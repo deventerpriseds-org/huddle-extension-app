@@ -7,6 +7,7 @@ import {
   type AuthenticationResult,
   type Configuration,
 } from "@azure/msal-browser";
+import { hasUatTokenParam, resolveUatBypassFromUrl } from "@/lib/uat-bypass.client";
 
 const tenantName = import.meta.env.VITE_ENTRA_TENANT_NAME as string | undefined;
 const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID as string | undefined;
@@ -238,14 +239,17 @@ const E2E_ACCOUNT = {
 } as AccountInfo;
 
 // Production UAT bypass — separate from and does not touch E2E_BYPASS above. That bypass is
-// dev-build-only and can never reach production; this one is a runtime check that CAN ship in the
-// production bundle, but is inert unless a caller supplies a token matching a build-time secret
-// (VITE_UAT_BYPASS_TOKEN, sourced from the org secret UAT_BYPASS_TOKEN in deploy-swa.yml). Real OAuth
-// redirects can't complete from a CCR sandbox (egress proxied), so this is the only way to drive the
-// LIVE deployed app as a real authenticated user for verification. Server fns already trust
-// caller.entra_email in the payload (see board.functions.ts), so this only ever authenticates as the
-// one real designated UAT user below — it does not grant any new server-side privilege.
-const UAT_BYPASS_TOKEN = import.meta.env.VITE_UAT_BYPASS_TOKEN as string | undefined;
+// dev-build-only and can never reach production; this one CAN ship in the production bundle, but it
+// holds NO secret: when (and only when) the URL carries `?uat_token=`, the value is stripped from the
+// address bar and sent ONCE to the `verifyUatToken` server function, which compares it (constant-time)
+// with the server-only UAT_BYPASS_TOKEN app setting and answers a bare boolean. The compare used to run
+// here against a build-time copy of the secret that Vite inlined into the public bundle — see
+// docs/FIX-uat-check-server-side.md. Real OAuth redirects can't complete from a CCR sandbox (egress
+// proxied), so this is the only way to drive the LIVE deployed app as a real authenticated user for
+// verification. Server fns already trust caller.entra_email in the payload (see board.functions.ts), so
+// this only ever authenticates as the one real designated UAT user below — it does not grant any new
+// server-side privilege. Normal loads (no `uat_token` param) make NO extra request and take the
+// unchanged MSAL path below.
 const UAT_ACCOUNT = {
   homeAccountId: "uat-von-ellis",
   localAccountId: "uat-von-ellis",
@@ -254,31 +258,29 @@ const UAT_ACCOUNT = {
   username: "von.ellis@enterpriseds.io",
   name: "Von Ellis (UAT)",
 } as AccountInfo;
-let uatBypassActive: boolean | null = null; // memoized per page load
+let uatBypassActive = false; // set only by a server-confirmed match, once per page load
+let uatCheckPromise: Promise<boolean> | null = null; // memoized: the server is asked at most once
+
+/** Starts the server check iff `uat_token` is in the URL (or a check already started). Returns null
+ *  on every normal load — no import, no request, no await. */
+function startUatCheck(): Promise<boolean> | null {
+  if (uatCheckPromise) return uatCheckPromise;
+  if (!isBrowser() || !hasUatTokenParam(window.location.search)) return null;
+  uatCheckPromise = resolveUatBypassFromUrl(window, async (token) => {
+    // Loaded lazily so normal loads never even fetch the RPC stub.
+    const { verifyUatToken } = await import("@/lib/uat-bypass.functions");
+    return verifyUatToken({ data: { token } });
+  }).then((matched) => {
+    uatBypassActive = matched;
+    // The token is already stripped from the URL (resolveUatBypassFromUrl does it first), so this
+    // trace's captured href is clean. Never trace the supplied value.
+    traceAuth(matched ? "uat-bypass:activated" : "uat-bypass:rejected", { matched });
+    return matched;
+  });
+  return uatCheckPromise;
+}
 
 function checkUatBypass(): boolean {
-  if (uatBypassActive !== null) return uatBypassActive;
-  uatBypassActive = false;
-  if (!isBrowser() || !UAT_BYPASS_TOKEN) return false;
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const supplied = params.get("uat_token");
-    if (supplied && supplied === UAT_BYPASS_TOKEN) {
-      uatBypassActive = true;
-      // Strip the token from the URL BEFORE tracing/rendering, so it never lingers in browser
-      // history/referrers and the activation trace's own captured href is already clean.
-      params.delete("uat_token");
-      const qs = params.toString();
-      window.history.replaceState(
-        null,
-        "",
-        window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash,
-      );
-      traceAuth("uat-bypass:activated", { matched: true });
-    }
-  } catch {
-    /* ignore */
-  }
   return uatBypassActive;
 }
 
@@ -291,7 +293,14 @@ export function isAuthBypassActive(): boolean {
 
 export function initMsal(): Promise<void> {
   if (E2E_BYPASS) return Promise.resolve();
+  const uatCheck = startUatCheck();
+  if (uatCheck) return uatCheck.then((matched) => (matched ? undefined : initMsalCore()));
   if (checkUatBypass()) return Promise.resolve();
+  return initMsalCore();
+}
+
+/** The real-sign-in path, unchanged from before the UAT check moved server-side. */
+function initMsalCore(): Promise<void> {
   if (!isBrowser()) return Promise.resolve();
   if (initPromise) {
     traceAuth("msal:init:reuse");
