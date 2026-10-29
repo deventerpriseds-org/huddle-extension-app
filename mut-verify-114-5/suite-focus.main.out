@@ -1,0 +1,27 @@
+PASS F1 commas split a one-line list
+PASS F2 newlines, bullets, numbering and a leading 'and' are stripped
+PASS F3 duplicates and blanks dropped, order kept
+PASS F4 empty text -> no items
+PASS F5 exact title (case/punctuation-insensitive)
+PASS F6 phrase inside one title
+PASS F7 every meaningful word present in exactly one title
+PASS F8 a TIE is no match (two 'upload video' tasks) -> created, never guessed
+PASS F8b a tie on ALL-WORDS (reversed order, no phrase hit) is also no match
+PASS F5b two open tasks with the SAME title -> no match (never guess which)
+PASS F9 a DONE task is never matched (no reopening finished work)
+PASS F10 a shared single word alone does not match ('trinnex' is in two titles)
+PASS F11 unrelated item -> no match (it will be created)
+PASS F12 one task is claimed once: the second item does not re-match the same task
+PASS F13 summary names started + new count
+PASS F14 summary names what failed and why
+PASS F15 core creates through journey quick_create_task
+PASS F16 core stars (set_priority_rank PUSH_RANK) and starts (update_task DOING)
+PASS F17 core un-parks a parked task it starts, keeping its other tags
+PASS F18 core accepts a model-picked id ONLY from the owner's own rows
+PASS F19 the Priorities input's server fn calls the core
+PASS F20 the Priorities input stays on the tab and calls it (no hand-off to Iris)
+PASS F21 Iris (both backends) is offered focus_on and told when to use it
+FAIL F22 a voice call to Iris can do it too
+PASS F23 the priority check tells him he can reply with a list
+
+24 passed, 1 failed

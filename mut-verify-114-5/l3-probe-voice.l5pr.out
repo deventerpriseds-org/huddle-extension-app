@@ -1,0 +1,41 @@
+== V1 executor THROW on the voice path (output {error,tool}) ==
+ holding after output: true
+ finalize('I couldn't save that, there was an error.'): {"full":"Nexus write status:\n• Not saved: the whole write request — TypeError: boom\nNothing else from this turn is shown. Anything marked not saved is NOT in Nexus; check Nexus before relying on anything marked unknown.","speak":"Nexus write status:\n• Not saved: the whole write request — TypeError: boom\nNothing else from this turn is shown. Anything marked not saved is NOT in Nexus; check Nexus before relying on anything marked unknown.","mode":"whole"}
+ finalize('Done — your Research Proposal is in Nexus for Oct 30.'): {"full":"Nexus write status:\n• Not saved: the whole write request — TypeError: boom\nNothing else from this turn is shown. Anything marked not saved is NOT in Nexus; check Nexus before relying on anything marked unknown.","speak":"Nexus write status:\n• Not saved: the whole write request — TypeError: boom\nNothing else from this turn is shown. Anything marked not saved is NOT in Nexus; check Nexus before relying on anything marked unknown.","mode":"whole"}
+ text presenter, same detail: [{"agentId":"elle","text":"Nexus write status:\n• Not saved: the whole write request — TypeError: boom\nNothing else from this turn is shown. Anything marked not saved is NOT in Nexus; check Nexus before relying on anything marked unknown."}]
+
+== V2 TYPED entry after a failed write (sendText never calls reset) ==
+ exchange1 finalize: "whole"
+ exchange2 (typed 'what's due this week?') holding: true
+ exchange2 finalize('You have the Case Brief due Monday.'): {"full":"","speak":"","mode":"none"}
+ exchange2 flush: null
+ exchange3 finalize('Anything else?'): {"full":"","speak":"","mode":"none"}
+
+== V3 HANG-UP mid-write: .then returns before noteToolOutput when gen changed / dc closed (hook :545) ==
+ new call: holding: true
+ new call greeting finalize('Hi Von, what can I help with?'): {"full":"","speak":"","mode":"none"}
+ new call flush at response.done: null
+ after a spoken utterance, finalize('Your next class is Monday.'): {"full":"","speak":"","mode":"none"}
+ holding: true
+
+== V4 failed write delivered, user hangs up WITHOUT speaking, starts a new call ==
+ new call greeting finalize('Hi Von!'): {"full":"","speak":"","mode":"none"}
+ holding (deltas not synthed): true
+
+== V5 spoken utterance whose transcription.completed arrives AFTER the new reply's text.done ==
+ reply to new question finalize('Your next class is Monday.'): {"full":"","speak":"","mode":"none"}
+ after late transcription, next finalize: {"full":"Anything else?","speak":"","mode":"none"}
+
+== V6 clean write, follow-up text claims MORE than written (H14 on voice) ==
+ holding (deltas stream): false
+ finalize: {"full":"I've added all five MGT-782 assignments.\n\nSaved in Nexus:\n• “Research Proposal” — due Fri, Oct 30, 2026, 11:59 PM EDT — MGT-782","speak":"Saved in Nexus:\n• “Research Proposal” — due Fri, Oct 30, 2026, 11:59 PM EDT — MGT-782","mode":"append"}
+
+== V7 success delivered, then a SECOND write in the same exchange fails ==
+ 1st finalize: {"full":"Added the proposal.\n\nSaved in Nexus:\n• “Research Proposal” — due Fri, Oct 30, 2026, 11:59 PM EDT — MGT-782","speak":"Saved in Nexus:\n• “Research Proposal” — due Fri, Oct 30, 2026, 11:59 PM EDT — MGT-782","mode":"append"}
+ 2nd finalize: {"full":"Nexus write status:\n• Saved: “Research Proposal” — due Fri, Oct 30, 2026, 11:59 PM EDT — MGT-782\n• Not saved: “Research Proposal” — Nexus returned an error (http 500)\nNothing else from this turn is shown. Anything marked not saved is NOT in Nexus; check Nexus before relying on anything marked unknown.","speak":"Nexus write status:\n• Saved: “Research Proposal” — due Fri, Oct 30, 2026, 11:59 PM EDT — MGT-782\n• Not saved: “Research Proposal” — Nexus returned an error (http 500)\nNothing else from this turn is shown. Anything marked not saved is NOT in Nexus; check Nexus before relying on anything marked unknown.","mode":"whole"}
+
+== T1 text presenter: clean write + TEAMMATE claims an unrelated save (no call) ==
+[{"agentId":"elle","text":"Added it.\n\nSaved in Nexus:\n• “Research Proposal” — due Fri, Oct 30, 2026, 11:59 PM EDT — MGT-782"},{"agentId":"iris","text":"I also added your Case Brief 7 to Nexus."}]
+
+== T2 text presenter: duplicate only (nothing new written) ==
+[{"agentId":"elle","text":"Nexus write status:\n• Already in Nexus, nothing new added: “Research Proposal” — due Fri, Oct 30, 2026, 11:59 PM EDT\nNothing else from this turn is shown. Anything marked not saved is NOT in Nexus; check Nexus before relying on anything marked unknown."},{"agentId":"iris","text":"(Held back: a Nexus write in this turn did not fully save, so this turn shows only the Nexus write status.)"}]

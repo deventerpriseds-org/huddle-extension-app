@@ -1,0 +1,8 @@
+  PASS  both card renders (desktop + mobile) are given onDelete
+  PASS  the card's delete only OPENS the confirm (never deletes directly)
+  PASS  only the confirm dialog's Delete button calls onDelete
+  PASS  a failed delete restores the card
+  PASS  the server fn deletes through journey's delete_task
+  PASS  the server fn requires a signed-in caller
+
+ALL PASS

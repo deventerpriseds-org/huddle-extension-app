@@ -1,0 +1,20 @@
+GROOMING'S DEFAULT OWNER = the task's CURRENT owner (the batch pick only for an unassigned task)
+  PASS  assigned task → its current owner
+  PASS  unassigned task → the batch pick
+  PASS  empty string counts as unassigned
+  PASS  an unknown agent id is not an owner
+
+STRUCTURAL — all three ownership decisions go through the SAME judge
+  PASS  grooming asks the judge with the incumbent as the default, framed as an assigned task
+  PASS  grooming keeps the incumbent when the judge fails
+  PASS  every assignment starts at its incumbent BEFORE the judge (budget skip / load failure keep the current owner)
+  PASS  a 1:1-created task asks the judge on its own title
+  PASS  …and that call is time-boxed on the reply path
+  PASS  a produce task is assigned through the same judge
+  PASS  the delete action is user-only at the journey chokepoint
+  PASS  the 1:1 hand-off asks the same judge
+  PASS  in-chat grooming gives the judge a short budget
+  PASS  the scheduled groom passes a longer judge budget
+  PASS  the judge has the assigned-task framing
+
+ALL PASS
