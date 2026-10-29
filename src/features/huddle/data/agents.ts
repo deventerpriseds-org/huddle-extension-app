@@ -156,9 +156,48 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
       "yoga", "gym", "fitness", "workout",
       // household (loop 1/2)
       "toilet", "towel", "towels", "card", "kid", "kids", "son", "daughter", "child", "grocery", "groceries", "golf",
+      // ── D12 (docs/FIX-nexus-write-routing.md, RESPONDS TO VERIFY-nexus-write-tool-3.md): asks that merely
+      // MENTION a course / professor / deadline but belong to ANOTHER lane. Owner decision 2026-10-29: these keep
+      // their origin/main routing and never trigger the deterministic 1:1 hand-off. One group per lane:
+      // email / messaging
+      "email", "e-mail", "emailed", "emailing", "message", "messaged", "messaging", "inbox",
+      // calendar / reminders
+      "remind", "reminder",
+      // dining
+      "restaurant", "dinner", "lunch", "breakfast", "brunch", "eat", "eating", "reservation", "book a table",
+      "reserve a table",
+      // car rental / driving
+      "rent a car", "rental car", "car rental", "rent-a-car", "uber", "lyft", "taxi",
+      // lodging
+      "airbnb", "lodging", "hotels", "motel", "hostel", "accommodation", "accommodations",
+      // money / budget / purchases
+      "budget", "budgeting", "afford", "deposit", "payment", "pay", "paying", "tuition", "buy", "buying",
+      "purchase", "purchasing", "price", "spend", "spending", "refund",
+      // running / training
+      "runs", "running", "jog", "jogging", "marathon", "5k", "10k", "training plan", "training schedule",
+      // travel
+      "travel", "traveling", "travelling", "airport", "itinerary", "fly", "flying",
     ],
-    // a ticker written as a cashtag ("$NVDA")
-    vetoPatterns: [["\\$[A-Za-z]{1,5}\\b", ""]],
+    vetoPatterns: [
+      // a ticker written as a cashtag ("$NVDA")
+      ["\\$[A-Za-z]{1,5}\\b", ""],
+      // D12 email / messaging: "write to my professor", "text my instructor" -- never "write to Nexus"
+      ["\\bwrite (?:a (?:note|letter|message) )?to (?!(?:my )?nexus\\b)|\\btext (?:my|the|him|her|them)\\b", "i"],
+      // D12 calendar: his OWN calendar or a time block ("on my calendar", "block two hours", "schedule focus
+      // time", "study time") -- a bare "calendar" is not vetoed ("the course calendar" in a syllabus is coursework)
+      [
+        "\\b(?:on|to|in|into|onto|from|off) my calendar\\b|\\bcalendar (?:invite|event|hold|block)s?\\b|\\bblock (?:off |out )?(?:some |an? |one |two |three |four |\\d+ )?(?:hours?|minutes?|mins?|time|morning|afternoon|evening)\\b|\\b(?:focus|study|deep work|prep) (?:time|block|session)s?\\b|\\bschedule (?:some |an? |one |two |three |\\d+ )?(?:time|hours?|minutes?|session|block)s?\\b",
+        "i",
+      ],
+      // D12 driving: "drive to/from campus" -- never "Google Drive" / "my drive" (where a syllabus may live)
+      ["\\b(?:drive|driving) (?:to|from|me|us|down|up|over|back|home)\\b", "i"],
+      // D12 lodging: "a place to stay", "stay near campus" -- never "stay on top of my assignments"
+      ["\\b(?:place|somewhere|where) to stay\\b|\\bstay(?:ing)? (?:at|near|in|with|overnight)\\b", "i"],
+      // D12 money: "cost(s)" -- never a cost-benefit / cost-accounting / cost-of-capital paper topic
+      ["\\bcosts?\\b(?![- ](?:benefit|accounting|analysis|of capital|structure|leadership|center|centre)\\b)", "i"],
+      // D12 fitness: "go for a run", "a 5 mile run", "run schedule" -- never "run a regression"
+      ["\\b(?:go|went|going) for a run\\b|\\b\\d+\\s?(?:k|km|mi|mile|miles) run\\b|\\brun(?:ning)? (?:plan|schedule)\\b", "i"],
+    ],
     ignore: ["of course"],
   },
 };
