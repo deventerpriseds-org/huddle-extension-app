@@ -127,6 +127,16 @@ index into a requirement list**.
 - Memory architecture: owner chose (a) SOFT preference (2026-10-27) and "thought it was already this way" — it largely IS: runAgentTurn's laneBoost re-ranks shared memory by the agent's domains/themes (topic text, not agent name). Gaps: voice has no lane boost/Executive Profile; the owner's ChatGPT knowledge isn't ingested yet.
 - ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
 
+## One ownership judge + board Delete (2026-10-29, #124 squash 4cb2273 DEPLOYED, NOT owner-confirmed)
+`routing.ts resolveOwnerLLM` is THE ownership judge for: 1:1 hand-off, 1:1 task creation (task title; responder only
+on failure, 5s cap), produce tasks, weekly grooming (`framing:"assigned"`, current owner = default; every assignment
+starts at its incumbent so any judge failure keeps the owner; 3s budget in chat, 20s scheduled). Board Delete →
+`deleteBoardTask` → journey `delete_task` (scoped to user_id), user-only at the `invokeJourneyTool` chokepoint
+(`UI_ONLY_JOURNEY_TOOLS`, only the board passes `allowUiOnly`). focus_on refuses when journey is off (text) and isn't
+offered (voice). Open: agents can still reassign via journey `update_task`; caller identity is client-asserted.
+**Approved next (not built):** planning = timed table, create missing, start nothing; 1:1 answers first. Cause of
+"everything moved to Doing" = `tasks/tools.ts:477` FOCUS hint.
+
 ## Deep 1:1 asks: HYBRID — act now, or answer + offer to produce; never hold (2026-10-28, #116 MERGED + DEPLOYED 96448d3, NOT owner-confirmed)
 **Live (durable path, 2026-10-28 19:22Z):** Iris answered a "plan my day" ask with a real time-blocked plan in 37s. Follow-up PR #124: one ownership judge (creation + grooming), board Delete, no offer after a hand-off, focus_on journey gate. **Incident:** live harness runs wrote to the real board (see accuracy-log 2026-10-28); 7 test tasks parked+tagged `test-artifact` pending delete confirmation.
 **Trigger:** owner asked Iris (dm-iris-chase) to plan the day — gym 3pm, vitamin shop, DBA 702/782 papers, eulogy,
