@@ -1,0 +1,1 @@
+      ["\\bcosts?\\b(?![- ](?:benefit|accounting|analysis|of capital|structure|leadership|center|centre)\\b)", "i"],

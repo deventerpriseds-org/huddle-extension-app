@@ -1,0 +1,1 @@
+  const system = (invocation.strictPrompt ? strictSystem : baseSystem);

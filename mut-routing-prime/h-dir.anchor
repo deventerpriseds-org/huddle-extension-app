@@ -1,0 +1,1 @@
+    return `- ${cap.label} → ${who}${cap.routerHint ? `: ${cap.routerHint}` : ""}`;

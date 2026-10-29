@@ -1,0 +1,1 @@
+      ["\\b(?:go|went|going) for a run\\b|\\b\\d+\\s?(?:k|km|mi|mile|miles) run\\b|\\brun(?:ning)? (?:plan|schedule)\\b", "i"],

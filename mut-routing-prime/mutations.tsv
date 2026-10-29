@@ -1,0 +1,23 @@
+v-email	src/features/huddle/data/agents.ts	R12-email warm
+v-email-pattern	src/features/huddle/data/agents.ts	R12-email-pattern warm
+v-calendar	src/features/huddle/data/agents.ts	R12-calendar warm
+v-reminder	src/features/huddle/data/agents.ts	R12-reminder warm
+v-dining	src/features/huddle/data/agents.ts	R12-dining warm
+v-car	src/features/huddle/data/agents.ts	R12-car warm
+v-car-pattern	src/features/huddle/data/agents.ts	R12-car-pattern warm
+v-lodging	src/features/huddle/data/agents.ts	R12-lodging warm
+v-lodging-pattern	src/features/huddle/data/agents.ts	R12-lodging-pattern warm
+v-money	src/features/huddle/data/agents.ts	R12-money warm
+v-money-pattern	src/features/huddle/data/agents.ts	R12-money-pattern warm
+v-fitness	src/features/huddle/data/agents.ts	R12-fitness warm
+v-fitness-pattern	src/features/huddle/data/agents.ts	R12-fitness-pattern warm
+v-travel	src/features/huddle/data/agents.ts	R12-travel warm
+g-drive	src/features/huddle/data/agents.ts	R-CW-drive warm
+g-cost	src/features/huddle/data/agents.ts	R-CW-cost warm
+g-run	src/features/huddle/data/agents.ts	R-CW-run warm
+g-stay	src/features/huddle/data/agents.ts	R-CW-stay warm
+h-data	src/features/huddle/data/agents.ts	R-A2 the hint data says "preferred owners"
+h-dir	src/features/huddle/lib/capabilities.ts	R-A1-hint
+h-group	src/features/huddle/lib/routing.ts	R-A3 base router system prompt carries
+h-strict	src/features/huddle/lib/routing.ts	R-A3s strict router system prompt carries
+h-resolver	src/features/huddle/lib/routing.ts	R-A4 1:1 owner resolver prompt carries
