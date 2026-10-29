@@ -1,7 +1,7 @@
 import { generateText, NoObjectGeneratedError, Output } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type Agent, type AgentId } from "../data/agents";
-import { ownershipMarker, primeMarker, sharedCapabilityHolders } from "./capabilities";
+import { ownershipMarker, primeMarker, primeOwnershipDirectory, sharedCapabilityHolders } from "./capabilities";
 import { resolveAddressedAgent } from "./addressedAgent";
 import type { HuddleMessage, RoutingDecision } from "../data/seed";
 
@@ -598,8 +598,10 @@ export async function resolveOwnerLLM(
     // — that was the bug that made this a no-op and let the keyword scorer decide.
     const roster = AGENTS;
     const lines = roster
-      .map((a) => `- ${a.id} (${a.name}, ${a.role}): ${[...a.domains, ...a.themes].slice(0, 14).join(", ")}`)
+      .map((a) => `- ${a.id} (${a.name}, ${a.role}): ${[...a.domains, ...a.themes].slice(0, 14).join(", ")}${primeMarker(a)}`)
       .join("\n");
+    // (A) docs/FIX-nexus-write-routing.md: the same additive, data-built prime-owner hint the group router gets.
+    const primeOwners = primeOwnershipDirectory();
     const { callOpenAIRouter } = await import("./openai-responses.server");
     const raw = await callOpenAIRouter<{ owner: string }>({
       model: invocation.model,
@@ -611,6 +613,7 @@ export async function resolveOwnerLLM(
         "want a spreadsheet still belongs to the finance lane, not whoever 'builds' things).",
       prompt:
         `The user is in a 1:1 with ${addressed.name} (id "${addressed.id}", ${addressed.role}). Team roster:\n${lines}\n\n` +
+        (primeOwners ? `${primeOwners}\n\n` : "") +
         `User's request:\n"""${(text || "").slice(0, 1200)}"""\n\n` +
         `Return {"owner": "<agent id>"}: the id of the teammate who should own this. Use "${addressed.id}" to KEEP ` +
         `it with the agent they addressed (the default). Only pick a different id when the request plainly belongs ` +
@@ -699,7 +702,10 @@ Example — user: "Finn, have Iris create the venue task" → primary: iris-chas
 Example — user: "plan tomorrow's workout and also budget my gym membership" → primary: flex-grimes, supporting: [finn-reid], reason: two distinct lanes explicitly named.
 EXCEPTION — MULTI-LANE LIST: if the message ENUMERATES several distinct task areas at once (a labeled list "Career - …, Finance - …, Errands - …" or clearly separate domains each with their own items), this is the ONE case where multiple primaries are correct: return the owner of EACH enumerated lane in supporting AND explicitlyRequested (map each lane to its owner via the roster domains). A single-topic message that merely touches an adjacent domain is NOT this case — stay solo.`;
 
-  const system = invocation.strictPrompt ? strictSystem : baseSystem;
+  // (A) of the owner's 2026-10-29 decision (docs/FIX-nexus-write-routing.md): an ADDITIVE, data-built hint naming
+  // who leads each shared job (agents.ts `routerHint`) -- appended to whichever prompt runs, never replacing it.
+  const primeOwners = primeOwnershipDirectory(memberIds);
+  const system = (invocation.strictPrompt ? strictSystem : baseSystem) + (primeOwners ? `\n${primeOwners}` : "");
 
   const wantInterject = !!invocation.interjections;
   const supportingHint = invocation.strictPrompt

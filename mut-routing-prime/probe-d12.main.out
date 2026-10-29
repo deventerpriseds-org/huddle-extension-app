@@ -1,0 +1,86 @@
+{"cache":"warm","kind":"d12","group":"email","text":"email my professor that my MGT-782 paper will be a day late","self":"cam-post","lead":"cam-post","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"email","text":"draft an email to my MGT-782 group about the proposal deadline","self":"cam-post","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"email","text":"email my professor that my paper will be a day late","self":"cam-post","lead":"cam-post","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"email","text":"draft an email to my instructor asking for an extension on the essay deadline","self":"cam-post","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"warm","kind":"d12","group":"email","text":"message my MGT-782 professor that the essay will be late","self":"cam-post","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"warm","kind":"d12","group":"email-pattern","text":"write to my professor that my MGT-782 paper will be late","self":"cam-post","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"email-pattern","text":"text my instructor that I need more time on the essay deadline","self":"cam-post","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"warm","kind":"d12","group":"calendar","text":"block two hours on my calendar Thursday for the MGT-782 paper","self":"eli-vaughn","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"calendar","text":"schedule focus time before my MGT-782 essay deadline","self":"eli-vaughn","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"warm","kind":"d12","group":"calendar","text":"block two hours on my calendar Thursday for my research paper deadline","self":"eli-vaughn","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"calendar","text":"put study time on my calendar before the MGT-702 exam","self":"eli-vaughn","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"reminder","text":"remind me tomorrow at 9 that the MGT-782 paper is due","self":"eli-vaughn","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"reminder","text":"remind me tomorrow at 9 that my essay deadline is Friday","self":"eli-vaughn","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"warm","kind":"d12","group":"reminder","text":"set a reminder for the MGT-702 final paper deadline","self":"eli-vaughn","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"dining","text":"book a table for my MGT-782 study group after the exam Friday","self":"charleston-lewis","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"dining","text":"pick a restaurant for dinner after my MGT-782 exam","self":"charleston-lewis","lead":"charleston-lewis","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"dining","text":"pick a restaurant for dinner with my professor after the exam","self":"charleston-lewis","lead":"charleston-lewis","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"dining","text":"where should I eat lunch before my EMBA694 exam","self":"charleston-lewis","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"car","text":"rent a car for the MGT-701 residency weekend, it's due back Sunday","self":"troy-lennox","lead":"ezra-miles","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"car","text":"get me a rental car for the MGT-782 residency, the deadline to book is Friday","self":"troy-lennox","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"car-pattern","text":"drive me to campus for my MGT-782 exam Friday","self":"troy-lennox","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"lodging","text":"I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday","self":"troy-lennox","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"warm","kind":"d12","group":"lodging","text":"find me lodging near campus for the MGT-782 residency, deadline to book is Friday","self":"troy-lennox","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"lodging-pattern","text":"find a place to stay for the MGT-701 residency, the deadline is Friday","self":"troy-lennox","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"money","text":"the EMBA694 textbook payment is due Friday, can I afford it","self":"finn-reid","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"money","text":"budget for the MGT-701 residency costs, the deposit is due Monday","self":"finn-reid","lead":"finn-reid","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"money","text":"pay my EMBA694 tuition before the deadline","self":"finn-reid","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"warm","kind":"d12","group":"money","text":"buy the MGT-782 textbook before the exam","self":"finn-reid","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"money-pattern","text":"what will the MGT-701 residency cost, the paper is due the same week","self":"finn-reid","lead":"tess-sutton","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"fitness","text":"plan my runs around the MGT-782 exam week","self":"flex-grimes","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"fitness","text":"build a training plan around my MGT-782 exam","self":"flex-grimes","lead":"flex-grimes","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"fitness-pattern","text":"I want to go for a run before my MGT-782 exam","self":"flex-grimes","lead":"flex-grimes","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"travel","text":"book my travel to the MGT-701 residency, the deadline is Friday","self":"troy-lennox","lead":"troy-lennox","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"d12","group":"travel","text":"book a flight for the EMBA694 residency before the deadline","self":"troy-lennox","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"warm","kind":"cw","text":"add the MGT-701 research proposal due Dec 1 to Nexus","lead":"iris-chase","keep":"n/a","finnLane":null}
+{"cache":"warm","kind":"cw","text":"my MGT-782 paper is due Friday","lead":"iris-chase","keep":"n/a","finnLane":null}
+{"cache":"warm","kind":"cw","text":"my professor wants the case study by Friday, can you add it","lead":"elle-rowan","keep":"n/a","finnLane":null}
+{"cache":"warm","kind":"cw","text":"add the MGT-782 cost-benefit analysis paper due Friday to Nexus","lead":"troy-lennox","keep":"n/a","finnLane":null}
+{"cache":"warm","kind":"cw","text":"upload the MGT-702 syllabus from my Google Drive to Nexus","lead":"iris-chase","keep":"n/a","finnLane":null}
+{"cache":"warm","kind":"cw","text":"the course calendar in my MGT-782 syllabus has the paper due Dec 9, add it","lead":"elle-rowan","keep":"n/a","finnLane":"elle-rowan"}
+{"cache":"warm","kind":"cw","text":"update the due date on my MGT-782 essay to Friday","lead":"elle-rowan","keep":"n/a","finnLane":"elle-rowan"}
+{"cache":"warm","kind":"cw","text":"add my EMBA694 case brief due Nov 20","lead":"elle-rowan","keep":"n/a","finnLane":null}
+{"cache":"warm","kind":"cw","text":"stay on top of my MGT-782 assignments, add the essay due Friday","lead":"elle-rowan","keep":"n/a","finnLane":"elle-rowan"}
+{"cache":"cold","kind":"d12","group":"email","text":"email my professor that my MGT-782 paper will be a day late","self":"cam-post","lead":"cam-post","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"email","text":"draft an email to my MGT-782 group about the proposal deadline","self":"cam-post","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"email","text":"email my professor that my paper will be a day late","self":"cam-post","lead":"cam-post","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"email","text":"draft an email to my instructor asking for an extension on the essay deadline","self":"cam-post","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"cold","kind":"d12","group":"email","text":"message my MGT-782 professor that the essay will be late","self":"cam-post","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"cold","kind":"d12","group":"email-pattern","text":"write to my professor that my MGT-782 paper will be late","self":"cam-post","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"email-pattern","text":"text my instructor that I need more time on the essay deadline","self":"cam-post","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"cold","kind":"d12","group":"calendar","text":"block two hours on my calendar Thursday for the MGT-782 paper","self":"eli-vaughn","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"calendar","text":"schedule focus time before my MGT-782 essay deadline","self":"eli-vaughn","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"cold","kind":"d12","group":"calendar","text":"block two hours on my calendar Thursday for my research paper deadline","self":"eli-vaughn","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"calendar","text":"put study time on my calendar before the MGT-702 exam","self":"eli-vaughn","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"reminder","text":"remind me tomorrow at 9 that the MGT-782 paper is due","self":"eli-vaughn","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"reminder","text":"remind me tomorrow at 9 that my essay deadline is Friday","self":"eli-vaughn","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"cold","kind":"d12","group":"reminder","text":"set a reminder for the MGT-702 final paper deadline","self":"eli-vaughn","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"dining","text":"book a table for my MGT-782 study group after the exam Friday","self":"charleston-lewis","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"dining","text":"pick a restaurant for dinner after my MGT-782 exam","self":"charleston-lewis","lead":"charleston-lewis","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"dining","text":"pick a restaurant for dinner with my professor after the exam","self":"charleston-lewis","lead":"charleston-lewis","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"dining","text":"where should I eat lunch before my EMBA694 exam","self":"charleston-lewis","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"car","text":"rent a car for the MGT-701 residency weekend, it's due back Sunday","self":"troy-lennox","lead":"ezra-miles","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"car","text":"get me a rental car for the MGT-782 residency, the deadline to book is Friday","self":"troy-lennox","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"car-pattern","text":"drive me to campus for my MGT-782 exam Friday","self":"troy-lennox","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"lodging","text":"I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday","self":"troy-lennox","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"cold","kind":"d12","group":"lodging","text":"find me lodging near campus for the MGT-782 residency, deadline to book is Friday","self":"troy-lennox","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"lodging-pattern","text":"find a place to stay for the MGT-701 residency, the deadline is Friday","self":"troy-lennox","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"money","text":"the EMBA694 textbook payment is due Friday, can I afford it","self":"finn-reid","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"money","text":"budget for the MGT-701 residency costs, the deposit is due Monday","self":"finn-reid","lead":"finn-reid","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"money","text":"pay my EMBA694 tuition before the deadline","self":"finn-reid","lead":"elle-rowan","prime":null,"lane":"elle-rowan","handoffs":0}
+{"cache":"cold","kind":"d12","group":"money","text":"buy the MGT-782 textbook before the exam","self":"finn-reid","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"money-pattern","text":"what will the MGT-701 residency cost, the paper is due the same week","self":"finn-reid","lead":"tess-sutton","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"fitness","text":"plan my runs around the MGT-782 exam week","self":"flex-grimes","lead":"iris-chase","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"fitness","text":"build a training plan around my MGT-782 exam","self":"flex-grimes","lead":"flex-grimes","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"fitness-pattern","text":"I want to go for a run before my MGT-782 exam","self":"flex-grimes","lead":"flex-grimes","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"travel","text":"book my travel to the MGT-701 residency, the deadline is Friday","self":"troy-lennox","lead":"troy-lennox","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"d12","group":"travel","text":"book a flight for the EMBA694 residency before the deadline","self":"troy-lennox","lead":"elle-rowan","prime":null,"lane":null,"handoffs":0}
+{"cache":"cold","kind":"cw","text":"add the MGT-701 research proposal due Dec 1 to Nexus","lead":"iris-chase","keep":"n/a","finnLane":null}
+{"cache":"cold","kind":"cw","text":"my MGT-782 paper is due Friday","lead":"iris-chase","keep":"n/a","finnLane":null}
+{"cache":"cold","kind":"cw","text":"my professor wants the case study by Friday, can you add it","lead":"elle-rowan","keep":"n/a","finnLane":null}
+{"cache":"cold","kind":"cw","text":"add the MGT-782 cost-benefit analysis paper due Friday to Nexus","lead":"troy-lennox","keep":"n/a","finnLane":null}
+{"cache":"cold","kind":"cw","text":"upload the MGT-702 syllabus from my Google Drive to Nexus","lead":"iris-chase","keep":"n/a","finnLane":null}
+{"cache":"cold","kind":"cw","text":"the course calendar in my MGT-782 syllabus has the paper due Dec 9, add it","lead":"elle-rowan","keep":"n/a","finnLane":"elle-rowan"}
+{"cache":"cold","kind":"cw","text":"update the due date on my MGT-782 essay to Friday","lead":"elle-rowan","keep":"n/a","finnLane":"elle-rowan"}
+{"cache":"cold","kind":"cw","text":"add my EMBA694 case brief due Nov 20","lead":"elle-rowan","keep":"n/a","finnLane":null}
+{"cache":"cold","kind":"cw","text":"stay on top of my MGT-782 assignments, add the essay due Friday","lead":"elle-rowan","keep":"n/a","finnLane":"elle-rowan"}

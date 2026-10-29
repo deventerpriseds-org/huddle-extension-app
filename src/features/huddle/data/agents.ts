@@ -60,6 +60,14 @@ export interface AgentCapability {
    */
   triggerPairs?: Array<[string[], string[]]>;
   /**
+   * SHARED capabilities only: an ADVISORY line for the LLM routers (group router + 1:1 owner resolver),
+   * printed after the holders' names in `primeOwnershipDirectory` (lib/capabilities.ts). It says, in plain
+   * words, which asks this capability's holders should LEAD and which merely-related asks stay with their
+   * own lane. Prose for a model, never matched against text. Name lanes here, not agents -- the holders'
+   * names come from the roster.
+   */
+  routerHint?: string;
+  /**
    * SHARED capabilities only: the ask must ALSO carry this context, or no trigger counts. A trigger
    * word says WHAT kind of job ("assignment", "deliverable", "paper ... due"); the context says WHOSE
    * job -- without it "change my seat assignment on the flight" and "the client deliverable is due"
@@ -111,6 +119,15 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
       ["due", "deadline", "deadlines", "graded", "grade", "submit", "submission"],
     ],
   ],
+  // (A) of the owner's 2026-10-29 decision (docs/FIX-nexus-write-routing.md): the LLM routers are told who LEADS
+  // adding/updating his Nexus coursework, and that an ask merely MENTIONING a course stays in its own lane.
+  routerHint:
+    "they are the preferred owners whenever the owner asks to ADD or UPDATE his Nexus coursework assignments " +
+    "(a dated, graded deliverable for one of his courses, a syllabus to load into Nexus, a due date to change, " +
+    "what is due in Nexus). Other lanes keep asks that merely MENTION a course, a professor or a deadline: " +
+    "emailing or messaging a professor (email lane), booking travel, lodging or a rental car for a residency " +
+    "(travel lane), budgeting tuition, a deposit or a textbook purchase (finance lane), scheduling study time " +
+    "or a reminder (calendar lane), dinner after an exam (dining lane), training around exam week (fitness lane).",
   // WHOSE job: the owner's coursework. Loop 3 (D6, docs/FIX-nexus-write-loop3.md, owner-specified):
   //   VETOES are evaluated FIRST and win (another lane's unmistakable vocabulary).
   //   STRONG = DATA FROM NEXUS -- one of the owner's REAL course codes or names (`strongSources:
@@ -189,8 +206,12 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
         "\\b(?:on|to|in|into|onto|from|off) my calendar\\b|\\bcalendar (?:invite|event|hold|block)s?\\b|\\bblock (?:off |out )?(?:some |an? |one |two |three |four |\\d+ )?(?:hours?|minutes?|mins?|time|morning|afternoon|evening)\\b|\\b(?:focus|study|deep work|prep) (?:time|block|session)s?\\b|\\bschedule (?:some |an? |one |two |three |\\d+ )?(?:time|hours?|minutes?|session|block)s?\\b",
         "i",
       ],
-      // D12 driving: "drive to/from campus" -- never "Google Drive" / "my drive" (where a syllabus may live)
-      ["\\b(?:drive|driving) (?:to|from|me|us|down|up|over|back|home)\\b", "i"],
+      // D12 driving: "drive to/from campus", "drive me" -- never "(Google|my|the|shared) Drive" (where a syllabus
+      // may live: "upload the syllabus from my Google Drive to Nexus") and never "… to Nexus"
+      [
+        "(?<!\\b(?:google|my|the|a|shared|team|one)\\s)\\b(?:drive|driving) (?:to (?!(?:my )?nexus\\b)|from|me|us|down|up|over|back|home)",
+        "i",
+      ],
       // D12 lodging: "a place to stay", "stay near campus" -- never "stay on top of my assignments"
       ["\\b(?:place|somewhere|where) to stay\\b|\\bstay(?:ing)? (?:at|near|in|with|overnight)\\b", "i"],
       // D12 money: "cost(s)" -- never a cost-benefit / cost-accounting / cost-of-capital paper topic

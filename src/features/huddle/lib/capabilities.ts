@@ -338,6 +338,34 @@ export function sharedCapabilityHolders(text: string, members?: readonly AgentId
   return out;
 }
 
+/**
+ * ADVISORY directory of the SHARED capabilities for the LLM routers, built from agents.ts data only:
+ *   "PRIME OWNERS (who leads which shared job):
+ *    - <capability label> → <Holder Name> (@<handle>), <Holder Name> (@<handle>): <routerHint>"
+ * One line per shared capability with at least one holder in `members` (the whole roster when omitted).
+ * Empty string when there is none, so a huddle without a holder gets no extra prompt text. No agent id or
+ * name is written in this file -- they come from the roster (docs/FIX-nexus-write-routing.md, item A).
+ */
+export function primeOwnershipDirectory(members?: readonly AgentId[]): string {
+  const inScope = members ? new Set(members) : null;
+  const byCap = new Map<string, { cap: AgentCapability; holders: Agent[] }>();
+  for (const agent of AGENTS) {
+    if (inScope && !inScope.has(agent.id)) continue;
+    for (const cap of agent.capabilities ?? []) {
+      if (cap.exclusive) continue;
+      const entry = byCap.get(cap.id) ?? { cap, holders: [] };
+      entry.holders.push(agent);
+      byCap.set(cap.id, entry);
+    }
+  }
+  if (!byCap.size) return "";
+  const lines = [...byCap.values()].map(({ cap, holders }) => {
+    const who = holders.map((a) => `${a.name} (@${a.handle})`).join(", ");
+    return `- ${cap.label} → ${who}${cap.routerHint ? `: ${cap.routerHint}` : ""}`;
+  });
+  return `PRIME OWNERS (who leads which shared job — advisory; ADDRESSED BY NAME and DELEGATION still win):\n${lines.join("\n")}`;
+}
+
 /** Roster marker for shared capabilities, e.g. " [prime for: adding & updating … in Nexus …]". */
 export function primeMarker(agent: Agent): string {
   const shared = (agent.capabilities ?? []).filter((c) => !c.exclusive);
