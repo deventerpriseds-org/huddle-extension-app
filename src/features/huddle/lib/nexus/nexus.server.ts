@@ -61,13 +61,20 @@
 // nothing in this file can write; the Nexus side blocks writes on this auth path anyway
 // (`requireWrite` rejects the owner-parameter identity) and both aggregate endpoints are declared
 // methods: ['GET','OPTIONS']. Adding a write path is a different decision with a different gate.
+//
+// THAT DECISION WAS TAKEN (2026-10-28, W1 per nexus-hub DECISION-nexus-write-auth.md) AND THE WRITE
+// PATH LIVES ELSEWHERE ON PURPOSE: `nexus-write.server.ts`. It imports `nexusBase`/`nexusOwner`/
+// `nexusGet` from here (exported for exactly that reason, so the base URL and the configured owner
+// have one definition) and owns its own single POST/PATCH call site. Nothing in THIS file gained a
+// method, a body or a header -- `nexusFetch` is still a bare GET, and the twelve tools above are
+// still the only ones `nexusReadTools()` returns. scripts/nexus-write-tool.test.ts asserts both.
 
 /** The owner id Nexus scopes rows by. Configured, never inferred -- see resolveNexusOwner below. */
-function nexusOwner(): string {
+export function nexusOwner(): string {
   return (process.env.NEXUS_OWNER_ID ?? "").trim();
 }
 
-function nexusBase(): string {
+export function nexusBase(): string {
   return (process.env.NEXUS_API_URL ?? "").trim().replace(/\/+$/, "");
 }
 
@@ -80,7 +87,7 @@ export function nexusReadConfigured(): boolean {
   return !!nexusBase() && !!nexusOwner();
 }
 
-const TIMEOUT_MS = 15_000;
+export const TIMEOUT_MS = 15_000;
 
 type Row = Record<string, unknown>;
 
@@ -143,7 +150,7 @@ async function nexusFetch(path: string, params: URLSearchParams): Promise<Fetche
  * no such column and then fails in Postgres. Every order/filter column used by the callers below
  * was read out of the table's CREATE TABLE first.
  */
-async function nexusGet(
+export async function nexusGet(
   table: string,
   filters: [string, string][] = [],
   opts: { limit?: number; order?: string } = {},

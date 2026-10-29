@@ -5,6 +5,7 @@
 // capability to any agent (or a new agent that owns one) works across the whole
 // roster with zero per-case code. See AgentCapability in agents.ts.
 import { AGENTS, type Agent, type AgentCapability, type AgentId } from "../data/agents";
+import { nexusCourseMentioned } from "./nexus/course-context";
 
 // ─── Turn intent classification ────────────────────────────────────────────────
 // Lightweight, trait-driven intent classifier. Determines the SEMANTIC INTENT of
@@ -262,4 +263,159 @@ export function ownershipDirectory(members: readonly AgentId[]): string {
   const owned = exclusiveCapabilities(members);
   if (!owned.length) return "";
   return owned.map((o) => `- ${o.cap.label} → @${o.agent.handle}`).join("\n");
+}
+
+// ─── SHARED (non-exclusive) capabilities: who is PRIME for an ask ──────────────────────────────────
+// An exclusive capability says "only X may do this". A SHARED one says "anyone may, but X and Y lead".
+// Everything here is generic over agents.ts data -- no agent id appears in this file. Consumers:
+// routing.ts (`routeMessage` picks a holder as the deterministic winner; `primeLaneDecision` keeps a
+// 1:1 with a holder and hands a non-holder's to one), the 1:1 owner follow-up in huddle.functions.ts,
+// and the roster/router prompt markers.
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Word-START match, so "assignment" matches "assignments" but not "reassignment". */
+const wordStart = (phrase: string) => new RegExp(`(^|[^a-z0-9])${escapeRe(phrase.toLowerCase())}`, "i");
+/** Whole-word match (plural/possessive tolerated), for the co-occurrence pairs. */
+const wholeWord = (w: string) =>
+  new RegExp(`(^|[^a-z0-9])${escapeRe(w.toLowerCase())}(?:'?s)?(?![a-z0-9])`, "i");
+
+/**
+ * Named DATA sources a capability's `requiresContext.strongSources` may cite (agents.ts). Each answers "does
+ * this text name something real for the owner?" from data held elsewhere -- never a shape regex.
+ *   "nexus-courses" -- one of the owner's REAL Nexus course codes or names (lib/nexus/course-context.ts,
+ *                      filled from Nexus on the server; empty/stale -> false, i.e. weak signals only).
+ */
+const CONTEXT_SOURCES: Record<string, (text: string) => boolean> = {
+  "nexus-courses": nexusCourseMentioned,
+};
+
+/**
+ * Does `text` carry the capability's required CONTEXT (agents.ts `requiresContext`)? No spec = yes.
+ * ORDER: an EXPLICIT OVERRIDE first (`explicitOverride` DATA, e.g. "add … to Nexus" -- docs/FIX-nexus-write-routing.md,
+ * "Explicit Nexus override (2026-10-29)"), then, as in loop 3 D6 (docs/FIX-nexus-write-loop3.md): VETOES and they WIN -- another lane's unmistakable
+ * vocabulary ("flight", "visa", "loan", "LLC", "calls", "yoga" …) beats even strong context; loop 2 checked
+ * strong first, so a flight number read as a course code skipped every veto. Then STRONG (data sources such
+ * as the owner's real course list, plus explicit words/patterns), then WEAK.
+ */
+export function capabilityContextPresent(cap: AgentCapability, text: string): boolean {
+  const ctx = cap.requiresContext;
+  if (!ctx) return true;
+  let raw = String(text ?? "");
+  for (const p of ctx.ignore ?? []) raw = raw.replace(new RegExp(escapeRe(p), "gi"), " ");
+  const t = raw.toLowerCase();
+  const anyWord = (ws?: string[]) => (ws ?? []).some((w) => wholeWord(w).test(t));
+  const anyPattern = (ps?: Array<[string, string]>) => (ps ?? []).some(([src, flags]) => new RegExp(src, flags).test(raw));
+  const anySource = (names?: string[]) => (names ?? []).some((n) => CONTEXT_SOURCES[n]?.(raw) === true);
+  // An EXPLICIT request naming the capability's own system as the destination beats the vetoes (owner, 2026-10-29).
+  // D14: tested per clause, with competing destinations cancelling (`explicitOverrideMatches`).
+  if (explicitOverrideMatches(ctx, raw)) return true;
+  if (anyWord(ctx.vetoes) || anyPattern(ctx.vetoPatterns)) return false;
+  if (anyWord(ctx.strong) || anyPattern(ctx.strongPatterns) || anySource(ctx.strongSources)) return true;
+  if (anyWord(ctx.weak) || anyPattern(ctx.weakPatterns)) return true;
+  return (ctx.weakPairs ?? []).some(([nouns, cues]) => anyWord(nouns) && anyWord(cues));
+}
+
+/**
+ * Does `text` match the capability's EXPLICIT OVERRIDE (agents.ts `requiresContext.explicitOverride`, after `ignore`)?
+ * For the Nexus coursework capability: a write verb + an ASSIGNMENT OBJECT + "to/in/into Nexus" (D13-ovr,
+ * docs/FIX-nexus-write-loop4.md). False when the capability has no override.
+ */
+export function capabilityExplicitOverride(cap: AgentCapability, text: string): boolean {
+  const ctx = cap.requiresContext;
+  if (!ctx?.explicitOverride?.length) return false;
+  let raw = String(text ?? "");
+  for (const p of ctx.ignore ?? []) raw = raw.replace(new RegExp(escapeRe(p), "gi"), " ");
+  return explicitOverrideMatches(ctx, raw);
+}
+
+/**
+ * D14 (docs/FIX-nexus-write-loop4.md, "D14 -- override needs Nexus as the destination"): the explicit override is
+ * evaluated ONE CLAUSE AT A TIME (`explicitOverrideClauseBreak` DATA splits the ask), and a clause counts only when an
+ * `explicitOverride` pattern matches it and NO `explicitOverrideCancels` pattern does (a competing destination such as
+ * "to my calendar", or another lane's object such as a reminder, flight or budget, in that same clause). Generic over
+ * the capability's data; `raw` has already had `ignore` phrases removed.
+ */
+function explicitOverrideMatches(ctx: NonNullable<AgentCapability["requiresContext"]>, raw: string): boolean {
+  const overrides = ctx.explicitOverride ?? [];
+  if (!overrides.length) return false;
+  const brk = ctx.explicitOverrideClauseBreak;
+  const clauses = brk ? raw.split(new RegExp(brk[0], brk[1].includes("g") ? brk[1] : `${brk[1]}g`)) : [raw];
+  const cancels = ctx.explicitOverrideCancels ?? [];
+  return clauses.some((c) => {
+    const clause = c.trim();
+    if (!clause) return false;
+    if (!overrides.some(([src, flags]) => new RegExp(src, flags).test(clause))) return false;
+    return !cancels.some(([src, flags]) => new RegExp(src, flags).test(clause));
+  });
+}
+
+/**
+ * May the deterministic 1:1 hand-off fire from a NON-holder to a holder of this matching shared capability?
+ * Data-driven (agents.ts `oneToOneHandoff`): "always" (default) = yes; "explicit-override" = only when the ask
+ * also matches the capability's explicit override (D13, docs/FIX-nexus-write-loop4.md). Holders KEEP regardless.
+ */
+export function capabilityHandsOffInOneToOne(cap: AgentCapability, text: string): boolean {
+  if (cap.oneToOneHandoff === "explicit-override") return capabilityExplicitOverride(cap, text);
+  return true;
+}
+
+/** Does `text` ask for this SHARED capability? Exclusive capabilities never match here. */
+export function sharedCapabilityMatches(cap: AgentCapability, text: string): boolean {
+  if (cap.exclusive) return false;
+  const t = (text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  let signal = (cap.triggers ?? []).some((p) => wordStart(p).test(t));
+  for (const [nouns, cues] of cap.triggerPairs ?? []) {
+    if (signal) break;
+    if (nouns.some((n) => wholeWord(n).test(t)) && cues.some((c) => wholeWord(c).test(t))) signal = true;
+  }
+  // A trigger says what KIND of job; the context says it is THIS capability's job (W19/W20).
+  return signal && capabilityContextPresent(cap, text);
+}
+
+/** The agents PRIME for this ask (holders of a matching shared capability), in roster order,
+ *  optionally restricted to `members`. Empty when the ask matches no shared capability. */
+export function sharedCapabilityHolders(text: string, members?: readonly AgentId[]): OwnedCapability[] {
+  const inScope = members ? new Set(members) : null;
+  const out: OwnedCapability[] = [];
+  for (const agent of AGENTS) {
+    if (inScope && !inScope.has(agent.id)) continue;
+    const cap = (agent.capabilities ?? []).find((c) => sharedCapabilityMatches(c, text));
+    if (cap) out.push({ agent, cap });
+  }
+  return out;
+}
+
+/**
+ * ADVISORY directory of the SHARED capabilities for the LLM routers, built from agents.ts data only:
+ *   "PRIME OWNERS (who leads which shared job):
+ *    - <capability label> → <Holder Name> (@<handle>), <Holder Name> (@<handle>): <routerHint>"
+ * One line per shared capability with at least one holder in `members` (the whole roster when omitted).
+ * Empty string when there is none, so a huddle without a holder gets no extra prompt text. No agent id or
+ * name is written in this file -- they come from the roster (docs/FIX-nexus-write-routing.md, item A).
+ */
+export function primeOwnershipDirectory(members?: readonly AgentId[]): string {
+  const inScope = members ? new Set(members) : null;
+  const byCap = new Map<string, { cap: AgentCapability; holders: Agent[] }>();
+  for (const agent of AGENTS) {
+    if (inScope && !inScope.has(agent.id)) continue;
+    for (const cap of agent.capabilities ?? []) {
+      if (cap.exclusive) continue;
+      const entry = byCap.get(cap.id) ?? { cap, holders: [] };
+      entry.holders.push(agent);
+      byCap.set(cap.id, entry);
+    }
+  }
+  if (!byCap.size) return "";
+  const lines = [...byCap.values()].map(({ cap, holders }) => {
+    const who = holders.map((a) => `${a.name} (@${a.handle})`).join(", ");
+    return `- ${cap.label} → ${who}${cap.routerHint ? `: ${cap.routerHint}` : ""}`;
+  });
+  return `PRIME OWNERS (who leads which shared job — advisory; ADDRESSED BY NAME and DELEGATION still win):\n${lines.join("\n")}`;
+}
+
+/** Roster marker for shared capabilities, e.g. " [prime for: adding & updating … in Nexus …]". */
+export function primeMarker(agent: Agent): string {
+  const shared = (agent.capabilities ?? []).filter((c) => !c.exclusive);
+  return shared.length ? ` [prime for: ${shared.map((c) => c.label).join("; ")}]` : "";
 }

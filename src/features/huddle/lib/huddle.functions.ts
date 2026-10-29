@@ -21,6 +21,7 @@ import {
   routeMessageLLM,
   scoreAskLLM,
   laneOwnerFor,
+  primeLaneDecision,
   resolveOwnerLLM,
   type RouterInvocation,
   type RouteResult,
@@ -32,6 +33,13 @@ import {
   type PromptDebug,
 } from "./fallbacks";
 import { buildRoster } from "./roster";
+// Pure (no server imports) -- the Nexus write tool's reply-honesty guard, run in reply assembly.
+import {
+  presentNexusWriteTurn,
+  createNexusWriteStreamHold,
+  nexusWriteInFlightOutcome,
+  type TurnNexusWriteUse,
+} from "./nexus/nexus-write-shared";
 import {
   resolveByDifficulty,
   resolveModel,
@@ -613,6 +621,9 @@ type TurnResumeState = {
   reasoning: string[];
   fallbacks: FallbackEvent[];
   prompts: PromptDebug[];
+  /** Every Nexus write this turn, with its result (in-flight = unknown) -- loop 3 D11: a later chunk's
+   *  replies are presented against the writes of EARLIER chunks too (presentNexusWriteTurn). */
+  nexusWriteUses?: TurnNexusWriteUse[];
 };
 
 export interface RunHuddleTurnOpts {
@@ -1131,6 +1142,17 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       lovableModel = gateway(id);
     }
     return lovableModel;
+  }
+
+  // D6 (loop 3, docs/FIX-nexus-write-loop3.md): the coursework capability's strong context is the owner's
+  // REAL Nexus course list (codes/names), read through the existing read path and cached with a short TTL.
+  // Bounded (course-context.server.ts): a cold read is awaited ~1.5s at most, else this turn routes on the
+  // weak signals only. Also read by the 1:1 prime hand-off below (resumed chunks included).
+  try {
+    const { primeNexusCourseContext } = await import("./nexus/course-context.server");
+    await primeNexusCourseContext();
+  } catch {
+    /* weak signals only */
   }
 
   // ---- Route ----
@@ -2166,6 +2188,30 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     turnActionLedger.add(k);
     return true;
   };
+  // Nexus writes (W3/W17, docs/FIX-nexus-write-redteam.md): the FIRST call's outcome, by claim key, so a
+  // teammate whose identical write is suppressed is handed THAT real outcome (and its reply is checked
+  // against it) instead of an unconditional "already done". Every write this turn is also collected so
+  // a teammate that never called the tool cannot claim the writer's failed item was saved.
+  const nexusWriteOutcomes = new Map<string, Promise<Record<string, unknown>>>();
+  const turnNexusWriteUses: TurnNexusWriteUse[] = [...(resume?.nexusWriteUses ?? [])];
+  // D4 (docs/FIX-nexus-write-loop2.md): once a Nexus write call STARTS this turn, the 1:1 text stream
+  // stops publishing partial replies; only the final, presented reply (presentNexusWriteTurn) is shown.
+  const nexusStreamHold = createNexusWriteStreamHold();
+  // D11 (loop 3, docs/FIX-nexus-write-loop3.md): a write SETTLED in an earlier chunk hands its real outcome
+  // to an identical call in this chunk (an in-flight one stays `unknown`).
+  for (const u of turnNexusWriteUses) {
+    if (!u.claimKey || typeof u.detail !== "string" || nexusWriteOutcomes.has(u.claimKey)) continue;
+    try {
+      nexusWriteOutcomes.set(u.claimKey, Promise.resolve(JSON.parse(u.detail) as Record<string, unknown>));
+    } catch {
+      /* unreadable -> an identical call reports unknown */
+    }
+  }
+  // D10 (loop 3): the replies the OWNER sees. `replies` stays RAW (the resume state carries it); every point
+  // where a reply leaves the server -- the 1:1 stream, each chunk save, the final result, the prior shown to
+  // later agents, memory -- goes through this, so a turn with a failed/unknown write shows ONLY the
+  // code-built status (every reply, every chunk) and a clean write always shows the code-built saved list.
+  const presentedReplies = (list: Reply[] = replies): Reply[] => presentNexusWriteTurn(list, turnNexusWriteUses) as Reply[];
 
   // Lightweight handoff contract for the ad-hoc mention-chain: when an agent @mentions a teammate
   // (the "mention IS the handoff"), we re-queue that teammate — but today they receive no structured
@@ -3674,6 +3720,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // than one that exists and fails.
         const { nexusReadTools } = await import("./nexus/nexus.server");
         const nexusTools = nexusReadTools() as { type: "function"; name: string }[];
+        // Nexus WRITE (add/update dated assignments). Same pool for EVERY agent -- Elle and Iris are
+        // made prime by routing data (agents.ts), not by gating the tool. Empty unless the base URL,
+        // the owner id AND the UAT token are all configured (nexus-write.server.ts).
+        const { nexusWriteTools } = await import("./nexus/nexus-write.server");
+        const nexusWriteToolList = nexusWriteTools() as { type: "function"; name: string }[];
         const mergedTools = [
           createHuddleTaskTool,
           createHuddleTasksTool,
@@ -3712,6 +3763,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           ...journeyTools,
           ...webSearchTools,
           ...nexusTools,
+          ...nexusWriteToolList,
         ];
         toolTypes = mergedTools
           .map((t) => {
@@ -4439,6 +4491,41 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             recordToolUse(winner.id, c.name, ok ? `${label} rendered` : `${label} -- failed`, ok, detail);
             return out;
           }
+          const nexusWriteMod = await import("./nexus/nexus-write.server");
+          if (c.name === nexusWriteMod.NEXUS_WRITE_TOOL_NAME) {
+            // D4: from here on this turn publishes no partial 1:1 reply (the stream hold), before anything else.
+            nexusStreamHold.noteToolCall(c.name);
+            // Mutating: an IDENTICAL write is claimed once per turn, so two group responders running in
+            // one parallel wave cannot both POST the same deliverable (the dedup read would race).
+            const writeArgs = (c.arguments ?? {}) as Record<string, unknown>;
+            const runWrite = () =>
+              nexusWriteMod.executeNexusWriteTool(writeArgs, {
+                ref: `huddle:${data.huddleId}:turn:${turnId ?? "sync"}:agent:${winner.id}`,
+              });
+            // Claimed on the NORMALISED (course, title, due) of its items, never the raw JSON (W3).
+            const claimKey = `${c.name}:${nexusWriteMod.nexusWriteClaimKey(writeArgs)}`;
+            if (!claimAction(claimKey)) {
+              // Suppressed: carry the FIRST call's real outcome (unknown if it was an earlier chunk).
+              const firstOut = (await nexusWriteOutcomes.get(claimKey)) ?? nexusWriteMod.nexusWriteUnknownOutcome(writeArgs);
+              const firstDetail = JSON.stringify(firstOut);
+              const firstOk = nexusWriteMod.nexusWriteSummary(firstOut).ok;
+              recordToolUse(winner.id, c.name, "Nexus write -- already done this turn", firstOk, firstDetail);
+              return JSON.stringify({ ...firstOut, already_done_this_turn: true, note: "A teammate already sent this write this turn. These are THAT call's real results: report them exactly, and do not call again." });
+            }
+            // D11 (loop 3): recorded the moment it STARTS, every item `unknown` -- a reply presented (or a
+            // chunk saved) while it is in flight can never claim it; the real result replaces it below.
+            const writeUse: TurnNexusWriteUse = { agentId: winner.id, tool: c.name, ok: false, detail: JSON.stringify(nexusWriteInFlightOutcome(writeArgs)), claimKey };
+            turnNexusWriteUses.push(writeUse);
+            const pending = runWrite();
+            nexusWriteOutcomes.set(claimKey, pending.catch(() => nexusWriteMod.nexusWriteUnknownOutcome(writeArgs)));
+            const out = await pending;
+            const { summary, ok } = nexusWriteMod.nexusWriteSummary(out);
+            // The FULL result rides in `detail`: presentNexusWriteTurn reads it back to build what the
+            // owner sees (code-built status / saved list, loop 3) -- never the model's own words about it.
+            recordToolUse(winner.id, c.name, summary, ok, JSON.stringify(out));
+            Object.assign(writeUse, { ok, detail: JSON.stringify(out) });
+            return JSON.stringify(out);
+          }
           const nexusMod = await import("./nexus/nexus.server");
           if (nexusMod.NEXUS_TOOL_NAMES.has(c.name)) {
             const out = await nexusMod.executeNexusTool(
@@ -4942,19 +5029,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           data.scope === "one-to-one" &&
           (data.streamReplies?.oneOnOne ?? true);
         let lastStreamWrite = 0;
+        // Wrapped in the Nexus stream hold (D4): after a write call starts, no partial is published.
         const onDelta = streamOneOnOne
-          ? (full: string) => {
+          ? nexusStreamHold.wrap((full: string) => {
               const nowMs = Date.now();
               if (nowMs - lastStreamWrite < 900) return; // throttle to ~1s writes
               lastStreamWrite = nowMs;
               void turnStore!
                 .updateTurnReplies(
                   turnId!,
-                  [...replies, { agentId: winner.id, text: full }],
+                  presentedReplies([...replies, { agentId: winner.id, text: full }]),
                   buildResumeState(),
                 )
                 .catch(() => {});
-            }
+            })
           : undefined;
 
         // A file a BUILT-IN tool produced — an image from image_generation, or a file the model wrote
@@ -6618,6 +6706,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // any self-authored markdown link from the text so the user never sees a fake "open the document" link.
     // Also backstop file_search's own narration tendency (house-style bans it in prose; the model still
     // does it — see stripFileMentionNarration above).
+    // Nexus write honesty is NOT applied here per agent any more (loop 3 D10, docs/FIX-nexus-write-loop3.md):
+    // it is a property of the whole TURN -- a write that fails AFTER this reply was assembled must still
+    // replace it -- so the raw reply is kept and `presentedReplies()` builds what the owner sees.
     const safeText = stripFileMentionNarration(stripAgentReplyLinks(finalText));
     // A confirm-intent ask this reply IS, if the agent called propose_task_intent this same turn — mirrors
     // replyArtifacts's derivation exactly (detail carries the structured payload as JSON rather than a
@@ -6791,8 +6882,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           void deliverOwnerFollowup(ownerId, winner.name, data.text);
         }
       };
+      // SHARED capability (agents.ts, exclusive:false): deterministic too, and decided BEFORE the LLM
+      // resolver so the 1:1 directive (laneOwnerFor) and this follow-up can never disagree. "keep" =
+      // the addressed agent is prime for this ask -> no follow-up to anyone. A non-holder gets a deterministic
+      // hand-off only where the capability data allows it (D13: Nexus coursework = an explicit Nexus write of an
+      // assignment); any other ask returns null and takes the LLM judge below (docs/FIX-nexus-write-loop4.md).
+      const prime = capOwnerId ? null : primeLaneDecision(data.text, nextId);
       if (capOwnerId) {
         deliverIfOwner(capOwnerId);
+      } else if (prime === "keep") {
+        // in its own lane: nothing to pass along
+      } else if (prime) {
+        deliverIfOwner(prime);
       } else {
         // No exclusive owner → resolve the LANE owner. The LLM router doesn't run in a 1:1, so classify
         // SEMANTICALLY (a cheap dedicated LLM call, mirroring scoreDifficultyLLM) — replacing the keyword
@@ -6806,11 +6907,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // (the earlier bug: null meant BOTH "keep" and "failed", so laneOwnerFor re-introduced the mis-route).
           const resolved =
             routerCfg.backend === "openai" && openaiKey
-              ? await resolveOwnerLLM(data.text, nextId, {
+              ? // The live 1:1 chat hand-off is the ONLY caller that gets PR #114's prime-owners hint
+                // (docs/FIX-nexus-write-loop4.md M0); grooming and task-creation ownership do not.
+                await resolveOwnerLLM(data.text, nextId, {
                   backend: "openai",
                   model: routerCfg.model,
                   fastMode: routerCfg.fastMode,
-                })
+                }, { primeHint: true })
               : null;
           const ownerId = resolved ?? (laneOwnerFor(data.text, nextId)?.id ?? null);
           deliverIfOwner(ownerId);
@@ -6823,7 +6926,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   // merged so far, in order. Recomputed once per wave and shared by all agents
   // in that wave (they do not see each other's replies).
   const buildPrior = () =>
-    replies.map((rep) => `${AGENT_BY_ID[rep.agentId].name} just said: "${rep.text}"`).join("\n");
+    presentedReplies().map((rep) => `${AGENT_BY_ID[rep.agentId].name} just said: "${rep.text}"`).join("\n");
 
   // Pop the next runnable agent, skipping ones that already spoke or aren't
   // members (mirrors the sequential loop's per-iteration skip checks).
@@ -6919,11 +7022,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     reasoning: reasoningSummaries,
     fallbacks,
     prompts,
+    nexusWriteUses: turnNexusWriteUses.map((u) => ({ ...u })),
   });
 
   const finalResult = () => ({
     decision: routed.decision,
-    replies,
+    replies: presentedReplies(),
     fallbacks,
     prompts,
     journeyTaskUpdates,
@@ -7018,7 +7122,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       return c?.store === "azure" && c.chunks && (c.sharing ?? "shared") === "shared";
     });
     if (!anyShared) return; // respect privacy: only persist when the room shares memory
-    const finalReplies = [...replies];
+    const finalReplies = presentedReplies();
     const finalTools = [...toolUses];
     (async () => {
       try {
@@ -7075,7 +7179,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   const streamChunk = async () => {
     if (!chunked || !turnId || !turnStore) return;
     try {
-      await turnStore.updateTurnReplies(turnId, replies, buildResumeState());
+      await turnStore.updateTurnReplies(turnId, presentedReplies(), buildResumeState());
     } catch (e) {
       console.error("[turn-stream] updateTurnReplies failed", e instanceof Error ? e.message : e);
     }
@@ -7226,7 +7330,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       (remainingEligible.length > 0 || ceremonyCloser != null);
     if (hasMore) {
       try {
-        await turnStore.saveTurnChunk(turnId, replies, buildResumeState(), false);
+        await turnStore.saveTurnChunk(turnId, presentedReplies(), buildResumeState(), false);
       } catch (e) {
         console.error("[turn-chunk] partial save failed", e instanceof Error ? e.message : e);
       }
@@ -7236,7 +7340,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     ensureNavLinkDelivered();
     await ensureProduceOfferDelivered();
     try {
-      await turnStore.saveTurnChunk(turnId, replies, null, true, finalResult());
+      await turnStore.saveTurnChunk(turnId, presentedReplies(), null, true, finalResult());
     } catch (e) {
       console.error("[turn-chunk] done save failed", e instanceof Error ? e.message : e);
     }

@@ -407,6 +407,9 @@ jobs:
           # -- `resolveScopeByEmail` looks the anchor up by email and both rows point at it.
           # Set the CROSS_APP_TURN_SUBJECT secret to override; do not read "fails closed" as meaning
           # the route stays shut until someone configures it. It does not.
+          # UAT_BYPASS_TOKEN reaches the SERVER runtime for the Nexus write tool (nexus-write.server.ts):
+          # it is the W1 credential (nexus-hub DECISION-nexus-write-auth.md), the SAME org secret Nexus's
+          # api-deploy.yml syncs to its Function App. Not a new secret. Absent -> the tool is not offered.
           # NOTE: every line below is inside ONE backslash-continued command. A `#` comment must
           # NEVER be placed between those lines: bash splices the continuation BEFORE it parses
           # comments, so the comment swallows the rest of the command and every later setting is
@@ -435,6 +438,7 @@ jobs:
               CROSS_APP_TURN_SUBJECT="${{ secrets.CROSS_APP_TURN_SUBJECT || 'dev@enterpriseds.io' }}" \
               NEXUS_API_URL="${{ secrets.NEXUS_API_URL || 'https://nexus-hub-api.azurewebsites.net' }}" \
               NEXUS_OWNER_ID="${{ secrets.NEXUS_OWNER_ID || 'a3378f93-d655-4913-b2fa-ca5b1d8020f1' }}" \
+              UAT_BYPASS_TOKEN="${{ secrets.UAT_BYPASS_TOKEN }}" \
               AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
               UAT_BYPASS_TOKEN="${{ secrets.UAT_BYPASS_TOKEN }}" \
               HUDDLE_APP_URL="https://${SWA_HOST}"

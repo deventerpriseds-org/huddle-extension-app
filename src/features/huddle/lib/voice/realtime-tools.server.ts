@@ -56,6 +56,10 @@ import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "../
 // file records nine native tools that exist on text and are silently absent when spoken, and the
 // drift is always one-directional. Adding it to one surface "for now" is how that list got to nine.
 import { nexusReadTools, NEXUS_TOOL_NAMES, executeNexusTool } from "../nexus/nexus.server";
+// The Nexus WRITE tool rides the same "all four registration points or none" rule as the reads:
+// defined here, in NATIVE, and dispatched here, so a spoken "add my research paper" never reaches
+// the journey proxy (where it does not exist). One executor for both surfaces.
+import { nexusWriteTools, NEXUS_WRITE_TOOL_NAME, executeNexusWriteTool } from "../nexus/nexus-write.server";
 import { LIST_ARTIFACTS_TOOL } from "../artifacts/artifact-tool";
 // SHARED with the text turn engine — the exclusive-capability meta-task guard, cross-turn title dedup,
 // journey date normalization and the honest outcome note. NOT a voice-local copy: huddle.functions.ts's
@@ -195,6 +199,8 @@ export async function buildRealtimeToolset(
     GET_CALENDAR_EVENTS_TOOL,
     GET_EXTERNAL_CALENDAR_EVENTS_TOOL,
     ...nexusReadTools(),
+    // PR #114: the Nexus WRITE tools (add/update coursework assignments) ride beside the read tools.
+    ...nexusWriteTools(),
   ];
 
   if (opts.webSearch !== false) raw.push(TAVILY_WEB_SEARCH_TOOL);
@@ -529,10 +535,20 @@ export async function executeRealtimeTool(
     "create_huddle_tasks",
     "confirm_task_intent",
     ...NEXUS_TOOL_NAMES,
+    NEXUS_WRITE_TOOL_NAME,
   ]);
   try {
     if (NEXUS_TOOL_NAMES.has(name)) {
       return done(JSON.stringify(await executeNexusTool(name, args, ctx.timeZone || "UTC")));
+    }
+    if (name === NEXUS_WRITE_TOOL_NAME) {
+      return done(
+        JSON.stringify(
+          await executeNexusWriteTool(args, {
+            ref: `huddle:${ctx.huddleId}:voice:${ctx.runId ?? "call"}:agent:${ctx.agentId}`,
+          }),
+        ),
+      );
     }
     if (name === "get_external_calendar_events") {
       const { resolveCalendarMailbox } = await import("../journey/identity");
@@ -879,6 +895,10 @@ export async function executeRealtimeTool(
     }
     return done(JSON.stringify({ error: `Tool not available on the voice path: ${name}` }));
   } catch (err) {
-    return done(JSON.stringify({ error: err instanceof Error ? err.message : String(err), tool: name }));
+    // V1 (docs/FIX-nexus-write-voice-gate.md): a THROW is a failure, said explicitly -- `ok:false`, and for the
+    // Nexus write `persisted:"unknown"` (the throw may have come after the POST landed). Without `ok:false` the
+    // voice gate read `{error,tool}` as a clean write and appended an empty "Saved in Nexus:" list.
+    const error = err instanceof Error ? err.message : String(err);
+    return done(JSON.stringify(name === NEXUS_WRITE_TOOL_NAME ? { ok: false, persisted: "unknown", error, tool: name } : { ok: false, error, tool: name }));
   }
 }

@@ -77,7 +77,12 @@ console.log("=== PART 2 — VOICE DRIFT: every tool defined on text is reachable
 const voiceSrc = readFileSync("src/features/huddle/lib/voice/realtime-tools.server.ts", "utf8");
 const textSrc = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
 t("voice imports the shared definitions", voiceSrc.includes("nexusReadTools"), true);
-t("voice pushes them into its toolset", /raw: unknown\[\][^\n]*nexusReadTools\(\)/.test(voiceSrc), true);
+// Multi-line since the merge with origin/main #124 (docs/FIX-nexus-write-loop4.md M0): read the whole array literal.
+t(
+  "voice pushes them into its toolset",
+  /^\s*\.\.\.nexusReadTools\(\),?\s*$/m.test(voiceSrc.match(/const raw: unknown\[\] = \[([\s\S]*?)\n  \];/)?.[1] ?? ""),
+  true,
+);
 t("voice adds them to NATIVE (else journey-proxied)", voiceSrc.includes("...NEXUS_TOOL_NAMES"), true);
 t("voice dispatches them", voiceSrc.includes("NEXUS_TOOL_NAMES.has(name)"), true);
 t("text pushes them into mergedTools", textSrc.includes("...nexusTools"), true);
