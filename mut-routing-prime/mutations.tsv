@@ -12,7 +12,8 @@ v-money-pattern	src/features/huddle/data/agents.ts	R12-money-pattern warm
 v-fitness	src/features/huddle/data/agents.ts	R12-fitness warm
 v-fitness-pattern	src/features/huddle/data/agents.ts	R12-fitness-pattern warm
 v-travel	src/features/huddle/data/agents.ts	R12-travel warm
-g-drive	src/features/huddle/data/agents.ts	R-CW-drive warm
+g-drive	src/features/huddle/data/agents.ts	R-CW-gdrive warm
+g-drive-nexus	src/features/huddle/data/agents.ts	R-CW-drive-nexus warm
 g-cost	src/features/huddle/data/agents.ts	R-CW-cost warm
 g-run	src/features/huddle/data/agents.ts	R-CW-run warm
 g-stay	src/features/huddle/data/agents.ts	R-CW-stay warm

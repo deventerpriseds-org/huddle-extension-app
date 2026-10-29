@@ -117,6 +117,8 @@ async function main() {
       ["R-CW-prof", "my professor wants the case study by Friday, can you add it", true],
       ["R-CW-cost", "add the MGT-782 cost-benefit analysis paper due Friday to Nexus", true],
       ["R-CW-drive", "upload the MGT-702 syllabus from my Google Drive to Nexus", true],
+      ["R-CW-gdrive", "add the MGT-782 deadlines from the syllabus on my Google Drive to my assignments", true],
+      ["R-CW-drive-nexus", "import the MGT-702 syllabus from Drive to Nexus", true],
       ["R-CW-calendar", "the course calendar in my MGT-782 syllabus has the paper due Dec 9, add it", true],
       ["R-CW-update", "update the due date on my MGT-782 essay to Friday", true],
       ["R-CW-brief", "add my EMBA694 case brief due Nov 20", false],
