@@ -100,3 +100,74 @@ unschedule_task update_task send_push register_push_token`.
 | **Grooming replaces tags blindly.** OBSERVED as open. | A tag he added by hand ("waiting-on-Dana") disappears after Monday's groom. | actions.md:2746: "grooming (`groom.ts:168`) blind-replaces the tags array". Parked tags were fixed (`bebc385`), but not general tags. | soon | S |
 | **Parking a task leaves its owner and rank.** OBSERVED as open. | A parked task still shows an assignee and rank in some views. | actions.md:2793 `[OPEN — consider] the PARK action could also clear stale assigned_agent/priority_rank`. | later | S |
 | **The nightly planner demotes IN_REVIEW and DOING to TODO.** OBSERVED (root-caused 2026-08-06). Current state not re-verified. | A draft waiting for his review vanishes from Review overnight. | memory.md:1055-1067: journey `nightly-schedule-builder` "OVERWRITES status to 'TODO'" (lines 837/1344/1454). "fix NOT yet built". | now (if unchanged) | S (journey) |
+
+## 6. COMMUNICATE (email, messages, calls)
+
+| Gap | What the owner would experience (concrete example) | Evidence | Sev | Size |
+|---|---|---|---|---|
+| **No on-demand inbox read.** OBSERVED. See §1. | "Summarise what came in from the program office today" cannot be done. Only the push-driven watch tells him about new mail. | `graph-email.server.ts:249` `listInboxMessagesSince` is used only by `runInboundEmailWatch`. | now | M |
+| **Save-to-Drafts for email replies is not owner-confirmed.** OBSERVED. | He taps "Save to Drafts" on Iris's reply card and does not yet know if it lands in Outlook. | memory.md:3806 (`ACT:inbound-email-watch`): "Save-to-Drafts NOT yet owner-confirmed". actions.md:4678 "OPEN until owner confirms". | now | S |
+| **No text or SMS channel.** OBSERVED (no tool). INFERRED need. | "Text Dana I'm running late" has no route. journey offers `send_chat_message` (in-app), `send_slack_message` and `initiate_phone_call`, but no SMS. | The journey case list has no sms. Huddle has none either. | later | M |
+| **Agent replies have no push unless journey is connected.** OBSERVED. | A Huddle-only user gets no phone notification for a reply, a reminder or an alarm. | CLAUDE.md "Known gap — Huddle-only (no journey) has NO phone push at all ... Deferred by the user (2026-10-08)". | later | M |
+| **A Huddle alarm on a task journey already alarms rings in both apps.** OBSERVED (the user chose to leave it). | Double alarm for the gym. | CLAUDE.md "Known overlap, left as is by the user's choice". | later | S |
+
+## 7. WORK IN THE BACKGROUND (produce, autowork, confirm gates, review)
+
+| Gap | What the owner would experience (concrete example) | Evidence | Sev | Size |
+|---|---|---|---|---|
+| **A short "ok" or "great" in a 1:1 can silently confirm a pending task's Definition of Done.** OBSERVED. | Iris asked about task X earlier. Later he says "ok great" about something else, and task X's DoD is locked and the task advances. | `huddle.functions.ts:700-760`: when the DM agent has an `asked` task, `isPlainConfirmation(replyText)` (`:639-648`, which matches `ok|sure|great|right|perfect` under 40 chars) calls `confirmTaskIntent` before any model reads the message. The binding is now the last-sent ask (`tasks.server.ts:1227`), which is better, but the message still is not checked to be ABOUT that task. | now | S |
+| **The confirm, approach and review gates are heavy for simple tasks.** INFERRED from his philosophy, with OBSERVED mechanics. | "Get the vitamin list together" goes through confirm-intent, then an approach grade, then review before anything happens. A ChatGPT-style "just do it" is not available for work done in the background. | CLAUDE.md "Agent auto-work": the UP_NEXT→DOING gate behind `confirm_task_intent`, then the "auto-graded approach gate", then IN_REVIEW. `ACT:chatgpt-work-flow-parity` (actions.md:3638) is an open assessment. | soon | M |
+| **The produce offer is lost if he replies with anything other than an explicit produce phrase.** OBSERVED (by design). | The agent offers the full version; he says "yes please". `isOfferAccepted` needs a produce phrase, so the offer is cleared and nothing is produced. | `huddle.functions.ts:1726-1740`: "Only an explicit produce phrase accepts (a bare 'yes' may be answering a question inside the answer itself)". "Any other next message clears it." | soon | S |
+| **Specialist workers can spawn from a plain question and post into other agents' DMs.** OBSERVED (incident). | A "plan my day" turn produced 2 Tess artifacts in his review queue and messages in Sam's and Tess's DMs. | accuracy-log.md 2026-10-28: "it also spawned Tess specialist workers that put 2 artifacts in the review queue and messages in Sam's/Tess's DMs". | soon | S |
+| **There is no chat-reachable reset for a stuck task.** INFERRED. Partially addressed. | A task stuck in an escalated approach or awaiting review: he has to know which tool or board action applies. | The escalated-is-terminal issue was fixed (`approach-gate.server.ts` comment block at ~:130). `override_approach_gate` and `request_approach_override` exist, but he has no "unstick this" verb. | later | S |
+
+## 8. TEAM / HAND-OFF
+
+| Gap | What the owner would experience (concrete example) | Evidence | Sev | Size |
+|---|---|---|---|---|
+| **1:1 deferral by default** (same as §1 row 1). OBSERVED. | In Iris's DM he asks a money question and gets a hand-off instead of an answer. | `huddle.functions.ts:2442`. | now | S |
+| **The 1:1 scene text still says @mention, which contradicts the 1:1 rule.** OBSERVED. | An agent writes "@finn-reid" in a DM, where the mention does nothing (nobody is in the room). | `:2482`: the generic scene has no scope check. CLAUDE.md: "NO @handle in a 1:1 (@ is group-only)". | soon | S |
+| **A hand-off in prose re-queues nobody.** OBSERVED (documented). | In a group, "I'll get Finn to run the numbers" and Finn never speaks. | CLAUDE.md "Secondary (prose handoff)": "When an agent delegates in prose ... no re-queue happens". | soon | M |
+| **Grooming in chat can exceed the 45s ceiling.** OBSERVED (computed by the verifier, not measured). | "Terry, groom the backlog" in chat can time out and come back partial. | VERIFY-ownership-judge-delete-2 AC3: "total ... **~63.5s** ... Still over the ~45s ceiling in the worst case. Typical time is UNPROVEN". | soon | M |
+| **Every created task can add up to 5s for the ownership judge, even with journey off.** OBSERVED. | A brain-dump with 6 items created one by one adds up to 30s. | VERIFY-ownership-judge-delete-2 AC2 notes (b) and (c). | soon | S |
+
+## 9. MEMORY / CONTEXT
+
+| Gap | What the owner would experience (concrete example) | Evidence | Sev | Size |
+|---|---|---|---|---|
+| **His ChatGPT knowledge is not ingested.** OBSERVED (stated gap). | Things he told ChatGPT over months (preferences, venture details) are unknown to the team. | memory.md:128: "Gaps: ... the owner's ChatGPT knowledge isn't ingested yet." | soon | M |
+| **Voice now shares memory, but that is not owner-confirmed.** OBSERVED. | It is not known yet whether a voice 1:1 actually knows his goals. | actions.md `ACT:voice-context-parity`: "[ ] Owner confirms on a live voice 1:1 ... (NOT yet confirmed)". | now | S |
+| **Short-term context does not cross huddles.** OBSERVED (by design). | He says something in the group, then in Iris's 1:1 says "like I said": she has only RAG memory, and only if the score is ≥0.3. | CLAUDE.md "Chat memory & context architecture": history is per-huddle, and the only bridge is `rag_chunks`. | later | M |
+| **The Memory view's intent is still an open owner decision.** OBSERVED. | He cannot see or curate what the team "knows" about him in one place. | actions.md:3865: "OWNER DECISION deferred by the owner to post-deploy: Memory view — original intent". | later | M |
+| **Agents do not know their own mechanisms.** OBSERVED (incident note). | Tess says "I don't handle real-time board state" when she can read it. | memory.md:1038: "agents blind to their own mechanisms ... = separate follow-on". | later | S |
+
+## 10. PLATFORM / RELIABILITY / SAFETY
+
+| Gap | What the owner would experience (concrete example) | Evidence | Sev | Size |
+|---|---|---|---|---|
+| **The caller identity is asserted by the client.** OBSERVED. | Anyone who can call the server fn with his email can read or write his board. Today this is a single-user app, so the risk is latent. | The server-fn input takes `caller: { entra_object_id?, entra_email? }` as optional zod strings (`huddle.functions.ts:216`, `:8015`, `:8103`). VERIFY-ownership-judge-delete-2 AC5: "The client-asserted caller is pre-existing". journey `updateTask` is unscoped (§5). | soon (before any second user) | M |
+| **The journey toggle is enforced per call site, not at one chokepoint.** OBSERVED. | A test harness run writes real tasks to his board. This happened on 2026-10-28 (7 created, 8 started). | accuracy-log 2026-10-28: "the toggle is per call site, not global ... Open: a single chokepoint test that EVERY journey-writing dispatch is gated". Voice focus_on is still ungated (§3). | now | S |
+| **The ~45s hosting ceiling and slow tiers.** OBSERVED. | Long group turns or deep asks come back "deferred", or as partial replies that trickle in. | `huddle.functions.ts:695-700`: `CHUNK_BUDGET_MS = 30_000`, `TURN_DEADLINE_MS = 36_000`, `MAX_CHUNKS = 6`. memory.md:2727-2736: "an in-flight OpenAI call can't be paused/resumed across executions". | soon | L |
+| **There is no per-agent model-call timeout.** OBSERVED (backlog). | One slow agent in a group wave drags the whole turn toward the ceiling. | CLAUDE.md Backlog #2: "Wrap each agent's `callOpenAIResponses`/`generateText` in an AbortController (~30s)". | soon | S |
+| **Prompt caching is not exploited.** OBSERVED (backlog #1). | Slower, costlier turns, especially in groups. | CLAUDE.md Backlog #1: "order the prompt as [stable prefix] + [volatile suffix]". | later | M |
+| **There is no token streaming in 1:1 chat.** OBSERVED. | He waits 5-10s for a whole reply. journey feels faster because it streams. | memory.md:2460 (2): "Latency 5–10s/turn ... Journey feels faster because it STREAMS tokens". `docs/plan-1on1-token-streaming.md` exists as a plan. | soon | L |
+| **Admin consents that gate features are not granted.** OBSERVED. | Outlook calendar reads 403. OneDrive mirroring returns `needsConsent`. | actions.md:2475; CLAUDE.md Artifact store Phase 2. | soon | S (admin) |
+| **Connector expiry has no proactive alert.** INFERRED. | His Google or Outlook connection in journey lapses, and Iris's brief silently loses meetings. | The brief depends on `resolveCalendarMailbox` via journey `get_my_config` (memory.md:174). I found no expiry check or "reconnect" message in src. | later | M |
+| **Many shipped fixes are not owner-confirmed.** OBSERVED. | Behaviour he has not seen work is recorded as live: deep-ask hybrid, confirm rotation, sticky priority push, timestamps, voice context parity, email drafts. | memory.md:120, :130, :147, :172, :1747; actions.md:4819. All are marked "NOT owner-confirmed". | now | S (one walk-through) |
+
+---
+
+## Top 10 to do next (ranked by owner impact)
+
+1. **Replace the FOCUS hint with the approved planning contract.** A list means a short timed table, create the missing tasks, start nothing, add times only when asked. This fixes failures #2 and #3 from 2026-10-28. (`tasks/tools.ts:476`; §2, §3)
+2. **Make the 1:1 lane rule "answer first, then offer the hand-off"**, and drop "@mention" from the 1:1 scene. (`huddle.functions.ts:2442`, `:2482`; §1, §8)
+3. **Stop a bare "ok"/"great" from confirming a task's Definition of Done** unless the message is about that task. (`huddle.functions.ts:639-760`; §7)
+4. **Add tools to list, cancel and move reminders.** The backend `cancelReminder` already exists. (§4)
+5. **Add tools to edit and delete calendar events** (journey side, beside `create_calendar_event`). (§4)
+6. **Add an on-demand inbox search and read tool** on top of the existing `listInboxMessagesSince`. (§1, §6)
+7. **Gate every journey write at one chokepoint**, including voice `focus_on`, so test runs can never touch the real board. (§3, §10)
+8. **Add recurring tasks and habits** (gym MWF, daily vitamins). (§3)
+9. **Make blocker and status questions read a source that includes BLOCKED tasks, and localise schedule times to ET.** (§1)
+10. **Add an undo of the last agent action, plus a chat path to delete a task with a confirm step.** (§5)
+
+Also worth an owner walk-through in one session: the not-owner-confirmed list in §10, last row.
