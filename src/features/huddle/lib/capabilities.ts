@@ -291,7 +291,8 @@ const CONTEXT_SOURCES: Record<string, (text: string) => boolean> = {
 
 /**
  * Does `text` carry the capability's required CONTEXT (agents.ts `requiresContext`)? No spec = yes.
- * ORDER (loop 3 D6, docs/FIX-nexus-write-loop3.md): VETOES FIRST and they WIN -- another lane's unmistakable
+ * ORDER: an EXPLICIT OVERRIDE first (`explicitOverride` DATA, e.g. "add … to Nexus" -- docs/FIX-nexus-write-routing.md,
+ * "Explicit Nexus override (2026-10-29)"), then, as in loop 3 D6 (docs/FIX-nexus-write-loop3.md): VETOES and they WIN -- another lane's unmistakable
  * vocabulary ("flight", "visa", "loan", "LLC", "calls", "yoga" …) beats even strong context; loop 2 checked
  * strong first, so a flight number read as a course code skipped every veto. Then STRONG (data sources such
  * as the owner's real course list, plus explicit words/patterns), then WEAK.
@@ -305,6 +306,8 @@ export function capabilityContextPresent(cap: AgentCapability, text: string): bo
   const anyWord = (ws?: string[]) => (ws ?? []).some((w) => wholeWord(w).test(t));
   const anyPattern = (ps?: Array<[string, string]>) => (ps ?? []).some(([src, flags]) => new RegExp(src, flags).test(raw));
   const anySource = (names?: string[]) => (names ?? []).some((n) => CONTEXT_SOURCES[n]?.(raw) === true);
+  // An EXPLICIT request naming the capability's own system as the destination beats the vetoes (owner, 2026-10-29).
+  if (anyPattern(ctx.explicitOverride)) return true;
   if (anyWord(ctx.vetoes) || anyPattern(ctx.vetoPatterns)) return false;
   if (anyWord(ctx.strong) || anyPattern(ctx.strongPatterns) || anySource(ctx.strongSources)) return true;
   if (anyWord(ctx.weak) || anyPattern(ctx.weakPatterns)) return true;

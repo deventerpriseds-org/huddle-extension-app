@@ -1,0 +1,68 @@
+warm	pos	add the MGT-782 email marketing case analysis to Nexus	holders=n/a	lead=cam-post	1:1(cam-post)=cam-post	lane(cam-post)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	put my travel industry essay due Nov 3 into Nexus	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	update the Airbnb pricing case study due date in Nexus	holders=n/a	lead=eli-vaughn	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=eli-vaughn	handoffs=n/a	elle/iris=n/a
+warm	pos	can you add my hotel management essay to Nexus	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	please reschedule the budgeting case study to Dec 2 in Nexus	holders=n/a	lead=finn-reid	1:1(finn-reid)=finn-reid	lane(finn-reid)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	add the flight operations essay to my Nexus assignments	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	set the travel essay due date to Friday in Nexus	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	record my dinner etiquette essay due Nov 10 into Nexus	holders=n/a	lead=elle-rowan	1:1(charleston-lewis)=charleston-lewis	lane(charleston-lewis)=elle-rowan	handoffs=n/a	elle/iris=n/a
+warm	pos	change the client presentation paper deadline in Nexus to Monday	holders=n/a	lead=elle-rowan	1:1(sam-trent)=sam-trent	lane(sam-trent)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	save the email marketing paper to my Nexus	holders=n/a	lead=cam-post	1:1(cam-post)=cam-post	lane(cam-post)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	enter the fitness industry case study into Nexus	holders=n/a	lead=flex-grimes	1:1(flex-grimes)=flex-grimes	lane(flex-grimes)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	move my hotel case study to Dec 4 in Nexus	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	log the tax accounting paper due Friday in Nexus	holders=n/a	lead=iris-chase	1:1(finn-reid)=finn-reid	lane(finn-reid)=null	handoffs=n/a	elle/iris=n/a
+warm	pos	hey Elle, add my airline pricing essay to Nexus	holders=n/a	lead=elle-rowan	1:1(cam-post)=cam-post	lane(cam-post)=elle-rowan	handoffs=n/a	elle/iris=n/a
+warm	pos	I need you to put the restaurant case study into Nexus	holders=n/a	lead=iris-chase	1:1(charleston-lewis)=charleston-lewis	lane(charleston-lewis)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-card	renew my NEXUS card before the deadline	holders=n/a	lead=elle-rowan	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-card	update the address on my NEXUS card	holders=n/a	lead=eli-vaughn	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=eli-vaughn	handoffs=n/a	elle/iris=n/a
+warm	neg-card	add my NEXUS card renewal fee to my budget	holders=n/a	lead=finn-reid	1:1(finn-reid)=finn-reid	lane(finn-reid)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-program	my NEXUS program application deadline is Friday	holders=n/a	lead=elle-rowan	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=elle-rowan	handoffs=n/a	elle/iris=n/a
+warm	neg-program	move my NEXUS program interview to Friday	holders=n/a	lead=cole-blake	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=cole-blake	handoffs=n/a	elle/iris=n/a
+warm	neg-apply	apply to NEXUS for me before my Toronto trip	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-apply	should I apply to NEXUS before the deadline	holders=n/a	lead=elle-rowan	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-trusted	update my address in NEXUS trusted traveler before the deadline	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-trusted	add my kid to NEXUS trusted traveler	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-fitness	can you log my 5k run to Nexus fitness tracker by the deadline	holders=n/a	lead=elle-rowan	1:1(flex-grimes)=flex-grimes	lane(flex-grimes)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-email	email my professor about Nexus	holders=n/a	lead=cam-post	1:1(cam-post)=cam-post	lane(cam-post)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-email	email my professor about the essay I put in Nexus	holders=n/a	lead=elle-rowan	1:1(cam-post)=cam-post	lane(cam-post)=elle-rowan	handoffs=n/a	elle/iris=n/a
+warm	neg-email	email my professor that I will add the MGT-782 essay to Nexus tonight	holders=n/a	lead=elle-rowan	1:1(cam-post)=cam-post	lane(cam-post)=elle-rowan	handoffs=n/a	elle/iris=n/a
+warm	neg-down	is Nexus down	holders=n/a	lead=iris-chase	1:1(cam-post)=cam-post	lane(cam-post)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-down	is Nexus down again? I can't add the travel essay	holders=n/a	lead=troy-lennox	1:1(cam-post)=cam-post	lane(cam-post)=troy-lennox	handoffs=n/a	elle/iris=n/a
+warm	neg-question	when is my travel essay due in Nexus	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-question	did the email marketing paper make it into Nexus	holders=n/a	lead=cam-post	1:1(cam-post)=cam-post	lane(cam-post)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-nexus-of	update my travel essay to the nexus of airlines and hotels	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-nexus-of	add a paragraph on the nexus of travel and pricing to my essay	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	add the MGT-782 email marketing case analysis to Nexus	holders=n/a	lead=cam-post	1:1(cam-post)=cam-post	lane(cam-post)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	put my travel industry essay due Nov 3 into Nexus	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	update the Airbnb pricing case study due date in Nexus	holders=n/a	lead=eli-vaughn	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=eli-vaughn	handoffs=n/a	elle/iris=n/a
+cold	pos	can you add my hotel management essay to Nexus	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	please reschedule the budgeting case study to Dec 2 in Nexus	holders=n/a	lead=finn-reid	1:1(finn-reid)=finn-reid	lane(finn-reid)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	add the flight operations essay to my Nexus assignments	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	set the travel essay due date to Friday in Nexus	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	record my dinner etiquette essay due Nov 10 into Nexus	holders=n/a	lead=elle-rowan	1:1(charleston-lewis)=charleston-lewis	lane(charleston-lewis)=elle-rowan	handoffs=n/a	elle/iris=n/a
+cold	pos	change the client presentation paper deadline in Nexus to Monday	holders=n/a	lead=elle-rowan	1:1(sam-trent)=sam-trent	lane(sam-trent)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	save the email marketing paper to my Nexus	holders=n/a	lead=cam-post	1:1(cam-post)=cam-post	lane(cam-post)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	enter the fitness industry case study into Nexus	holders=n/a	lead=flex-grimes	1:1(flex-grimes)=flex-grimes	lane(flex-grimes)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	move my hotel case study to Dec 4 in Nexus	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	log the tax accounting paper due Friday in Nexus	holders=n/a	lead=iris-chase	1:1(finn-reid)=finn-reid	lane(finn-reid)=null	handoffs=n/a	elle/iris=n/a
+cold	pos	hey Elle, add my airline pricing essay to Nexus	holders=n/a	lead=elle-rowan	1:1(cam-post)=cam-post	lane(cam-post)=elle-rowan	handoffs=n/a	elle/iris=n/a
+cold	pos	I need you to put the restaurant case study into Nexus	holders=n/a	lead=iris-chase	1:1(charleston-lewis)=charleston-lewis	lane(charleston-lewis)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-card	renew my NEXUS card before the deadline	holders=n/a	lead=elle-rowan	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-card	update the address on my NEXUS card	holders=n/a	lead=eli-vaughn	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=eli-vaughn	handoffs=n/a	elle/iris=n/a
+cold	neg-card	add my NEXUS card renewal fee to my budget	holders=n/a	lead=finn-reid	1:1(finn-reid)=finn-reid	lane(finn-reid)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-program	my NEXUS program application deadline is Friday	holders=n/a	lead=elle-rowan	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=elle-rowan	handoffs=n/a	elle/iris=n/a
+cold	neg-program	move my NEXUS program interview to Friday	holders=n/a	lead=cole-blake	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=cole-blake	handoffs=n/a	elle/iris=n/a
+cold	neg-apply	apply to NEXUS for me before my Toronto trip	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-apply	should I apply to NEXUS before the deadline	holders=n/a	lead=elle-rowan	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-trusted	update my address in NEXUS trusted traveler before the deadline	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-trusted	add my kid to NEXUS trusted traveler	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-fitness	can you log my 5k run to Nexus fitness tracker by the deadline	holders=n/a	lead=elle-rowan	1:1(flex-grimes)=flex-grimes	lane(flex-grimes)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-email	email my professor about Nexus	holders=n/a	lead=cam-post	1:1(cam-post)=cam-post	lane(cam-post)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-email	email my professor about the essay I put in Nexus	holders=n/a	lead=elle-rowan	1:1(cam-post)=cam-post	lane(cam-post)=elle-rowan	handoffs=n/a	elle/iris=n/a
+cold	neg-email	email my professor that I will add the MGT-782 essay to Nexus tonight	holders=n/a	lead=elle-rowan	1:1(cam-post)=cam-post	lane(cam-post)=elle-rowan	handoffs=n/a	elle/iris=n/a
+cold	neg-down	is Nexus down	holders=n/a	lead=iris-chase	1:1(cam-post)=cam-post	lane(cam-post)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-down	is Nexus down again? I can't add the travel essay	holders=n/a	lead=troy-lennox	1:1(cam-post)=cam-post	lane(cam-post)=troy-lennox	handoffs=n/a	elle/iris=n/a
+cold	neg-question	when is my travel essay due in Nexus	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-question	did the email marketing paper make it into Nexus	holders=n/a	lead=cam-post	1:1(cam-post)=cam-post	lane(cam-post)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-nexus-of	update my travel essay to the nexus of airlines and hotels	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-nexus-of	add a paragraph on the nexus of travel and pricing to my essay	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a

@@ -87,7 +87,13 @@ export interface AgentCapability {
     weakPatterns?: Array<[string, string]>;
     /** [nouns, cues]: weak context when any noun AND any cue appear as whole words. */
     weakPairs?: Array<[string[], string[]]>;
-    /** Evaluated FIRST: any veto word/pattern means "not this capability's job", even over strong context. */
+    /**
+     * Evaluated BEFORE the vetoes: an EXPLICIT request naming this capability's own system as the destination
+     * ("add … to Nexus", "update … in Nexus") is this capability's job even when its topic carries another
+     * lane's veto word ("the email marketing case analysis", "my travel industry essay"). [source, flags] pairs.
+     */
+    explicitOverride?: Array<[string, string]>;
+    /** Evaluated after `explicitOverride`, before everything else: any veto word/pattern means "not this capability's job", even over strong context. */
     vetoes?: string[];
     vetoPatterns?: Array<[string, string]>;
     /** Phrases removed before matching ("of course" is not a course). */
@@ -101,6 +107,23 @@ export interface AgentCapability {
  * when the ask matches -- the deterministic router picks a holder, and a holder is never handed off
  * from in a 1:1. Defined ONCE here and attached to each prime agent, so the triggers cannot drift.
  */
+// "Nexus" is the APP only when NOT followed by one of these (the NEXUS trusted-traveler card/program). ONE list,
+// used by the strong "Nexus as the app" pattern AND the explicit override below, so they cannot drift.
+// "trusted|traveler|traveller" added 2026-10-29 (docs/FIX-nexus-write-routing.md, "Explicit Nexus override"):
+// "update my address in NEXUS trusted traveler" was read as Nexus-the-app.
+const NEXUS_NOT_THE_APP =
+  "(?!\\s+(?:card|cards|program|programme|membership|application|interview|pass|lane|fitness|tracker|trusted|traveler|traveller))";
+// EXPLICIT Nexus write (owner, 2026-10-29): a write verb opening a clause (optionally after a greeting, a vocative
+// and "please / can you / I need you to …"), whose object goes TO / IN / INTO (my) Nexus, or onto "Nexus
+// assignment(s)". Clause-initial on purpose: "email my professor that I will add the essay to Nexus" and "is Nexus
+// down? I can't add the essay" are not requests to write. "the nexus of X and Y" never matches (no "the").
+const NEXUS_EXPLICIT_WRITE =
+  "(?:^|[.!?;:\\n]\\s*|\\b(?:and|then)\\s+)" +
+  "(?:(?:hey|hi|ok|okay|so)\\s+)?(?:[a-z]+\\s*,\\s*)?" +
+  "(?:(?:please|pls|kindly|just|also|now|go ahead and|can you|could you|would you|will you|can u|i need you to|i want you to|i'd like you to|i need to|i want to|let's|lets|help me)\\s+)*" +
+  "(?:add|put|log|save|enter|record|update|change|move|reschedule|set)\\b" +
+  "[^.?!;\\n]{0,100}?" +
+  `(?:\\b(?:to|in|into)\\s+(?:my\\s+)?nexus\\b${NEXUS_NOT_THE_APP}|\\bnexus\\s+assignments?\\b)`;
 const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
   id: "nexus-assignments",
   label: "adding & updating the owner's coursework assignments in Nexus (dated, graded deliverables)",
@@ -127,7 +150,10 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
     "what is due in Nexus). Other lanes keep asks that merely MENTION a course, a professor or a deadline: " +
     "emailing or messaging a professor (email lane), booking travel, lodging or a rental car for a residency " +
     "(travel lane), budgeting tuition, a deposit or a textbook purchase (finance lane), scheduling study time " +
-    "or a reminder (calendar lane), dinner after an exam (dining lane), training around exam week (fitness lane).",
+    "or a reminder (calendar lane), dinner after an exam (dining lane), training around exam week (fitness lane). " +
+    "An EXPLICIT request to add, put, log, save, update, change, move or reschedule something TO, IN or INTO Nexus " +
+    "is theirs even when its topic names another lane (an email marketing case analysis, a travel industry essay, " +
+    "an Airbnb pricing case study).",
   // WHOSE job: the owner's coursework. Loop 3 (D6, docs/FIX-nexus-write-loop3.md, owner-specified):
   //   VETOES are evaluated FIRST and win (another lane's unmistakable vocabulary).
   //   STRONG = DATA FROM NEXUS -- one of the owner's REAL course codes or names (`strongSources:
@@ -145,10 +171,13 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
       // "Nexus" as the APP: "Nexus assignments", "in/on/from/into (my) Nexus", or a write verb "… to Nexus"
       // -- never followed by card/program/membership/application/interview/pass/lane/fitness/tracker.
       [
-        "\\bnexus assignments?\\b|\\b(?:in|on|from|into) (?:my )?nexus\\b(?!\\s+(?:card|cards|program|programme|membership|application|interview|pass|lane|fitness|tracker))|\\b(?:add|put|log|save|enter|record|sync|upload|import)\\b[^.?!]{0,60}?\\bto (?:my )?nexus\\b(?!\\s+(?:card|cards|program|programme|membership|application|interview|pass|lane|fitness|tracker))",
+        `\\bnexus assignments?\\b|\\b(?:in|on|from|into) (?:my )?nexus\\b${NEXUS_NOT_THE_APP}|\\b(?:add|put|log|save|enter|record|sync|upload|import)\\b[^.?!]{0,60}?\\bto (?:my )?nexus\\b${NEXUS_NOT_THE_APP}`,
         "i",
       ],
     ],
+    // Checked BEFORE the vetoes (owner, 2026-10-29): "add the MGT-782 email marketing case analysis to Nexus",
+    // "put my travel industry essay due Nov 3 into Nexus", "update the Airbnb pricing case study due date in Nexus".
+    explicitOverride: [[NEXUS_EXPLICIT_WRITE, "i"]],
     weak: ["coursework", "course work", "emba", "mba", "dba", "doctoral", "professor", "prof", "instructor"],
     weakPatterns: [
       // "my assignment", "my assignments", "my school assignments" (a veto word keeps "my seat assignments")

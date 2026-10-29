@@ -141,6 +141,87 @@ async function main() {
     setNexusCourseContext(REAL_COURSES);
   }
 
+  console.log("=== Explicit Nexus override (2026-10-29): an explicit '… to/in/into Nexus' write beats the vetoes ===");
+  {
+    const cap = AGENTS.flatMap((a) => a.capabilities ?? []).find((c) => c.id === "nexus-assignments");
+    t("R-X-data the override is DATA on the capability (explicitOverride)", (cap?.requiresContext?.explicitOverride ?? []).length > 0, true);
+    const capSrc = readFileSync("src/features/huddle/lib/capabilities.ts", "utf8");
+    t(
+      "R-X-order capabilityContextPresent checks explicitOverride BEFORE the vetoes",
+      /if \(anyPattern\(ctx\.explicitOverride\)\) return true;\s*\n\s*if \(anyWord\(ctx\.vetoes\) \|\| anyPattern\(ctx\.vetoPatterns\)\) return false;/.test(capSrc),
+      true,
+    );
+    t("R-X-hint the routers' hint says an explicit Nexus write is theirs", String(cap?.routerHint).includes("An EXPLICIT request to add, put, log, save, update, change, move or reschedule something TO, IN or INTO Nexus"), true);
+    // [ask, a non-holder addressed in a 1:1]. Every ask carries another lane's veto word (email, travel, Airbnb,
+    // hotel, budget(ing), flight, dinner, client, fitness, tax, restaurant): on the PR head before this change all
+    // were vetoed (holders=0) -- mut-explicit-override/probe-override.before.out.
+    const POS: Array<[string, AgentId]> = [
+      ["add the MGT-782 email marketing case analysis to Nexus", "cam-post"],
+      ["put my travel industry essay due Nov 3 into Nexus", "troy-lennox"],
+      ["update the Airbnb pricing case study due date in Nexus", "troy-lennox"],
+      ["can you add my hotel management essay to Nexus", "troy-lennox"],
+      ["please reschedule the budgeting case study to Dec 2 in Nexus", "finn-reid"],
+      ["add the flight operations essay to my Nexus assignments", "troy-lennox"],
+      ["set the travel essay due date to Friday in Nexus", "troy-lennox"],
+      ["record my dinner etiquette essay due Nov 10 into Nexus", "charleston-lewis"],
+      ["change the client presentation paper deadline in Nexus to Monday", "sam-trent"],
+      ["save the email marketing paper to my Nexus", "cam-post"],
+      ["enter the fitness industry case study into Nexus", "flex-grimes"],
+      ["move my hotel case study to Dec 4 in Nexus", "troy-lennox"],
+      ["log the tax accounting paper due Friday in Nexus", "finn-reid"],
+      ["hey Elle, add my airline pricing essay to Nexus", "cam-post"],
+      ["I need you to put the restaurant case study into Nexus", "charleston-lewis"],
+    ];
+    // [guard, ask, addressed agent, origin/main group leader, origin/main laneOwnerFor(ask, addressed)] -- MEASURED:
+    // mut-explicit-override/probe-override.main.out (origin/main ee8f7b6), identical warm and cold.
+    const NEG: Array<[string, string, AgentId, string, string]> = [
+      ["card", "renew my NEXUS card before the deadline", "troy-lennox", "elle-rowan", "null"],
+      ["card", "update the address on my NEXUS card", "troy-lennox", "eli-vaughn", "eli-vaughn"],
+      ["card", "add my NEXUS card renewal fee to my budget", "finn-reid", "finn-reid", "null"],
+      ["program", "my NEXUS program application deadline is Friday", "troy-lennox", "elle-rowan", "elle-rowan"],
+      ["program", "move my NEXUS program interview to Friday", "troy-lennox", "cole-blake", "cole-blake"],
+      ["apply", "apply to NEXUS for me before my Toronto trip", "troy-lennox", "troy-lennox", "null"],
+      ["apply", "should I apply to NEXUS before the deadline", "troy-lennox", "elle-rowan", "null"],
+      ["trusted", "update my address in NEXUS trusted traveler before the deadline", "troy-lennox", "troy-lennox", "null"],
+      ["trusted", "add my kid to NEXUS trusted traveler", "troy-lennox", "troy-lennox", "null"],
+      ["fitness", "can you log my 5k run to Nexus fitness tracker by the deadline", "flex-grimes", "elle-rowan", "null"],
+      ["email", "email my professor about Nexus", "cam-post", "cam-post", "null"],
+      ["email", "email my professor about the essay I put in Nexus", "cam-post", "elle-rowan", "elle-rowan"],
+      ["email", "email my professor that I will add the MGT-782 essay to Nexus tonight", "cam-post", "elle-rowan", "elle-rowan"],
+      ["down", "is Nexus down", "cam-post", "iris-chase", "null"],
+      ["down", "is Nexus down again? I can't add the travel essay", "cam-post", "troy-lennox", "troy-lennox"],
+      ["question", "when is my travel essay due in Nexus", "troy-lennox", "troy-lennox", "null"],
+      ["question", "did the email marketing paper make it into Nexus", "cam-post", "cam-post", "null"],
+      ["nexus-of", "update my travel essay to the nexus of airlines and hotels", "troy-lennox", "troy-lennox", "null"],
+      ["nexus-of", "add a paragraph on the nexus of travel and pricing to my essay", "troy-lennox", "troy-lennox", "null"],
+    ];
+    for (const [cache, prime] of CACHES) {
+      prime();
+      for (const [text, other] of POS) {
+        const id = `R-X ${cache}`;
+        t(`${id} "${text}" -> holders are Elle/Iris`, sharedCapabilityHolders(text).map((h) => h.agent.id).sort().join(","), "elle-rowan,iris-chase");
+        t(`${id} group "${text}" is led by Elle/Iris`, PRIME.has(lead(text)), true);
+        t(`${id} 1:1 Elle/Iris keep "${text}" (no hand-off away)`, `${primeLaneDecision(text, "elle-rowan")}/${primeLaneDecision(text, "iris-chase")}`, "keep/keep");
+        t(`${id} 1:1 Elle/Iris: laneOwnerFor is null (they answer it)`, `${laneOwnerFor(text, "elle-rowan")?.id ?? "null"}/${laneOwnerFor(text, "iris-chase")?.id ?? "null"}`, "null/null");
+        t(`${id} 1:1 Cam hands "${text}" to Elle/Iris`, PRIME.has(String(laneOwnerFor(text, "cam-post" as AgentId)?.id)), true);
+        t(`${id} 1:1 ${other} hands "${text}" to Elle/Iris`, PRIME.has(String(laneOwnerFor(text, other)?.id)), true);
+      }
+      for (const [guard, text, self, mainLead, mainLane] of NEG) {
+        const id = `R-XN-${guard} ${cache}`;
+        t(`${id} "${text}" matches NO coursework prime capability`, sharedCapabilityHolders(text).length, 0);
+        t(`${id} group "${text}" -> origin/main leader`, lead(text), mainLead);
+        const handoffs = ALL_IDS.map((a) => primeLaneDecision(text, a)).filter((x) => x !== null);
+        t(`${id} 1:1 with ANY agent: "${text}" makes no prime hand-off / follow-up DM`, handoffs.length, 0);
+        t(`${id} 1:1 ${self}: "${text}" -> origin/main lane`, laneOwnerFor(text, self)?.id ?? "null", mainLane);
+        const one = routeMessage({
+          text, scope: "one-to-one", members: [self], history: [], targetAgentId: self,
+        } as Parameters<typeof routeMessage>[0]);
+        t(`${id} 1:1 ${self} answers "${text}" itself`, one.winners.join(","), self);
+      }
+    }
+    setNexusCourseContext(REAL_COURSES);
+  }
+
   console.log("=== (A) the LLM routers carry an additive, data-built prime-owners hint ===");
   {
     const dir = primeOwnershipDirectory();
