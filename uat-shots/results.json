@@ -1,0 +1,59 @@
+{
+  "results": [
+    {
+      "name": "Sidebar visible by default on desktop",
+      "pass": true
+    },
+    {
+      "name": "Sidebar collapses (removed from DOM) after clicking collapse",
+      "pass": true
+    },
+    {
+      "name": "Main content reflows wider when Sidebar collapses",
+      "pass": true,
+      "detail": "before=368 after=624"
+    },
+    {
+      "name": "Sidebar re-expands via Rail's H button",
+      "pass": true
+    },
+    {
+      "name": "ContextPanel visible by default with a collapse button",
+      "pass": true
+    },
+    {
+      "name": "ContextPanel collapses to the slim edge-tab",
+      "pass": true
+    },
+    {
+      "name": "ContextPanel re-expands via the edge-tab",
+      "pass": true
+    },
+    {
+      "name": "Meeting button visible after selecting a real huddle",
+      "pass": true,
+      "detail": "selected a real group huddle first"
+    },
+    {
+      "name": "standupCeremonyTiming",
+      "pass": false,
+      "detail": "threw: locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator('button').filter({ hasText: /^Meeting$/ }).first()\n    - locator resolved to <button type=\"button\" id=\"radix-_r_5_\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" class=\"inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90\">…</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <button class=\"relative flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition text-foreground\">…</button> from <div class=\"app-hidden h-full md:flex\">…</div> subtree intercepts pointer events\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <button class=\"relative flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition text-foreground\">…</button> from <div class=\"app-hidden h-full md:flex\">…</div> subtree intercepts pointer events\n    - retrying click action\n      - waiting 100ms\n    58 × waiting for element to be visible, enabled and stable\n       - element is visible, enabled and stable\n       - scrolling into view if needed\n       - done scrolling\n       - <button class=\"relative flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition text-foreground\">…</button> from <div class=\"app-hidden h-full md:flex\">…</div> subtree intercepts pointer events\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "name": "No avatar image 404s (ACT-huddle-2 regression guard)",
+      "pass": true,
+      "detail": "all avatar images loaded"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
