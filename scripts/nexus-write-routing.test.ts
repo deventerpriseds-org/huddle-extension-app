@@ -235,10 +235,12 @@ async function main() {
     // leader; in a 1:1 with a non-holder the deterministic hand-off fires ONLY on the explicit override.
     const D13: Array<[string, string, AgentId, string, string, string, string, string]> = [
     // [tag, ask, addressed, origin/main laneOwnerFor (warm=cold), group warm, group cold, origin/main group warm, origin/main group cold]
-    // GENERATED from mut-loop4/measure-d13.{main,fixed}.out (bun mut-loop4/measure-d13.ts <tree>), not typed.
-    ["O1", "update my address in NEXUS before my next border crossing", "troy-lennox", "eli-vaughn", "iris-chase", "iris-chase", "eli-vaughn", "eli-vaughn"],
-    ["O2", "reschedule my interview in NEXUS, I can't make the 14th", "troy-lennox", "cole-blake", "iris-chase", "iris-chase", "cole-blake", "cole-blake"],
-    ["O3", "change my vehicle info in my NEXUS account", "troy-lennox", "null", "iris-chase", "iris-chase", "ezra-miles", "ezra-miles"],
+    // GENERATED from mut-loop4/measure-d13.{main,fixed}.out (bun mut-loop4/measure-d13.ts <tree>), not typed. The group
+    // columns of O1 O2 O3 L8 S11 S12 re-measured after the group-veto rows fix: mut-group-veto/measure-d13.after.out
+    // (every row's group, lane and hand-offs now identical to measure-d13.main.out, warm and cold).
+    ["O1", "update my address in NEXUS before my next border crossing", "troy-lennox", "eli-vaughn", "eli-vaughn", "eli-vaughn", "eli-vaughn", "eli-vaughn"],
+    ["O2", "reschedule my interview in NEXUS, I can't make the 14th", "troy-lennox", "cole-blake", "cole-blake", "cole-blake", "cole-blake", "cole-blake"],
+    ["O3", "change my vehicle info in my NEXUS account", "troy-lennox", "null", "ezra-miles", "ezra-miles", "ezra-miles", "ezra-miles"],
     ["O4", "add my new passport number to NEXUS", "troy-lennox", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
     ["O8", "set a reminder to log into Nexus tonight and check my grades", "eli-vaughn", "null", "terry-locke", "terry-locke", "terry-locke", "terry-locke"],
     ["O11", "Finn, add the EMBA694 textbook cost to Nexus", "finn-reid", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
@@ -246,7 +248,7 @@ async function main() {
     ["L3", "book a room near campus for the MGT-701 residency, deadline is Friday", "troy-lennox", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
     ["L4", "get me a ride to the MGT-782 exam on Friday", "troy-lennox", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
     ["L6", "order the MGT-782 textbook, it is due to arrive before the exam", "finn-reid", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
-    ["L8", "plan my meals for MGT-782 exam week", "charleston-lewis", "null", "iris-chase", "charleston-lewis", "charleston-lewis", "charleston-lewis"],
+    ["L8", "plan my meals for MGT-782 exam week", "charleston-lewis", "null", "charleston-lewis", "charleston-lewis", "charleston-lewis", "charleston-lewis"],
     ["L10", "put the MGT-782 exam on the calendar for Friday", "eli-vaughn", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
     ["L12", "find a babysitter for the MGT-701 residency weekend, deadline Friday", "charleston-lewis", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
     ["L13", "send my MGT-782 group the slides before the deadline", "cam-post", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
@@ -260,8 +262,8 @@ async function main() {
     ["S8", "book a room for the MGT-701 residency, it's due by Friday", "troy-lennox", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
     ["S9", "I need a ride to my MGT-782 exam", "troy-lennox", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
     ["S10", "order the EMBA694 textbook before the exam", "finn-reid", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
-    ["S11", "meal prep for my MGT-782 exam week", "charleston-lewis", "null", "iris-chase", "charleston-lewis", "charleston-lewis", "charleston-lewis"],
-    ["S12", "what should I cook the night before my MGT-782 exam", "charleston-lewis", "null", "iris-chase", "tess-sutton", "tess-sutton", "tess-sutton"],
+    ["S11", "meal prep for my MGT-782 exam week", "charleston-lewis", "null", "charleston-lewis", "charleston-lewis", "charleston-lewis", "charleston-lewis"],
+    ["S12", "what should I cook the night before my MGT-782 exam", "charleston-lewis", "null", "tess-sutton", "tess-sutton", "tess-sutton", "tess-sutton"],
     ["S14", "stretch routine before my MGT-782 exam", "flex-grimes", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
     ];
     for (const [cache, prime] of CACHES) {
@@ -272,6 +274,8 @@ async function main() {
         const mainG = cache === "warm" ? mainGWarm : mainGCold;
         // GROUP: the hard coursework rule decides (owner); where that differs from origin/main the name says so.
         t(`${id} group "${text}" -> ${g}${g === mainG ? " (= origin/main)" : ` (coursework group rule; origin/main ${mainG})`}`, lead(text), g);
+        // Group-veto rows fix (docs/FIX-nexus-write-loop4.md): ALL 27 rows lead the GROUP exactly as origin/main does.
+        t(`${id} group "${text}" = origin/main leader ${mainG}`, lead(text), mainG);
         // 1:1: no deterministic prime hand-off from ANY non-holder (holders may only "keep").
         const handoffs = ALL_IDS.map((a) => primeLaneDecision(text, a)).filter((x) => x !== null && x !== "keep");
         t(`${id} 1:1 with ANY agent: "${text}" makes no deterministic prime hand-off / follow-up DM`, handoffs.length, 0);
@@ -281,6 +285,22 @@ async function main() {
           text, scope: "one-to-one", members: [self], history: [], targetAgentId: self,
         } as Parameters<typeof routeMessage>[0]);
         t(`${id} 1:1 ${self} answers "${text}" itself`, one.winners.join(","), self);
+      }
+    }
+    setNexusCourseContext(REAL_COURSES);
+
+    // Group-veto rows (docs/FIX-nexus-write-loop4.md, "Group-veto rows"): the 6 rows whose GROUP leader used to differ
+    // from origin/main. The coursework capability must not match them at all (warm or cold), so the group falls back to
+    // origin/main's keyword leader: O1/O2/O3 via the NEXUS-program clause veto (NEXUS_PROGRAM_WORDS), L8/S11/S12 via the
+    // dining / food veto group. [tag, ask, origin/main leader warm, origin/main leader cold] -- from the D13 table above.
+    const G6 = D13.filter(([tag]) => ["O1", "O2", "O3", "L8", "S11", "S12"].includes(tag));
+    t("R13-G6 the six group-veto rows are all present in the D13 table", G6.map(([tag]) => tag).join(","), "O1,O2,O3,L8,S11,S12");
+    for (const [cache, prime] of CACHES) {
+      prime();
+      for (const [tag, text, , , , , mainGWarm, mainGCold] of G6) {
+        const mainG = cache === "warm" ? mainGWarm : mainGCold;
+        t(`R13-G6-${tag} ${cache} "${text}" matches NO coursework prime capability`, sharedCapabilityHolders(text).length, 0);
+        t(`R13-G6-${tag} ${cache} group "${text}" -> origin/main ${mainG}`, lead(text), mainG);
       }
     }
     setNexusCourseContext(REAL_COURSES);

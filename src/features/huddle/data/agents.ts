@@ -122,8 +122,21 @@ export interface AgentCapability {
 // used by the strong "Nexus as the app" pattern AND the explicit override below, so they cannot drift.
 // "trusted|traveler|traveller" added 2026-10-29 (docs/FIX-nexus-write-routing.md, "Explicit Nexus override"):
 // "update my address in NEXUS trusted traveler" was read as Nexus-the-app.
+// Group-veto rows (docs/FIX-nexus-write-loop4.md, "Group-veto rows"): the NEXUS trusted-traveler PROGRAM's own
+// vocabulary. ONE list, used twice: (1) right after "Nexus" (the lookahead below), and (2) anywhere in the SAME
+// clause as "Nexus", before or after it (`NEXUS_PROGRAM_CLAUSE`, a veto on the coursework capability) -- because
+// "update my address in NEXUS before my next border crossing", "reschedule my interview in NEXUS" and "change my
+// vehicle info in my NEXUS account" put the program word away from, or before, "Nexus", and the strong "in (my)
+// Nexus" pattern then made Iris lead the GROUP instead of origin/main's Eli / Cole / Ezra.
+const NEXUS_PROGRAM_WORDS = [
+  "account", "passport", "vehicle", "membership", "renewal", "interview", "enrollment", "enrolment", "global entry",
+  "border",
+];
+const NEXUS_PROGRAM_ALT = NEXUS_PROGRAM_WORDS.map((w) => w.replace(/ /g, "\\s+")).join("|");
 const NEXUS_NOT_THE_APP =
-  "(?!\\s+(?:card|cards|program|programme|membership|application|interview|pass|lane|fitness|tracker|trusted|traveler|traveller))";
+  `(?!\\s+(?:card|cards|program|programme|membership|application|interview|pass|lane|fitness|tracker|trusted|traveler|traveller|${NEXUS_PROGRAM_ALT}))`;
+const NEXUS_PROGRAM_CLAUSE =
+  `\\bnexus\\b[^.?!;\\n]{0,80}?\\b(?:${NEXUS_PROGRAM_ALT})\\b|\\b(?:${NEXUS_PROGRAM_ALT})\\b[^.?!;\\n]{0,80}?\\bnexus\\b`;
 // EXPLICIT Nexus write (owner, 2026-10-29): a write verb opening a clause (optionally after a greeting, a vocative
 // and "please / can you / I need you to …"), whose object goes TO / IN / INTO (my) Nexus, or onto "Nexus
 // assignment(s)". Clause-initial on purpose: "email my professor that I will add the essay to Nexus" and "is Nexus
@@ -240,6 +253,11 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
       // dining
       "restaurant", "dinner", "lunch", "breakfast", "brunch", "eat", "eating", "reservation", "book a table",
       "reserve a table",
+      // dining / food -- group-veto rows (docs/FIX-nexus-write-loop4.md): "plan my meals for MGT-782 exam week",
+      // "meal prep …", "what should I cook …" with a real course code made Iris lead the GROUP instead of
+      // Charleston / Tess. ("grocery"/"groceries" are also in the household group above; listed here too so the
+      // food lane's vocabulary is complete in one place.)
+      "meal", "meals", "meal prep", "cook", "cooking", "recipe", "groceries", "grocery", "snack",
       // car rental / driving
       "rent a car", "rental car", "car rental", "rent-a-car", "uber", "lyft", "taxi",
       // lodging
@@ -255,6 +273,9 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
     vetoPatterns: [
       // a ticker written as a cashtag ("$NVDA")
       ["\\$[A-Za-z]{1,5}\\b", ""],
+      // the NEXUS trusted-traveler program named in the same clause as "Nexus" (group-veto rows, see
+      // NEXUS_PROGRAM_WORDS). The explicit override (an assignment object written to Nexus) is checked first.
+      [NEXUS_PROGRAM_CLAUSE, "i"],
       // D12 email / messaging: "write to my professor", "text my instructor" -- never "write to Nexus"
       ["\\bwrite (?:a (?:note|letter|message) )?to (?!(?:my )?nexus\\b)|\\btext (?:my|the|him|her|them)\\b", "i"],
       // D12 calendar: his OWN calendar or a time block ("on my calendar", "block two hours", "schedule focus
