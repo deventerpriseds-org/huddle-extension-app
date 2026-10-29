@@ -14,7 +14,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { checkUatTokenServer, matchUatToken, UAT_TOKEN_ENV } from "../src/lib/uat-bypass.server";
-import { hasUatTokenParam, resolveUatBypassFromUrl } from "../src/lib/uat-bypass.client";
+import { hasUatTokenParam, resolveUatBypassFromUrl } from "../src/lib/uat-bypass-url";
 
 let pass = 0;
 let fail = 0;

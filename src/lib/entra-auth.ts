@@ -7,7 +7,7 @@ import {
   type AuthenticationResult,
   type Configuration,
 } from "@azure/msal-browser";
-import { hasUatTokenParam, resolveUatBypassFromUrl } from "@/lib/uat-bypass.client";
+import { hasUatTokenParam, resolveUatBypassFromUrl } from "@/lib/uat-bypass-url";
 
 const tenantName = import.meta.env.VITE_ENTRA_TENANT_NAME as string | undefined;
 const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID as string | undefined;
