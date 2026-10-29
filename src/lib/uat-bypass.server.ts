@@ -1,5 +1,5 @@
 // WHAT:       Server-only check of a supplied `?uat_token=` against the UAT_BYPASS_TOKEN app setting.
-// WHY:        The compare used to run in the browser against VITE_UAT_BYPASS_TOKEN, which Vite inlined
+// WHY:        The compare used to run in the browser against a VITE_-prefixed copy, which Vite inlined
 //             into the PUBLIC bundle -- and Nexus accepts that same org secret as a write identity.
 //             Moving the compare here keeps the secret on the server only.
 // SUPERSEDES: the client-side compare in src/lib/entra-auth.ts (checkUatBypass before 2026-10-29).

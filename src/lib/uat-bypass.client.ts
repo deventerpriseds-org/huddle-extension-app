@@ -1,6 +1,6 @@
 // WHAT:       Browser-side half of the UAT sign-in check: read `?uat_token=` once, strip it from the
 //             URL, and ask the server whether it matches. Holds NO secret.
-// WHY:        The previous in-browser compare needed the secret in the bundle (VITE_UAT_BYPASS_TOKEN).
+// WHY:        The previous in-browser compare needed the secret in the bundle (a VITE_-prefixed copy).
 //             Kept dependency-free so the "only call the server when the param is present" rule can be
 //             tested offline (scripts/uat-check-server-side.test.ts).
 // SUPERSEDES: the client-side compare in src/lib/entra-auth.ts (checkUatBypass before 2026-10-29).
