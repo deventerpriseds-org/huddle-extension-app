@@ -187,7 +187,11 @@ check(
 const initFn = auth.slice(auth.indexOf("export function initMsal"), auth.indexOf("function initMsalCore"));
 check(
   "C13 initMsal: normal load goes straight to the unchanged MSAL path",
-  /if \(uatCheck\) return uatCheck\.then/.test(initFn) && /return initMsalCore\(\);\n\}/.test(initFn),
+  /return initMsalCore\(\);\n\}/.test(initFn),
+);
+check(
+  "C14 initMsal: a rejected/failed UAT check falls through to the real MSAL sign-in",
+  /if \(uatCheck\) return uatCheck\.then\(\(matched\) => \(matched \? undefined : initMsalCore\(\)\)\);/.test(initFn),
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);
