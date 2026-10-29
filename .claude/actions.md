@@ -4816,12 +4816,31 @@ Plumley — draft reply ready", data.sticky "true", FCM 1 success (journey funct
 **NOT yet confirmed by the owner** — needs: install v1.0.10; the next real email arriving within seconds; the push staying
 after a tap; one Save to Drafts tap (spacing + Calibri 11 in Outlook).
 
-### ACT:deep-ask-hybrid (2026-10-28) — OPEN
-Ask: "Is Iris going through her standup routine in a 1:1? why didnt she just do it?" → diagnosed the deep-confirm hold
-(not standup); owner chose the hybrid ("go with the recomended hybrid"). PR deventerpriseds-org/huddle-extension-app#116
-(7ad609f). Status: implemented, offline tests + 4 mutations FIRED; independent verifier running; then merge → auto-deploy
-→ live 1:1 check. NOT owner-confirmed. Sub-item: delete stray "Plan daily activities" task — awaiting owner yes/no.
+### ACT:deep-ask-hybrid (2026-10-28) — DEPLOYED, NOT owner-confirmed
+Ask: "Is Iris going through her standup routine in a 1:1? why didnt she just do it?" → the deep-confirm hold (not
+standup). Owner chose the hybrid. **#116 squash 96448d3, deploy success 2026-10-28.** Live (durable path, 19:22Z):
+Iris returned a real time-blocked plan. 4 verifier loops (VERIFY-deep-ask-hybrid-1..4 on claude_verify-* refs).
+- [x] Stray "Plan daily activities" task deleted? — NO: Supabase-MCP DELETE prompt timed out (owner said delete).
+- [ ] Owner confirms live in their own 1:1.
 
+### ACT:ownership-judge-delete (2026-10-28/29) — DEPLOYED, NOT owner-confirmed
+Owner chose "B" (one ownership judge for creation + grooming), asked for board Delete, "A" on the trust model,
+"ship 124 now". **#124 squash 4cb2273, deploy-swa success 2026-10-29 12:47Z.** journey `delete_task` = #75 (9c81e5f,
+deployed). Also in #124: focus_on refuses with journey off (text + voice), no produce offer after a 1:1 hand-off,
+judge time limits (5s create, 3s in-chat groom, 20s weekly). 2 verifier loops (VERIFY-ownership-judge-delete-1..2).
+- [x] Flex's 2 writing tasks reassigned to Elle; sweep of 65 hand-offs found no others.
+- [ ] 7 test tasks (parked, tag `test-artifact`) — owner said delete; Supabase-MCP DELETE prompt timed out 4x;
+      owner asked to use the new board Delete.
+- [ ] Owner confirms Delete + ownership live.
+- Open (pre-existing, not built): agents can reassign via journey update_task without the judge; caller identity is
+  client-asserted (owner chose to ship on today's trust model).
+
+### ACT:plan-intent-map (2026-10-29) — APPROVED, NOT BUILT
+Owner: planning = short timed table, create missing tasks, start NOTHING; times only when asked ("if i tell it to add
+the times... not automatically"); 1:1 out-of-lane → answer first, offer hand-off. Philosophy: "don't be so prescriptive
+that the agent can't just do what it should ... like in the chatgpt app". Root cause of the "everything moved to Doing":
+tools.ts:477 FOCUS hint. Owner asked for the map re-binned by what the AI does (his verbs: look up, go get, create,
+help me, research) + an extensive gap analysis — research pass running (claude_gap-analysis-2026-10-29).
 
 ## ACT:iris-sticky-priority-and-clean-layout — priority check missed; thread "smashed together" (2026-10-28)
 Owner: *"I haven't been asked in the early morning to check out the schedule for any adjustments. and evening to confirm the priorities ... with deep link"*, then *"it did ask but because it didn't stick i missed it. also the formatting in the thread is all smashed together not clean"*.
