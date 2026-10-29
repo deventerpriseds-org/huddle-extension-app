@@ -141,6 +141,23 @@ export function laneRanks(sortedIds: readonly string[], max: number = PRIORITY_L
   return m;
 }
 
+/**
+ * Who a task's owner is BEFORE the ownership judge runs: its current assignee when that is a real
+ * agent, else the batch model's pick (an unassigned task). Pure, exported for the test.
+ */
+export function incumbentOwner(current: string | null | undefined, batchPick: string): string {
+  return current && AGENT_IDS.has(current as AgentId) ? current : batchPick;
+}
+
+/** Run `fn` over `items` with at most `limit` in flight (no dependency for one call site). */
+async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const worker = async () => {
+    while (i < items.length) await fn(items[i++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,
@@ -159,7 +176,7 @@ function rosterForPrompt(): string {
 export async function dispatchGroomBacklog(
   caller: Caller | undefined,
   args: Record<string, unknown>,
-  opts?: { maxLimit?: number },
+  opts?: { maxLimit?: number; judgeBudgetMs?: number },
 ): Promise<string> {
   if (!caller?.entra_email) {
     return JSON.stringify({ error: "no_caller_identity", message: "Grooming needs the signed-in user's email." });
@@ -278,6 +295,53 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     if (!assignments.length) {
       return JSON.stringify({ error: "groom_no_assignments", message: "Classification returned nothing — try again." });
     }
+
+    // ONE OWNERSHIP JUDGE (owner-chosen "B", 2026-10-28). The owner is decided by the SAME resolver the
+    // 1:1 hand-off and 1:1 task creation use (routing.ts resolveOwnerLLM), with the task's CURRENT owner
+    // as the default it keeps unless the task plainly belongs to another lane. Before this, the batch
+    // model's "keep the existing assignee if still a reasonable fit" rule protected a wrong owner
+    // forever: two writing tasks Flex (fitness) created on Oct 9 and handed to Elle stayed Flex's across
+    // every Monday groom. The batch model's pick is now only the default for an UNASSIGNED task, and on
+    // any judge failure the incumbent stays — so a failure can never reshuffle owners.
+    const _tJ0 = Date.now();
+    // Every assignment STARTS at its incumbent, so any path the judge does not complete for — the
+    // budget skip, a per-call timeout, or the judge failing to load at all — keeps the current owner
+    // rather than the batch model's pick (VERIFY-ownership-judge-delete-1.md AC3: the skip and outer
+    // catch used to write the batch pick, which could reshuffle an assigned task).
+    const byId = new Map(slice.map((t) => [t.id, t]));
+    for (const a of assignments) {
+      const t = byId.get(a.id);
+      if (t) a.assigned_agent = incumbentOwner(t.assigned_agent, a.assigned_agent);
+    }
+    try {
+      const { resolveOwnerLLM } = await import("../routing");
+      const { DEFAULT_ROUTER_MODEL } = await import("../model-catalog");
+      // Bounded. In a chat turn (the hosting ceiling is ~45s, and classify + write + autowork already
+      // take most of it) the judge gets 3s; the scheduled weekly groom, which runs outside a chat turn,
+      // passes a larger budget (grooming.server.ts). A task the budget doesn't reach keeps its incumbent.
+      // VERIFY-ownership-judge-delete-2.md AC3: an in-chat worst case of ~63.5s at the old 8s budget.
+      const JUDGE_BUDGET_MS = opts?.judgeBudgetMs ?? 3_000;
+      await mapLimit(assignments, 16, async (a) => {
+        if (Date.now() - _tJ0 > JUDGE_BUDGET_MS) return;
+        const t = byId.get(a.id);
+        if (!t) return;
+        const incumbent = a.assigned_agent;
+        const judged = await withTimeout(
+          resolveOwnerLLM(
+            t.title,
+            incumbent as AgentId,
+            { backend: "openai", model: DEFAULT_ROUTER_MODEL.openai },
+            { framing: "assigned" },
+          ),
+          5_000,
+          "owner-judge",
+        ).catch(() => null);
+        a.assigned_agent = judged ?? incumbent;
+      });
+    } catch {
+      /* judge unavailable — every assignment keeps its incumbent (set above) */
+    }
+    const _judgeMs = Date.now() - _tJ0;
 
     // Normalize ranks to a dense 1..N ordering (1 = do first) for the priority lane.
     //
@@ -400,7 +464,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
       groomed: written,
       promoted,
       total: assignments.length,
-      _timings: { readMs: _readMs, classifyMs: _classifyMs, writeMs: _writeMs, tasks: slice.length },
+      _timings: { readMs: _readMs, classifyMs: _classifyMs, judgeMs: _judgeMs, writeMs: _writeMs, tasks: slice.length },
       note:
         (written === 0
           ? "Planned the assignments, but the write to the task board didn't confirm — try again in a moment."

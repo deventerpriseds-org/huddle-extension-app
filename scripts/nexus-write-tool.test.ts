@@ -165,7 +165,10 @@ const writeSrc = readFileSync("src/features/huddle/lib/nexus/nexus-write.server.
 const readSrc = readFileSync("src/features/huddle/lib/nexus/nexus.server.ts", "utf8");
 t("F2-31 tool name is the shared constant", (WRITE_NEXUS_ASSIGNMENTS_TOOL as { name: string }).name, NEXUS_WRITE_TOOL_NAME);
 t("F2-31 (1) text pool spreads the write tools into mergedTools", /\.\.\.nexusTools,\s*\n\s*\.\.\.nexusWriteToolList,/.test(textSrc), true);
-t("F2-31 (2) voice toolset pushes the write tools", /raw: unknown\[\][^\n]*\.\.\.nexusWriteTools\(\)/.test(voiceSrc), true);
+// The voice `raw` list became multi-line in the merge with origin/main #124 (FOCUS_TOOL rides the journey switch,
+// docs/FIX-nexus-write-loop4.md M0): read the WHOLE array literal, then require a BARE spread line (no condition).
+const voiceRawList = voiceSrc.match(/const raw: unknown\[\] = \[([\s\S]*?)\n  \];/)?.[1] ?? "";
+t("F2-31 (2) voice toolset pushes the write tools", /^\s*\.\.\.nexusWriteTools\(\),?\s*$/m.test(voiceRawList), true);
 t("F2-31 (3) text dispatch routes the name to the write executor", /c\.name === nexusWriteMod\.NEXUS_WRITE_TOOL_NAME\)[\s\S]{0,900}executeNexusWriteTool/.test(textSrc), true);
 t("F2-31 (4a) voice NATIVE set holds the name (never journey-proxied)", /\.\.\.NEXUS_TOOL_NAMES,\s*\n\s*NEXUS_WRITE_TOOL_NAME,/.test(voiceSrc), true);
 t("F2-31 (4b) voice dispatch routes the name to the write executor", /name === NEXUS_WRITE_TOOL_NAME\)[\s\S]{0,200}executeNexusWriteTool/.test(voiceSrc), true);
@@ -176,7 +179,11 @@ t("F2-31 read executor's name set does NOT contain the write tool", NEXUS_TOOL_N
 t("F2-42 1:1 follow-up consults primeLaneDecision before the LLM resolver",
   /const prime = capOwnerId \? null : primeLaneDecision\(data\.text, nextId\);[\s\S]{0,400}\} else if \(prime === "keep"\) \{[\s\S]{0,200}\} else if \(prime\) \{\s*deliverIfOwner\(prime\);[\s\S]{0,2000}resolveOwnerLLM/.test(textSrc), true);
 t("F2-32 text pool is ungated (no agent/capability condition)", /const nexusWriteToolList = nexusWriteTools\(\) as/.test(textSrc), true);
-t("F2-32 voice toolset is ungated (same unconditional raw list as the reads)", /\.\.\.nexusReadTools\(\), \.\.\.nexusWriteTools\(\)\]/.test(voiceSrc), true);
+t(
+  "F2-32 voice toolset is ungated (same unconditional raw list as the reads)",
+  /^\s*\.\.\.nexusReadTools\(\),\s*$/m.test(voiceRawList) && /^\s*\.\.\.nexusWriteTools\(\),?\s*$/m.test(voiceRawList),
+  true,
+);
 
 console.log("=== AC-F2-33 — no identity in the schema or on the wire ===");
 {

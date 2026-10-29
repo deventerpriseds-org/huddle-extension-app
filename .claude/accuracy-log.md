@@ -455,6 +455,15 @@ is **loop 4**.
 | Root cause | Took the harness's "today" (a UTC date) as the owner's local day; journey's own rule is "never toISOString for today, use the user's tz" |
 | Guard implied | Any "today/tonight/this morning" question: resolve the date in the owner's tz (`user_scheduling_prefs.timezone`) first and state it ("Friday 16 Oct, ET") in the first line |
 
+### 2026-10-28 — "journey:{enabled:false} means the harness cannot touch the real board"
+| | |
+|---|---|
+| Claim | A live harness with `journey:{enabled:false}` on every agent writes nothing to the owner's board (stated in qa-produce-quick.mjs's header and to the owner) |
+| Ground truth | Two journey writes ignored the toggle: `runProduce` (fixed in #116 loop 2) and `focus_on` (both backends). A "Test- plan my day" turn to Iris CREATED 7 real tasks (no Test- prefix, focus_on names them from the list) and a second run STARTED 8; it also spawned Tess specialist workers that put 2 artifacts in the review queue and messages in Sam's/Tess's DMs |
+| Source that would have settled it | `grep -n "agentBackend.journey?.enabled" huddle.functions.ts` against every `invokeJourneyTool` / `dispatch*` that writes — the toggle is per call site, not global |
+| Root cause | Treated a per-call-site opt-in as a global switch; and the sync-path harness kept executing tools AFTER its HTTP response gave up, so writes landed minutes later |
+| Guard implied | `focus_on` now refuses with journey off (ask-shape.test.ts structural check, mutation-proved). Open: a single chokepoint test that EVERY journey-writing dispatch is gated, rather than per-site checks |
+
 
 ## 2026-10-20 — "Several confirm-asks are expected today given the backlog size"
 

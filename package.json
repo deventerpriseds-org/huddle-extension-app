@@ -30,6 +30,8 @@
     "test:assign-on-create": "bun scripts/assign-on-create.test.ts",
     "test:verdict-memory": "bun scripts/verdict-memory.test.ts",
     "test:ask-shape": "bun scripts/ask-shape.test.ts",
+    "test:ownership-judge": "bun scripts/ownership-judge.test.ts",
+    "test:board-delete": "bun scripts/board-delete.test.ts",
     "test:memory-context": "bun test scripts/memory-context.test.ts",
     "test:widget-park": "bun scripts/widget-park.test.ts",
     "test:widget-live": "bun scripts/widget-live-refresh.test.ts",

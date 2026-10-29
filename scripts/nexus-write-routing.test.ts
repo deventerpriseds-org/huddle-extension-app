@@ -291,8 +291,10 @@ async function main() {
 
       bodies.length = 0;
       answer = { owner: "cam-post" };
-      const owner = await resolveOwnerLLM(ask, "cam-post" as AgentId, { backend: "openai", model: "test-model" });
-      t("R-A4 1:1 owner resolver prompt carries the prime-owners directory", userOf().includes(dir), true);
+      // The live 1:1 chat hand-off opts in EXPLICITLY ({ primeHint: true }) since the merge with origin/main #124
+      // made resolveOwnerLLM the grooming / task-creation judge too (docs/FIX-nexus-write-loop4.md M0).
+      const owner = await resolveOwnerLLM(ask, "cam-post" as AgentId, { backend: "openai", model: "test-model" }, { primeHint: true });
+      t("R-A4 1:1 owner resolver prompt (chat hand-off, primeHint) carries the prime-owners directory", userOf().includes(dir), true);
       t(
         "R-A4b ...and the [prime for: …] marker on Elle's and Iris's roster lines",
         /- elle-rowan \(Elle Rowan[^\n]*\[prime for: /.test(userOf()) && /- iris-chase \(Iris Chase[^\n]*\[prime for: /.test(userOf()),

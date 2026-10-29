@@ -67,8 +67,11 @@ export function isOneToOne(scope: string | undefined, huddleId: string | undefin
 /**
  * WHO gets the new task. Owner-decided, and the group case is deliberately conservative:
  *
- *  - **1:1** → the RESPONDING agent. You asked that agent directly, in its own room; it is the
- *    natural owner, and there is nobody else in the room to mean instead.
+ *  - **1:1** → the task's LANE OWNER when one was resolved from the task itself, else the
+ *    RESPONDING agent. Changed 2026-10-28 (owner: "do all three"): asked in Flex's 1:1 for two
+ *    writing tasks, Flex created them, handed the work to Elle (the follow-up reached Elle's DM),
+ *    and the tasks stayed Flex's — grooming's "keep the current owner" rule then pinned them there.
+ *    The responding agent is now only the fallback when no lane owner could be resolved.
  *  - **group** → ONLY an explicitly named owner. `huddle.functions.ts:2221` makes the LEAD capture
  *    items across every lane, so defaulting to the responder would file other lanes' work against
  *    the wrong agent — worse than leaving it for grooming, which at least reads the content.
@@ -80,9 +83,12 @@ export function pickCreatedTaskAssignee(opts: {
   huddleId: string | undefined;
   responderId: string | null | undefined;
   explicitOwner: string | null;
+  /** 1:1 only: the owner resolved from the task's own content (may equal the responder). */
+  laneOwner?: string | null;
 }): string | null {
   if (opts.explicitOwner) return opts.explicitOwner;
   if (!isOneToOne(opts.scope, opts.huddleId)) return null;
+  if (opts.laneOwner) return opts.laneOwner;
   return opts.responderId ? opts.responderId : null;
 }
 
