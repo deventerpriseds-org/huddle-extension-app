@@ -326,10 +326,13 @@ exit 0 (`mut-d14/tsc.out` empty).
 
 | id | Defect reinstated | Named test | Verdict (verbatim) |
 |---|---|---|---|
-| m1 | clause boundary removed (`explicitOverrideClauseBreak` dropped: whole ask = one clause) | `D14-clause "add my reading list, the essay is in Nexus"` | see mutations.out |
-| m2 | destination requirement removed ("in (my) Nexus" anywhere, the loop-4 shape) | `D14-dest "add my essay in Nexus to the shared folder"` | see mutations.out |
-| m3 | competing-destination cancel removed (`explicitOverrideCancels` dropped) | `D14-cancel "add a reminder about my essay to Nexus"` | see mutations.out |
-| m4 | purpose ("for my … project") lookbehind removed | `D14-for "log the textbook I bought for my MGT-782 project in Nexus"` | see mutations.out |
+| m1 | clause boundary removed (`explicitOverrideClauseBreak` dropped: whole ask = one clause) | `D14-clause "add my reading list, the essay is in Nexus"` | FIRED |
+| m2 | destination requirement removed ("in (my) Nexus" anywhere, the loop-4 shape) | `D14-dest "add my essay in Nexus to the shared folder"` | FIRED |
+| m3 | competing-destination cancel removed (`explicitOverrideCancels` dropped) | `D14-cancel "add a reminder about my essay to Nexus"` | FIRED |
+| m4 | purpose ("for my … project") lookbehind removed | `D14-for "log the textbook I bought for my MGT-782 project in Nexus"` | FIRED |
+
+Every run printed `restored: src/features/huddle/data/agents.ts matches HEAD` and `tree clean: … passes again`.
+**4 FIRED, 0 INERT, 0 NOT-APPLIED.** (Run on the final source, after the date-tail courtesy-word change.)
 
 **Collateral, measured on asks outside the suite** (`bun mut-d14/probe-edges.ts <tree>`, PR head ec6127a -> this fix:
 `mut-d14/out/probe-edges.{before,after}.out`). Four asks NO LONGER override (deterministic 1:1 hand-off from a
