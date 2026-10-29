@@ -1,0 +1,1311 @@
+=== prime capability holders are data (agents.ts) ===
+  ok R-PRIME the nexus-assignments holders: elle-rowan,iris-chase
+=== D12: other lanes' course-mentioning asks keep origin/main routing; no prime hand-off/DM ===
+  ok R12-email warm "email my professor that my MGT-782 paper will be a day late" matches NO coursework prime capability: 0
+  ok R12-email warm group "email my professor that my MGT-782 paper will be a day late" -> origin/main leader: cam-post
+  ok R12-email warm 1:1 with ANY agent: "email my professor that my MGT-782 paper will be a day late" makes no prime hand-off / follow-up DM: 0
+  ok R12-email warm 1:1 cam-post: "email my professor that my MGT-782 paper will be a day late" -> origin/main lane: null
+  ok R12-email warm 1:1 cam-post answers "email my professor that my MGT-782 paper will be a day late" itself: cam-post
+  ok R12-email warm "draft an email to my MGT-782 group about the proposal deadline" matches NO coursework prime capability: 0
+  ok R12-email warm group "draft an email to my MGT-782 group about the proposal deadline" -> origin/main leader: elle-rowan
+  ok R12-email warm 1:1 with ANY agent: "draft an email to my MGT-782 group about the proposal deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-email warm 1:1 cam-post: "draft an email to my MGT-782 group about the proposal deadline" -> origin/main lane: null
+  ok R12-email warm 1:1 cam-post answers "draft an email to my MGT-782 group about the proposal deadline" itself: cam-post
+  ok R12-email warm "email my professor that my paper will be a day late" matches NO coursework prime capability: 0
+  ok R12-email warm group "email my professor that my paper will be a day late" -> origin/main leader: cam-post
+  ok R12-email warm 1:1 with ANY agent: "email my professor that my paper will be a day late" makes no prime hand-off / follow-up DM: 0
+  ok R12-email warm 1:1 cam-post: "email my professor that my paper will be a day late" -> origin/main lane: null
+  ok R12-email warm 1:1 cam-post answers "email my professor that my paper will be a day late" itself: cam-post
+  ok R12-email warm "draft an email to my instructor asking for an extension on the essay deadline" matches NO coursework prime capability: 0
+  ok R12-email warm group "draft an email to my instructor asking for an extension on the essay deadline" -> origin/main leader: elle-rowan
+  ok R12-email warm 1:1 with ANY agent: "draft an email to my instructor asking for an extension on the essay deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-email warm 1:1 cam-post: "draft an email to my instructor asking for an extension on the essay deadline" -> origin/main lane: elle-rowan
+  ok R12-email warm 1:1 cam-post answers "draft an email to my instructor asking for an extension on the essay deadline" itself: cam-post
+  ok R12-email warm "message my MGT-782 professor that the essay will be late" matches NO coursework prime capability: 0
+  ok R12-email warm group "message my MGT-782 professor that the essay will be late" -> origin/main leader: elle-rowan
+  ok R12-email warm 1:1 with ANY agent: "message my MGT-782 professor that the essay will be late" makes no prime hand-off / follow-up DM: 0
+  ok R12-email warm 1:1 cam-post: "message my MGT-782 professor that the essay will be late" -> origin/main lane: elle-rowan
+  ok R12-email warm 1:1 cam-post answers "message my MGT-782 professor that the essay will be late" itself: cam-post
+  ok R12-email-pattern warm "write to my professor that my MGT-782 paper will be late" matches NO coursework prime capability: 0
+  ok R12-email-pattern warm group "write to my professor that my MGT-782 paper will be late" -> origin/main leader: elle-rowan
+  ok R12-email-pattern warm 1:1 with ANY agent: "write to my professor that my MGT-782 paper will be late" makes no prime hand-off / follow-up DM: 0
+  ok R12-email-pattern warm 1:1 cam-post: "write to my professor that my MGT-782 paper will be late" -> origin/main lane: null
+  ok R12-email-pattern warm 1:1 cam-post answers "write to my professor that my MGT-782 paper will be late" itself: cam-post
+  ok R12-email-pattern warm "text my instructor that I need more time on the essay deadline" matches NO coursework prime capability: 0
+  ok R12-email-pattern warm group "text my instructor that I need more time on the essay deadline" -> origin/main leader: elle-rowan
+  ok R12-email-pattern warm 1:1 with ANY agent: "text my instructor that I need more time on the essay deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-email-pattern warm 1:1 cam-post: "text my instructor that I need more time on the essay deadline" -> origin/main lane: elle-rowan
+  ok R12-email-pattern warm 1:1 cam-post answers "text my instructor that I need more time on the essay deadline" itself: cam-post
+  ok R12-calendar warm "block two hours on my calendar Thursday for the MGT-782 paper" matches NO coursework prime capability: 0
+  ok R12-calendar warm group "block two hours on my calendar Thursday for the MGT-782 paper" -> origin/main leader: iris-chase
+  ok R12-calendar warm 1:1 with ANY agent: "block two hours on my calendar Thursday for the MGT-782 paper" makes no prime hand-off / follow-up DM: 0
+  ok R12-calendar warm 1:1 eli-vaughn: "block two hours on my calendar Thursday for the MGT-782 paper" -> origin/main lane: null
+  ok R12-calendar warm 1:1 eli-vaughn answers "block two hours on my calendar Thursday for the MGT-782 paper" itself: eli-vaughn
+  ok R12-calendar warm "schedule focus time before my MGT-782 essay deadline" matches NO coursework prime capability: 0
+  ok R12-calendar warm group "schedule focus time before my MGT-782 essay deadline" -> origin/main leader: elle-rowan
+  ok R12-calendar warm 1:1 with ANY agent: "schedule focus time before my MGT-782 essay deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-calendar warm 1:1 eli-vaughn: "schedule focus time before my MGT-782 essay deadline" -> origin/main lane: elle-rowan
+  ok R12-calendar warm 1:1 eli-vaughn answers "schedule focus time before my MGT-782 essay deadline" itself: eli-vaughn
+  ok R12-calendar warm "block two hours on my calendar Thursday for my research paper deadline" matches NO coursework prime capability: 0
+  ok R12-calendar warm group "block two hours on my calendar Thursday for my research paper deadline" -> origin/main leader: elle-rowan
+  ok R12-calendar warm 1:1 with ANY agent: "block two hours on my calendar Thursday for my research paper deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-calendar warm 1:1 eli-vaughn: "block two hours on my calendar Thursday for my research paper deadline" -> origin/main lane: null
+  ok R12-calendar warm 1:1 eli-vaughn answers "block two hours on my calendar Thursday for my research paper deadline" itself: eli-vaughn
+  ok R12-calendar warm "put study time on my calendar before the MGT-702 exam" matches NO coursework prime capability: 0
+  ok R12-calendar warm group "put study time on my calendar before the MGT-702 exam" -> origin/main leader: iris-chase
+  ok R12-calendar warm 1:1 with ANY agent: "put study time on my calendar before the MGT-702 exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-calendar warm 1:1 eli-vaughn: "put study time on my calendar before the MGT-702 exam" -> origin/main lane: null
+  ok R12-calendar warm 1:1 eli-vaughn answers "put study time on my calendar before the MGT-702 exam" itself: eli-vaughn
+  ok R12-reminder warm "remind me tomorrow at 9 that the MGT-782 paper is due" matches NO coursework prime capability: 0
+  ok R12-reminder warm group "remind me tomorrow at 9 that the MGT-782 paper is due" -> origin/main leader: iris-chase
+  ok R12-reminder warm 1:1 with ANY agent: "remind me tomorrow at 9 that the MGT-782 paper is due" makes no prime hand-off / follow-up DM: 0
+  ok R12-reminder warm 1:1 eli-vaughn: "remind me tomorrow at 9 that the MGT-782 paper is due" -> origin/main lane: null
+  ok R12-reminder warm 1:1 eli-vaughn answers "remind me tomorrow at 9 that the MGT-782 paper is due" itself: eli-vaughn
+  ok R12-reminder warm "remind me tomorrow at 9 that my essay deadline is Friday" matches NO coursework prime capability: 0
+  ok R12-reminder warm group "remind me tomorrow at 9 that my essay deadline is Friday" -> origin/main leader: elle-rowan
+  ok R12-reminder warm 1:1 with ANY agent: "remind me tomorrow at 9 that my essay deadline is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-reminder warm 1:1 eli-vaughn: "remind me tomorrow at 9 that my essay deadline is Friday" -> origin/main lane: elle-rowan
+  ok R12-reminder warm 1:1 eli-vaughn answers "remind me tomorrow at 9 that my essay deadline is Friday" itself: eli-vaughn
+  ok R12-reminder warm "set a reminder for the MGT-702 final paper deadline" matches NO coursework prime capability: 0
+  ok R12-reminder warm group "set a reminder for the MGT-702 final paper deadline" -> origin/main leader: elle-rowan
+  ok R12-reminder warm 1:1 with ANY agent: "set a reminder for the MGT-702 final paper deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-reminder warm 1:1 eli-vaughn: "set a reminder for the MGT-702 final paper deadline" -> origin/main lane: null
+  ok R12-reminder warm 1:1 eli-vaughn answers "set a reminder for the MGT-702 final paper deadline" itself: eli-vaughn
+  ok R12-dining warm "book a table for my MGT-782 study group after the exam Friday" matches NO coursework prime capability: 0
+  ok R12-dining warm group "book a table for my MGT-782 study group after the exam Friday" -> origin/main leader: iris-chase
+  ok R12-dining warm 1:1 with ANY agent: "book a table for my MGT-782 study group after the exam Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-dining warm 1:1 charleston-lewis: "book a table for my MGT-782 study group after the exam Friday" -> origin/main lane: null
+  ok R12-dining warm 1:1 charleston-lewis answers "book a table for my MGT-782 study group after the exam Friday" itself: charleston-lewis
+  ok R12-dining warm "pick a restaurant for dinner after my MGT-782 exam" matches NO coursework prime capability: 0
+  ok R12-dining warm group "pick a restaurant for dinner after my MGT-782 exam" -> origin/main leader: charleston-lewis
+  ok R12-dining warm 1:1 with ANY agent: "pick a restaurant for dinner after my MGT-782 exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-dining warm 1:1 charleston-lewis: "pick a restaurant for dinner after my MGT-782 exam" -> origin/main lane: null
+  ok R12-dining warm 1:1 charleston-lewis answers "pick a restaurant for dinner after my MGT-782 exam" itself: charleston-lewis
+  ok R12-dining warm "pick a restaurant for dinner with my professor after the exam" matches NO coursework prime capability: 0
+  ok R12-dining warm group "pick a restaurant for dinner with my professor after the exam" -> origin/main leader: charleston-lewis
+  ok R12-dining warm 1:1 with ANY agent: "pick a restaurant for dinner with my professor after the exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-dining warm 1:1 charleston-lewis: "pick a restaurant for dinner with my professor after the exam" -> origin/main lane: null
+  ok R12-dining warm 1:1 charleston-lewis answers "pick a restaurant for dinner with my professor after the exam" itself: charleston-lewis
+  ok R12-dining warm "where should I eat lunch before my EMBA694 exam" matches NO coursework prime capability: 0
+  ok R12-dining warm group "where should I eat lunch before my EMBA694 exam" -> origin/main leader: elle-rowan
+  ok R12-dining warm 1:1 with ANY agent: "where should I eat lunch before my EMBA694 exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-dining warm 1:1 charleston-lewis: "where should I eat lunch before my EMBA694 exam" -> origin/main lane: null
+  ok R12-dining warm 1:1 charleston-lewis answers "where should I eat lunch before my EMBA694 exam" itself: charleston-lewis
+  ok R12-car warm "rent a car for the MGT-701 residency weekend, it's due back Sunday" matches NO coursework prime capability: 0
+  ok R12-car warm group "rent a car for the MGT-701 residency weekend, it's due back Sunday" -> origin/main leader: ezra-miles
+  ok R12-car warm 1:1 with ANY agent: "rent a car for the MGT-701 residency weekend, it's due back Sunday" makes no prime hand-off / follow-up DM: 0
+  ok R12-car warm 1:1 troy-lennox: "rent a car for the MGT-701 residency weekend, it's due back Sunday" -> origin/main lane: null
+  ok R12-car warm 1:1 troy-lennox answers "rent a car for the MGT-701 residency weekend, it's due back Sunday" itself: troy-lennox
+  ok R12-car warm "get me a rental car for the MGT-782 residency, the deadline to book is Friday" matches NO coursework prime capability: 0
+  ok R12-car warm group "get me a rental car for the MGT-782 residency, the deadline to book is Friday" -> origin/main leader: elle-rowan
+  ok R12-car warm 1:1 with ANY agent: "get me a rental car for the MGT-782 residency, the deadline to book is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-car warm 1:1 troy-lennox: "get me a rental car for the MGT-782 residency, the deadline to book is Friday" -> origin/main lane: null
+  ok R12-car warm 1:1 troy-lennox answers "get me a rental car for the MGT-782 residency, the deadline to book is Friday" itself: troy-lennox
+  ok R12-car-pattern warm "drive me to campus for my MGT-782 exam Friday" matches NO coursework prime capability: 0
+  ok R12-car-pattern warm group "drive me to campus for my MGT-782 exam Friday" -> origin/main leader: iris-chase
+  ok R12-car-pattern warm 1:1 with ANY agent: "drive me to campus for my MGT-782 exam Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-car-pattern warm 1:1 troy-lennox: "drive me to campus for my MGT-782 exam Friday" -> origin/main lane: null
+  ok R12-car-pattern warm 1:1 troy-lennox answers "drive me to campus for my MGT-782 exam Friday" itself: troy-lennox
+  ok R12-lodging warm "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" matches NO coursework prime capability: 0
+  ok R12-lodging warm group "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" -> origin/main leader: elle-rowan
+  ok R12-lodging warm 1:1 with ANY agent: "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-lodging warm 1:1 troy-lennox: "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" -> origin/main lane: elle-rowan
+  ok R12-lodging warm 1:1 troy-lennox answers "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" itself: troy-lennox
+  ok R12-lodging warm "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" matches NO coursework prime capability: 0
+  ok R12-lodging warm group "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" -> origin/main leader: elle-rowan
+  ok R12-lodging warm 1:1 with ANY agent: "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-lodging warm 1:1 troy-lennox: "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" -> origin/main lane: null
+  ok R12-lodging warm 1:1 troy-lennox answers "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" itself: troy-lennox
+  ok R12-lodging-pattern warm "find a place to stay for the MGT-701 residency, the deadline is Friday" matches NO coursework prime capability: 0
+  ok R12-lodging-pattern warm group "find a place to stay for the MGT-701 residency, the deadline is Friday" -> origin/main leader: elle-rowan
+  ok R12-lodging-pattern warm 1:1 with ANY agent: "find a place to stay for the MGT-701 residency, the deadline is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-lodging-pattern warm 1:1 troy-lennox: "find a place to stay for the MGT-701 residency, the deadline is Friday" -> origin/main lane: null
+  ok R12-lodging-pattern warm 1:1 troy-lennox answers "find a place to stay for the MGT-701 residency, the deadline is Friday" itself: troy-lennox
+  ok R12-money warm "the EMBA694 textbook payment is due Friday, can I afford it" matches NO coursework prime capability: 0
+  ok R12-money warm group "the EMBA694 textbook payment is due Friday, can I afford it" -> origin/main leader: elle-rowan
+  ok R12-money warm 1:1 with ANY agent: "the EMBA694 textbook payment is due Friday, can I afford it" makes no prime hand-off / follow-up DM: 0
+  ok R12-money warm 1:1 finn-reid: "the EMBA694 textbook payment is due Friday, can I afford it" -> origin/main lane: null
+  ok R12-money warm 1:1 finn-reid answers "the EMBA694 textbook payment is due Friday, can I afford it" itself: finn-reid
+  ok R12-money warm "budget for the MGT-701 residency costs, the deposit is due Monday" matches NO coursework prime capability: 0
+  ok R12-money warm group "budget for the MGT-701 residency costs, the deposit is due Monday" -> origin/main leader: finn-reid
+  ok R12-money warm 1:1 with ANY agent: "budget for the MGT-701 residency costs, the deposit is due Monday" makes no prime hand-off / follow-up DM: 0
+  ok R12-money warm 1:1 finn-reid: "budget for the MGT-701 residency costs, the deposit is due Monday" -> origin/main lane: null
+  ok R12-money warm 1:1 finn-reid answers "budget for the MGT-701 residency costs, the deposit is due Monday" itself: finn-reid
+  ok R12-money warm "pay my EMBA694 tuition before the deadline" matches NO coursework prime capability: 0
+  ok R12-money warm group "pay my EMBA694 tuition before the deadline" -> origin/main leader: elle-rowan
+  ok R12-money warm 1:1 with ANY agent: "pay my EMBA694 tuition before the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-money warm 1:1 finn-reid: "pay my EMBA694 tuition before the deadline" -> origin/main lane: elle-rowan
+  ok R12-money warm 1:1 finn-reid answers "pay my EMBA694 tuition before the deadline" itself: finn-reid
+  ok R12-money warm "buy the MGT-782 textbook before the exam" matches NO coursework prime capability: 0
+  ok R12-money warm group "buy the MGT-782 textbook before the exam" -> origin/main leader: iris-chase
+  ok R12-money warm 1:1 with ANY agent: "buy the MGT-782 textbook before the exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-money warm 1:1 finn-reid: "buy the MGT-782 textbook before the exam" -> origin/main lane: null
+  ok R12-money warm 1:1 finn-reid answers "buy the MGT-782 textbook before the exam" itself: finn-reid
+  ok R12-money-pattern warm "what will the MGT-701 residency cost, the paper is due the same week" matches NO coursework prime capability: 0
+  ok R12-money-pattern warm group "what will the MGT-701 residency cost, the paper is due the same week" -> origin/main leader: tess-sutton
+  ok R12-money-pattern warm 1:1 with ANY agent: "what will the MGT-701 residency cost, the paper is due the same week" makes no prime hand-off / follow-up DM: 0
+  ok R12-money-pattern warm 1:1 finn-reid: "what will the MGT-701 residency cost, the paper is due the same week" -> origin/main lane: null
+  ok R12-money-pattern warm 1:1 finn-reid answers "what will the MGT-701 residency cost, the paper is due the same week" itself: finn-reid
+  ok R12-fitness warm "plan my runs around the MGT-782 exam week" matches NO coursework prime capability: 0
+  ok R12-fitness warm group "plan my runs around the MGT-782 exam week" -> origin/main leader: iris-chase
+  ok R12-fitness warm 1:1 with ANY agent: "plan my runs around the MGT-782 exam week" makes no prime hand-off / follow-up DM: 0
+  ok R12-fitness warm 1:1 flex-grimes: "plan my runs around the MGT-782 exam week" -> origin/main lane: null
+  ok R12-fitness warm 1:1 flex-grimes answers "plan my runs around the MGT-782 exam week" itself: flex-grimes
+  ok R12-fitness warm "build a training plan around my MGT-782 exam" matches NO coursework prime capability: 0
+  ok R12-fitness warm group "build a training plan around my MGT-782 exam" -> origin/main leader: flex-grimes
+  ok R12-fitness warm 1:1 with ANY agent: "build a training plan around my MGT-782 exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-fitness warm 1:1 flex-grimes: "build a training plan around my MGT-782 exam" -> origin/main lane: null
+  ok R12-fitness warm 1:1 flex-grimes answers "build a training plan around my MGT-782 exam" itself: flex-grimes
+  ok R12-fitness-pattern warm "I want to go for a run before my MGT-782 exam" matches NO coursework prime capability: 0
+  ok R12-fitness-pattern warm group "I want to go for a run before my MGT-782 exam" -> origin/main leader: flex-grimes
+  ok R12-fitness-pattern warm 1:1 with ANY agent: "I want to go for a run before my MGT-782 exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-fitness-pattern warm 1:1 flex-grimes: "I want to go for a run before my MGT-782 exam" -> origin/main lane: null
+  ok R12-fitness-pattern warm 1:1 flex-grimes answers "I want to go for a run before my MGT-782 exam" itself: flex-grimes
+  ok R12-travel warm "book my travel to the MGT-701 residency, the deadline is Friday" matches NO coursework prime capability: 0
+  ok R12-travel warm group "book my travel to the MGT-701 residency, the deadline is Friday" -> origin/main leader: troy-lennox
+  ok R12-travel warm 1:1 with ANY agent: "book my travel to the MGT-701 residency, the deadline is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-travel warm 1:1 troy-lennox: "book my travel to the MGT-701 residency, the deadline is Friday" -> origin/main lane: null
+  ok R12-travel warm 1:1 troy-lennox answers "book my travel to the MGT-701 residency, the deadline is Friday" itself: troy-lennox
+  ok R12-travel warm "book a flight for the EMBA694 residency before the deadline" matches NO coursework prime capability: 0
+  ok R12-travel warm group "book a flight for the EMBA694 residency before the deadline" -> origin/main leader: elle-rowan
+  ok R12-travel warm 1:1 with ANY agent: "book a flight for the EMBA694 residency before the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-travel warm 1:1 troy-lennox: "book a flight for the EMBA694 residency before the deadline" -> origin/main lane: null
+  ok R12-travel warm 1:1 troy-lennox answers "book a flight for the EMBA694 residency before the deadline" itself: troy-lennox
+  ok R12-email cold "email my professor that my MGT-782 paper will be a day late" matches NO coursework prime capability: 0
+  ok R12-email cold group "email my professor that my MGT-782 paper will be a day late" -> origin/main leader: cam-post
+  ok R12-email cold 1:1 with ANY agent: "email my professor that my MGT-782 paper will be a day late" makes no prime hand-off / follow-up DM: 0
+  ok R12-email cold 1:1 cam-post: "email my professor that my MGT-782 paper will be a day late" -> origin/main lane: null
+  ok R12-email cold 1:1 cam-post answers "email my professor that my MGT-782 paper will be a day late" itself: cam-post
+  ok R12-email cold "draft an email to my MGT-782 group about the proposal deadline" matches NO coursework prime capability: 0
+  ok R12-email cold group "draft an email to my MGT-782 group about the proposal deadline" -> origin/main leader: elle-rowan
+  ok R12-email cold 1:1 with ANY agent: "draft an email to my MGT-782 group about the proposal deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-email cold 1:1 cam-post: "draft an email to my MGT-782 group about the proposal deadline" -> origin/main lane: null
+  ok R12-email cold 1:1 cam-post answers "draft an email to my MGT-782 group about the proposal deadline" itself: cam-post
+  ok R12-email cold "email my professor that my paper will be a day late" matches NO coursework prime capability: 0
+  ok R12-email cold group "email my professor that my paper will be a day late" -> origin/main leader: cam-post
+  ok R12-email cold 1:1 with ANY agent: "email my professor that my paper will be a day late" makes no prime hand-off / follow-up DM: 0
+  ok R12-email cold 1:1 cam-post: "email my professor that my paper will be a day late" -> origin/main lane: null
+  ok R12-email cold 1:1 cam-post answers "email my professor that my paper will be a day late" itself: cam-post
+  ok R12-email cold "draft an email to my instructor asking for an extension on the essay deadline" matches NO coursework prime capability: 0
+  ok R12-email cold group "draft an email to my instructor asking for an extension on the essay deadline" -> origin/main leader: elle-rowan
+  ok R12-email cold 1:1 with ANY agent: "draft an email to my instructor asking for an extension on the essay deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-email cold 1:1 cam-post: "draft an email to my instructor asking for an extension on the essay deadline" -> origin/main lane: elle-rowan
+  ok R12-email cold 1:1 cam-post answers "draft an email to my instructor asking for an extension on the essay deadline" itself: cam-post
+  ok R12-email cold "message my MGT-782 professor that the essay will be late" matches NO coursework prime capability: 0
+  ok R12-email cold group "message my MGT-782 professor that the essay will be late" -> origin/main leader: elle-rowan
+  ok R12-email cold 1:1 with ANY agent: "message my MGT-782 professor that the essay will be late" makes no prime hand-off / follow-up DM: 0
+  ok R12-email cold 1:1 cam-post: "message my MGT-782 professor that the essay will be late" -> origin/main lane: elle-rowan
+  ok R12-email cold 1:1 cam-post answers "message my MGT-782 professor that the essay will be late" itself: cam-post
+  ok R12-email-pattern cold "write to my professor that my MGT-782 paper will be late" matches NO coursework prime capability: 0
+  ok R12-email-pattern cold group "write to my professor that my MGT-782 paper will be late" -> origin/main leader: elle-rowan
+  ok R12-email-pattern cold 1:1 with ANY agent: "write to my professor that my MGT-782 paper will be late" makes no prime hand-off / follow-up DM: 0
+  ok R12-email-pattern cold 1:1 cam-post: "write to my professor that my MGT-782 paper will be late" -> origin/main lane: null
+  ok R12-email-pattern cold 1:1 cam-post answers "write to my professor that my MGT-782 paper will be late" itself: cam-post
+  ok R12-email-pattern cold "text my instructor that I need more time on the essay deadline" matches NO coursework prime capability: 0
+  ok R12-email-pattern cold group "text my instructor that I need more time on the essay deadline" -> origin/main leader: elle-rowan
+  ok R12-email-pattern cold 1:1 with ANY agent: "text my instructor that I need more time on the essay deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-email-pattern cold 1:1 cam-post: "text my instructor that I need more time on the essay deadline" -> origin/main lane: elle-rowan
+  ok R12-email-pattern cold 1:1 cam-post answers "text my instructor that I need more time on the essay deadline" itself: cam-post
+  ok R12-calendar cold "block two hours on my calendar Thursday for the MGT-782 paper" matches NO coursework prime capability: 0
+  ok R12-calendar cold group "block two hours on my calendar Thursday for the MGT-782 paper" -> origin/main leader: iris-chase
+  ok R12-calendar cold 1:1 with ANY agent: "block two hours on my calendar Thursday for the MGT-782 paper" makes no prime hand-off / follow-up DM: 0
+  ok R12-calendar cold 1:1 eli-vaughn: "block two hours on my calendar Thursday for the MGT-782 paper" -> origin/main lane: null
+  ok R12-calendar cold 1:1 eli-vaughn answers "block two hours on my calendar Thursday for the MGT-782 paper" itself: eli-vaughn
+  ok R12-calendar cold "schedule focus time before my MGT-782 essay deadline" matches NO coursework prime capability: 0
+  ok R12-calendar cold group "schedule focus time before my MGT-782 essay deadline" -> origin/main leader: elle-rowan
+  ok R12-calendar cold 1:1 with ANY agent: "schedule focus time before my MGT-782 essay deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-calendar cold 1:1 eli-vaughn: "schedule focus time before my MGT-782 essay deadline" -> origin/main lane: elle-rowan
+  ok R12-calendar cold 1:1 eli-vaughn answers "schedule focus time before my MGT-782 essay deadline" itself: eli-vaughn
+  ok R12-calendar cold "block two hours on my calendar Thursday for my research paper deadline" matches NO coursework prime capability: 0
+  ok R12-calendar cold group "block two hours on my calendar Thursday for my research paper deadline" -> origin/main leader: elle-rowan
+  ok R12-calendar cold 1:1 with ANY agent: "block two hours on my calendar Thursday for my research paper deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-calendar cold 1:1 eli-vaughn: "block two hours on my calendar Thursday for my research paper deadline" -> origin/main lane: null
+  ok R12-calendar cold 1:1 eli-vaughn answers "block two hours on my calendar Thursday for my research paper deadline" itself: eli-vaughn
+  ok R12-calendar cold "put study time on my calendar before the MGT-702 exam" matches NO coursework prime capability: 0
+  ok R12-calendar cold group "put study time on my calendar before the MGT-702 exam" -> origin/main leader: iris-chase
+  ok R12-calendar cold 1:1 with ANY agent: "put study time on my calendar before the MGT-702 exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-calendar cold 1:1 eli-vaughn: "put study time on my calendar before the MGT-702 exam" -> origin/main lane: null
+  ok R12-calendar cold 1:1 eli-vaughn answers "put study time on my calendar before the MGT-702 exam" itself: eli-vaughn
+  ok R12-reminder cold "remind me tomorrow at 9 that the MGT-782 paper is due" matches NO coursework prime capability: 0
+  ok R12-reminder cold group "remind me tomorrow at 9 that the MGT-782 paper is due" -> origin/main leader: iris-chase
+  ok R12-reminder cold 1:1 with ANY agent: "remind me tomorrow at 9 that the MGT-782 paper is due" makes no prime hand-off / follow-up DM: 0
+  ok R12-reminder cold 1:1 eli-vaughn: "remind me tomorrow at 9 that the MGT-782 paper is due" -> origin/main lane: null
+  ok R12-reminder cold 1:1 eli-vaughn answers "remind me tomorrow at 9 that the MGT-782 paper is due" itself: eli-vaughn
+  ok R12-reminder cold "remind me tomorrow at 9 that my essay deadline is Friday" matches NO coursework prime capability: 0
+  ok R12-reminder cold group "remind me tomorrow at 9 that my essay deadline is Friday" -> origin/main leader: elle-rowan
+  ok R12-reminder cold 1:1 with ANY agent: "remind me tomorrow at 9 that my essay deadline is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-reminder cold 1:1 eli-vaughn: "remind me tomorrow at 9 that my essay deadline is Friday" -> origin/main lane: elle-rowan
+  ok R12-reminder cold 1:1 eli-vaughn answers "remind me tomorrow at 9 that my essay deadline is Friday" itself: eli-vaughn
+  ok R12-reminder cold "set a reminder for the MGT-702 final paper deadline" matches NO coursework prime capability: 0
+  ok R12-reminder cold group "set a reminder for the MGT-702 final paper deadline" -> origin/main leader: elle-rowan
+  ok R12-reminder cold 1:1 with ANY agent: "set a reminder for the MGT-702 final paper deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-reminder cold 1:1 eli-vaughn: "set a reminder for the MGT-702 final paper deadline" -> origin/main lane: null
+  ok R12-reminder cold 1:1 eli-vaughn answers "set a reminder for the MGT-702 final paper deadline" itself: eli-vaughn
+  ok R12-dining cold "book a table for my MGT-782 study group after the exam Friday" matches NO coursework prime capability: 0
+  ok R12-dining cold group "book a table for my MGT-782 study group after the exam Friday" -> origin/main leader: iris-chase
+  ok R12-dining cold 1:1 with ANY agent: "book a table for my MGT-782 study group after the exam Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-dining cold 1:1 charleston-lewis: "book a table for my MGT-782 study group after the exam Friday" -> origin/main lane: null
+  ok R12-dining cold 1:1 charleston-lewis answers "book a table for my MGT-782 study group after the exam Friday" itself: charleston-lewis
+  ok R12-dining cold "pick a restaurant for dinner after my MGT-782 exam" matches NO coursework prime capability: 0
+  ok R12-dining cold group "pick a restaurant for dinner after my MGT-782 exam" -> origin/main leader: charleston-lewis
+  ok R12-dining cold 1:1 with ANY agent: "pick a restaurant for dinner after my MGT-782 exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-dining cold 1:1 charleston-lewis: "pick a restaurant for dinner after my MGT-782 exam" -> origin/main lane: null
+  ok R12-dining cold 1:1 charleston-lewis answers "pick a restaurant for dinner after my MGT-782 exam" itself: charleston-lewis
+  ok R12-dining cold "pick a restaurant for dinner with my professor after the exam" matches NO coursework prime capability: 0
+  ok R12-dining cold group "pick a restaurant for dinner with my professor after the exam" -> origin/main leader: charleston-lewis
+  ok R12-dining cold 1:1 with ANY agent: "pick a restaurant for dinner with my professor after the exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-dining cold 1:1 charleston-lewis: "pick a restaurant for dinner with my professor after the exam" -> origin/main lane: null
+  ok R12-dining cold 1:1 charleston-lewis answers "pick a restaurant for dinner with my professor after the exam" itself: charleston-lewis
+  ok R12-dining cold "where should I eat lunch before my EMBA694 exam" matches NO coursework prime capability: 0
+  ok R12-dining cold group "where should I eat lunch before my EMBA694 exam" -> origin/main leader: elle-rowan
+  ok R12-dining cold 1:1 with ANY agent: "where should I eat lunch before my EMBA694 exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-dining cold 1:1 charleston-lewis: "where should I eat lunch before my EMBA694 exam" -> origin/main lane: null
+  ok R12-dining cold 1:1 charleston-lewis answers "where should I eat lunch before my EMBA694 exam" itself: charleston-lewis
+  ok R12-car cold "rent a car for the MGT-701 residency weekend, it's due back Sunday" matches NO coursework prime capability: 0
+  ok R12-car cold group "rent a car for the MGT-701 residency weekend, it's due back Sunday" -> origin/main leader: ezra-miles
+  ok R12-car cold 1:1 with ANY agent: "rent a car for the MGT-701 residency weekend, it's due back Sunday" makes no prime hand-off / follow-up DM: 0
+  ok R12-car cold 1:1 troy-lennox: "rent a car for the MGT-701 residency weekend, it's due back Sunday" -> origin/main lane: null
+  ok R12-car cold 1:1 troy-lennox answers "rent a car for the MGT-701 residency weekend, it's due back Sunday" itself: troy-lennox
+  ok R12-car cold "get me a rental car for the MGT-782 residency, the deadline to book is Friday" matches NO coursework prime capability: 0
+  ok R12-car cold group "get me a rental car for the MGT-782 residency, the deadline to book is Friday" -> origin/main leader: elle-rowan
+  ok R12-car cold 1:1 with ANY agent: "get me a rental car for the MGT-782 residency, the deadline to book is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-car cold 1:1 troy-lennox: "get me a rental car for the MGT-782 residency, the deadline to book is Friday" -> origin/main lane: null
+  ok R12-car cold 1:1 troy-lennox answers "get me a rental car for the MGT-782 residency, the deadline to book is Friday" itself: troy-lennox
+  ok R12-car-pattern cold "drive me to campus for my MGT-782 exam Friday" matches NO coursework prime capability: 0
+  ok R12-car-pattern cold group "drive me to campus for my MGT-782 exam Friday" -> origin/main leader: iris-chase
+  ok R12-car-pattern cold 1:1 with ANY agent: "drive me to campus for my MGT-782 exam Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-car-pattern cold 1:1 troy-lennox: "drive me to campus for my MGT-782 exam Friday" -> origin/main lane: null
+  ok R12-car-pattern cold 1:1 troy-lennox answers "drive me to campus for my MGT-782 exam Friday" itself: troy-lennox
+  ok R12-lodging cold "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" matches NO coursework prime capability: 0
+  ok R12-lodging cold group "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" -> origin/main leader: elle-rowan
+  ok R12-lodging cold 1:1 with ANY agent: "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-lodging cold 1:1 troy-lennox: "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" -> origin/main lane: elle-rowan
+  ok R12-lodging cold 1:1 troy-lennox answers "I need an Airbnb in Toronto for the EMBA694 residency, the deadline to book is Friday" itself: troy-lennox
+  ok R12-lodging cold "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" matches NO coursework prime capability: 0
+  ok R12-lodging cold group "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" -> origin/main leader: elle-rowan
+  ok R12-lodging cold 1:1 with ANY agent: "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-lodging cold 1:1 troy-lennox: "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" -> origin/main lane: null
+  ok R12-lodging cold 1:1 troy-lennox answers "find me lodging near campus for the MGT-782 residency, deadline to book is Friday" itself: troy-lennox
+  ok R12-lodging-pattern cold "find a place to stay for the MGT-701 residency, the deadline is Friday" matches NO coursework prime capability: 0
+  ok R12-lodging-pattern cold group "find a place to stay for the MGT-701 residency, the deadline is Friday" -> origin/main leader: elle-rowan
+  ok R12-lodging-pattern cold 1:1 with ANY agent: "find a place to stay for the MGT-701 residency, the deadline is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-lodging-pattern cold 1:1 troy-lennox: "find a place to stay for the MGT-701 residency, the deadline is Friday" -> origin/main lane: null
+  ok R12-lodging-pattern cold 1:1 troy-lennox answers "find a place to stay for the MGT-701 residency, the deadline is Friday" itself: troy-lennox
+  ok R12-money cold "the EMBA694 textbook payment is due Friday, can I afford it" matches NO coursework prime capability: 0
+  ok R12-money cold group "the EMBA694 textbook payment is due Friday, can I afford it" -> origin/main leader: elle-rowan
+  ok R12-money cold 1:1 with ANY agent: "the EMBA694 textbook payment is due Friday, can I afford it" makes no prime hand-off / follow-up DM: 0
+  ok R12-money cold 1:1 finn-reid: "the EMBA694 textbook payment is due Friday, can I afford it" -> origin/main lane: null
+  ok R12-money cold 1:1 finn-reid answers "the EMBA694 textbook payment is due Friday, can I afford it" itself: finn-reid
+  ok R12-money cold "budget for the MGT-701 residency costs, the deposit is due Monday" matches NO coursework prime capability: 0
+  ok R12-money cold group "budget for the MGT-701 residency costs, the deposit is due Monday" -> origin/main leader: finn-reid
+  ok R12-money cold 1:1 with ANY agent: "budget for the MGT-701 residency costs, the deposit is due Monday" makes no prime hand-off / follow-up DM: 0
+  ok R12-money cold 1:1 finn-reid: "budget for the MGT-701 residency costs, the deposit is due Monday" -> origin/main lane: null
+  ok R12-money cold 1:1 finn-reid answers "budget for the MGT-701 residency costs, the deposit is due Monday" itself: finn-reid
+  ok R12-money cold "pay my EMBA694 tuition before the deadline" matches NO coursework prime capability: 0
+  ok R12-money cold group "pay my EMBA694 tuition before the deadline" -> origin/main leader: elle-rowan
+  ok R12-money cold 1:1 with ANY agent: "pay my EMBA694 tuition before the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-money cold 1:1 finn-reid: "pay my EMBA694 tuition before the deadline" -> origin/main lane: elle-rowan
+  ok R12-money cold 1:1 finn-reid answers "pay my EMBA694 tuition before the deadline" itself: finn-reid
+  ok R12-money cold "buy the MGT-782 textbook before the exam" matches NO coursework prime capability: 0
+  ok R12-money cold group "buy the MGT-782 textbook before the exam" -> origin/main leader: iris-chase
+  ok R12-money cold 1:1 with ANY agent: "buy the MGT-782 textbook before the exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-money cold 1:1 finn-reid: "buy the MGT-782 textbook before the exam" -> origin/main lane: null
+  ok R12-money cold 1:1 finn-reid answers "buy the MGT-782 textbook before the exam" itself: finn-reid
+  ok R12-money-pattern cold "what will the MGT-701 residency cost, the paper is due the same week" matches NO coursework prime capability: 0
+  ok R12-money-pattern cold group "what will the MGT-701 residency cost, the paper is due the same week" -> origin/main leader: tess-sutton
+  ok R12-money-pattern cold 1:1 with ANY agent: "what will the MGT-701 residency cost, the paper is due the same week" makes no prime hand-off / follow-up DM: 0
+  ok R12-money-pattern cold 1:1 finn-reid: "what will the MGT-701 residency cost, the paper is due the same week" -> origin/main lane: null
+  ok R12-money-pattern cold 1:1 finn-reid answers "what will the MGT-701 residency cost, the paper is due the same week" itself: finn-reid
+  ok R12-fitness cold "plan my runs around the MGT-782 exam week" matches NO coursework prime capability: 0
+  ok R12-fitness cold group "plan my runs around the MGT-782 exam week" -> origin/main leader: iris-chase
+  ok R12-fitness cold 1:1 with ANY agent: "plan my runs around the MGT-782 exam week" makes no prime hand-off / follow-up DM: 0
+  ok R12-fitness cold 1:1 flex-grimes: "plan my runs around the MGT-782 exam week" -> origin/main lane: null
+  ok R12-fitness cold 1:1 flex-grimes answers "plan my runs around the MGT-782 exam week" itself: flex-grimes
+  ok R12-fitness cold "build a training plan around my MGT-782 exam" matches NO coursework prime capability: 0
+  ok R12-fitness cold group "build a training plan around my MGT-782 exam" -> origin/main leader: flex-grimes
+  ok R12-fitness cold 1:1 with ANY agent: "build a training plan around my MGT-782 exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-fitness cold 1:1 flex-grimes: "build a training plan around my MGT-782 exam" -> origin/main lane: null
+  ok R12-fitness cold 1:1 flex-grimes answers "build a training plan around my MGT-782 exam" itself: flex-grimes
+  ok R12-fitness-pattern cold "I want to go for a run before my MGT-782 exam" matches NO coursework prime capability: 0
+  ok R12-fitness-pattern cold group "I want to go for a run before my MGT-782 exam" -> origin/main leader: flex-grimes
+  ok R12-fitness-pattern cold 1:1 with ANY agent: "I want to go for a run before my MGT-782 exam" makes no prime hand-off / follow-up DM: 0
+  ok R12-fitness-pattern cold 1:1 flex-grimes: "I want to go for a run before my MGT-782 exam" -> origin/main lane: null
+  ok R12-fitness-pattern cold 1:1 flex-grimes answers "I want to go for a run before my MGT-782 exam" itself: flex-grimes
+  ok R12-travel cold "book my travel to the MGT-701 residency, the deadline is Friday" matches NO coursework prime capability: 0
+  ok R12-travel cold group "book my travel to the MGT-701 residency, the deadline is Friday" -> origin/main leader: troy-lennox
+  ok R12-travel cold 1:1 with ANY agent: "book my travel to the MGT-701 residency, the deadline is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R12-travel cold 1:1 troy-lennox: "book my travel to the MGT-701 residency, the deadline is Friday" -> origin/main lane: null
+  ok R12-travel cold 1:1 troy-lennox answers "book my travel to the MGT-701 residency, the deadline is Friday" itself: troy-lennox
+  ok R12-travel cold "book a flight for the EMBA694 residency before the deadline" matches NO coursework prime capability: 0
+  ok R12-travel cold group "book a flight for the EMBA694 residency before the deadline" -> origin/main leader: elle-rowan
+  ok R12-travel cold 1:1 with ANY agent: "book a flight for the EMBA694 residency before the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R12-travel cold 1:1 troy-lennox: "book a flight for the EMBA694 residency before the deadline" -> origin/main lane: null
+  ok R12-travel cold 1:1 troy-lennox answers "book a flight for the EMBA694 residency before the deadline" itself: troy-lennox
+=== coursework (add/update his Nexus assignments) still goes to Elle/Iris ===
+  ok R-CW-nexus warm group "add the MGT-701 research proposal due Dec 1 to Nexus" is led by Elle/Iris: true
+  ok R-CW-nexus warm 1:1 Elle/Iris keep "add the MGT-701 research proposal due Dec 1 to Nexus": keep/keep
+  ok R-CW-nexus warm 1:1 Finn: "add the MGT-701 research proposal due Dec 1 to Nexus" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-code warm group "my MGT-782 paper is due Friday" is led by Elle/Iris: true
+  ok R-CW-code warm 1:1 Elle/Iris keep "my MGT-782 paper is due Friday": keep/keep
+  ok R-CW-code warm 1:1 Finn: "my MGT-782 paper is due Friday" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-prof warm group "my professor wants the case study by Friday, can you add it" is led by Elle/Iris: true
+  ok R-CW-prof warm 1:1 Elle/Iris keep "my professor wants the case study by Friday, can you add it": keep/keep
+  ok R-CW-prof warm 1:1 Finn: "my professor wants the case study by Friday, can you add it" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-cost warm group "add the MGT-782 cost-benefit analysis paper due Friday to Nexus" is led by Elle/Iris: true
+  ok R-CW-cost warm 1:1 Elle/Iris keep "add the MGT-782 cost-benefit analysis paper due Friday to Nexus": keep/keep
+  ok R-CW-cost warm 1:1 Finn: "add the MGT-782 cost-benefit analysis paper due Friday to Nexus" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-drive warm group "upload the MGT-702 syllabus from my Google Drive to Nexus" is led by Elle/Iris: true
+  ok R-CW-drive warm 1:1 Elle/Iris keep "upload the MGT-702 syllabus from my Google Drive to Nexus": keep/keep
+  ok R-CW-drive warm 1:1 Finn: "upload the MGT-702 syllabus from my Google Drive to Nexus" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-gdrive warm group "add the MGT-782 deadlines from the syllabus on my Google Drive to my assignments" is led by Elle/Iris: true
+  ok R-CW-gdrive warm 1:1 Elle/Iris keep "add the MGT-782 deadlines from the syllabus on my Google Drive to my assignments": keep/keep
+  ok R-CW-gdrive warm 1:1 Finn: "add the MGT-782 deadlines from the syllabus on my Google Drive to my assignments" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-drive-nexus warm group "import the MGT-702 syllabus from Drive to Nexus" is led by Elle/Iris: true
+  ok R-CW-drive-nexus warm 1:1 Elle/Iris keep "import the MGT-702 syllabus from Drive to Nexus": keep/keep
+  ok R-CW-drive-nexus warm 1:1 Finn: "import the MGT-702 syllabus from Drive to Nexus" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-calendar warm group "the course calendar in my MGT-782 syllabus has the paper due Dec 9, add it" is led by Elle/Iris: true
+  ok R-CW-calendar warm 1:1 Elle/Iris keep "the course calendar in my MGT-782 syllabus has the paper due Dec 9, add it": keep/keep
+  ok R-CW-calendar warm 1:1 Finn: "the course calendar in my MGT-782 syllabus has the paper due Dec 9, add it" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-update warm group "update the due date on my MGT-782 essay to Friday" is led by Elle/Iris: true
+  ok R-CW-update warm 1:1 Elle/Iris keep "update the due date on my MGT-782 essay to Friday": keep/keep
+  ok R-CW-update warm 1:1 Finn: "update the due date on my MGT-782 essay to Friday" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-brief warm group "add my EMBA694 case brief due Nov 20" is led by Elle/Iris: true
+  ok R-CW-brief warm 1:1 Elle/Iris keep "add my EMBA694 case brief due Nov 20": keep/keep
+  ok R-CW-brief warm 1:1 Finn: "add my EMBA694 case brief due Nov 20" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-stay warm group "stay on top of my MGT-782 assignments, add the essay due Friday" is led by Elle/Iris: true
+  ok R-CW-stay warm 1:1 Elle/Iris keep "stay on top of my MGT-782 assignments, add the essay due Friday": keep/keep
+  ok R-CW-stay warm 1:1 Finn: "stay on top of my MGT-782 assignments, add the essay due Friday" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-run warm group "add the MGT-782 regression analysis paper due Friday, I still need to run the model" is led by Elle/Iris: true
+  ok R-CW-run warm 1:1 Elle/Iris keep "add the MGT-782 regression analysis paper due Friday, I still need to run the model": keep/keep
+  ok R-CW-run warm 1:1 Finn: "add the MGT-782 regression analysis paper due Friday, I still need to run the model" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-nexus cold group "add the MGT-701 research proposal due Dec 1 to Nexus" is led by Elle/Iris: true
+  ok R-CW-nexus cold 1:1 Elle/Iris keep "add the MGT-701 research proposal due Dec 1 to Nexus": keep/keep
+  ok R-CW-nexus cold 1:1 Finn: "add the MGT-701 research proposal due Dec 1 to Nexus" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-prof cold group "my professor wants the case study by Friday, can you add it" is led by Elle/Iris: true
+  ok R-CW-prof cold 1:1 Elle/Iris keep "my professor wants the case study by Friday, can you add it": keep/keep
+  ok R-CW-prof cold 1:1 Finn: "my professor wants the case study by Friday, can you add it" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-cost cold group "add the MGT-782 cost-benefit analysis paper due Friday to Nexus" is led by Elle/Iris: true
+  ok R-CW-cost cold 1:1 Elle/Iris keep "add the MGT-782 cost-benefit analysis paper due Friday to Nexus": keep/keep
+  ok R-CW-cost cold 1:1 Finn: "add the MGT-782 cost-benefit analysis paper due Friday to Nexus" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-drive cold group "upload the MGT-702 syllabus from my Google Drive to Nexus" is led by Elle/Iris: true
+  ok R-CW-drive cold 1:1 Elle/Iris keep "upload the MGT-702 syllabus from my Google Drive to Nexus": keep/keep
+  ok R-CW-drive cold 1:1 Finn: "upload the MGT-702 syllabus from my Google Drive to Nexus" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-gdrive cold group "add the MGT-782 deadlines from the syllabus on my Google Drive to my assignments" is led by Elle/Iris: true
+  ok R-CW-gdrive cold 1:1 Elle/Iris keep "add the MGT-782 deadlines from the syllabus on my Google Drive to my assignments": keep/keep
+  ok R-CW-gdrive cold 1:1 Finn: "add the MGT-782 deadlines from the syllabus on my Google Drive to my assignments" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-drive-nexus cold group "import the MGT-702 syllabus from Drive to Nexus" is led by Elle/Iris: true
+  ok R-CW-drive-nexus cold 1:1 Elle/Iris keep "import the MGT-702 syllabus from Drive to Nexus": keep/keep
+  ok R-CW-drive-nexus cold 1:1 Finn: "import the MGT-702 syllabus from Drive to Nexus" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-calendar cold group "the course calendar in my MGT-782 syllabus has the paper due Dec 9, add it" is led by Elle/Iris: true
+  ok R-CW-calendar cold 1:1 Elle/Iris keep "the course calendar in my MGT-782 syllabus has the paper due Dec 9, add it": keep/keep
+  ok R-CW-calendar cold 1:1 Finn: "the course calendar in my MGT-782 syllabus has the paper due Dec 9, add it" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+  ok R-CW-update cold group "update the due date on my MGT-782 essay to Friday" is led by Elle/Iris: true
+  ok R-CW-update cold 1:1 Elle/Iris keep "update the due date on my MGT-782 essay to Friday": keep/keep
+  ok R-CW-update cold 1:1 Finn: "update the due date on my MGT-782 essay to Friday" -> Elle/Iris only on an explicit Nexus write, else no prime hand-off (D13): true
+=== Explicit Nexus override (2026-10-29): an explicit '… to/in/into Nexus' write beats the vetoes ===
+  ok R-X-data the override is DATA on the capability (explicitOverride): true
+  ok R-X-order capabilityContextPresent checks explicitOverride BEFORE the vetoes: true
+  ok R-X-hint the routers' hint says an explicit Nexus write is theirs: true
+  ok R-X warm "add the MGT-782 email marketing case analysis to Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "add the MGT-782 email marketing case analysis to Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "add the MGT-782 email marketing case analysis to Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "add the MGT-782 email marketing case analysis to Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 cam-post hands "add the MGT-782 email marketing case analysis to Nexus" to Elle/Iris: true
+  ok R-X warm "put my travel industry essay due Nov 3 into Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "put my travel industry essay due Nov 3 into Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "put my travel industry essay due Nov 3 into Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "put my travel industry essay due Nov 3 into Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 troy-lennox hands "put my travel industry essay due Nov 3 into Nexus" to Elle/Iris: true
+  ok R-X warm "update the Airbnb pricing case study due date in Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "update the Airbnb pricing case study due date in Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "update the Airbnb pricing case study due date in Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "update the Airbnb pricing case study due date in Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 troy-lennox hands "update the Airbnb pricing case study due date in Nexus" to Elle/Iris: true
+  ok R-X warm "can you add my hotel management essay to Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "can you add my hotel management essay to Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "can you add my hotel management essay to Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "can you add my hotel management essay to Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 troy-lennox hands "can you add my hotel management essay to Nexus" to Elle/Iris: true
+  ok R-X warm "please reschedule the budgeting case study to Dec 2 in Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "please reschedule the budgeting case study to Dec 2 in Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "please reschedule the budgeting case study to Dec 2 in Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "please reschedule the budgeting case study to Dec 2 in Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 finn-reid hands "please reschedule the budgeting case study to Dec 2 in Nexus" to Elle/Iris: true
+  ok R-X warm "add the flight operations essay to my Nexus assignments" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "add the flight operations essay to my Nexus assignments" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "add the flight operations essay to my Nexus assignments" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "add the flight operations essay to my Nexus assignments" to Elle/Iris: true
+  ok R-X warm 1:1 troy-lennox hands "add the flight operations essay to my Nexus assignments" to Elle/Iris: true
+  ok R-X warm "set the travel essay due date to Friday in Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "set the travel essay due date to Friday in Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "set the travel essay due date to Friday in Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "set the travel essay due date to Friday in Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 troy-lennox hands "set the travel essay due date to Friday in Nexus" to Elle/Iris: true
+  ok R-X warm "record my dinner etiquette essay due Nov 10 into Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "record my dinner etiquette essay due Nov 10 into Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "record my dinner etiquette essay due Nov 10 into Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "record my dinner etiquette essay due Nov 10 into Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 charleston-lewis hands "record my dinner etiquette essay due Nov 10 into Nexus" to Elle/Iris: true
+  ok R-X warm "change the client presentation paper deadline in Nexus to Monday" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "change the client presentation paper deadline in Nexus to Monday" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "change the client presentation paper deadline in Nexus to Monday" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "change the client presentation paper deadline in Nexus to Monday" to Elle/Iris: true
+  ok R-X warm 1:1 sam-trent hands "change the client presentation paper deadline in Nexus to Monday" to Elle/Iris: true
+  ok R-X warm "save the email marketing paper to my Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "save the email marketing paper to my Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "save the email marketing paper to my Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "save the email marketing paper to my Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 cam-post hands "save the email marketing paper to my Nexus" to Elle/Iris: true
+  ok R-X warm "enter the fitness industry case study into Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "enter the fitness industry case study into Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "enter the fitness industry case study into Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "enter the fitness industry case study into Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 flex-grimes hands "enter the fitness industry case study into Nexus" to Elle/Iris: true
+  ok R-X warm "move my hotel case study to Dec 4 in Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "move my hotel case study to Dec 4 in Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "move my hotel case study to Dec 4 in Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "move my hotel case study to Dec 4 in Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 troy-lennox hands "move my hotel case study to Dec 4 in Nexus" to Elle/Iris: true
+  ok R-X warm "log the tax accounting paper due Friday in Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "log the tax accounting paper due Friday in Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "log the tax accounting paper due Friday in Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "log the tax accounting paper due Friday in Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 finn-reid hands "log the tax accounting paper due Friday in Nexus" to Elle/Iris: true
+  ok R-X warm "hey Elle, add my airline pricing essay to Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "hey Elle, add my airline pricing essay to Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "hey Elle, add my airline pricing essay to Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "hey Elle, add my airline pricing essay to Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 cam-post hands "hey Elle, add my airline pricing essay to Nexus" to Elle/Iris: true
+  ok R-X warm "I need you to put the restaurant case study into Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X warm group "I need you to put the restaurant case study into Nexus" is led by Elle/Iris: true
+  ok R-X warm 1:1 Elle/Iris keep "I need you to put the restaurant case study into Nexus" (no hand-off away): keep/keep
+  ok R-X warm 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X warm 1:1 Cam hands "I need you to put the restaurant case study into Nexus" to Elle/Iris: true
+  ok R-X warm 1:1 charleston-lewis hands "I need you to put the restaurant case study into Nexus" to Elle/Iris: true
+  ok R-XN-card warm "renew my NEXUS card before the deadline" matches NO coursework prime capability: 0
+  ok R-XN-card warm group "renew my NEXUS card before the deadline" -> origin/main leader: elle-rowan
+  ok R-XN-card warm 1:1 with ANY agent: "renew my NEXUS card before the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-card warm 1:1 troy-lennox: "renew my NEXUS card before the deadline" -> origin/main lane: null
+  ok R-XN-card warm 1:1 troy-lennox answers "renew my NEXUS card before the deadline" itself: troy-lennox
+  ok R-XN-card warm "update the address on my NEXUS card" matches NO coursework prime capability: 0
+  ok R-XN-card warm group "update the address on my NEXUS card" -> origin/main leader: eli-vaughn
+  ok R-XN-card warm 1:1 with ANY agent: "update the address on my NEXUS card" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-card warm 1:1 troy-lennox: "update the address on my NEXUS card" -> origin/main lane: eli-vaughn
+  ok R-XN-card warm 1:1 troy-lennox answers "update the address on my NEXUS card" itself: troy-lennox
+  ok R-XN-card warm "add my NEXUS card renewal fee to my budget" matches NO coursework prime capability: 0
+  ok R-XN-card warm group "add my NEXUS card renewal fee to my budget" -> origin/main leader: finn-reid
+  ok R-XN-card warm 1:1 with ANY agent: "add my NEXUS card renewal fee to my budget" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-card warm 1:1 finn-reid: "add my NEXUS card renewal fee to my budget" -> origin/main lane: null
+  ok R-XN-card warm 1:1 finn-reid answers "add my NEXUS card renewal fee to my budget" itself: finn-reid
+  ok R-XN-card warm "add the renewal date to my NEXUS card" matches NO coursework prime capability: 0
+  ok R-XN-card warm group "add the renewal date to my NEXUS card" -> origin/main leader: iris-chase
+  ok R-XN-card warm 1:1 with ANY agent: "add the renewal date to my NEXUS card" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-card warm 1:1 troy-lennox: "add the renewal date to my NEXUS card" -> origin/main lane: null
+  ok R-XN-card warm 1:1 troy-lennox answers "add the renewal date to my NEXUS card" itself: troy-lennox
+  ok R-XN-program warm "update the interview date in my NEXUS program" matches NO coursework prime capability: 0
+  ok R-XN-program warm group "update the interview date in my NEXUS program" -> origin/main leader: cole-blake
+  ok R-XN-program warm 1:1 with ANY agent: "update the interview date in my NEXUS program" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-program warm 1:1 troy-lennox: "update the interview date in my NEXUS program" -> origin/main lane: cole-blake
+  ok R-XN-program warm 1:1 troy-lennox answers "update the interview date in my NEXUS program" itself: troy-lennox
+  ok R-XN-program warm "my NEXUS program application deadline is Friday" matches NO coursework prime capability: 0
+  ok R-XN-program warm group "my NEXUS program application deadline is Friday" -> origin/main leader: elle-rowan
+  ok R-XN-program warm 1:1 with ANY agent: "my NEXUS program application deadline is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-program warm 1:1 troy-lennox: "my NEXUS program application deadline is Friday" -> origin/main lane: elle-rowan
+  ok R-XN-program warm 1:1 troy-lennox answers "my NEXUS program application deadline is Friday" itself: troy-lennox
+  ok R-XN-program warm "move my NEXUS program interview to Friday" matches NO coursework prime capability: 0
+  ok R-XN-program warm group "move my NEXUS program interview to Friday" -> origin/main leader: cole-blake
+  ok R-XN-program warm 1:1 with ANY agent: "move my NEXUS program interview to Friday" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-program warm 1:1 troy-lennox: "move my NEXUS program interview to Friday" -> origin/main lane: cole-blake
+  ok R-XN-program warm 1:1 troy-lennox answers "move my NEXUS program interview to Friday" itself: troy-lennox
+  ok R-XN-apply warm "apply to NEXUS for me before my Toronto trip" matches NO coursework prime capability: 0
+  ok R-XN-apply warm group "apply to NEXUS for me before my Toronto trip" -> origin/main leader: troy-lennox
+  ok R-XN-apply warm 1:1 with ANY agent: "apply to NEXUS for me before my Toronto trip" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-apply warm 1:1 troy-lennox: "apply to NEXUS for me before my Toronto trip" -> origin/main lane: null
+  ok R-XN-apply warm 1:1 troy-lennox answers "apply to NEXUS for me before my Toronto trip" itself: troy-lennox
+  ok R-XN-apply warm "should I apply to NEXUS before the deadline" matches NO coursework prime capability: 0
+  ok R-XN-apply warm group "should I apply to NEXUS before the deadline" -> origin/main leader: elle-rowan
+  ok R-XN-apply warm 1:1 with ANY agent: "should I apply to NEXUS before the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-apply warm 1:1 troy-lennox: "should I apply to NEXUS before the deadline" -> origin/main lane: null
+  ok R-XN-apply warm 1:1 troy-lennox answers "should I apply to NEXUS before the deadline" itself: troy-lennox
+  ok R-XN-trusted warm "update my address in NEXUS trusted traveler before the deadline" matches NO coursework prime capability: 0
+  ok R-XN-trusted warm group "update my address in NEXUS trusted traveler before the deadline" -> origin/main leader: troy-lennox
+  ok R-XN-trusted warm 1:1 with ANY agent: "update my address in NEXUS trusted traveler before the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-trusted warm 1:1 troy-lennox: "update my address in NEXUS trusted traveler before the deadline" -> origin/main lane: null
+  ok R-XN-trusted warm 1:1 troy-lennox answers "update my address in NEXUS trusted traveler before the deadline" itself: troy-lennox
+  ok R-XN-trusted warm "add my kid to NEXUS trusted traveler" matches NO coursework prime capability: 0
+  ok R-XN-trusted warm group "add my kid to NEXUS trusted traveler" -> origin/main leader: troy-lennox
+  ok R-XN-trusted warm 1:1 with ANY agent: "add my kid to NEXUS trusted traveler" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-trusted warm 1:1 troy-lennox: "add my kid to NEXUS trusted traveler" -> origin/main lane: null
+  ok R-XN-trusted warm 1:1 troy-lennox answers "add my kid to NEXUS trusted traveler" itself: troy-lennox
+  ok R-XN-fitness warm "can you log my 5k run to Nexus fitness tracker by the deadline" matches NO coursework prime capability: 0
+  ok R-XN-fitness warm group "can you log my 5k run to Nexus fitness tracker by the deadline" -> origin/main leader: elle-rowan
+  ok R-XN-fitness warm 1:1 with ANY agent: "can you log my 5k run to Nexus fitness tracker by the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-fitness warm 1:1 flex-grimes: "can you log my 5k run to Nexus fitness tracker by the deadline" -> origin/main lane: null
+  ok R-XN-fitness warm 1:1 flex-grimes answers "can you log my 5k run to Nexus fitness tracker by the deadline" itself: flex-grimes
+  ok R-XN-email warm "email my professor about Nexus" matches NO coursework prime capability: 0
+  ok R-XN-email warm group "email my professor about Nexus" -> origin/main leader: cam-post
+  ok R-XN-email warm 1:1 with ANY agent: "email my professor about Nexus" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-email warm 1:1 cam-post: "email my professor about Nexus" -> origin/main lane: null
+  ok R-XN-email warm 1:1 cam-post answers "email my professor about Nexus" itself: cam-post
+  ok R-XN-email warm "email my professor about the essay I put in Nexus" matches NO coursework prime capability: 0
+  ok R-XN-email warm group "email my professor about the essay I put in Nexus" -> origin/main leader: elle-rowan
+  ok R-XN-email warm 1:1 with ANY agent: "email my professor about the essay I put in Nexus" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-email warm 1:1 cam-post: "email my professor about the essay I put in Nexus" -> origin/main lane: elle-rowan
+  ok R-XN-email warm 1:1 cam-post answers "email my professor about the essay I put in Nexus" itself: cam-post
+  ok R-XN-email warm "email my professor that I will add the MGT-782 essay to Nexus tonight" matches NO coursework prime capability: 0
+  ok R-XN-email warm group "email my professor that I will add the MGT-782 essay to Nexus tonight" -> origin/main leader: elle-rowan
+  ok R-XN-email warm 1:1 with ANY agent: "email my professor that I will add the MGT-782 essay to Nexus tonight" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-email warm 1:1 cam-post: "email my professor that I will add the MGT-782 essay to Nexus tonight" -> origin/main lane: elle-rowan
+  ok R-XN-email warm 1:1 cam-post answers "email my professor that I will add the MGT-782 essay to Nexus tonight" itself: cam-post
+  ok R-XN-down warm "is Nexus down" matches NO coursework prime capability: 0
+  ok R-XN-down warm group "is Nexus down" -> origin/main leader: iris-chase
+  ok R-XN-down warm 1:1 with ANY agent: "is Nexus down" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-down warm 1:1 cam-post: "is Nexus down" -> origin/main lane: null
+  ok R-XN-down warm 1:1 cam-post answers "is Nexus down" itself: cam-post
+  ok R-XN-down warm "is Nexus down again? I can't add the travel essay" matches NO coursework prime capability: 0
+  ok R-XN-down warm group "is Nexus down again? I can't add the travel essay" -> origin/main leader: troy-lennox
+  ok R-XN-down warm 1:1 with ANY agent: "is Nexus down again? I can't add the travel essay" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-down warm 1:1 cam-post: "is Nexus down again? I can't add the travel essay" -> origin/main lane: troy-lennox
+  ok R-XN-down warm 1:1 cam-post answers "is Nexus down again? I can't add the travel essay" itself: cam-post
+  ok R-XN-question warm "when is my travel essay due in Nexus" matches NO coursework prime capability: 0
+  ok R-XN-question warm group "when is my travel essay due in Nexus" -> origin/main leader: troy-lennox
+  ok R-XN-question warm 1:1 with ANY agent: "when is my travel essay due in Nexus" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-question warm 1:1 troy-lennox: "when is my travel essay due in Nexus" -> origin/main lane: null
+  ok R-XN-question warm 1:1 troy-lennox answers "when is my travel essay due in Nexus" itself: troy-lennox
+  ok R-XN-question warm "did the email marketing paper make it into Nexus" matches NO coursework prime capability: 0
+  ok R-XN-question warm group "did the email marketing paper make it into Nexus" -> origin/main leader: cam-post
+  ok R-XN-question warm 1:1 with ANY agent: "did the email marketing paper make it into Nexus" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-question warm 1:1 cam-post: "did the email marketing paper make it into Nexus" -> origin/main lane: null
+  ok R-XN-question warm 1:1 cam-post answers "did the email marketing paper make it into Nexus" itself: cam-post
+  ok R-XN-nexus-of warm "update my travel essay to the nexus of airlines and hotels" matches NO coursework prime capability: 0
+  ok R-XN-nexus-of warm group "update my travel essay to the nexus of airlines and hotels" -> origin/main leader: troy-lennox
+  ok R-XN-nexus-of warm 1:1 with ANY agent: "update my travel essay to the nexus of airlines and hotels" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-nexus-of warm 1:1 troy-lennox: "update my travel essay to the nexus of airlines and hotels" -> origin/main lane: null
+  ok R-XN-nexus-of warm 1:1 troy-lennox answers "update my travel essay to the nexus of airlines and hotels" itself: troy-lennox
+  ok R-XN-nexus-of warm "add a paragraph on the nexus of travel and pricing to my essay" matches NO coursework prime capability: 0
+  ok R-XN-nexus-of warm group "add a paragraph on the nexus of travel and pricing to my essay" -> origin/main leader: troy-lennox
+  ok R-XN-nexus-of warm 1:1 with ANY agent: "add a paragraph on the nexus of travel and pricing to my essay" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-nexus-of warm 1:1 troy-lennox: "add a paragraph on the nexus of travel and pricing to my essay" -> origin/main lane: null
+  ok R-XN-nexus-of warm 1:1 troy-lennox answers "add a paragraph on the nexus of travel and pricing to my essay" itself: troy-lennox
+  ok R-X cold "add the MGT-782 email marketing case analysis to Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "add the MGT-782 email marketing case analysis to Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "add the MGT-782 email marketing case analysis to Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "add the MGT-782 email marketing case analysis to Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 cam-post hands "add the MGT-782 email marketing case analysis to Nexus" to Elle/Iris: true
+  ok R-X cold "put my travel industry essay due Nov 3 into Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "put my travel industry essay due Nov 3 into Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "put my travel industry essay due Nov 3 into Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "put my travel industry essay due Nov 3 into Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 troy-lennox hands "put my travel industry essay due Nov 3 into Nexus" to Elle/Iris: true
+  ok R-X cold "update the Airbnb pricing case study due date in Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "update the Airbnb pricing case study due date in Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "update the Airbnb pricing case study due date in Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "update the Airbnb pricing case study due date in Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 troy-lennox hands "update the Airbnb pricing case study due date in Nexus" to Elle/Iris: true
+  ok R-X cold "can you add my hotel management essay to Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "can you add my hotel management essay to Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "can you add my hotel management essay to Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "can you add my hotel management essay to Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 troy-lennox hands "can you add my hotel management essay to Nexus" to Elle/Iris: true
+  ok R-X cold "please reschedule the budgeting case study to Dec 2 in Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "please reschedule the budgeting case study to Dec 2 in Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "please reschedule the budgeting case study to Dec 2 in Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "please reschedule the budgeting case study to Dec 2 in Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 finn-reid hands "please reschedule the budgeting case study to Dec 2 in Nexus" to Elle/Iris: true
+  ok R-X cold "add the flight operations essay to my Nexus assignments" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "add the flight operations essay to my Nexus assignments" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "add the flight operations essay to my Nexus assignments" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "add the flight operations essay to my Nexus assignments" to Elle/Iris: true
+  ok R-X cold 1:1 troy-lennox hands "add the flight operations essay to my Nexus assignments" to Elle/Iris: true
+  ok R-X cold "set the travel essay due date to Friday in Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "set the travel essay due date to Friday in Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "set the travel essay due date to Friday in Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "set the travel essay due date to Friday in Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 troy-lennox hands "set the travel essay due date to Friday in Nexus" to Elle/Iris: true
+  ok R-X cold "record my dinner etiquette essay due Nov 10 into Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "record my dinner etiquette essay due Nov 10 into Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "record my dinner etiquette essay due Nov 10 into Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "record my dinner etiquette essay due Nov 10 into Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 charleston-lewis hands "record my dinner etiquette essay due Nov 10 into Nexus" to Elle/Iris: true
+  ok R-X cold "change the client presentation paper deadline in Nexus to Monday" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "change the client presentation paper deadline in Nexus to Monday" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "change the client presentation paper deadline in Nexus to Monday" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "change the client presentation paper deadline in Nexus to Monday" to Elle/Iris: true
+  ok R-X cold 1:1 sam-trent hands "change the client presentation paper deadline in Nexus to Monday" to Elle/Iris: true
+  ok R-X cold "save the email marketing paper to my Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "save the email marketing paper to my Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "save the email marketing paper to my Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "save the email marketing paper to my Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 cam-post hands "save the email marketing paper to my Nexus" to Elle/Iris: true
+  ok R-X cold "enter the fitness industry case study into Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "enter the fitness industry case study into Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "enter the fitness industry case study into Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "enter the fitness industry case study into Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 flex-grimes hands "enter the fitness industry case study into Nexus" to Elle/Iris: true
+  ok R-X cold "move my hotel case study to Dec 4 in Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "move my hotel case study to Dec 4 in Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "move my hotel case study to Dec 4 in Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "move my hotel case study to Dec 4 in Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 troy-lennox hands "move my hotel case study to Dec 4 in Nexus" to Elle/Iris: true
+  ok R-X cold "log the tax accounting paper due Friday in Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "log the tax accounting paper due Friday in Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "log the tax accounting paper due Friday in Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "log the tax accounting paper due Friday in Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 finn-reid hands "log the tax accounting paper due Friday in Nexus" to Elle/Iris: true
+  ok R-X cold "hey Elle, add my airline pricing essay to Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "hey Elle, add my airline pricing essay to Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "hey Elle, add my airline pricing essay to Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "hey Elle, add my airline pricing essay to Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 cam-post hands "hey Elle, add my airline pricing essay to Nexus" to Elle/Iris: true
+  ok R-X cold "I need you to put the restaurant case study into Nexus" -> holders are Elle/Iris: elle-rowan,iris-chase
+  ok R-X cold group "I need you to put the restaurant case study into Nexus" is led by Elle/Iris: true
+  ok R-X cold 1:1 Elle/Iris keep "I need you to put the restaurant case study into Nexus" (no hand-off away): keep/keep
+  ok R-X cold 1:1 Elle/Iris: laneOwnerFor is null (they answer it): null/null
+  ok R-X cold 1:1 Cam hands "I need you to put the restaurant case study into Nexus" to Elle/Iris: true
+  ok R-X cold 1:1 charleston-lewis hands "I need you to put the restaurant case study into Nexus" to Elle/Iris: true
+  ok R-XN-card cold "renew my NEXUS card before the deadline" matches NO coursework prime capability: 0
+  ok R-XN-card cold group "renew my NEXUS card before the deadline" -> origin/main leader: elle-rowan
+  ok R-XN-card cold 1:1 with ANY agent: "renew my NEXUS card before the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-card cold 1:1 troy-lennox: "renew my NEXUS card before the deadline" -> origin/main lane: null
+  ok R-XN-card cold 1:1 troy-lennox answers "renew my NEXUS card before the deadline" itself: troy-lennox
+  ok R-XN-card cold "update the address on my NEXUS card" matches NO coursework prime capability: 0
+  ok R-XN-card cold group "update the address on my NEXUS card" -> origin/main leader: eli-vaughn
+  ok R-XN-card cold 1:1 with ANY agent: "update the address on my NEXUS card" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-card cold 1:1 troy-lennox: "update the address on my NEXUS card" -> origin/main lane: eli-vaughn
+  ok R-XN-card cold 1:1 troy-lennox answers "update the address on my NEXUS card" itself: troy-lennox
+  ok R-XN-card cold "add my NEXUS card renewal fee to my budget" matches NO coursework prime capability: 0
+  ok R-XN-card cold group "add my NEXUS card renewal fee to my budget" -> origin/main leader: finn-reid
+  ok R-XN-card cold 1:1 with ANY agent: "add my NEXUS card renewal fee to my budget" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-card cold 1:1 finn-reid: "add my NEXUS card renewal fee to my budget" -> origin/main lane: null
+  ok R-XN-card cold 1:1 finn-reid answers "add my NEXUS card renewal fee to my budget" itself: finn-reid
+  ok R-XN-card cold "add the renewal date to my NEXUS card" matches NO coursework prime capability: 0
+  ok R-XN-card cold group "add the renewal date to my NEXUS card" -> origin/main leader: iris-chase
+  ok R-XN-card cold 1:1 with ANY agent: "add the renewal date to my NEXUS card" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-card cold 1:1 troy-lennox: "add the renewal date to my NEXUS card" -> origin/main lane: null
+  ok R-XN-card cold 1:1 troy-lennox answers "add the renewal date to my NEXUS card" itself: troy-lennox
+  ok R-XN-program cold "update the interview date in my NEXUS program" matches NO coursework prime capability: 0
+  ok R-XN-program cold group "update the interview date in my NEXUS program" -> origin/main leader: cole-blake
+  ok R-XN-program cold 1:1 with ANY agent: "update the interview date in my NEXUS program" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-program cold 1:1 troy-lennox: "update the interview date in my NEXUS program" -> origin/main lane: cole-blake
+  ok R-XN-program cold 1:1 troy-lennox answers "update the interview date in my NEXUS program" itself: troy-lennox
+  ok R-XN-program cold "my NEXUS program application deadline is Friday" matches NO coursework prime capability: 0
+  ok R-XN-program cold group "my NEXUS program application deadline is Friday" -> origin/main leader: elle-rowan
+  ok R-XN-program cold 1:1 with ANY agent: "my NEXUS program application deadline is Friday" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-program cold 1:1 troy-lennox: "my NEXUS program application deadline is Friday" -> origin/main lane: elle-rowan
+  ok R-XN-program cold 1:1 troy-lennox answers "my NEXUS program application deadline is Friday" itself: troy-lennox
+  ok R-XN-program cold "move my NEXUS program interview to Friday" matches NO coursework prime capability: 0
+  ok R-XN-program cold group "move my NEXUS program interview to Friday" -> origin/main leader: cole-blake
+  ok R-XN-program cold 1:1 with ANY agent: "move my NEXUS program interview to Friday" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-program cold 1:1 troy-lennox: "move my NEXUS program interview to Friday" -> origin/main lane: cole-blake
+  ok R-XN-program cold 1:1 troy-lennox answers "move my NEXUS program interview to Friday" itself: troy-lennox
+  ok R-XN-apply cold "apply to NEXUS for me before my Toronto trip" matches NO coursework prime capability: 0
+  ok R-XN-apply cold group "apply to NEXUS for me before my Toronto trip" -> origin/main leader: troy-lennox
+  ok R-XN-apply cold 1:1 with ANY agent: "apply to NEXUS for me before my Toronto trip" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-apply cold 1:1 troy-lennox: "apply to NEXUS for me before my Toronto trip" -> origin/main lane: null
+  ok R-XN-apply cold 1:1 troy-lennox answers "apply to NEXUS for me before my Toronto trip" itself: troy-lennox
+  ok R-XN-apply cold "should I apply to NEXUS before the deadline" matches NO coursework prime capability: 0
+  ok R-XN-apply cold group "should I apply to NEXUS before the deadline" -> origin/main leader: elle-rowan
+  ok R-XN-apply cold 1:1 with ANY agent: "should I apply to NEXUS before the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-apply cold 1:1 troy-lennox: "should I apply to NEXUS before the deadline" -> origin/main lane: null
+  ok R-XN-apply cold 1:1 troy-lennox answers "should I apply to NEXUS before the deadline" itself: troy-lennox
+  ok R-XN-trusted cold "update my address in NEXUS trusted traveler before the deadline" matches NO coursework prime capability: 0
+  ok R-XN-trusted cold group "update my address in NEXUS trusted traveler before the deadline" -> origin/main leader: troy-lennox
+  ok R-XN-trusted cold 1:1 with ANY agent: "update my address in NEXUS trusted traveler before the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-trusted cold 1:1 troy-lennox: "update my address in NEXUS trusted traveler before the deadline" -> origin/main lane: null
+  ok R-XN-trusted cold 1:1 troy-lennox answers "update my address in NEXUS trusted traveler before the deadline" itself: troy-lennox
+  ok R-XN-trusted cold "add my kid to NEXUS trusted traveler" matches NO coursework prime capability: 0
+  ok R-XN-trusted cold group "add my kid to NEXUS trusted traveler" -> origin/main leader: troy-lennox
+  ok R-XN-trusted cold 1:1 with ANY agent: "add my kid to NEXUS trusted traveler" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-trusted cold 1:1 troy-lennox: "add my kid to NEXUS trusted traveler" -> origin/main lane: null
+  ok R-XN-trusted cold 1:1 troy-lennox answers "add my kid to NEXUS trusted traveler" itself: troy-lennox
+  ok R-XN-fitness cold "can you log my 5k run to Nexus fitness tracker by the deadline" matches NO coursework prime capability: 0
+  ok R-XN-fitness cold group "can you log my 5k run to Nexus fitness tracker by the deadline" -> origin/main leader: elle-rowan
+  ok R-XN-fitness cold 1:1 with ANY agent: "can you log my 5k run to Nexus fitness tracker by the deadline" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-fitness cold 1:1 flex-grimes: "can you log my 5k run to Nexus fitness tracker by the deadline" -> origin/main lane: null
+  ok R-XN-fitness cold 1:1 flex-grimes answers "can you log my 5k run to Nexus fitness tracker by the deadline" itself: flex-grimes
+  ok R-XN-email cold "email my professor about Nexus" matches NO coursework prime capability: 0
+  ok R-XN-email cold group "email my professor about Nexus" -> origin/main leader: cam-post
+  ok R-XN-email cold 1:1 with ANY agent: "email my professor about Nexus" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-email cold 1:1 cam-post: "email my professor about Nexus" -> origin/main lane: null
+  ok R-XN-email cold 1:1 cam-post answers "email my professor about Nexus" itself: cam-post
+  ok R-XN-email cold "email my professor about the essay I put in Nexus" matches NO coursework prime capability: 0
+  ok R-XN-email cold group "email my professor about the essay I put in Nexus" -> origin/main leader: elle-rowan
+  ok R-XN-email cold 1:1 with ANY agent: "email my professor about the essay I put in Nexus" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-email cold 1:1 cam-post: "email my professor about the essay I put in Nexus" -> origin/main lane: elle-rowan
+  ok R-XN-email cold 1:1 cam-post answers "email my professor about the essay I put in Nexus" itself: cam-post
+  ok R-XN-email cold "email my professor that I will add the MGT-782 essay to Nexus tonight" matches NO coursework prime capability: 0
+  ok R-XN-email cold group "email my professor that I will add the MGT-782 essay to Nexus tonight" -> origin/main leader: elle-rowan
+  ok R-XN-email cold 1:1 with ANY agent: "email my professor that I will add the MGT-782 essay to Nexus tonight" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-email cold 1:1 cam-post: "email my professor that I will add the MGT-782 essay to Nexus tonight" -> origin/main lane: elle-rowan
+  ok R-XN-email cold 1:1 cam-post answers "email my professor that I will add the MGT-782 essay to Nexus tonight" itself: cam-post
+  ok R-XN-down cold "is Nexus down" matches NO coursework prime capability: 0
+  ok R-XN-down cold group "is Nexus down" -> origin/main leader: iris-chase
+  ok R-XN-down cold 1:1 with ANY agent: "is Nexus down" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-down cold 1:1 cam-post: "is Nexus down" -> origin/main lane: null
+  ok R-XN-down cold 1:1 cam-post answers "is Nexus down" itself: cam-post
+  ok R-XN-down cold "is Nexus down again? I can't add the travel essay" matches NO coursework prime capability: 0
+  ok R-XN-down cold group "is Nexus down again? I can't add the travel essay" -> origin/main leader: troy-lennox
+  ok R-XN-down cold 1:1 with ANY agent: "is Nexus down again? I can't add the travel essay" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-down cold 1:1 cam-post: "is Nexus down again? I can't add the travel essay" -> origin/main lane: troy-lennox
+  ok R-XN-down cold 1:1 cam-post answers "is Nexus down again? I can't add the travel essay" itself: cam-post
+  ok R-XN-question cold "when is my travel essay due in Nexus" matches NO coursework prime capability: 0
+  ok R-XN-question cold group "when is my travel essay due in Nexus" -> origin/main leader: troy-lennox
+  ok R-XN-question cold 1:1 with ANY agent: "when is my travel essay due in Nexus" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-question cold 1:1 troy-lennox: "when is my travel essay due in Nexus" -> origin/main lane: null
+  ok R-XN-question cold 1:1 troy-lennox answers "when is my travel essay due in Nexus" itself: troy-lennox
+  ok R-XN-question cold "did the email marketing paper make it into Nexus" matches NO coursework prime capability: 0
+  ok R-XN-question cold group "did the email marketing paper make it into Nexus" -> origin/main leader: cam-post
+  ok R-XN-question cold 1:1 with ANY agent: "did the email marketing paper make it into Nexus" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-question cold 1:1 cam-post: "did the email marketing paper make it into Nexus" -> origin/main lane: null
+  ok R-XN-question cold 1:1 cam-post answers "did the email marketing paper make it into Nexus" itself: cam-post
+  ok R-XN-nexus-of cold "update my travel essay to the nexus of airlines and hotels" matches NO coursework prime capability: 0
+  ok R-XN-nexus-of cold group "update my travel essay to the nexus of airlines and hotels" -> origin/main leader: troy-lennox
+  ok R-XN-nexus-of cold 1:1 with ANY agent: "update my travel essay to the nexus of airlines and hotels" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-nexus-of cold 1:1 troy-lennox: "update my travel essay to the nexus of airlines and hotels" -> origin/main lane: null
+  ok R-XN-nexus-of cold 1:1 troy-lennox answers "update my travel essay to the nexus of airlines and hotels" itself: troy-lennox
+  ok R-XN-nexus-of cold "add a paragraph on the nexus of travel and pricing to my essay" matches NO coursework prime capability: 0
+  ok R-XN-nexus-of cold group "add a paragraph on the nexus of travel and pricing to my essay" -> origin/main leader: troy-lennox
+  ok R-XN-nexus-of cold 1:1 with ANY agent: "add a paragraph on the nexus of travel and pricing to my essay" makes no prime hand-off / follow-up DM: 0
+  ok R-XN-nexus-of cold 1:1 troy-lennox: "add a paragraph on the nexus of travel and pricing to my essay" -> origin/main lane: null
+  ok R-XN-nexus-of cold 1:1 troy-lennox answers "add a paragraph on the nexus of travel and pricing to my essay" itself: troy-lennox
+=== D13 / D13-ovr (loop 4): 1:1 matches origin/main unless the ask is an EXPLICIT Nexus write of an assignment ===
+  ok R13-O1 warm group "update my address in NEXUS before my next border crossing" -> eli-vaughn (= origin/main): eli-vaughn
+  ok R13-O1 warm group "update my address in NEXUS before my next border crossing" = origin/main leader eli-vaughn: eli-vaughn
+  ok R13-O1 warm 1:1 with ANY agent: "update my address in NEXUS before my next border crossing" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O1 warm 1:1 troy-lennox: "update my address in NEXUS before my next border crossing" directive lane = origin/main laneOwnerFor: eli-vaughn
+  ok R13-O1 warm 1:1 troy-lennox: "update my address in NEXUS before my next border crossing" is NOT an explicit Nexus override: false
+  ok R13-O1 warm 1:1 troy-lennox answers "update my address in NEXUS before my next border crossing" itself: troy-lennox
+  ok R13-O2 warm group "reschedule my interview in NEXUS, I can't make the 14th" -> cole-blake (= origin/main): cole-blake
+  ok R13-O2 warm group "reschedule my interview in NEXUS, I can't make the 14th" = origin/main leader cole-blake: cole-blake
+  ok R13-O2 warm 1:1 with ANY agent: "reschedule my interview in NEXUS, I can't make the 14th" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O2 warm 1:1 troy-lennox: "reschedule my interview in NEXUS, I can't make the 14th" directive lane = origin/main laneOwnerFor: cole-blake
+  ok R13-O2 warm 1:1 troy-lennox: "reschedule my interview in NEXUS, I can't make the 14th" is NOT an explicit Nexus override: false
+  ok R13-O2 warm 1:1 troy-lennox answers "reschedule my interview in NEXUS, I can't make the 14th" itself: troy-lennox
+  ok R13-O3 warm group "change my vehicle info in my NEXUS account" -> ezra-miles (= origin/main): ezra-miles
+  ok R13-O3 warm group "change my vehicle info in my NEXUS account" = origin/main leader ezra-miles: ezra-miles
+  ok R13-O3 warm 1:1 with ANY agent: "change my vehicle info in my NEXUS account" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O3 warm 1:1 troy-lennox: "change my vehicle info in my NEXUS account" directive lane = origin/main laneOwnerFor: null
+  ok R13-O3 warm 1:1 troy-lennox: "change my vehicle info in my NEXUS account" is NOT an explicit Nexus override: false
+  ok R13-O3 warm 1:1 troy-lennox answers "change my vehicle info in my NEXUS account" itself: troy-lennox
+  ok R13-O4 warm group "add my new passport number to NEXUS" -> iris-chase (= origin/main): iris-chase
+  ok R13-O4 warm group "add my new passport number to NEXUS" = origin/main leader iris-chase: iris-chase
+  ok R13-O4 warm 1:1 with ANY agent: "add my new passport number to NEXUS" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O4 warm 1:1 troy-lennox: "add my new passport number to NEXUS" directive lane = origin/main laneOwnerFor: null
+  ok R13-O4 warm 1:1 troy-lennox: "add my new passport number to NEXUS" is NOT an explicit Nexus override: false
+  ok R13-O4 warm 1:1 troy-lennox answers "add my new passport number to NEXUS" itself: troy-lennox
+  ok R13-O8 warm group "set a reminder to log into Nexus tonight and check my grades" -> terry-locke (= origin/main): terry-locke
+  ok R13-O8 warm group "set a reminder to log into Nexus tonight and check my grades" = origin/main leader terry-locke: terry-locke
+  ok R13-O8 warm 1:1 with ANY agent: "set a reminder to log into Nexus tonight and check my grades" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O8 warm 1:1 eli-vaughn: "set a reminder to log into Nexus tonight and check my grades" directive lane = origin/main laneOwnerFor: null
+  ok R13-O8 warm 1:1 eli-vaughn: "set a reminder to log into Nexus tonight and check my grades" is NOT an explicit Nexus override: false
+  ok R13-O8 warm 1:1 eli-vaughn answers "set a reminder to log into Nexus tonight and check my grades" itself: eli-vaughn
+  ok R13-O11 warm group "Finn, add the EMBA694 textbook cost to Nexus" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-O11 warm group "Finn, add the EMBA694 textbook cost to Nexus" = origin/main leader elle-rowan: elle-rowan
+  ok R13-O11 warm 1:1 with ANY agent: "Finn, add the EMBA694 textbook cost to Nexus" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O11 warm 1:1 finn-reid: "Finn, add the EMBA694 textbook cost to Nexus" directive lane = origin/main laneOwnerFor: null
+  ok R13-O11 warm 1:1 finn-reid: "Finn, add the EMBA694 textbook cost to Nexus" is NOT an explicit Nexus override: false
+  ok R13-O11 warm 1:1 finn-reid answers "Finn, add the EMBA694 textbook cost to Nexus" itself: finn-reid
+  ok R13-O15 warm group "save my flight confirmation to Nexus" -> troy-lennox (= origin/main): troy-lennox
+  ok R13-O15 warm group "save my flight confirmation to Nexus" = origin/main leader troy-lennox: troy-lennox
+  ok R13-O15 warm 1:1 with ANY agent: "save my flight confirmation to Nexus" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O15 warm 1:1 troy-lennox: "save my flight confirmation to Nexus" directive lane = origin/main laneOwnerFor: null
+  ok R13-O15 warm 1:1 troy-lennox: "save my flight confirmation to Nexus" is NOT an explicit Nexus override: false
+  ok R13-O15 warm 1:1 troy-lennox answers "save my flight confirmation to Nexus" itself: troy-lennox
+  ok R13-L3 warm group "book a room near campus for the MGT-701 residency, deadline is Friday" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-L3 warm group "book a room near campus for the MGT-701 residency, deadline is Friday" = origin/main leader elle-rowan: elle-rowan
+  ok R13-L3 warm 1:1 with ANY agent: "book a room near campus for the MGT-701 residency, deadline is Friday" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L3 warm 1:1 troy-lennox: "book a room near campus for the MGT-701 residency, deadline is Friday" directive lane = origin/main laneOwnerFor: null
+  ok R13-L3 warm 1:1 troy-lennox: "book a room near campus for the MGT-701 residency, deadline is Friday" is NOT an explicit Nexus override: false
+  ok R13-L3 warm 1:1 troy-lennox answers "book a room near campus for the MGT-701 residency, deadline is Friday" itself: troy-lennox
+  ok R13-L4 warm group "get me a ride to the MGT-782 exam on Friday" -> iris-chase (= origin/main): iris-chase
+  ok R13-L4 warm group "get me a ride to the MGT-782 exam on Friday" = origin/main leader iris-chase: iris-chase
+  ok R13-L4 warm 1:1 with ANY agent: "get me a ride to the MGT-782 exam on Friday" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L4 warm 1:1 troy-lennox: "get me a ride to the MGT-782 exam on Friday" directive lane = origin/main laneOwnerFor: null
+  ok R13-L4 warm 1:1 troy-lennox: "get me a ride to the MGT-782 exam on Friday" is NOT an explicit Nexus override: false
+  ok R13-L4 warm 1:1 troy-lennox answers "get me a ride to the MGT-782 exam on Friday" itself: troy-lennox
+  ok R13-L6 warm group "order the MGT-782 textbook, it is due to arrive before the exam" -> iris-chase (= origin/main): iris-chase
+  ok R13-L6 warm group "order the MGT-782 textbook, it is due to arrive before the exam" = origin/main leader iris-chase: iris-chase
+  ok R13-L6 warm 1:1 with ANY agent: "order the MGT-782 textbook, it is due to arrive before the exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L6 warm 1:1 finn-reid: "order the MGT-782 textbook, it is due to arrive before the exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-L6 warm 1:1 finn-reid: "order the MGT-782 textbook, it is due to arrive before the exam" is NOT an explicit Nexus override: false
+  ok R13-L6 warm 1:1 finn-reid answers "order the MGT-782 textbook, it is due to arrive before the exam" itself: finn-reid
+  ok R13-L8 warm group "plan my meals for MGT-782 exam week" -> charleston-lewis (= origin/main): charleston-lewis
+  ok R13-L8 warm group "plan my meals for MGT-782 exam week" = origin/main leader charleston-lewis: charleston-lewis
+  ok R13-L8 warm 1:1 with ANY agent: "plan my meals for MGT-782 exam week" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L8 warm 1:1 charleston-lewis: "plan my meals for MGT-782 exam week" directive lane = origin/main laneOwnerFor: null
+  ok R13-L8 warm 1:1 charleston-lewis: "plan my meals for MGT-782 exam week" is NOT an explicit Nexus override: false
+  ok R13-L8 warm 1:1 charleston-lewis answers "plan my meals for MGT-782 exam week" itself: charleston-lewis
+  ok R13-L10 warm group "put the MGT-782 exam on the calendar for Friday" -> iris-chase (= origin/main): iris-chase
+  ok R13-L10 warm group "put the MGT-782 exam on the calendar for Friday" = origin/main leader iris-chase: iris-chase
+  ok R13-L10 warm 1:1 with ANY agent: "put the MGT-782 exam on the calendar for Friday" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L10 warm 1:1 eli-vaughn: "put the MGT-782 exam on the calendar for Friday" directive lane = origin/main laneOwnerFor: null
+  ok R13-L10 warm 1:1 eli-vaughn: "put the MGT-782 exam on the calendar for Friday" is NOT an explicit Nexus override: false
+  ok R13-L10 warm 1:1 eli-vaughn answers "put the MGT-782 exam on the calendar for Friday" itself: eli-vaughn
+  ok R13-L12 warm group "find a babysitter for the MGT-701 residency weekend, deadline Friday" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-L12 warm group "find a babysitter for the MGT-701 residency weekend, deadline Friday" = origin/main leader elle-rowan: elle-rowan
+  ok R13-L12 warm 1:1 with ANY agent: "find a babysitter for the MGT-701 residency weekend, deadline Friday" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L12 warm 1:1 charleston-lewis: "find a babysitter for the MGT-701 residency weekend, deadline Friday" directive lane = origin/main laneOwnerFor: null
+  ok R13-L12 warm 1:1 charleston-lewis: "find a babysitter for the MGT-701 residency weekend, deadline Friday" is NOT an explicit Nexus override: false
+  ok R13-L12 warm 1:1 charleston-lewis answers "find a babysitter for the MGT-701 residency weekend, deadline Friday" itself: charleston-lewis
+  ok R13-L13 warm group "send my MGT-782 group the slides before the deadline" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-L13 warm group "send my MGT-782 group the slides before the deadline" = origin/main leader elle-rowan: elle-rowan
+  ok R13-L13 warm 1:1 with ANY agent: "send my MGT-782 group the slides before the deadline" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L13 warm 1:1 cam-post: "send my MGT-782 group the slides before the deadline" directive lane = origin/main laneOwnerFor: null
+  ok R13-L13 warm 1:1 cam-post: "send my MGT-782 group the slides before the deadline" is NOT an explicit Nexus override: false
+  ok R13-L13 warm 1:1 cam-post answers "send my MGT-782 group the slides before the deadline" itself: cam-post
+  ok R13-L14 warm group "DM my MGT-782 group that the proposal deadline moved" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-L14 warm group "DM my MGT-782 group that the proposal deadline moved" = origin/main leader elle-rowan: elle-rowan
+  ok R13-L14 warm 1:1 with ANY agent: "DM my MGT-782 group that the proposal deadline moved" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L14 warm 1:1 cam-post: "DM my MGT-782 group that the proposal deadline moved" directive lane = origin/main laneOwnerFor: null
+  ok R13-L14 warm 1:1 cam-post: "DM my MGT-782 group that the proposal deadline moved" is NOT an explicit Nexus override: false
+  ok R13-L14 warm 1:1 cam-post answers "DM my MGT-782 group that the proposal deadline moved" itself: cam-post
+  ok R13-S1 warm group "put my MGT-782 exam on the calendar" -> iris-chase (= origin/main): iris-chase
+  ok R13-S1 warm group "put my MGT-782 exam on the calendar" = origin/main leader iris-chase: iris-chase
+  ok R13-S1 warm 1:1 with ANY agent: "put my MGT-782 exam on the calendar" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S1 warm 1:1 eli-vaughn: "put my MGT-782 exam on the calendar" directive lane = origin/main laneOwnerFor: null
+  ok R13-S1 warm 1:1 eli-vaughn: "put my MGT-782 exam on the calendar" is NOT an explicit Nexus override: false
+  ok R13-S1 warm 1:1 eli-vaughn answers "put my MGT-782 exam on the calendar" itself: eli-vaughn
+  ok R13-S2 warm group "add the MGT-782 final exam to the calendar, it's Dec 12" -> iris-chase (= origin/main): iris-chase
+  ok R13-S2 warm group "add the MGT-782 final exam to the calendar, it's Dec 12" = origin/main leader iris-chase: iris-chase
+  ok R13-S2 warm 1:1 with ANY agent: "add the MGT-782 final exam to the calendar, it's Dec 12" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S2 warm 1:1 eli-vaughn: "add the MGT-782 final exam to the calendar, it's Dec 12" directive lane = origin/main laneOwnerFor: null
+  ok R13-S2 warm 1:1 eli-vaughn: "add the MGT-782 final exam to the calendar, it's Dec 12" is NOT an explicit Nexus override: false
+  ok R13-S2 warm 1:1 eli-vaughn answers "add the MGT-782 final exam to the calendar, it's Dec 12" itself: eli-vaughn
+  ok R13-S4 warm group "can you get the MGT-782 exam onto my schedule" -> iris-chase (= origin/main): iris-chase
+  ok R13-S4 warm group "can you get the MGT-782 exam onto my schedule" = origin/main leader iris-chase: iris-chase
+  ok R13-S4 warm 1:1 with ANY agent: "can you get the MGT-782 exam onto my schedule" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S4 warm 1:1 eli-vaughn: "can you get the MGT-782 exam onto my schedule" directive lane = origin/main laneOwnerFor: null
+  ok R13-S4 warm 1:1 eli-vaughn: "can you get the MGT-782 exam onto my schedule" is NOT an explicit Nexus override: false
+  ok R13-S4 warm 1:1 eli-vaughn answers "can you get the MGT-782 exam onto my schedule" itself: eli-vaughn
+  ok R13-S5 warm group "share the slides with my MGT-782 group before Friday's deadline" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-S5 warm group "share the slides with my MGT-782 group before Friday's deadline" = origin/main leader elle-rowan: elle-rowan
+  ok R13-S5 warm 1:1 with ANY agent: "share the slides with my MGT-782 group before Friday's deadline" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S5 warm 1:1 cam-post: "share the slides with my MGT-782 group before Friday's deadline" directive lane = origin/main laneOwnerFor: null
+  ok R13-S5 warm 1:1 cam-post: "share the slides with my MGT-782 group before Friday's deadline" is NOT an explicit Nexus override: false
+  ok R13-S5 warm 1:1 cam-post answers "share the slides with my MGT-782 group before Friday's deadline" itself: cam-post
+  ok R13-S6 warm group "send the MGT-782 group my draft before the deadline" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-S6 warm group "send the MGT-782 group my draft before the deadline" = origin/main leader elle-rowan: elle-rowan
+  ok R13-S6 warm 1:1 with ANY agent: "send the MGT-782 group my draft before the deadline" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S6 warm 1:1 cam-post: "send the MGT-782 group my draft before the deadline" directive lane = origin/main laneOwnerFor: elle-rowan
+  ok R13-S6 warm 1:1 cam-post: "send the MGT-782 group my draft before the deadline" is NOT an explicit Nexus override: false
+  ok R13-S6 warm 1:1 cam-post answers "send the MGT-782 group my draft before the deadline" itself: cam-post
+  ok R13-S7 warm group "reply to my MGT-782 professor about the exam" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-S7 warm group "reply to my MGT-782 professor about the exam" = origin/main leader elle-rowan: elle-rowan
+  ok R13-S7 warm 1:1 with ANY agent: "reply to my MGT-782 professor about the exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S7 warm 1:1 cam-post: "reply to my MGT-782 professor about the exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-S7 warm 1:1 cam-post: "reply to my MGT-782 professor about the exam" is NOT an explicit Nexus override: false
+  ok R13-S7 warm 1:1 cam-post answers "reply to my MGT-782 professor about the exam" itself: cam-post
+  ok R13-S8 warm group "book a room for the MGT-701 residency, it's due by Friday" -> iris-chase (= origin/main): iris-chase
+  ok R13-S8 warm group "book a room for the MGT-701 residency, it's due by Friday" = origin/main leader iris-chase: iris-chase
+  ok R13-S8 warm 1:1 with ANY agent: "book a room for the MGT-701 residency, it's due by Friday" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S8 warm 1:1 troy-lennox: "book a room for the MGT-701 residency, it's due by Friday" directive lane = origin/main laneOwnerFor: null
+  ok R13-S8 warm 1:1 troy-lennox: "book a room for the MGT-701 residency, it's due by Friday" is NOT an explicit Nexus override: false
+  ok R13-S8 warm 1:1 troy-lennox answers "book a room for the MGT-701 residency, it's due by Friday" itself: troy-lennox
+  ok R13-S9 warm group "I need a ride to my MGT-782 exam" -> iris-chase (= origin/main): iris-chase
+  ok R13-S9 warm group "I need a ride to my MGT-782 exam" = origin/main leader iris-chase: iris-chase
+  ok R13-S9 warm 1:1 with ANY agent: "I need a ride to my MGT-782 exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S9 warm 1:1 troy-lennox: "I need a ride to my MGT-782 exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-S9 warm 1:1 troy-lennox: "I need a ride to my MGT-782 exam" is NOT an explicit Nexus override: false
+  ok R13-S9 warm 1:1 troy-lennox answers "I need a ride to my MGT-782 exam" itself: troy-lennox
+  ok R13-S10 warm group "order the EMBA694 textbook before the exam" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-S10 warm group "order the EMBA694 textbook before the exam" = origin/main leader elle-rowan: elle-rowan
+  ok R13-S10 warm 1:1 with ANY agent: "order the EMBA694 textbook before the exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S10 warm 1:1 finn-reid: "order the EMBA694 textbook before the exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-S10 warm 1:1 finn-reid: "order the EMBA694 textbook before the exam" is NOT an explicit Nexus override: false
+  ok R13-S10 warm 1:1 finn-reid answers "order the EMBA694 textbook before the exam" itself: finn-reid
+  ok R13-S11 warm group "meal prep for my MGT-782 exam week" -> charleston-lewis (= origin/main): charleston-lewis
+  ok R13-S11 warm group "meal prep for my MGT-782 exam week" = origin/main leader charleston-lewis: charleston-lewis
+  ok R13-S11 warm 1:1 with ANY agent: "meal prep for my MGT-782 exam week" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S11 warm 1:1 charleston-lewis: "meal prep for my MGT-782 exam week" directive lane = origin/main laneOwnerFor: null
+  ok R13-S11 warm 1:1 charleston-lewis: "meal prep for my MGT-782 exam week" is NOT an explicit Nexus override: false
+  ok R13-S11 warm 1:1 charleston-lewis answers "meal prep for my MGT-782 exam week" itself: charleston-lewis
+  ok R13-S12 warm group "what should I cook the night before my MGT-782 exam" -> tess-sutton (= origin/main): tess-sutton
+  ok R13-S12 warm group "what should I cook the night before my MGT-782 exam" = origin/main leader tess-sutton: tess-sutton
+  ok R13-S12 warm 1:1 with ANY agent: "what should I cook the night before my MGT-782 exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S12 warm 1:1 charleston-lewis: "what should I cook the night before my MGT-782 exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-S12 warm 1:1 charleston-lewis: "what should I cook the night before my MGT-782 exam" is NOT an explicit Nexus override: false
+  ok R13-S12 warm 1:1 charleston-lewis answers "what should I cook the night before my MGT-782 exam" itself: charleston-lewis
+  ok R13-S14 warm group "stretch routine before my MGT-782 exam" -> iris-chase (= origin/main): iris-chase
+  ok R13-S14 warm group "stretch routine before my MGT-782 exam" = origin/main leader iris-chase: iris-chase
+  ok R13-S14 warm 1:1 with ANY agent: "stretch routine before my MGT-782 exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S14 warm 1:1 flex-grimes: "stretch routine before my MGT-782 exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-S14 warm 1:1 flex-grimes: "stretch routine before my MGT-782 exam" is NOT an explicit Nexus override: false
+  ok R13-S14 warm 1:1 flex-grimes answers "stretch routine before my MGT-782 exam" itself: flex-grimes
+  ok R13-O1 cold group "update my address in NEXUS before my next border crossing" -> eli-vaughn (= origin/main): eli-vaughn
+  ok R13-O1 cold group "update my address in NEXUS before my next border crossing" = origin/main leader eli-vaughn: eli-vaughn
+  ok R13-O1 cold 1:1 with ANY agent: "update my address in NEXUS before my next border crossing" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O1 cold 1:1 troy-lennox: "update my address in NEXUS before my next border crossing" directive lane = origin/main laneOwnerFor: eli-vaughn
+  ok R13-O1 cold 1:1 troy-lennox: "update my address in NEXUS before my next border crossing" is NOT an explicit Nexus override: false
+  ok R13-O1 cold 1:1 troy-lennox answers "update my address in NEXUS before my next border crossing" itself: troy-lennox
+  ok R13-O2 cold group "reschedule my interview in NEXUS, I can't make the 14th" -> cole-blake (= origin/main): cole-blake
+  ok R13-O2 cold group "reschedule my interview in NEXUS, I can't make the 14th" = origin/main leader cole-blake: cole-blake
+  ok R13-O2 cold 1:1 with ANY agent: "reschedule my interview in NEXUS, I can't make the 14th" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O2 cold 1:1 troy-lennox: "reschedule my interview in NEXUS, I can't make the 14th" directive lane = origin/main laneOwnerFor: cole-blake
+  ok R13-O2 cold 1:1 troy-lennox: "reschedule my interview in NEXUS, I can't make the 14th" is NOT an explicit Nexus override: false
+  ok R13-O2 cold 1:1 troy-lennox answers "reschedule my interview in NEXUS, I can't make the 14th" itself: troy-lennox
+  ok R13-O3 cold group "change my vehicle info in my NEXUS account" -> ezra-miles (= origin/main): ezra-miles
+  ok R13-O3 cold group "change my vehicle info in my NEXUS account" = origin/main leader ezra-miles: ezra-miles
+  ok R13-O3 cold 1:1 with ANY agent: "change my vehicle info in my NEXUS account" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O3 cold 1:1 troy-lennox: "change my vehicle info in my NEXUS account" directive lane = origin/main laneOwnerFor: null
+  ok R13-O3 cold 1:1 troy-lennox: "change my vehicle info in my NEXUS account" is NOT an explicit Nexus override: false
+  ok R13-O3 cold 1:1 troy-lennox answers "change my vehicle info in my NEXUS account" itself: troy-lennox
+  ok R13-O4 cold group "add my new passport number to NEXUS" -> iris-chase (= origin/main): iris-chase
+  ok R13-O4 cold group "add my new passport number to NEXUS" = origin/main leader iris-chase: iris-chase
+  ok R13-O4 cold 1:1 with ANY agent: "add my new passport number to NEXUS" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O4 cold 1:1 troy-lennox: "add my new passport number to NEXUS" directive lane = origin/main laneOwnerFor: null
+  ok R13-O4 cold 1:1 troy-lennox: "add my new passport number to NEXUS" is NOT an explicit Nexus override: false
+  ok R13-O4 cold 1:1 troy-lennox answers "add my new passport number to NEXUS" itself: troy-lennox
+  ok R13-O8 cold group "set a reminder to log into Nexus tonight and check my grades" -> terry-locke (= origin/main): terry-locke
+  ok R13-O8 cold group "set a reminder to log into Nexus tonight and check my grades" = origin/main leader terry-locke: terry-locke
+  ok R13-O8 cold 1:1 with ANY agent: "set a reminder to log into Nexus tonight and check my grades" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O8 cold 1:1 eli-vaughn: "set a reminder to log into Nexus tonight and check my grades" directive lane = origin/main laneOwnerFor: null
+  ok R13-O8 cold 1:1 eli-vaughn: "set a reminder to log into Nexus tonight and check my grades" is NOT an explicit Nexus override: false
+  ok R13-O8 cold 1:1 eli-vaughn answers "set a reminder to log into Nexus tonight and check my grades" itself: eli-vaughn
+  ok R13-O11 cold group "Finn, add the EMBA694 textbook cost to Nexus" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-O11 cold group "Finn, add the EMBA694 textbook cost to Nexus" = origin/main leader elle-rowan: elle-rowan
+  ok R13-O11 cold 1:1 with ANY agent: "Finn, add the EMBA694 textbook cost to Nexus" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O11 cold 1:1 finn-reid: "Finn, add the EMBA694 textbook cost to Nexus" directive lane = origin/main laneOwnerFor: null
+  ok R13-O11 cold 1:1 finn-reid: "Finn, add the EMBA694 textbook cost to Nexus" is NOT an explicit Nexus override: false
+  ok R13-O11 cold 1:1 finn-reid answers "Finn, add the EMBA694 textbook cost to Nexus" itself: finn-reid
+  ok R13-O15 cold group "save my flight confirmation to Nexus" -> troy-lennox (= origin/main): troy-lennox
+  ok R13-O15 cold group "save my flight confirmation to Nexus" = origin/main leader troy-lennox: troy-lennox
+  ok R13-O15 cold 1:1 with ANY agent: "save my flight confirmation to Nexus" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-O15 cold 1:1 troy-lennox: "save my flight confirmation to Nexus" directive lane = origin/main laneOwnerFor: null
+  ok R13-O15 cold 1:1 troy-lennox: "save my flight confirmation to Nexus" is NOT an explicit Nexus override: false
+  ok R13-O15 cold 1:1 troy-lennox answers "save my flight confirmation to Nexus" itself: troy-lennox
+  ok R13-L3 cold group "book a room near campus for the MGT-701 residency, deadline is Friday" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-L3 cold group "book a room near campus for the MGT-701 residency, deadline is Friday" = origin/main leader elle-rowan: elle-rowan
+  ok R13-L3 cold 1:1 with ANY agent: "book a room near campus for the MGT-701 residency, deadline is Friday" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L3 cold 1:1 troy-lennox: "book a room near campus for the MGT-701 residency, deadline is Friday" directive lane = origin/main laneOwnerFor: null
+  ok R13-L3 cold 1:1 troy-lennox: "book a room near campus for the MGT-701 residency, deadline is Friday" is NOT an explicit Nexus override: false
+  ok R13-L3 cold 1:1 troy-lennox answers "book a room near campus for the MGT-701 residency, deadline is Friday" itself: troy-lennox
+  ok R13-L4 cold group "get me a ride to the MGT-782 exam on Friday" -> iris-chase (= origin/main): iris-chase
+  ok R13-L4 cold group "get me a ride to the MGT-782 exam on Friday" = origin/main leader iris-chase: iris-chase
+  ok R13-L4 cold 1:1 with ANY agent: "get me a ride to the MGT-782 exam on Friday" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L4 cold 1:1 troy-lennox: "get me a ride to the MGT-782 exam on Friday" directive lane = origin/main laneOwnerFor: null
+  ok R13-L4 cold 1:1 troy-lennox: "get me a ride to the MGT-782 exam on Friday" is NOT an explicit Nexus override: false
+  ok R13-L4 cold 1:1 troy-lennox answers "get me a ride to the MGT-782 exam on Friday" itself: troy-lennox
+  ok R13-L6 cold group "order the MGT-782 textbook, it is due to arrive before the exam" -> iris-chase (= origin/main): iris-chase
+  ok R13-L6 cold group "order the MGT-782 textbook, it is due to arrive before the exam" = origin/main leader iris-chase: iris-chase
+  ok R13-L6 cold 1:1 with ANY agent: "order the MGT-782 textbook, it is due to arrive before the exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L6 cold 1:1 finn-reid: "order the MGT-782 textbook, it is due to arrive before the exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-L6 cold 1:1 finn-reid: "order the MGT-782 textbook, it is due to arrive before the exam" is NOT an explicit Nexus override: false
+  ok R13-L6 cold 1:1 finn-reid answers "order the MGT-782 textbook, it is due to arrive before the exam" itself: finn-reid
+  ok R13-L8 cold group "plan my meals for MGT-782 exam week" -> charleston-lewis (= origin/main): charleston-lewis
+  ok R13-L8 cold group "plan my meals for MGT-782 exam week" = origin/main leader charleston-lewis: charleston-lewis
+  ok R13-L8 cold 1:1 with ANY agent: "plan my meals for MGT-782 exam week" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L8 cold 1:1 charleston-lewis: "plan my meals for MGT-782 exam week" directive lane = origin/main laneOwnerFor: null
+  ok R13-L8 cold 1:1 charleston-lewis: "plan my meals for MGT-782 exam week" is NOT an explicit Nexus override: false
+  ok R13-L8 cold 1:1 charleston-lewis answers "plan my meals for MGT-782 exam week" itself: charleston-lewis
+  ok R13-L10 cold group "put the MGT-782 exam on the calendar for Friday" -> iris-chase (= origin/main): iris-chase
+  ok R13-L10 cold group "put the MGT-782 exam on the calendar for Friday" = origin/main leader iris-chase: iris-chase
+  ok R13-L10 cold 1:1 with ANY agent: "put the MGT-782 exam on the calendar for Friday" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L10 cold 1:1 eli-vaughn: "put the MGT-782 exam on the calendar for Friday" directive lane = origin/main laneOwnerFor: null
+  ok R13-L10 cold 1:1 eli-vaughn: "put the MGT-782 exam on the calendar for Friday" is NOT an explicit Nexus override: false
+  ok R13-L10 cold 1:1 eli-vaughn answers "put the MGT-782 exam on the calendar for Friday" itself: eli-vaughn
+  ok R13-L12 cold group "find a babysitter for the MGT-701 residency weekend, deadline Friday" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-L12 cold group "find a babysitter for the MGT-701 residency weekend, deadline Friday" = origin/main leader elle-rowan: elle-rowan
+  ok R13-L12 cold 1:1 with ANY agent: "find a babysitter for the MGT-701 residency weekend, deadline Friday" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L12 cold 1:1 charleston-lewis: "find a babysitter for the MGT-701 residency weekend, deadline Friday" directive lane = origin/main laneOwnerFor: null
+  ok R13-L12 cold 1:1 charleston-lewis: "find a babysitter for the MGT-701 residency weekend, deadline Friday" is NOT an explicit Nexus override: false
+  ok R13-L12 cold 1:1 charleston-lewis answers "find a babysitter for the MGT-701 residency weekend, deadline Friday" itself: charleston-lewis
+  ok R13-L13 cold group "send my MGT-782 group the slides before the deadline" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-L13 cold group "send my MGT-782 group the slides before the deadline" = origin/main leader elle-rowan: elle-rowan
+  ok R13-L13 cold 1:1 with ANY agent: "send my MGT-782 group the slides before the deadline" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L13 cold 1:1 cam-post: "send my MGT-782 group the slides before the deadline" directive lane = origin/main laneOwnerFor: null
+  ok R13-L13 cold 1:1 cam-post: "send my MGT-782 group the slides before the deadline" is NOT an explicit Nexus override: false
+  ok R13-L13 cold 1:1 cam-post answers "send my MGT-782 group the slides before the deadline" itself: cam-post
+  ok R13-L14 cold group "DM my MGT-782 group that the proposal deadline moved" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-L14 cold group "DM my MGT-782 group that the proposal deadline moved" = origin/main leader elle-rowan: elle-rowan
+  ok R13-L14 cold 1:1 with ANY agent: "DM my MGT-782 group that the proposal deadline moved" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-L14 cold 1:1 cam-post: "DM my MGT-782 group that the proposal deadline moved" directive lane = origin/main laneOwnerFor: null
+  ok R13-L14 cold 1:1 cam-post: "DM my MGT-782 group that the proposal deadline moved" is NOT an explicit Nexus override: false
+  ok R13-L14 cold 1:1 cam-post answers "DM my MGT-782 group that the proposal deadline moved" itself: cam-post
+  ok R13-S1 cold group "put my MGT-782 exam on the calendar" -> iris-chase (= origin/main): iris-chase
+  ok R13-S1 cold group "put my MGT-782 exam on the calendar" = origin/main leader iris-chase: iris-chase
+  ok R13-S1 cold 1:1 with ANY agent: "put my MGT-782 exam on the calendar" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S1 cold 1:1 eli-vaughn: "put my MGT-782 exam on the calendar" directive lane = origin/main laneOwnerFor: null
+  ok R13-S1 cold 1:1 eli-vaughn: "put my MGT-782 exam on the calendar" is NOT an explicit Nexus override: false
+  ok R13-S1 cold 1:1 eli-vaughn answers "put my MGT-782 exam on the calendar" itself: eli-vaughn
+  ok R13-S2 cold group "add the MGT-782 final exam to the calendar, it's Dec 12" -> iris-chase (= origin/main): iris-chase
+  ok R13-S2 cold group "add the MGT-782 final exam to the calendar, it's Dec 12" = origin/main leader iris-chase: iris-chase
+  ok R13-S2 cold 1:1 with ANY agent: "add the MGT-782 final exam to the calendar, it's Dec 12" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S2 cold 1:1 eli-vaughn: "add the MGT-782 final exam to the calendar, it's Dec 12" directive lane = origin/main laneOwnerFor: null
+  ok R13-S2 cold 1:1 eli-vaughn: "add the MGT-782 final exam to the calendar, it's Dec 12" is NOT an explicit Nexus override: false
+  ok R13-S2 cold 1:1 eli-vaughn answers "add the MGT-782 final exam to the calendar, it's Dec 12" itself: eli-vaughn
+  ok R13-S4 cold group "can you get the MGT-782 exam onto my schedule" -> iris-chase (= origin/main): iris-chase
+  ok R13-S4 cold group "can you get the MGT-782 exam onto my schedule" = origin/main leader iris-chase: iris-chase
+  ok R13-S4 cold 1:1 with ANY agent: "can you get the MGT-782 exam onto my schedule" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S4 cold 1:1 eli-vaughn: "can you get the MGT-782 exam onto my schedule" directive lane = origin/main laneOwnerFor: null
+  ok R13-S4 cold 1:1 eli-vaughn: "can you get the MGT-782 exam onto my schedule" is NOT an explicit Nexus override: false
+  ok R13-S4 cold 1:1 eli-vaughn answers "can you get the MGT-782 exam onto my schedule" itself: eli-vaughn
+  ok R13-S5 cold group "share the slides with my MGT-782 group before Friday's deadline" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-S5 cold group "share the slides with my MGT-782 group before Friday's deadline" = origin/main leader elle-rowan: elle-rowan
+  ok R13-S5 cold 1:1 with ANY agent: "share the slides with my MGT-782 group before Friday's deadline" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S5 cold 1:1 cam-post: "share the slides with my MGT-782 group before Friday's deadline" directive lane = origin/main laneOwnerFor: null
+  ok R13-S5 cold 1:1 cam-post: "share the slides with my MGT-782 group before Friday's deadline" is NOT an explicit Nexus override: false
+  ok R13-S5 cold 1:1 cam-post answers "share the slides with my MGT-782 group before Friday's deadline" itself: cam-post
+  ok R13-S6 cold group "send the MGT-782 group my draft before the deadline" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-S6 cold group "send the MGT-782 group my draft before the deadline" = origin/main leader elle-rowan: elle-rowan
+  ok R13-S6 cold 1:1 with ANY agent: "send the MGT-782 group my draft before the deadline" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S6 cold 1:1 cam-post: "send the MGT-782 group my draft before the deadline" directive lane = origin/main laneOwnerFor: elle-rowan
+  ok R13-S6 cold 1:1 cam-post: "send the MGT-782 group my draft before the deadline" is NOT an explicit Nexus override: false
+  ok R13-S6 cold 1:1 cam-post answers "send the MGT-782 group my draft before the deadline" itself: cam-post
+  ok R13-S7 cold group "reply to my MGT-782 professor about the exam" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-S7 cold group "reply to my MGT-782 professor about the exam" = origin/main leader elle-rowan: elle-rowan
+  ok R13-S7 cold 1:1 with ANY agent: "reply to my MGT-782 professor about the exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S7 cold 1:1 cam-post: "reply to my MGT-782 professor about the exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-S7 cold 1:1 cam-post: "reply to my MGT-782 professor about the exam" is NOT an explicit Nexus override: false
+  ok R13-S7 cold 1:1 cam-post answers "reply to my MGT-782 professor about the exam" itself: cam-post
+  ok R13-S8 cold group "book a room for the MGT-701 residency, it's due by Friday" -> iris-chase (= origin/main): iris-chase
+  ok R13-S8 cold group "book a room for the MGT-701 residency, it's due by Friday" = origin/main leader iris-chase: iris-chase
+  ok R13-S8 cold 1:1 with ANY agent: "book a room for the MGT-701 residency, it's due by Friday" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S8 cold 1:1 troy-lennox: "book a room for the MGT-701 residency, it's due by Friday" directive lane = origin/main laneOwnerFor: null
+  ok R13-S8 cold 1:1 troy-lennox: "book a room for the MGT-701 residency, it's due by Friday" is NOT an explicit Nexus override: false
+  ok R13-S8 cold 1:1 troy-lennox answers "book a room for the MGT-701 residency, it's due by Friday" itself: troy-lennox
+  ok R13-S9 cold group "I need a ride to my MGT-782 exam" -> iris-chase (= origin/main): iris-chase
+  ok R13-S9 cold group "I need a ride to my MGT-782 exam" = origin/main leader iris-chase: iris-chase
+  ok R13-S9 cold 1:1 with ANY agent: "I need a ride to my MGT-782 exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S9 cold 1:1 troy-lennox: "I need a ride to my MGT-782 exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-S9 cold 1:1 troy-lennox: "I need a ride to my MGT-782 exam" is NOT an explicit Nexus override: false
+  ok R13-S9 cold 1:1 troy-lennox answers "I need a ride to my MGT-782 exam" itself: troy-lennox
+  ok R13-S10 cold group "order the EMBA694 textbook before the exam" -> elle-rowan (= origin/main): elle-rowan
+  ok R13-S10 cold group "order the EMBA694 textbook before the exam" = origin/main leader elle-rowan: elle-rowan
+  ok R13-S10 cold 1:1 with ANY agent: "order the EMBA694 textbook before the exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S10 cold 1:1 finn-reid: "order the EMBA694 textbook before the exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-S10 cold 1:1 finn-reid: "order the EMBA694 textbook before the exam" is NOT an explicit Nexus override: false
+  ok R13-S10 cold 1:1 finn-reid answers "order the EMBA694 textbook before the exam" itself: finn-reid
+  ok R13-S11 cold group "meal prep for my MGT-782 exam week" -> charleston-lewis (= origin/main): charleston-lewis
+  ok R13-S11 cold group "meal prep for my MGT-782 exam week" = origin/main leader charleston-lewis: charleston-lewis
+  ok R13-S11 cold 1:1 with ANY agent: "meal prep for my MGT-782 exam week" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S11 cold 1:1 charleston-lewis: "meal prep for my MGT-782 exam week" directive lane = origin/main laneOwnerFor: null
+  ok R13-S11 cold 1:1 charleston-lewis: "meal prep for my MGT-782 exam week" is NOT an explicit Nexus override: false
+  ok R13-S11 cold 1:1 charleston-lewis answers "meal prep for my MGT-782 exam week" itself: charleston-lewis
+  ok R13-S12 cold group "what should I cook the night before my MGT-782 exam" -> tess-sutton (= origin/main): tess-sutton
+  ok R13-S12 cold group "what should I cook the night before my MGT-782 exam" = origin/main leader tess-sutton: tess-sutton
+  ok R13-S12 cold 1:1 with ANY agent: "what should I cook the night before my MGT-782 exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S12 cold 1:1 charleston-lewis: "what should I cook the night before my MGT-782 exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-S12 cold 1:1 charleston-lewis: "what should I cook the night before my MGT-782 exam" is NOT an explicit Nexus override: false
+  ok R13-S12 cold 1:1 charleston-lewis answers "what should I cook the night before my MGT-782 exam" itself: charleston-lewis
+  ok R13-S14 cold group "stretch routine before my MGT-782 exam" -> iris-chase (= origin/main): iris-chase
+  ok R13-S14 cold group "stretch routine before my MGT-782 exam" = origin/main leader iris-chase: iris-chase
+  ok R13-S14 cold 1:1 with ANY agent: "stretch routine before my MGT-782 exam" makes no deterministic prime hand-off / follow-up DM: 0
+  ok R13-S14 cold 1:1 flex-grimes: "stretch routine before my MGT-782 exam" directive lane = origin/main laneOwnerFor: null
+  ok R13-S14 cold 1:1 flex-grimes: "stretch routine before my MGT-782 exam" is NOT an explicit Nexus override: false
+  ok R13-S14 cold 1:1 flex-grimes answers "stretch routine before my MGT-782 exam" itself: flex-grimes
+  ok R13-G6 the six group-veto rows are all present in the D13 table: O1,O2,O3,L8,S11,S12
+  ok R13-G6-O1 warm "update my address in NEXUS before my next border crossing" matches NO coursework prime capability: 0
+  ok R13-G6-O1 warm group "update my address in NEXUS before my next border crossing" -> origin/main eli-vaughn: eli-vaughn
+  ok R13-G6-O2 warm "reschedule my interview in NEXUS, I can't make the 14th" matches NO coursework prime capability: 0
+  ok R13-G6-O2 warm group "reschedule my interview in NEXUS, I can't make the 14th" -> origin/main cole-blake: cole-blake
+  ok R13-G6-O3 warm "change my vehicle info in my NEXUS account" matches NO coursework prime capability: 0
+  ok R13-G6-O3 warm group "change my vehicle info in my NEXUS account" -> origin/main ezra-miles: ezra-miles
+  ok R13-G6-L8 warm "plan my meals for MGT-782 exam week" matches NO coursework prime capability: 0
+  ok R13-G6-L8 warm group "plan my meals for MGT-782 exam week" -> origin/main charleston-lewis: charleston-lewis
+  ok R13-G6-S11 warm "meal prep for my MGT-782 exam week" matches NO coursework prime capability: 0
+  ok R13-G6-S11 warm group "meal prep for my MGT-782 exam week" -> origin/main charleston-lewis: charleston-lewis
+  ok R13-G6-S12 warm "what should I cook the night before my MGT-782 exam" matches NO coursework prime capability: 0
+  ok R13-G6-S12 warm group "what should I cook the night before my MGT-782 exam" -> origin/main tess-sutton: tess-sutton
+  ok R13-G6-O1 cold "update my address in NEXUS before my next border crossing" matches NO coursework prime capability: 0
+  ok R13-G6-O1 cold group "update my address in NEXUS before my next border crossing" -> origin/main eli-vaughn: eli-vaughn
+  ok R13-G6-O2 cold "reschedule my interview in NEXUS, I can't make the 14th" matches NO coursework prime capability: 0
+  ok R13-G6-O2 cold group "reschedule my interview in NEXUS, I can't make the 14th" -> origin/main cole-blake: cole-blake
+  ok R13-G6-O3 cold "change my vehicle info in my NEXUS account" matches NO coursework prime capability: 0
+  ok R13-G6-O3 cold group "change my vehicle info in my NEXUS account" -> origin/main ezra-miles: ezra-miles
+  ok R13-G6-L8 cold "plan my meals for MGT-782 exam week" matches NO coursework prime capability: 0
+  ok R13-G6-L8 cold group "plan my meals for MGT-782 exam week" -> origin/main charleston-lewis: charleston-lewis
+  ok R13-G6-S11 cold "meal prep for my MGT-782 exam week" matches NO coursework prime capability: 0
+  ok R13-G6-S11 cold group "meal prep for my MGT-782 exam week" -> origin/main charleston-lewis: charleston-lewis
+  ok R13-G6-S12 cold "what should I cook the night before my MGT-782 exam" matches NO coursework prime capability: 0
+  ok R13-G6-S12 cold group "what should I cook the night before my MGT-782 exam" -> origin/main tess-sutton: tess-sutton
+  ok R13-ovr-data the capability's 1:1 hand-off is DATA: oneToOneHandoff = explicit-override: explicit-override
+  ok R13-ovr-neg "add my new passport number to NEXUS" is NOT an explicit override (no assignment object): false
+  ok R13-ovr-neg "change my vehicle info in my NEXUS account" is NOT an explicit override (no assignment object): false
+  ok R13-ovr-neg "set a reminder to log into Nexus tonight and check my grades" is NOT an explicit override (no assignment object): false
+  ok R13-ovr-neg "save my flight confirmation to Nexus" is NOT an explicit override (no assignment object): false
+  ok R13-ovr-neg "Finn, add the EMBA694 textbook cost to Nexus" is NOT an explicit override (no assignment object): false
+  ok R13-ovr-neg "update my address in NEXUS before my next border crossing" is NOT an explicit override (no assignment object): false
+  ok R13-ovr-neg "reschedule my interview in NEXUS, I can't make the 14th" is NOT an explicit override (no assignment object): false
+  ok R13-ovr-neg "add my phone number to my Nexus profile" is NOT an explicit override (no assignment object): false
+  ok R13-ovr-neg "log into Nexus and check my grades" is NOT an explicit override (no assignment object): false
+  ok R13-ovr-neg "put my new email address in Nexus" is NOT an explicit override (no assignment object): false
+  ok R13-ovr-pos "add the MGT-782 assignment to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my assignment in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 paper to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my paper in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 essay to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my essay in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 proposal to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my proposal in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 case to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my case in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 case study to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my case study in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 case analysis to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my case analysis in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 analysis to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my analysis in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 memo to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my memo in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 reflection to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my reflection in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 post to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my post in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 quiz to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my quiz in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 exam to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my exam in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 project to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my project in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 presentation to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my presentation in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 problem set to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my problem set in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 deliverable to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my deliverable in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 brief to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my brief in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 review to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my review in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 report to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my report in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 due date to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my due date in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 assignments to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my assignments in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 case studies to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my case studies in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 quizzes to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my quizzes in my Nexus" IS an explicit override: true
+  ok R13-ovr-pos "add the MGT-782 problem sets to Nexus" IS an explicit override: true
+  ok R13-ovr-pos "update my problem sets in my Nexus" IS an explicit override: true
+  ok R13-ovr-hand warm "put the MGT-782 email marketing case analysis due Nov 3 into Nexus" IS an explicit override: true
+  ok R13-ovr-hand warm 1:1 cam-post hands "put the MGT-782 email marketing case analysis due Nov 3 into Nexus" to Elle/Iris deterministically: true
+  ok R13-ovr-hand warm 1:1 Elle/Iris keep "put the MGT-782 email marketing case analysis due Nov 3 into Nexus": keep/keep
+  ok R13-ovr-hand warm group "put the MGT-782 email marketing case analysis due Nov 3 into Nexus" is led by Elle/Iris: true
+  ok R13-ovr-hand warm "hey Troy, please add the travel industry essay due Nov 3 to my Nexus" IS an explicit override: true
+  ok R13-ovr-hand warm 1:1 troy-lennox hands "hey Troy, please add the travel industry essay due Nov 3 to my Nexus" to Elle/Iris deterministically: true
+  ok R13-ovr-hand warm 1:1 Elle/Iris keep "hey Troy, please add the travel industry essay due Nov 3 to my Nexus": keep/keep
+  ok R13-ovr-hand warm group "hey Troy, please add the travel industry essay due Nov 3 to my Nexus" is led by Elle/Iris: true
+  ok R13-ovr-hand warm "add the MGT-701 research proposal due Dec 1 to Nexus" IS an explicit override: true
+  ok R13-ovr-hand warm 1:1 troy-lennox hands "add the MGT-701 research proposal due Dec 1 to Nexus" to Elle/Iris deterministically: true
+  ok R13-ovr-hand warm 1:1 Elle/Iris keep "add the MGT-701 research proposal due Dec 1 to Nexus": keep/keep
+  ok R13-ovr-hand warm group "add the MGT-701 research proposal due Dec 1 to Nexus" is led by Elle/Iris: true
+  ok R13-ovr-hand warm "update the due date of my research paper in Nexus to Dec 9" IS an explicit override: true
+  ok R13-ovr-hand warm 1:1 cam-post hands "update the due date of my research paper in Nexus to Dec 9" to Elle/Iris deterministically: true
+  ok R13-ovr-hand warm 1:1 Elle/Iris keep "update the due date of my research paper in Nexus to Dec 9": keep/keep
+  ok R13-ovr-hand warm group "update the due date of my research paper in Nexus to Dec 9" is led by Elle/Iris: true
+  ok R13-ovr-hand warm "add the flight operations essay to my Nexus assignments" IS an explicit override: true
+  ok R13-ovr-hand warm 1:1 troy-lennox hands "add the flight operations essay to my Nexus assignments" to Elle/Iris deterministically: true
+  ok R13-ovr-hand warm 1:1 Elle/Iris keep "add the flight operations essay to my Nexus assignments": keep/keep
+  ok R13-ovr-hand warm group "add the flight operations essay to my Nexus assignments" is led by Elle/Iris: true
+  ok R13-ovr-hand cold "put the MGT-782 email marketing case analysis due Nov 3 into Nexus" IS an explicit override: true
+  ok R13-ovr-hand cold 1:1 cam-post hands "put the MGT-782 email marketing case analysis due Nov 3 into Nexus" to Elle/Iris deterministically: true
+  ok R13-ovr-hand cold 1:1 Elle/Iris keep "put the MGT-782 email marketing case analysis due Nov 3 into Nexus": keep/keep
+  ok R13-ovr-hand cold group "put the MGT-782 email marketing case analysis due Nov 3 into Nexus" is led by Elle/Iris: true
+  ok R13-ovr-hand cold "hey Troy, please add the travel industry essay due Nov 3 to my Nexus" IS an explicit override: true
+  ok R13-ovr-hand cold 1:1 troy-lennox hands "hey Troy, please add the travel industry essay due Nov 3 to my Nexus" to Elle/Iris deterministically: true
+  ok R13-ovr-hand cold 1:1 Elle/Iris keep "hey Troy, please add the travel industry essay due Nov 3 to my Nexus": keep/keep
+  ok R13-ovr-hand cold group "hey Troy, please add the travel industry essay due Nov 3 to my Nexus" is led by Elle/Iris: true
+  ok R13-ovr-hand cold "add the MGT-701 research proposal due Dec 1 to Nexus" IS an explicit override: true
+  ok R13-ovr-hand cold 1:1 troy-lennox hands "add the MGT-701 research proposal due Dec 1 to Nexus" to Elle/Iris deterministically: true
+  ok R13-ovr-hand cold 1:1 Elle/Iris keep "add the MGT-701 research proposal due Dec 1 to Nexus": keep/keep
+  ok R13-ovr-hand cold group "add the MGT-701 research proposal due Dec 1 to Nexus" is led by Elle/Iris: true
+  ok R13-ovr-hand cold "update the due date of my research paper in Nexus to Dec 9" IS an explicit override: true
+  ok R13-ovr-hand cold 1:1 cam-post hands "update the due date of my research paper in Nexus to Dec 9" to Elle/Iris deterministically: true
+  ok R13-ovr-hand cold 1:1 Elle/Iris keep "update the due date of my research paper in Nexus to Dec 9": keep/keep
+  ok R13-ovr-hand cold group "update the due date of my research paper in Nexus to Dec 9" is led by Elle/Iris: true
+  ok R13-ovr-hand cold "add the flight operations essay to my Nexus assignments" IS an explicit override: true
+  ok R13-ovr-hand cold 1:1 troy-lennox hands "add the flight operations essay to my Nexus assignments" to Elle/Iris deterministically: true
+  ok R13-ovr-hand cold 1:1 Elle/Iris keep "add the flight operations essay to my Nexus assignments": keep/keep
+  ok R13-ovr-hand cold group "add the flight operations essay to my Nexus assignments" is led by Elle/Iris: true
+  ok R13-cw "my MGT-782 paper is due Friday": Elle/Iris keep: keep/keep
+  ok R13-cw "my MGT-782 paper is due Friday": Finn makes no deterministic hand-off: null
+  ok R13-cw "update the due date on my MGT-782 essay to Friday": Elle/Iris keep: keep/keep
+  ok R13-cw "update the due date on my MGT-782 essay to Friday": Finn makes no deterministic hand-off: null
+  ok R13-cw "put my MGT-782 exam on the calendar": Elle/Iris keep: keep/keep
+  ok R13-cw "put my MGT-782 exam on the calendar": Finn makes no deterministic hand-off: null
+=== (A) the LLM routers carry an additive, data-built prime-owners hint ===
+  ok R-A1 the directory names Elle and Iris (from the roster) for the Nexus assignments job: true
+  ok R-A1-hint the directory carries the capability's routerHint (preferred owners; other lanes keep course mentions): true
+  ok R-A2 the hint data says "preferred owners": true
+  ok R-A2 the hint data says "ADD or UPDATE": true
+  ok R-A2 the hint data says "emailing or messaging a professor": true
+  ok R-A2 the hint data says "booking travel, lodging or a rental car": true
+  ok R-A2 the hint data says "budgeting tuition, a deposit or a textbook purchase": true
+  ok R-A2 the hint data says "scheduling study time or a reminder": true
+  ok R-A2 the hint data says "dinner after an exam": true
+  ok R-A2 the hint data says "training around exam week": true
+  ok R-A2b a huddle without a holder gets no directory: 
+  ok R-A2c a huddle with only Iris names only Iris: true
+  ok R-A2d no agent id or name is written in capabilities.ts: false
+  ok R-A3 base router called once (offline fake): 1
+  ok R-A3 base router system prompt carries the prime-owners directory: true
+  ok R-A3 base ...ADDITIVE: the existing PRIME RESPONDERS rule is still there: true
+  ok R-A3 base ...ADDITIVE: ADDRESSED BY NAME is still there: true
+  ok R-A3 base ...and the roster still marks Elle/Iris [prime for: …]: true
+  ok R-A3 base the router's own decision is used (the hint is advisory): cam-post
+  ok R-A3s strict router called once (offline fake): 1
+  ok R-A3s strict router system prompt carries the prime-owners directory: true
+  ok R-A3s strict ...ADDITIVE: the existing PRIME RESPONDERS rule is still there: true
+  ok R-A3s strict ...ADDITIVE: ADDRESSED BY NAME is still there: true
+  ok R-A3s strict ...and the roster still marks Elle/Iris [prime for: …]: true
+  ok R-A3s strict the router's own decision is used (the hint is advisory): cam-post
+  ok R-A3n no holder in the huddle -> no PRIME OWNERS block: false
+  ok R-A4 1:1 owner resolver prompt (chat hand-off, primeHint) carries the prime-owners directory: true
+  ok R-A4b ...and the [prime for: …] marker on Elle's and Iris's roster lines: true
+  ok R-A4c ...ADDITIVE: the keep-with-the-addressed-agent default is still there: true
+  ok R-A4d ...ADDITIVE: the resolver's system prompt is unchanged in kind: true
+  ok R-A4e the resolver's own decision is used: cam-post
+  ok R-M0-chat hand-off { primeHint: true }: resolver called once (offline fake): 1
+  ok R-M0-chat hand-off { primeHint: true }: prompt carries the PRIME OWNERS directory: true
+  ok R-M0-chat hand-off { primeHint: true }: roster lines carry [prime for: …]: true
+  ok R-M0-grooming { framing: 'assigned' }: resolver called once (offline fake): 1
+  ok R-M0-grooming { framing: 'assigned' }: prompt carries the PRIME OWNERS directory: false
+  ok R-M0-grooming { framing: 'assigned' }: roster lines carry [prime for: …]: false
+  ok R-M0-task creation / produce task (no opts): resolver called once (offline fake): 1
+  ok R-M0-task creation / produce task (no opts): prompt carries the PRIME OWNERS directory: false
+  ok R-M0-task creation / produce task (no opts): roster lines carry [prime for: …]: false
+  ok R-M0-{ framing: 'dm' } without primeHint: resolver called once (offline fake): 1
+  ok R-M0-{ framing: 'dm' } without primeHint: prompt carries the PRIME OWNERS directory: false
+  ok R-M0-{ framing: 'dm' } without primeHint: roster lines carry [prime for: …]: false
+  ok R-M0-{ framing: 'assigned', primeHint: true } (assigned wins): resolver called once (offline fake): 1
+  ok R-M0-{ framing: 'assigned', primeHint: true } (assigned wins): prompt carries the PRIME OWNERS directory: false
+  ok R-M0-{ framing: 'assigned', primeHint: true } (assigned wins): roster lines carry [prime for: …]: false
+  ok R-M0-groom-shape grooming keeps #124's assigned framing (task owner, not a 1:1): true
+  ok R-M0-site exactly one primeHint opt-in in huddle.functions.ts: 1
+  ok R-M0-site ...and it is the 1:1 chat hand-off call (resolveOwnerLLM(data.text, nextId, …)): true
+  ok R-M0-site the 1:1 task-creation judge call has no primeHint: true
+  ok R-M0-site the produce-task judge call has no primeHint: true
+  ok R-M0-site grooming calls the judge with framing 'assigned': true
+  ok R-M0-site grooming never passes primeHint: false
+
+ALL PASS: 1303 passed, 0 failed
