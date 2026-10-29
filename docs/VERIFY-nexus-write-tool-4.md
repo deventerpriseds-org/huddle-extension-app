@@ -158,3 +158,64 @@ the voice-gate work. Observation on q6: the ONLY test that catches reverting the
 source-shape check of the hook; the behavioural VG-V3a-f run a simulation of the hook and stayed green with the
 hook reverted (the hook itself is React and is not executed by any suite). **C8: CONFIRMED** (7 FIRED, 0 INERT,
 0 NOT-APPLIED; 2 UNDETERMINED first attempts were mis-named tests, re-run and FIRED).
+
+## M0 (cont.) — what the two conflicts are, and what a careless resolution would do
+
+Conflicted files read from the merge tree `c94a98a` (`git merge-tree --write-tree`):
+
+| File | PR side | main side (#124) | Correct resolution | Wrong resolution and its effect |
+|---|---|---|---|---|
+| `lib/voice/realtime-tools.server.ts` :192-206 | `raw = [… GET_EXTERNAL_CALENDAR_EVENTS_TOOL, ...nexusReadTools(), ...nexusWriteTools()]` | multi-line `raw`, FOCUS_TOOL only when `opts.journey !== false` (AC8 gate), `...nexusReadTools()` -- no write tools | union: main's shape + `...nexusWriteTools()` | take main -> **voice silently loses the Nexus write tool**; take PR -> **voice re-offers FOCUS_TOOL with journey off** (main's AC8 fix reverted) |
+| `lib/routing.ts` :626-636 (`resolveOwnerLLM` prompt) | adds `primeOwners` directory to the 1:1 prompt | splits the prompt into `assigned` (grooming / 1:1 task creation owner) vs 1:1 | union; then DECIDE whether the prime-owner hint also goes into the `assigned` branch | after #124, `resolveOwnerLLM` is also the grooming judge (groom.ts:317-330) and the 1:1 task-creation owner (huddle.functions.ts:2930 on main) -- so wherever the hint lands, it now influences board-task ownership too, which no loop has verified |
+
+Probes this loop ran against 38e1b17 (the PR head) and against a `git archive origin/main` export; none ran
+against a resolved merge, because none exists. The merged result is unverified code on the C3/C4 paths.
+
+## C1 — Feature 2 ACs
+
+Unchanged since loop 3 except: **F2-35** stays MET (V1 now also MET on the throw shape; W4 residual is H15 class).
+**F2-41/42/43** MET (P1-P3: "add the MGT-701 research proposal due Dec 1 to Nexus" -> Iris from Troy; "my MGT-782
+paper is due Friday" -> Iris from Finn; "update the due date of my research paper in Nexus to Dec 9" -> Iris from
+Cam). **F2-45 NOT MET**: "Fitness, finance and travel asks still route to Flex, Finn and Troy as before" -- D13
+rows: Troy hands "I need a ride to my MGT-782 exam" / "book a room for the MGT-701 residency…" / "add my new
+passport number to NEXUS" to Iris/Elle; Finn hands "order the EMBA694 textbook before the exam"; Flex hands
+"stretch routine before my MGT-782 exam"; also Eli (calendar), Cam (send/share/DM/reply), Charleston (meals,
+babysitter). F2-10/F2-14 "shared with F1" NOT MET by construction (cross-repo, unchanged since loop 1).
+**C1: REFUTED** (F2-45).
+
+## Defects, ranked by realistic likelihood with a real model and real owner phrasing
+
+| # | Defect | Class | Likelihood | Repro |
+|---|---|---|---|---|
+| **M0** | PR #114 @38e1b17 conflicts with origin/main 4cb2273 in `routing.ts` and `realtime-tools.server.ts`; one-sided resolution drops either the voice Nexus write tool or main's FOCUS_TOOL journey gate; the merged `resolveOwnerLLM` now also judges grooming / task-creation owners | **BLOCKING for the merge** (merge impossible as-is; the result is unverified) | certain | `git merge-tree --write-tree --name-only origin/claude_nexus-write-tool-fixed origin/main` -> exit 1 |
+| **D13** | An other-lane ask in a 1:1 that names a real course CODE ("MGT-782", "MGT 782", "EMBA694") plus "exam"/"deadline"/"due", using lane vocabulary the veto list lacks (on THE calendar, onto my schedule, send/share/DM/reply, room, ride, order, meals, stretch, babysitter), is deterministically handed to Iris/Elle: directive "not your lane, don't answer" + durable follow-up DM. origin/main keeps all 18 with the addressed agent. Course NAMES and code-less phrasing do not trigger (probe-c9-names). | **BLOCKING** (another agent's lane stolen that origin/main kept) | **moderate** -- needs the code + a deadline word + an unlisted verb; "put my MGT 782 exam on the calendar" to Eli is ordinary; no LLM involved, so it reproduces every time | `bun mut-verify-114-4/probe-c9-routing.ts <tree>`, `probe-c9-steal2.ts <tree>` (PR vs main) |
+| **D13-ovr** | the explicit override beats every veto, so "add my new passport number to NEXUS", "change my vehicle info in my NEXUS account" (trusted-traveler program, only `card/program/…/trusted/traveler` excluded) and "set a reminder to log into Nexus tonight and check my grades" hand Troy's / Eli's asks to Iris | **BLOCKING** by definition (lane stolen origin/main kept) | low (NEXUS-program asks without "card/program/trusted traveler"; reminders that say "into Nexus") | same probe, rows O3 O4 O8 |
+| W4 | after a failed write was spoken, an echo of the agent's own voice committed by server VAD resets the gate (the committed handler has no echo filter), so a later contradictory sentence in that exchange is streamed instead of suppressed | NON-BLOCKING (needs the model to contradict its own failed tool output; H15 class) | very low | `bun mut-verify-114-4/probe-c9-voice.ts` W4 |
+| H15 | a save claim with no write call in the exchange is shown/spoken unchanged | BLOCKING by definition; owner-accepted design residual | low-moderate | loop 3 `probe-voice.ts` T1 |
+| O13 | passive "… needs to be added to Nexus" misses the override -> origin/main routing | NON-BLOCKING (baseline routing; any agent may still call the write tool) | low-moderate | probe-c9-routing O13 |
+| q6-cov | reverting the hook's V3 ordering is caught only by a source-shape test (VG-H3c); the behavioural V3 tests simulate the hook | NON-BLOCKING (test-quality) | n/a | C8 q6 |
+| D7-gap / D7-over / D8-far / over-veto | as loop 3 (unchanged) | as loop 3 | as loop 3 | loop 3 probes |
+
+Fixed and confirmed this loop: D12 (all 13 loop-3 rows match origin/main), V1 (throw -> "Not saved"), V2 (typed reset,
+W5), V3 (write settles captured gate; q6 FIRED), V4 (fresh gate per call), V5 (keyed reset; W2/W3; q5 FIRED).
+
+## Verdict
+
+| Claim | Verdict |
+|---|---|
+| C1 F2 ACs | REFUTED (F2-45 NOT MET via D13; F2-10/14 shared-with-F1 NOT MET by construction) |
+| C2 owner rules | CONFIRMED (loop-3 probe byte-identical) |
+| C3 honesty | CONFIRMED as scoped (V1-V5 fixed; residuals W4 very low, H15 owner-accepted) |
+| C4 routing | REFUTED (D13: 18 vocabulary + 3 override lane steals origin/main does not make) |
+| C5 identity/url/headers | CONFIRMED |
+| C6 read-only | CONFIRMED |
+| C7 suites + tsc | CONFIRMED on 38e1b17 (12 suites, exact counts; tsc 0) -- not on a merge with main (M0) |
+| C8 mutations | CONFIRMED (7 FIRED: q1-q4 routing/override, q5-q7 voice gate; 0 INERT; 0 NOT-APPLIED) |
+| C9 new adversarial | REFUTED (D13, D13-ovr; voice W1-W6 hold except W4) |
+
+**Overall: REFUTED.** The write path itself -- what is written, where, as whom, and what the owner is told --
+holds on every input tried, and every loop-3 defect is fixed with a guard that FIRES. Two things stand between
+this head and a merge: **M0** (it does not merge with today's main, and the conflict sits on the exact files the
+fixes live in) and **D13** (the D12 class is not closed: the veto list removed the 13 phrasings loop 3 found, and 21
+new ones were found in one pass, because a course code + "exam/deadline/due" is still enough to hand any lane's
+1:1 ask to Iris/Elle deterministically, ahead of the LLM owner judge).
