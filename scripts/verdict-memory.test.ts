@@ -159,21 +159,20 @@ check(
   true,
 );
 
-console.log("\nSTRUCTURAL — the fresh-ask path consults the memory BEFORE asking");
-const askIdx = turnCode.indexOf("await setPendingDeepConfirm(");
-const memIdx = turnCode.indexOf("await getRecentDeepVerdict(");
-check("both the memory read and the ask are present", askIdx > -1 && memIdx > -1, true);
-check("the memory is read BEFORE the ask is stored", memIdx < askIdx, true);
+// SUPERSEDED 2026-10-28 by the deep-1:1 hybrid (tasks/ask-shape.ts, scripts/ask-shape.test.ts): a
+// fresh deep ask is no longer HELD behind a question at all, so "read the memory before asking" has no
+// ask left to guard. What replaces it: the turn never stores a held ask, and the only pending it writes
+// is an OFFER, recorded after the offer line actually landed on a reply.
+console.log("\nSTRUCTURAL — the fresh-ask path never holds; it only records an offer that was shown");
+const storeCalls = turnCode.match(/await setPendingDeepConfirm\([^;]*\);/g) ?? [];
+check("the turn writes a pending exactly once", storeCalls.length, 1);
+check("and that write is an OFFER, never a held ask", /"offer"\s*\)\s*;$/.test(storeCalls[0] ?? ""), true);
 check(
-  "a remembered 'produce' runs the produce path instead of asking",
-  /remembered === "produce"[\s\S]{0,300}?runProduce\(/.test(turnCode),
+  "the offer is recorded only after appendProduceOffer reports it landed",
+  /appendProduceOffer\([\s\S]{0,120}?if \(!out\.appended\) return;[\s\S]{0,300}?await setPendingDeepConfirm\(/.test(turnCode),
   true,
 );
-check(
-  "a remembered 'quick' drops to the chat tier instead of asking",
-  /remembered === "quick"[\s\S]{0,400}?deepManual = "terra-med"/.test(turnCode),
-  true,
-);
+check("the canned produce-vs-quick ask is no longer returned by the turn", turnCode.includes("produceVsQuickAsk(primary)"), false);
 
 console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

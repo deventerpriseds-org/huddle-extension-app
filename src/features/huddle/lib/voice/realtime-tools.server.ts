@@ -65,10 +65,12 @@ import { LIST_ARTIFACTS_TOOL } from "../artifacts/artifact-tool";
 // journey date normalization and the honest outcome note. NOT a voice-local copy: huddle.functions.ts's
 // two task-create closures call these same functions, so the surfaces cannot drift.
 import {
+  annotateRawCreateOutput,
   loadOpenTaskTitles,
   normalizeJourneyDate,
   normalizeTaskTitle,
   screenCapabilityMetaTask,
+  screenRawJourneyCreate,
   splitTaskEntries,
   summarizeQuickCreateOutcome,
 } from "../tasks/create-task-core";
@@ -114,36 +116,48 @@ const VOICE_HOUSE_STYLE =
   "CALL `confirm_task_intent` (pass anything they added as `additions`), then say which task you locked " +
   "in. Never say a task was confirmed unless that call returned ok.";
 
-/** Same-brain instructions for the realtime session: snapshot + auto-retrieved memory + voice style. */
+/** Same-brain instructions for the realtime session: snapshot + the user's Executive Profile + memory
+ *  (the SAME retrieval step the text turn uses) + voice style. Both context pieces come from the shared
+ *  functions the text turn calls — getUserContext/renderExecutiveContext and retrieveAgentMemory — so a
+ *  change to either reaches typed and spoken conversations together, with nothing voice-specific to set. */
 export async function assembleRealtimeInstructions(
   agentId: AgentId,
-  opts: { memoryQuery?: string } = {},
+  opts: { memoryQuery?: string; caller?: RealtimeCaller } = {},
 ): Promise<string> {
   const agent = AGENT_BY_ID[agentId];
   const snapshot = getAssistantSnapshot(agentId);
   const base = (snapshot?.instructions || agent?.systemPrompt || "").trim();
 
-  let memoryBlock = "";
-  const q = opts.memoryQuery?.trim();
-  if (q) {
+  const execBlock = async (): Promise<string> => {
+    if (!opts.caller?.entra_email && !opts.caller?.entra_object_id) return "";
     try {
-      const { azurePgStore } = await import("../rag/azure-pg.server");
-      const hits = await azurePgStore.searchChunks({ query: q, k: 5, mode: "shared" });
-      const snippets = (hits ?? [])
-        .map((h) => (h as { text?: string }).text)
-        .filter((t): t is string => !!t)
-        .slice(0, 5);
-      if (snippets.length > 0) {
-        memoryBlock =
-          "\n\nRELEVANT MEMORY (recent context across the user's conversations):\n" +
-          snippets.map((s) => `- ${s}`).join("\n");
-      }
+      const { resolveTaskEmail } = await import("../journey/identity");
+      const email = (await resolveTaskEmail(opts.caller)) ?? opts.caller.entra_email ?? null;
+      if (!email) return "";
+      const { getUserContext, renderExecutiveContext } = await import("../identity/user-context.server");
+      return renderExecutiveContext(await getUserContext(email));
     } catch {
-      // Memory is best-effort — never block a voice reply on retrieval.
+      return ""; // the profile is best-effort — never block a voice reply on it
     }
-  }
+  };
 
-  return base + memoryBlock + VOICE_HOUSE_STYLE;
+  const memoryBlock = async (): Promise<string> => {
+    const q = opts.memoryQuery?.trim();
+    if (!q || !agent) return "";
+    try {
+      const { retrieveAgentMemory } = await import("../rag/memory-context.server");
+      const fresh = await retrieveAgentMemory({ query: q, agent });
+      return fresh.length
+        ? "\n\nRELEVANT MEMORY (recent context across the user's conversations):\n" +
+            fresh.map((h) => `- ${h.text}`).join("\n")
+        : "";
+    } catch {
+      return ""; // memory is best-effort — never block a voice reply on retrieval
+    }
+  };
+
+  const [exec, memory] = await Promise.all([execBlock(), memoryBlock()]);
+  return base + exec + memory + VOICE_HOUSE_STYLE;
 }
 
 // The app's function-tool schemas are shaped for the Responses/Chat APIs and carry fields the Realtime
@@ -676,7 +690,12 @@ export async function executeRealtimeTool(
         );
       }
 
-      const seen = await loadOpenTaskTitles(ctx.caller);
+      const load = await loadOpenTaskTitles(ctx.caller);
+      const seen = load.titles;
+      // AC-64: a failed open-title read proceeds but is SAID, on every result below.
+      const dedupNote = load.unavailable
+        ? { dedup_note: "dedup unavailable — the duplicate check could not run, so this was created without it" }
+        : {};
       const survivors: string[] = [];
       const deferred: Array<{ title: string; handedTo?: string; reason: string }> = [];
       const skipped: Array<{ title: string; reason: string }> = [];
@@ -741,6 +760,7 @@ export async function executeRealtimeTool(
             deferred,
             skipped,
             boards: ["huddle", "journey"],
+            ...dedupNote,
           }),
         );
       }
@@ -785,6 +805,7 @@ export async function executeRealtimeTool(
           skipped,
           boards: ["huddle", "journey"],
           note: `State the exact number created (${created}); do not say "all of them" unless it matches what they asked for.`,
+          ...dedupNote,
         }),
       );
     }
@@ -835,13 +856,30 @@ export async function executeRealtimeTool(
     // latency). An unknown/unsupported name comes back as a journey error, surfaced to the model.
     if (!NATIVE.has(name)) {
       via = "journey";
+      // Raw journey create dedup (D6, AC-57) — the SAME interception the text dispatchers use
+      // (tasks/create-task-core.ts). journey's catalog quick_create_task / parse_and_create_tasks /
+      // create_task are offered on voice too and journey does not dedup. A per-call ledger: voice has no
+      // turn-scoped one, and it still dedups repeats inside one batch. Non-creates pass untouched.
+      const dedup = await screenRawJourneyCreate(name, args, {
+        ledger: new Set<string>(),
+        loadTitles: () => loadOpenTaskTitles(ctx.caller),
+      });
+      if (dedup.action === "skip") {
+        return done(
+          JSON.stringify(
+            dedup.dedupUnavailable
+              ? { ...dedup.result, dedup_note: "dedup unavailable" }
+              : dedup.result,
+          ),
+        );
+      }
       const r = await invokeJourneyTool({
         toolName: name,
-        args,
+        args: dedup.action === "forward" ? dedup.args : args,
         caller: ctx.caller ?? {},
         context: { source: "huddle", huddleId: ctx.huddleId, agentId: ctx.agentId },
       });
-      return done(r.output);
+      return done(annotateRawCreateOutput(r.output, dedup));
     }
     return done(JSON.stringify({ error: `Tool not available on the voice path: ${name}` }));
   } catch (err) {

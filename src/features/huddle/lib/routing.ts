@@ -518,31 +518,57 @@ export async function scoreDifficultyLLM(
   text: string,
   invocation: { backend: "openai" | "lovable"; model: string; fastMode?: boolean },
 ): Promise<number | null> {
+  return (await scoreAskLLM(text, invocation))?.difficulty ?? null;
+}
+
+/**
+ * Same single cheap call as `scoreDifficultyLLM`, returning the ASK SHAPE as well — "act" (get
+ * something done now: plan/schedule/organise the user's own time, create/update tasks, reminders) vs
+ * "deliverable" (a written work product: research, report, comparison, strategy). The deep-1:1 hybrid
+ * (tasks/ask-shape.ts) needs both: a long, many-item "plan my day" scores 3 on rigor but must be DONE,
+ * not offered back as an async draft. Semantic (the model judges), never a keyword list. Null on any
+ * failure; an unparseable shape comes back null so the caller takes the safe answer-now path.
+ */
+export async function scoreAskLLM(
+  text: string,
+  invocation: { backend: "openai" | "lovable"; model: string; fastMode?: boolean },
+): Promise<{ difficulty: number; shape: "act" | "deliverable" | null } | null> {
   try {
     if (invocation.backend !== "openai") return null; // 1:1 difficulty only needed on the OpenAI path
     const { callOpenAIRouter } = await import("./openai-responses.server");
-    const raw = await callOpenAIRouter<{ difficulty: number }>({
+    const raw = await callOpenAIRouter<{ difficulty: number; shape: string }>({
       model: invocation.model,
       system:
-        "You rate how much reasoning rigor the BEST answer to a user's message needs — independent of who answers or how long the reply is.",
+        "You rate how much reasoning rigor the BEST answer to a user's message needs — independent of who answers or how long the reply is — and what SHAPE of response the user wants.",
       prompt:
         "Rate difficulty 1-4 for the message below. 1 = routine (ack, quick fact, single simple action). " +
         "2 = standard (a normal substantive reply, a short draft, a simple plan). 3 = deep (multi-constraint " +
         "strategy, financial/analytical modeling, real research → a rigorous written deliverable). 4 = " +
-        'exceptional rigor (rare). Return only {"difficulty": N}.\n\nMessage:\n"""' +
+        "exceptional rigor (rare).\n" +
+        'Also classify "shape": "act" = the user wants something DONE for them now in this conversation — ' +
+        "plan, schedule or organise their own day/week/activities, create/update/move tasks, set reminders, " +
+        "calendar or board actions — however many items it lists. \"deliverable\" = the user wants a written " +
+        "work product to read: research, a report or brief, a comparison, a strategy, an essay, a model, an " +
+        'analysis. If it mixes both, choose "act" when the main ask is to organise or plan their own activities.\n' +
+        'Return only {"difficulty": N, "shape": "act"|"deliverable"}.\n\nMessage:\n"""' +
         (text || "").slice(0, 1500) +
         '"""',
       schema: {
         type: "object",
         additionalProperties: false,
-        properties: { difficulty: { type: "integer", enum: [1, 2, 3, 4] } },
-        required: ["difficulty"],
+        properties: {
+          difficulty: { type: "integer", enum: [1, 2, 3, 4] },
+          shape: { type: "string", enum: ["act", "deliverable"] },
+        },
+        required: ["difficulty", "shape"],
       },
       schemaName: "difficulty_score",
       fastMode: invocation.fastMode,
     });
     const d = Math.round(raw?.difficulty ?? 0);
-    return d >= 1 && d <= 4 ? d : null;
+    if (!(d >= 1 && d <= 4)) return null;
+    const shape = raw?.shape === "act" || raw?.shape === "deliverable" ? raw.shape : null;
+    return { difficulty: d, shape };
   } catch {
     return null;
   }

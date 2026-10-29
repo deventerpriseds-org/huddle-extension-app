@@ -454,3 +454,44 @@ is **loop 4**.
 | Source that would have settled it | `TZ=America/New_York date` — one command, before the first query |
 | Root cause | Took the harness's "today" (a UTC date) as the owner's local day; journey's own rule is "never toISOString for today, use the user's tz" |
 | Guard implied | Any "today/tonight/this morning" question: resolve the date in the owner's tz (`user_scheduling_prefs.timezone`) first and state it ("Friday 16 Oct, ET") in the first line |
+
+
+## 2026-10-20 — "Several confirm-asks are expected today given the backlog size"
+
+| field | value |
+|---|---|
+| Claim | Many confirm-asks should fire today because the backlog is large |
+| Ground truth | Asks are armed only from UP_NEXT/DOING, never BACKLOG; 9/13/17 passes arm only `upNextAfterTopUp[0]` per agent; each ask fires once ever (`markConfirmAsked` awaiting→asked). Expected count today was ~0, which the live pass confirmed (0/0/0/0) |
+| Source that would have settled it | A full read of `autowork.server.ts` (`runScheduledAutoWork` gate loop, ~585-721) and `tasks.server.ts` `getDueConfirmAsks` |
+| Root cause | Inferred volume from backlog size without reading which lane arming draws from — answered from a proxy |
+| Guard implied | `scripts/autowork-lane-starvation.test.ts` pins the real arming/starvation behaviour; any "how many X should happen" answer must cite the selecting code path first |
+
+## 2026-10-20 — Typed SQL column shapes without reading the DDL (twice)
+
+| field | value |
+|---|---|
+| Claim | `task_engagement_state.confirm_asked_at`; `pending_turns.chunks` is jsonb |
+| Ground truth | Column is `confirm_ask_at`; `chunks` is `INT NOT NULL DEFAULT 0` (`turns.server.ts:57`) |
+| Source that would have settled it | The `CREATE TABLE` in `tasks.server.ts` / `turns.server.ts` |
+| Root cause | Literal typed from memory into a slow workflow-dispatched query; `ON_ERROR_STOP` aborted the whole batch each time, costing a dispatch round-trip |
+| Guard implied | Before any `azure-pg-query.yml` dispatch, grep the DDL for every column named in the SQL |
+
+## 2026-10-27 — Proposed a NEW re-ask day cap + interval setting when the throttle already existed
+
+| field | value |
+|---|---|
+| Claim | Re-asks need a new per-day cap (4/day) and a new interval setting, plus a top-3 limit and a review-frozen pause |
+| Ground truth | The confirm-ask throttle already exists: `armConfirmAsksSpaced` chains every ask 45–90 min after the user's latest pending one, inside fan windows 9–18/20–22, with a per-tick fire cap. The lane is already capped. Re-asks just need to ride that chain |
+| Source that would have settled it | `autowork.server.ts` `armConfirmAsksSpaced` / `nextSpacedFanSlotIso` and `scheduling-config.server.ts` `CONFIRM_GAP_DEFAULT` — both read in the same pass, but not reconciled against the new proposals |
+| Root cause | Relayed an AC subagent's "new knob" defaults without running the Extend-don't-duplicate check on them; the owner caught it |
+| Guard implied | Before presenting any new cap/interval/setting, name the existing mechanism that already throttles that thing and say why it is insufficient — or drop the new knob |
+
+## 2026-10-28 — Two verifier loops froze for 30+ min: my brief told them to `git push --force`
+
+| field | value |
+|---|---|
+| Claim | Verifier loops 2 and 3 "hung" on a git command |
+| Ground truth | No git process existed; the Bash call never started. Each loop's per-claim push in my brief used `--force`, which a subagent cannot run without a permission prompt nobody sees — the call sits waiting forever. Loop 1's brief allowed but did not require `--force` and it pushed fine |
+| Source that would have settled it | The subagent transcript's last line (an unanswered `tool_use` with `--force`) + `ps` showing no git process |
+| Root cause | Brief prescribed an action that needs approval; the harness gives a background subagent no way to surface the prompt |
+| Guard implied | Verifier briefs: per-loop refs are always NEW, so push WITHOUT `--force`; on a stale subagent, read its last tool_use before assuming a slow command |

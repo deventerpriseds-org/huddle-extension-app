@@ -23,6 +23,17 @@ Previous: 2026-09-12 (ACT:escalated-dead-end -- approach gate's `escalated` is t
 Previous: 2026-09-11 (CLAUDE.md's re-sync line advised `git reset --hard origin/main` unconditionally. A squash merge leaves the branch behind AND ahead -- the ordinary state after any PR merges -- and a bare reset destroys those commits; its 'saving genuine local work first' reads as being about UNCOMMITTED work. Measured at ahead=2 and ahead=3 on two real repos in one session. Now branches on the ahead-count. Found by a verifier sweeping for copies after the same defect was fixed in eds-claude-skills' drift guard and global rules.)
 Previous: 2026-08-26 (ACT-64 confirm-ask/assist scope revised, no code yet; ACT-63 notification bugs DEPLOYED 6dccf41, Bug 2 user-confirmed live; ACT-62 eds setup.sh synced to v12; ACT-59 confirm-ask contrast DEPLOYED; ACT-60 chat scroll-overflow PARKED)
 
+## ACT:message-copy-and-date — per-message copy button + dated timestamps in chat (2026-10-28)
+Owner asked (screenshot of journey's Iris chat): "there should be a copy option for each message. also the messages
+have timestamps but no date." Change in `HuddleView.tsx`: `ClientTime` now renders `Oct 27, 8:15 AM` (year only when
+not the current year) via `formatMessageTimestamp`; user messages gained a timestamp row (they had none); new
+`CopyMessageButton` (Copy→Check 2s, mirrors journey `TranscriptScroll.tsx`) on every user + agent message with text.
+Status: 🚀 DEPLOYED, NOT yet owner-confirmed live. Evidence: PR deventerpriseds-org/huddle-extension-app#120
+(https://github.com/deventerpriseds-org/huddle-extension-app/pull/120) squash-merged as `bee838b`; deploy-swa run
+40748141478 conclusion=success (https://github.com/deventerpriseds-org/huddle-extension-app/actions/runs/40748141478).
+Checks: `tsc --noEmit` 0 errors; eslint shows the same 19 pre-existing prettier errors as before (none new).
+Owner check: hard-refresh, open any chat → timestamps read `Oct 27, 8:15 AM`; copy icon on each message copies text.
+
 ## ACT:deeplink-opens-at-top — a 1:1 heads-up opened the thread at the TOP of history (2026-10-27)
 
 **Asked (owner):** *"when i click a heads up message from a 1:1 it deeplinks but goes to the top of the
@@ -30,6 +41,8 @@ thread history instead of the bottom … it seems it should quick load the most 
 oldest when scrolling up far enough according to best practices"*
 
 **Status: DEPLOYED `4332c41` (PR #109, deploy run 40586460645 success), mechanism verified headless
+**OWNER-CONFIRMED LIVE 2026-10-28:** "yes the scroll lands on the newest items". Part B step 4 decision: KEEP
+the ~185 blob-only messages (owner). Part B steps 1-3: awaiting approval.
 (A/B), NOT yet confirmed on the owner's phone.**
 
 **Cause (read from code, then reproduced):** the deep link switches to the 1:1 before the workspace
@@ -58,6 +71,26 @@ a real 1:1 reply push carries, so a tap exercises the deep-link landing with no 
 `dm-iris-chase`. Awaiting the owner's tap result. **Independent verification:** verifier loop 1 (work slug
 `deeplink-transcript`) covers #109/#111/#112; artifact `.claude/evidence/VERIFY-deeplink-transcript-1.md` on branch
 `claude_verify-deeplink-transcript`. C1 (root cause) already CONFIRMED by the verifier from source before a restart.
+
+**Owner live test 2026-10-28 ~18:00 UTC — FAILED from his view:** after tapping the test push, the Iris 1:1 showed
+only alarms and history never filled in (before: alarms, then history ~7s later). Findings, from the DB and a replay:
+- The newest Iris messages in the saved workspace are real conversation (Oct 9-15), not alarms, so an
+  alarms-only screen means the workspace history was NOT applied on that open (the alarms come from the
+  thread's own reminder poll, which runs before hydration).
+- Phone-sized headless replay of current main (alarms first, then a 3,230-message / 654-Iris history via
+  hydrateFromRemote): history renders, 40 rows, 0px from bottom, no page errors. So rendering is not what failed.
+- Load path untouched since 2026-10-17 (git log on useWorkspaceSync/store/HuddleApp/workspace.functions/entra-auth).
+- **SAVE IS BROKEN SINCE ~2026-10-18 (pre-existing, measured):** `identity.workspace_state` is 2,080,919 chars;
+  `saveWorkspace` validates `stateJson.max(2_000_000)`, so every save is rejected. Newest saved message: 2026-10-15.
+  Why the load did not apply on that open is still UNKNOWN; awaiting the owner's normal-open check.
+
+**Owner chose C (2026-10-28).** Part A shipped: #117 (`39f464d`, deploy 40744286484 success) -- save cap 8M,
+back-fill resumes from the newest saved message and pages past 100, load retries with an on-screen notice, save
+failures shown. **OWNER-CONFIRMED on his phone 2026-10-28 ("I now see the messages again")** and DB-verified: workspace
+`updated_at` 2026-10-28 18:24:36 UTC (was 10-18), 3,415 messages (was 3,230), Iris 806 (was 654), newest saved
+message 18:17 UTC today. Blob is now 2,228,410 chars -- over the OLD cap, so the raise is what let it save. Part B planned in `docs/plan-message-history-storage.md`, awaiting approval. Retracted claim: "the
+APK restart caused the loss" -- owner installed APKs after 10-18 without loss, so restarts were being recovered by
+something not yet identified.
 
 **Not done (deliberately):** server-side paging of history. All messages live in one workspace blob, so
 paging the DOWNLOAD needs a storage change; only worth it if the download itself becomes slow.
@@ -4746,6 +4779,20 @@ Owner: *"I prefer 'Get reply notifications on this computer — Turn on' strip"*
 | 2 | Composer bell + BellRing indicator removed | built | N3 |
 | 3 | Owner sees the strip on desktop, taps Turn on, gets a reply notification with the tab closed | **NOT confirmed live** | — |
 
+## ACT:confirm-ask-rotation — stop one unanswered ask freezing an agent's lane; keep re-asking in a loop (owner 2026-10-27)
+Owner: *"keep re-asking, but in a loop moving to the next item in the lane... ~3 at a time but it gets stuck on the first."* Also asked "why don't we have any deduplication in place?" (2026-10-20).
+- [x] Starvation reproduced offline — `scripts/autowork-lane-starvation.test.ts` (case A: asked-top + ready-second → 0 DOING).
+- [x] Independent ACs — `.claude/AC-confirm-ask-rotation.md` (67 ACs, 8 OQs; recommended defaults adopted, owner may override).
+- [x] Live sizing (azure-pg-query run 40574733189): 35 unanswered asks / 10 agents, oldest 2026-08-10; tess 12 in UP_NEXT; 2 confirmed+approach-pending; tess has 1 DOING item still `asked`.
+- [x] Owner re-scope 2026-10-27: whole lane (no top-N), NO new day cap/interval setting (reuse the 45–90 min spacing chain + windows), NO review-frozen pause; only a 24h per-item floor (owner's 08-26 choice).
+- [x] Build A-C — `.claude/IMPL-confirm-ask-rotation.md`; Build D — `.claude/IMPL-create-dedup.md`; merged on `claude_autowork-lane-rotation`.
+- [x] Verifier loop 1 (`.claude/VERIFY-confirm-ask-rotation-1.md`): gate CONFIRMED; REFUTED a hidden 3/day per-agent cap + a clock-skew double-send. Both fixed in 03ab8f2, new guards mutation-proved FIRED.
+- [x] Owner chose push target (a): new branch `claude_autowork-lane-rotation`, PR #108 (2026-10-27).
+- [x] Verifier loop 2 CONFIRMED R1 (no hidden cap); loop 3 (`docs/qc-evidence/VERIFY-confirm-ask-rotation-3.md`) CONFIRMED R2 clock skew, R3 escalate-after-floor, and the main-merge journeyOn gate; its two unguarded fixes now have tests (AC-35b, ask-shape dedup gate), both mutation-proved FIRED.
+- [x] Merged #108 (squash 33f625e) → deploy-swa run 40767764507 success (2026-10-28).
+- [x] Live DB after deploy: 4 new columns present; all 29 open 'asked' rows backfilled with last-sent. 5pm ET pass (2026-10-28) armed elle's 2 first asks (8:10pm, 9:19pm) and 7 re-asks, one per agent, oldest-asked first (sam 8/21 → 9:12am, tess → 10:25, cole → 11:54, eli → 12:50, cam → 14:01, iris → 15:29, ezra → 16:41 on 10-29).
+- [ ] Owner confirms on the phone that the re-asks arrive and rotate (NOT yet confirmed live).
+Branch: `claude_autowork-lane-rotation` (designated branch's history no longer connects to main — push target is an owner decision).
 ## ACT:instant-email-alerts + ACT:draft-formatting — instant, clearly-labelled, sticky email alerts; Calibri drafts (owner 2026-10-27)
 Owner: *"i recieved an email and Iris did not immediately send me an alert message with a draft reply"* → after the
 diagnosis: *"A and B now... The push should stick until I dismiss. Also when I click save draft, the draft it creates is
@@ -4768,3 +4815,27 @@ bridge #10 + #11 → Huddle APK v1.0.10 built (84f9813). Live: run 40575373656 �
 Plumley — draft reply ready", data.sticky "true", FCM 1 success (journey function_logs 20:08:53Z).
 **NOT yet confirmed by the owner** — needs: install v1.0.10; the next real email arriving within seconds; the push staying
 after a tap; one Save to Drafts tap (spacing + Calibri 11 in Outlook).
+
+### ACT:deep-ask-hybrid (2026-10-28) — OPEN
+Ask: "Is Iris going through her standup routine in a 1:1? why didnt she just do it?" → diagnosed the deep-confirm hold
+(not standup); owner chose the hybrid ("go with the recomended hybrid"). PR deventerpriseds-org/huddle-extension-app#116
+(7ad609f). Status: implemented, offline tests + 4 mutations FIRED; independent verifier running; then merge → auto-deploy
+→ live 1:1 check. NOT owner-confirmed. Sub-item: delete stray "Plan daily activities" task — awaiting owner yes/no.
+
+
+## ACT:iris-sticky-priority-and-clean-layout — priority check missed; thread "smashed together" (2026-10-28)
+Owner: *"I haven't been asked in the early morning to check out the schedule for any adjustments. and evening to confirm the priorities ... with deep link"*, then *"it did ask but because it didn't stick i missed it. also the formatting in the thread is all smashed together not clean"*.
+- **Found:** 8pm priority check sent nightly 10-16..10-27 (chat.pending_turns, all `done`); push log 2026-10-28T00:00:07Z FCM-accepted, titled "Iris Chase replied", 1s before the 8pm brief with the SAME title; not sticky. Brief directive demanded "ONE ... NO bullet points" → 11 tasks in one sentence.
+- **Shipped:** PR #122 squash `8302cb6`, deploy-swa run 40750842127 success. `lib/push/turn-push.ts` (`turnPushStyle`; email alerts unchanged) + `payload.pushStyle`; priority check "Iris: confirm tomorrow's/today's priorities" sticky; briefs "Iris: today's/tomorrow's schedule" (not sticky) + Open Schedule button + 8am/8pm "adjust anything?" line; one item per line, plain text.
+- **Evidence:** turn-push 9, priority-check 43, schedule-brief 76, dedupe 21, mail-subscription 24, inbound-email 69; tsc 0; build 0; mutate.sh FIRED T4/T7/P-STICK3/J4/J6b/P6. Live: run-priority-check run 40751464060 → turn `priority-check-evening-2026-10-28-manual-20261028190743` reply one priority per line + Open Priorities; push title "Iris: confirm tomorrow's priorities", FCM 1 success.
+- **Status:** live; mechanism verified. NOT owner-confirmed (stays in shade on phone; layout in thread). First scheduled briefs with the new layout: 8pm ET tonight.
+
+## ACT:voice-context-parity — voice 1:1 uses the same memory step + Executive Profile as text (owner 2026-10-28)
+Owner: *"Go on 3 and 4, I don't understand why voice can't trigger the same jobs instead of needing to be configured separately."*
+- [x] One shared retrieval `lib/rag/memory-context.server.ts` used by runAgentTurn AND assembleRealtimeInstructions; voice also gets renderExecutiveContext via the caller. `scripts/memory-context.test.ts` 11/0; 3 mutations FIRED.
+- [x] PR #125 merged (adad7b1), deploy-swa run 40773068187 success.
+- [ ] Owner confirms on a live voice 1:1 that the agent knows their goals (NOT yet confirmed).
+
+## ACT:duplicate-cleanup — remove existing duplicate tasks (owner "go on 3", 2026-10-28)
+- [x] Read journey `public.tasks` (canonical): 4 exact-duplicate groups + near-duplicates via pg_trgm ≥0.55. Presented grouped with a recommended keep per group.
+- [ ] Owner approves rows → DELETE from journey public.tasks only (mirror follows via trigger) → read back 0 remaining.

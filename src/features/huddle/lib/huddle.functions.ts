@@ -9,10 +9,17 @@ import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, Task
 // and the reply DTOs are shared with the client bundle.
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "./tasks/widgets.server";
 import {
+  OFFER_TTL_MS,
+  appendProduceOffer,
+  isOfferAccepted,
+  routeDeepAsk,
+  type AskShape,
+} from "./tasks/ask-shape";
+import {
   parseMentions,
   routeMessage,
   routeMessageLLM,
-  scoreDifficultyLLM,
+  scoreAskLLM,
   laneOwnerFor,
   primeLaneDecision,
   resolveOwnerLLM,
@@ -53,12 +60,16 @@ import {
 // journey date normalization and the honest outcome note. Shared with the VOICE executor
 // (voice/realtime-tools.server.ts) so the two surfaces cannot drift; see create-task-core.ts.
 import {
+  annotateRawCreateOutput,
+  describeRawCreateSkip,
   loadOpenTaskTitles,
   normalizeJourneyDate,
   normalizeTaskTitle,
   screenCapabilityMetaTask,
+  screenRawJourneyCreate,
   splitTaskEntries,
   summarizeQuickCreateOutcome,
+  type OpenTitleLoad,
 } from "./tasks/create-task-core";
 import {
   detectCeremony,
@@ -1245,15 +1256,20 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // cheap dedicated LLM call — this is what powers the difficulty-driven model tier + the Sol confirm
   // gate in 1:1. LLM-primary (dynamic, no keyword list), heuristic fallback only when there's no key.
   // Guarded: any failure leaves difficulty unset (treated as 2 = standard downstream).
+  // The same call also labels the ASK SHAPE (act vs deliverable) for the deep-1:1 hybrid below.
+  let askShape: AskShape | null = null;
   if (!resume && routed.difficulty == null && !data.internal && !data.ceremonyBarge) {
     try {
       if (routerCfg.backend === "openai" && openaiKey) {
-        const d = await scoreDifficultyLLM(data.text, {
+        const scored = await scoreAskLLM(data.text, {
           backend: "openai",
           model: routerCfg.model,
           fastMode: routerCfg.fastMode,
         });
-        if (d != null) routed.difficulty = d;
+        if (scored) {
+          routed.difficulty = scored.difficulty;
+          askShape = scored.shape;
+        }
       }
     } catch {
       /* leave unset — downstream treats undefined as 2 */
@@ -1601,19 +1617,14 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // exists and the user is in it. The owner reported exactly this misfire (2026-09-14). Without the
   // hold, the persona site's needsConfirm branch still keeps such a turn off the Sol rung.
   let deepManual: string | undefined = data.modelEscalate?.trim() || undefined;
+  // Set when a deliverable is answered now: the produce offer is appended to that agent's reply at the
+  // end of the turn (ensureProduceOfferDelivered), and only then recorded as a pending offer.
+  let produceOffer: { agentId: AgentId; askText: string; email: string | null } | null = null;
   if (!resume && !data.internal && !data.ceremonyBarge && !data.appContext && data.scope === "one-to-one") {
     try {
       const email = await resolveCallerEmail();
-      const {
-        getPendingDeepConfirm,
-        setPendingDeepConfirm,
-        clearPendingDeepConfirm,
-        recordDeepConfirmVerdict,
-        getRecentDeepVerdict,
-        classifyConfirmReply,
-        produceVsQuickAsk,
-      } = await import("./tasks/deep-confirm.server");
-      const { hasGreenLit } = await import("./tasks/green-light");
+      const { getPendingDeepConfirm, clearPendingDeepConfirm, recordDeepConfirmVerdict, classifyConfirmReply } =
+        await import("./tasks/deep-confirm.server");
 
       // THE PRODUCE PATH, once. Reached from TWO places now — an explicit "produce" reply to a pending
       // ask, and a fresh deep ask the user has ALREADY green-lit in this thread — and they must do the
@@ -1621,10 +1632,37 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // second copy of fifty lines that would drift the first time one of them was touched.
       const runProduce = async (agentId: AgentId, askText: string, note: string) => {
         const title = produceTitleFrom(askText);
-        // Create the produce task on the board (dual-write to journey). Non-fatal.
+        // Create the produce task on the board (dual-write to journey). Non-fatal. OPT-IN, like every
+        // other board write (`agentBackend.journey?.enabled`): only when the agent's journey is
+        // explicitly on — so a harness turn with journey off or absent never lands on the real board
+        // or kicks a forced auto-work pass (VERIFY-deep-ask-hybrid-2.md AC9; -3.md caveat).
+        const journeyOn = data.agents?.[agentId]?.journey?.enabled === true;
         let created = false;
+        // D7 / AC-58: the produce path called journey's quick_create_task with no dedup, so re-asking
+        // the same deep question filed the same produce task again. Same interception as every other
+        // raw create. A fresh ledger (not createdTaskTitles): runProduce runs BEFORE that per-turn
+        // ledger is declared below and ends the turn, so there is nothing in this turn to share with.
+        let alreadyOnBoard = false;
         try {
-          if (data.caller?.entra_email) {
+          const dedup = journeyOn && data.caller?.entra_email
+            ? await screenRawJourneyCreate(
+                "quick_create_task",
+                { title },
+                { ledger: new Set<string>(), loadTitles: () => loadOpenTaskTitles(data.caller) },
+              )
+            : ({ action: "pass" } as const);
+          if (dedup.action !== "pass" && dedup.dedupUnavailable) {
+            recordFallback(
+              "tool",
+              `duplicate-task check unavailable (${dedup.dedupUnavailable}) — produce task “${title}” created without it`,
+              "dedup unavailable",
+              agentId,
+            );
+          }
+          if (dedup.action === "skip") {
+            alreadyOnBoard = true;
+            recordToolUse(agentId, "quick_create_task", describeRawCreateSkip(dedup.skipped), true);
+          } else if (journeyOn && data.caller?.entra_email) {
             const { invokeJourneyTool } = await import("./journey/proxy.functions");
             const r = await invokeJourneyTool({
               toolName: "quick_create_task",
@@ -1659,11 +1697,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           );
         }
         // Kick the async WIP pipeline (fire-and-forget; the gated 9/13/17 cadence also picks it up).
-        try {
-          const { runScheduledAutoWork } = await import("./tasks/autowork.server");
-          void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
-        } catch {
-          /* best-effort */
+        if (journeyOn) {
+          try {
+            const { runScheduledAutoWork } = await import("./tasks/autowork.server");
+            void runScheduledAutoWork(data.caller, { force: true }).catch(() => {});
+          } catch {
+            /* best-effort */
+          }
         }
         return finalize({
           decision: {
@@ -1673,7 +1713,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
           replies: [
             {
               agentId,
-              text: created
+              text: alreadyOnBoard
+                ? `“${title}” is already on your board, so I didn't add a second copy — I've kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
+                : created
                 ? `Done — I've put “${title}” on the board as a produce task and kicked it to the team to work up async. You'll get the draft to review. Want me to steer it any particular way?`
                 : `I'll take “${title}” on as a produce task and work it up async — you'll get the draft to review. (Heads up: I couldn't confirm the board write just now, so give it a quick check.)`,
             },
@@ -1688,7 +1730,21 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       };
 
       const pending = await getPendingDeepConfirm(email, data.huddleId);
-      if (pending) {
+      if (pending && pending.kind === "offer") {
+        // HYBRID: the agent already ANSWERED and offered the full version. Only an explicit produce
+        // phrase accepts (a bare "yes" may be answering a question inside the answer itself); anything
+        // else retires the offer and the message routes normally — including as a fresh deep ask.
+        if (Date.now() - pending.createdAt <= OFFER_TTL_MS && isOfferAccepted(data.text)) {
+          await recordDeepConfirmVerdict(email, data.huddleId, pending.agentId, pending.askText, "produce");
+          const agentId = (pending.agentId as AgentId) ?? routed.winners[0] ?? data.members[0];
+          return runProduce(agentId, pending.askText, "produce-offer: accepted");
+        }
+        // Anything that is not an acceptance retires the offer — including a refusal that mentions it
+        // ("no, produce nothing"). Keeping it alive let a LATER "make it a task" produce the ask the
+        // user had just declined (VERIFY-deep-ask-hybrid-3.md, near-miss REFUTED).
+        await clearPendingDeepConfirm(email, data.huddleId);
+      } else if (pending) {
+        // A legacy held ask (written before the hybrid shipped) — answered exactly as before.
         const verdict = classifyConfirmReply(data.text);
         if (verdict === "quick") {
           // Resume the original ask inline on a chat-friendly tier — deliberately NOT the deep o3 rung.
@@ -1729,76 +1785,39 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         // verdict "unrelated" → leave the pending (2h expiry) and fall through to normal routing.
       }
 
-      // Fresh deep ask (no manual override): HOLD and ask produce-vs-quick instead of spending o3 inline.
+      // Fresh deep ask (no manual override): the HYBRID (tasks/ask-shape.ts). Never hold the turn.
+      // It used to hold EVERY difficulty>=3 1:1 message behind a canned "produce or quick?" before the
+      // agent ran — and a long "plan my day" (gym at 3pm, papers, errands, app work) scored 3 on length
+      // and came back as one vague async task instead of a plan. Owner, 2026-10-28: "why didnt she just
+      // do it?" Now: an ACT ask runs normally, pinned to the budget tier (Terra-high — never o3/Sol,
+      // which difficulty 3 would otherwise pick); a DELIVERABLE is answered now on the chat tier and
+      // ends with a one-line offer to produce the full version.
       if (!deepManual && routed.winners.length > 0 && (routed.difficulty ?? 2) >= 3) {
         const primary = routed.winners[0];
-        // ...UNLESS THE USER HAS ALREADY SAID GO. Measured: the ask fired at 01:32, the owner replied
-        // "Go for it" at 02:06 and "Okay knock it out" at 02:50 — three go-aheads — and it was still
-        // asking. Half of that was the classifier (fixed in classifyConfirmReply); this is the other
-        // half: once someone has told you to get on with it, asking them to choose a shape reads as
-        // not listening. A go-ahead in the thread means PRODUCE, which is the answer the gate was
-        // fishing for anyway. The current message counts too — "go for it, and do the pricing one"
-        // is a go-ahead AND a fresh deep ask in one line.
-        const recentUserLines = [
-          ...(data.history as HuddleMessage[]).filter((m) => m.author.kind === "user").map((m) => m.text),
-          data.text,
-        ];
-        if (hasGreenLit(recentUserLines)) {
-          // Remember it, so the NEXT deep ask a minute later is not asked either. `hasGreenLit` only
-          // looks back four user lines, so it decays out from under a conversation that is still
-          // plainly in the same flow.
-          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
-          return runProduce(primary, data.text, "deep-confirm: already green-lit");
-        }
-        // ...OR THE USER ALREADY ANSWERED THIS QUESTION. Every verdict used to DELETE the pending
-        // row, so the gate had no memory past the single reply: answer "produce", and the next
-        // difficulty>=3 message in the same 1:1 asked again from scratch a minute later. Note that
-        // the green-light check above does NOT cover this — measured this session,
-        // isGreenLight("produce") is FALSE, so replying with the exact word the gate asked for
-        // suppressed nothing. A recent verdict now applies the shape the user already chose instead
-        // of re-asking. "cancel" is never remembered (it deletes the row), so parking one ask can
-        // never silence a later genuine one. Window + expiry: tasks/verdict-memory.ts.
-        const remembered = await getRecentDeepVerdict(email, data.huddleId);
-        if (remembered === "produce") {
-          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "produce");
-          return runProduce(primary, data.text, "deep-confirm: remembered produce");
-        }
-        if (remembered === "quick") {
-          // Same landing as the explicit "quick" reply: answer INLINE on the chat-friendly tier,
-          // never the deep o3 rung. data.text is already the real ask here (unlike the reply path,
-          // which has to restore it from the stored pending), so only the tier and the recorded
-          // difficulty change.
+        const route = routeDeepAsk(askShape);
+        if (route === "act-now") {
+          deepManual = "budget";
+        } else {
           deepManual = "terra-med";
           routed.difficulty = 2;
-          await recordDeepConfirmVerdict(email, data.huddleId, primary, data.text, "quick");
-        } else {
-          // Nothing remembered — ask, exactly as before.
-          await setPendingDeepConfirm(email, data.huddleId, primary, data.text);
-          return finalize({
-            decision: {
-              ...routed.decision,
-              reason: `${routed.decision.reason} [deep-confirm: produce-vs-quick]`.slice(0, 220),
-            },
-            replies: [
-              {
-                agentId: primary,
-                // Per-agent phrasing, not one literal every agent recites — see produceVsQuickAsk.
-                text: produceVsQuickAsk(primary),
-              },
-            ] as Reply[],
-            fallbacks,
-            prompts,
-            journeyTaskUpdates,
-            suggestedTasks,
-            toolUses,
-            reasoning: reasoningSummaries,
-          });
+          produceOffer = { agentId: primary, askText: data.text, email };
         }
+        routed.decision = {
+          ...routed.decision,
+          reason: `${routed.decision.reason} [deep-ask: ${route}]`.slice(0, 220),
+        };
       }
     } catch (err) {
       console.warn(
         `[huddle-model] deep-confirm gate error: ${err instanceof Error ? err.message : String(err)}; proceeding without gate.`,
       );
+      // The tier pin needs no database, so a failed email/identity lookup above must not leave a
+      // difficulty>=3 ask unpinned on o3/Sol (VERIFY-deep-ask-hybrid-2.md, out-of-scope finding 3).
+      // No offer here: without the email there is nowhere to record it.
+      if (!deepManual && (routed.difficulty ?? 2) >= 3) {
+        deepManual = routeDeepAsk(askShape) === "act-now" ? "budget" : "terra-med";
+        if (deepManual === "terra-med") routed.difficulty = 2;
+      }
     }
   }
 
@@ -1904,13 +1923,16 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // duplicate of one that already exists. Best-effort: a failed read never blocks task creation.
   // normTitle / the mirror read now live in tasks/create-task-core.ts so the VOICE executor dedups
   // by the exact same rule — a title typed and the same title spoken must collide, not diverge.
+  // The same per-turn cache now also serves the RAW journey create interception
+  // (screenRawJourneyCreate, AC-55..AC-60), and carries `unavailable` so a failed read is reported
+  // as "dedup unavailable" by whichever agent hits it (AC-64) instead of passing as "no duplicates".
   const normTitle = normalizeTaskTitle;
-  let existingOpenTitles: Set<string> | null = null;
-  async function loadExistingOpenTitles(): Promise<Set<string>> {
+  let existingOpenTitles: OpenTitleLoad | null = null;
+  async function loadExistingOpenTitles(): Promise<OpenTitleLoad> {
     if (existingOpenTitles) return existingOpenTitles;
-    const set = await loadOpenTaskTitles(data.caller);
-    existingOpenTitles = set;
-    return set;
+    const load = await loadOpenTaskTitles(data.caller);
+    existingOpenTitles = load;
+    return load;
   }
 
   // 1:1 owner follow-up delivery (AC-4): when a non-owner defers in a DM ("Terry's better suited,
@@ -2548,70 +2570,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
         }
         if (memoryQueryVec) {
-          // How many CANDIDATES the DB returns, and how many survive into the prompt. Split on purpose:
-          // fetching wide is cheap (one ANN query) while injecting wide is not -- every extra chunk rides
-          // in EVERY agent's prompt on EVERY turn, which is the cost/tail-latency item at the top of this
-          // repo's own optimization backlog. So: widen the funnel, keep the outlet modest.
-          const MEMORY_CANDIDATE_K = 20;
-          const MEMORY_INJECT_N = 8;
-          const { azurePgStore } = await import("./rag/azure-pg.server");
-          const hits = await azurePgStore.searchChunks({
-            query: data.text,
-            queryVec: memoryQueryVec,
-            agentId: winner.id,
-            mode: ragCfg.sharing ?? "shared",
-            // 20, not 6. THIS was the binding constraint, not the `.slice()` below: the SQL LIMIT is
-            // this k, so the database returned at most SIX rows and the relevance floor, the lane
-            // re-rank and any dedup could only ever reorder those six. A chunk the ANN ranked 7th was
-            // unreachable no matter how relevant. Raising the slice alone would have been an inert fix.
-            // 20 is the current server-side clamp ceiling (azure-pg.server.ts) -- deliberately AT it
-            // rather than above, so nothing is silently truncated.
-            k: MEMORY_CANDIDATE_K,
-          });
+          // ONE retrieval step for every surface (rag/memory-context.server.ts): wide candidate fetch,
+          // relevance floor, this agent's topics ranked first, near-duplicate collapse. The voice call
+          // uses the same function, so typed and spoken 1:1s recall the same memory.
+          const { retrieveAgentMemory } = await import("./rag/memory-context.server");
           // Exclude the current message and anything already in this huddle's recent transcript,
           // so we surface only context the model wouldn't otherwise have (older / other-huddle).
-          const alreadyVisible = new Set(
-            [data.text, ...data.history.slice(-14).map((m) => m.text)].map((t) => t.trim()),
-          );
-          // Relevance floor calibrated for text-embedding-3-large, whose cosine scores run LOWER
-          // than older models: a strong topical match (e.g. "what is my dog's name?" vs a stored
-          // "my dog's name is Waffles") measures ~0.42, and unrelated text sits below ~0.25. The old
-          // 0.72 floor silently dropped every real hit. 0.3 keeps genuine matches, rejects noise.
-          const MEMORY_MIN_SCORE = 0.3;
-          // Role/domain-aware re-rank: within the relevance floor, gently prefer memory that matches
-          // THIS agent's lane — its domains/themes appear in the chunk, or it co-authored the chunk —
-          // so each agent surfaces the memory most relevant to what it actually owns, instead of the
-          // same generic top-K for everyone. Pure reorder over already-relevant hits (no SQL change).
-          const laneTerms = [...winner.domains, ...winner.themes]
-            .map((t) => t.toLowerCase())
-            .filter((t) => t.length >= 3);
-          const laneBoost = (h: { text?: string; authorAgentIds?: string[] }) => {
-            const t = (h.text || "").toLowerCase();
-            const termHit = laneTerms.some((kw) => t.includes(kw)) ? 0.12 : 0;
-            const authorHit = h.authorAgentIds?.includes(winner.id) ? 0.06 : 0;
-            return termHit + authorHit;
-          };
-          // Near-duplicate collapse. `alreadyVisible` only matches WHOLE strings, so it cannot catch
-          // two chunks that differ by a task title inside otherwise identical boilerplate. Without this,
-          // a family of near-identical rows can occupy every injected slot with the same sentence --
-          // which is exactly the shape of the 60 auto-work directives already in the store. Legacy rows
-          // stay in the store (deleting user history is destructive and not ours to decide); they are
-          // collapsed at READ time instead, so this also repairs the 713 rows already written.
-          const seenPrefix = new Set<string>();
-          const fresh = (hits ?? [])
-            .filter((h) => (h.score ?? 0) >= MEMORY_MIN_SCORE && !alreadyVisible.has(h.text.trim()))
-            .sort((a, b) => (b.score ?? 0) + laneBoost(b) - ((a.score ?? 0) + laneBoost(a)))
-            .filter((h) => {
-              const key = h.text.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 80);
-              if (seenPrefix.has(key)) return false;
-              seenPrefix.add(key);
-              return true;
-            })
-            .slice(0, MEMORY_INJECT_N);
-          console.info(
-            `[memory] agent=${winner.id} candidates=${(hits ?? []).length} afterFloor+dedup=${fresh.length} ` +
-              `injected=${Math.min(fresh.length, MEMORY_INJECT_N)} topScore=${(hits?.[0]?.score ?? 0).toFixed(3)}`,
-          );
+          const fresh = await retrieveAgentMemory({
+            query: data.text,
+            queryVec: memoryQueryVec,
+            agent: winner,
+            mode: ragCfg.sharing ?? "shared",
+            alreadyVisible: [data.text, ...data.history.slice(-14).map((m) => m.text)],
+          });
           if (fresh.length) {
             memoryBlock =
               "\n\nRelevant memory from earlier conversations (use only if it helps answer; do not repeat it verbatim or announce that you looked it up):\n" +
@@ -2827,6 +2798,54 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       };
     }
 
+    // AC-64 (owner OQ-6): when the open-title read failed, creates PROCEED but the gap is made
+    // VISIBLE — one "dedup unavailable" fallback per agent per turn, on whichever create path hit it
+    // first. Before this, a failed read was a silent empty set, indistinguishable from "no duplicates".
+    let dedupUnavailableReported = false;
+    function reportDedupUnavailable(reason: string | null, tool: string) {
+      if (!reason || dedupUnavailableReported) return;
+      dedupUnavailableReported = true;
+      const ev = recordFallback(
+        "tool",
+        `${winner.name}: duplicate-task check unavailable (${reason}) — ${tool} created without it`,
+        "dedup unavailable",
+        winner.id,
+      );
+      perAgentFallbacks.push(ev.inline);
+    }
+    /** The open-title set for create_huddle_task(s), reporting a failed read as it goes. */
+    async function openTitlesForCreate(tool: string): Promise<Set<string>> {
+      const load = await loadExistingOpenTitles();
+      reportDedupUnavailable(load.unavailable, tool);
+      return load.titles;
+    }
+
+    // RAW journey create interception (AC-55..AC-61, AC-67), shared by the OpenAI and Lovable journey
+    // dispatch exactly like maybeDeferStatusChange above. journey's catalog quick_create_task /
+    // parse_and_create_tasks / create_task bypassed every Huddle dedup (F14 D4/D5) and journey does not
+    // dedup either. Consults the SAME per-turn `createdTaskTitles` ledger as create_huddle_task, so a
+    // mixed sequence in one turn creates once (AC-60). Returns either the output to hand straight back
+    // to the model (skip) or the args to dispatch (unchanged, or a batch minus its duplicates).
+    async function guardRawJourneyCreate(
+      toolName: string,
+      rawArgs: unknown,
+    ): Promise<
+      | { skipOutput: string }
+      | { args: unknown; decision: Awaited<ReturnType<typeof screenRawJourneyCreate>> }
+    > {
+      const decision = await screenRawJourneyCreate(toolName, rawArgs, {
+        ledger: createdTaskTitles,
+        loadTitles: loadExistingOpenTitles,
+      });
+      if (decision.action === "pass") return { args: rawArgs, decision };
+      reportDedupUnavailable(decision.dedupUnavailable, toolName);
+      if (decision.action === "skip") {
+        recordToolUse(winner.id, toolName, describeRawCreateSkip(decision.skipped), true, undefined, rawArgs);
+        return { skipOutput: JSON.stringify(decision.result) };
+      }
+      return { args: decision.args, decision };
+    }
+
     function resolveTaskLane(value: unknown): TaskLane {
       const lane = String(value ?? "")
         .trim()
@@ -2895,7 +2914,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       }
       // Cross-agent / re-run dedup: if this exact title was already created earlier in this turn,
       // don't create a second card. The first caller claims the title here.
-      const titleKey = title.trim().toLowerCase();
+      // Keyed by THE normalizer (not a local lowercase) so the raw-create interception, which shares
+      // this ledger, collides with it whatever whitespace/punctuation either side used (AC-60).
+      const titleKey = normTitle(title);
       if (createdTaskTitles.has(titleKey)) {
         recordToolUse(
           winner.id,
@@ -2906,8 +2927,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
       }
       // Cross-turn dedup: skip if an open task with this title already exists on the board.
-      const existing = await loadExistingOpenTitles();
-      if (existing.has(normTitle(title))) {
+      const existing = await openTitlesForCreate("create_huddle_task");
+      if (existing.has(titleKey)) {
         createdTaskTitles.add(titleKey);
         recordToolUse(
           winner.id,
@@ -3121,7 +3142,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       }
 
       // Per-entry guards (mirror the single path): exclusive-capability meta-task guard + dedup.
-      const existing = await loadExistingOpenTitles();
+      const existing = await openTitlesForCreate("create_huddle_tasks");
       const survivors: string[] = [];
       const skipped: Array<{ title: string; reason: string }> = [];
       const deferred: Array<{ title: string; handedTo?: string; reason: string }> = [];
@@ -3131,8 +3152,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           deferred.push({ title: entry, handedTo: titleOwner.handedTo, reason: titleOwner.reason });
           continue;
         }
-        const key = entry.trim().toLowerCase();
-        if (createdTaskTitles.has(key) || existing.has(normTitle(entry))) {
+        const key = normTitle(entry);
+        if (createdTaskTitles.has(key) || existing.has(key)) {
           createdTaskTitles.add(key);
           skipped.push({ title: entry, reason: "an open task with this title already exists" });
           continue;
@@ -4747,10 +4768,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 );
                 return JSON.stringify(defer);
               }
+              // Raw journey create dedup (D4, AC-55). Non-creates pass straight through (AC-67).
+              const dedup = await guardRawJourneyCreate(c.name, c.arguments);
+              if ("skipOutput" in dedup) return dedup.skipOutput;
               const { invokeJourneyTool } = await import("./journey/proxy.functions");
               const r = await invokeJourneyTool({
                 toolName: c.name,
-                args: c.arguments,
+                args: dedup.args as typeof c.arguments,
                 caller: data.caller ?? {},
                 context: {
                   source: "huddle",
@@ -4776,7 +4800,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 );
                 perAgentFallbacks.push(ev.inline);
               }
-              return r.output;
+              return annotateRawCreateOutput(r.output, dedup.decision);
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               recordToolUse(winner.id, c.name, `journey-voice · crashed`, false, msg);
@@ -4833,7 +4857,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // routine→Luna-low, standard→Luna-high, deep→Sol-high. Escalating THINKING on the cheap model
         // (luna-high ≈ terra-med at ~1/9 cost, measured) beats jumping the model, so most turns run Luna
         // with more effort and only genuinely deep asks reach Sol. Sol auto-spend is gated upstream (a
-        // fresh 1:1 deep ask is confirm-gated), so if we still see needsConfirm here (a group deep ask,
+        // fresh 1:1 deep ask is pinned to budget/terra-med by the deep-ask hybrid), so if we still see needsConfirm here (a group deep ask,
         // or an un-gated path) we do NOT silently spend Sol — we drop to the Terra-high budget. A manual
         // override (deepManual) always wins and clears the gate. Guarded: any failure keeps the static
         // agent-backend model so a bad resolve never breaks the turn.
@@ -4861,7 +4885,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             // reasoning-summary channel to the UI.
             if (chosenModel === "o3" || chosenModel.includes("sol") || deepManual) {
               reasoningSummaries.push(
-                `${winner.name}: reasoning tier ${chosenModel.replace("gpt-5.6-", "")}/${chosenEffort}${deepManual ? " (you chose this)" : ""}`,
+                `${winner.name}: reasoning tier ${chosenModel.replace("gpt-5.6-", "")}/${chosenEffort}${data.modelEscalate?.trim() ? " (you chose this)" : ""}`,
               );
             }
           }
@@ -6290,10 +6314,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                       );
                       return JSON.stringify(defer);
                     }
+                    // Raw journey create dedup (D5, AC-56). Non-creates pass straight through.
+                    const dedup = await guardRawJourneyCreate(def.name, args);
+                    if ("skipOutput" in dedup) return dedup.skipOutput;
                     const { invokeJourneyTool } = await import("./journey/proxy.functions");
                     const r = await invokeJourneyTool({
                       toolName: def.name,
-                      args: (args ?? {}) as Record<string, unknown>,
+                      args: (dedup.args ?? {}) as Record<string, unknown>,
                       caller: data.caller ?? {},
                       context: {
                         source: "huddle",
@@ -6318,7 +6345,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                       );
                       perAgentFallbacks.push(ev.inline);
                     }
-                    return r.output;
+                    return annotateRawCreateOutput(r.output, dedup.decision);
                   } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
                     recordToolUse(winner.id, def.name, `journey-voice · crashed`, false, msg);
@@ -6994,6 +7021,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     });
   };
 
+  // A deliverable answered now (the deep-1:1 hybrid) ends with the produce offer. Recorded as a pending
+  // offer ONLY when the line actually landed on a reply, so an offer the user never saw can never be
+  // "accepted" by their next message.
+  const ensureProduceOfferDelivered = async () => {
+    if (!produceOffer) return;
+    const offer = produceOffer;
+    produceOffer = null;
+    const out = appendProduceOffer(replies, offer.agentId);
+    if (!out.appended) return;
+    replies.splice(0, replies.length, ...out.replies);
+    const { setPendingDeepConfirm } = await import("./tasks/deep-confirm.server");
+    await setPendingDeepConfirm(offer.email, data.huddleId, offer.agentId, offer.askText, "offer");
+  };
+
   // "researched" mode, GROUP/ceremony only (1:1 is carried by the conversation object): after the turn,
   // persist (A1) a distilled record of each agent's reply as a shared episodic chunk attributed to that
   // agent — so what an agent SAID survives beyond the ~14-message window and is retrievable cross-huddle —
@@ -7234,6 +7275,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     }
     ensureNotSilentOnRealWork();
     ensureNavLinkDelivered();
+    await ensureProduceOfferDelivered();
     try {
       await turnStore.saveTurnChunk(turnId, presentedReplies(), null, true, finalResult());
     } catch (e) {
@@ -7245,6 +7287,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 
   ensureNotSilentOnRealWork();
   ensureNavLinkDelivered();
+  await ensureProduceOfferDelivered();
   persistResearchedMemory();
   return finalResult();
 }
@@ -7718,19 +7761,17 @@ async function executeClaimedTurn(record: {
     const lead = result.replies?.[0];
     if (lead && wantsPush) {
       const name = AGENT_BY_ID[lead.agentId]?.name ?? "Huddle";
-      // An email alert names the sender and stays until dismissed; every other turn is unchanged.
+      // An email alert names the sender and stays until dismissed; a scheduled job (priority check,
+      // schedule brief) may name itself via payload.pushStyle; every other turn is unchanged.
       // Guarded like the presence check above: a throw here must never fail an already-saved reply.
-      let emailPush: ReturnType<typeof import("./email/inbound-email").inboundEmailPush> = null;
+      let stylePush: ReturnType<typeof import("./push/turn-push").turnPushStyle> = null;
       try {
-        const { inboundEmailPush } = await import("./email/inbound-email");
-        emailPush = inboundEmailPush(
-          (record.payload as { emailReplyRef?: { fromName?: string; fromAddress?: string } })
-            ?.emailReplyRef,
-        );
+        const { turnPushStyle } = await import("./push/turn-push");
+        stylePush = turnPushStyle(record.payload);
       } catch {
-        emailPush = null;
+        stylePush = null;
       }
-      const title = emailPush?.title ?? `${name} replied`;
+      const title = stylePush?.title ?? `${name} replied`;
       const body = String(lead.text).replace(/\s+/g, " ").slice(0, 140);
       // Primary away-delivery: piggyback journey's push (web-push + FCM/Android bridge), the SAME
       // reliable path reminders/alarms use to reach the phone. No separate Huddle VAPID keys needed;
@@ -7766,7 +7807,7 @@ async function executeClaimedTurn(record: {
                 tag: record.id,
                 // journey forwards it to the Android bridge, which then keeps the notification
                 // when tapped (setAutoCancel(false)) — only Dismiss or a swipe clears it.
-                ...(emailPush?.sticky ? { sticky: "true" } : {}),
+                ...(stylePush?.sticky ? { sticky: "true" } : {}),
               },
             },
             caller: { entra_email: record.user_email },

@@ -53,6 +53,16 @@ export const PRIORITY_CHECK_NAMED = 3;
  *  to the priority tab in the app instead of embedded priority widget". */
 export const PRIORITY_CHECK_NAV_LINK = { view: "priorities" as const, label: "Open Priorities" };
 
+/** The phone push. Owner, 2026-10-28: "it did ask but because it didn't stick i missed it" -- it went
+ *  out as "Iris Chase replied" one second before the 8pm schedule brief with the same title. Named for
+ *  what it asks, and sticky so it stays in the shade until he dismisses it (see lib/push/turn-push.ts). */
+export function priorityCheckPush(edition: CheckEdition): { title: string; sticky: true } {
+  return {
+    title: edition === "evening" ? "Iris: confirm tomorrow's priorities" : "Iris: confirm today's priorities",
+    sticky: true,
+  };
+}
+
 /** Count what the directive mentions. `todayKey` is yyyy-mm-dd in the user's zone; a row's due date
  *  is compared on its LOCAL date, via the same `localDateKey` the widget uses. */
 export function summarizeBand(
@@ -81,6 +91,10 @@ const BUTTON_LINE = `An "${PRIORITY_CHECK_NAV_LINK.label}" button appears under 
 /** Owner, 2026-10-16: "i should be able to reply to the priority message question with a list of items i
  *  want to work on" — the reply is handled by `focus_on` (focus.server.ts), so Iris says he can. */
 const REPLY_LINE = `He can also just reply to you with what he wants to work on (e.g. "the deck, interview prep, gym") and you will start those — creating any that don't exist yet. Say that in a few words.`;
+/** The chat shows Iris's text as-is (whitespace-pre-wrap, no markdown), so line breaks are the layout
+ *  and markdown symbols would show literally. */
+const PLAIN_TEXT_RULE = `Use plain text only: real line breaks for layout, "• " for list items, no ** or # or other markdown.`;
+const PRIORITY_LAYOUT = `- first line: "Hello Sir, here are your top priorities:"`;
 export function priorityCheckDirective(s: PriorityCheckSummary): string {
   // EMPTY BAND STILL SENDS (owner, 2026-10-15: "...and to confirm prioritization ahead of scheduling
   // the next day's build"). The 8pm run on 2026-10-15 found 0 priorities and sent NOTHING, so the
@@ -117,10 +131,15 @@ export function priorityCheckDirective(s: PriorityCheckSummary): string {
     `SCHEDULED PRIORITY CHECK (${s.edition}). The owner has ${s.count} open priorit${s.count === 1 ? "y" : "ies"}` +
     `${flags.length ? ` — ${flags.join(", ")}` : ""}. ${when}${named ? ` ${named}` : ""}\n\n` +
     `${BUTTON_LINE} ${REPLY_LINE}\n\n` +
-    `Write TWO or THREE short spoken lines, starting "Hello Sir,": name the top priorities above in plain ` +
-    `words${more > 0 ? " and say how many more there are" : ""}, ask whether they are still right, and say ` +
-    `he can confirm, reorder or fix anything stale with the button below. ` +
-    `${flags.length ? "Mention the flagged counts above in a few words. " : ""}` +
+    `Write it starting "Hello Sir," in your own voice, laid out as SEPARATE SHORT LINES (owner, ` +
+    `2026-10-28: one long paragraph reads "smashed together"), in this order:\n` +
+    `${PRIORITY_LAYOUT}\n` +
+    `- the top priorities above, ONE PER LINE, each line starting "• "` +
+    `${more > 0 ? `, then a line saying there are ${more} more` : ""}\n` +
+    `${flags.length ? "- a blank line, then ONE short line with the flagged counts above\n" : ""}` +
+    `- a blank line, then ONE short line asking whether these are still right, saying he can confirm, ` +
+    `reorder or fix anything stale with the button below, or just reply with what he wants to work on.\n` +
+    `${PLAIN_TEXT_RULE} ` +
     `Do NOT call any tool, do not list anything beyond the names given, and do not invent anything not stated here.`
   );
 }
@@ -197,6 +216,7 @@ export async function runPriorityCheck(
       internal: true,
       // The "Open Priorities" button, attached to Iris's reply by the turn runner (not by the model).
       navLink: PRIORITY_CHECK_NAV_LINK,
+      pushStyle: priorityCheckPush(edition),
     };
     const { enqueueTurn } = await import("./turns.server");
     const fresh = await enqueueTurn(turnId, `dm-${owner}`, caller.entra_email, payload);

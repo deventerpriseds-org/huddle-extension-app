@@ -36,7 +36,8 @@ export interface AutoWorkRunResult {
   promoted?: number; // BACKLOG->UP_NEXT / UP_NEXT->DOING status writes this pass
   blocked?: number; // grooming-flagged blocked items surfaced
   remaining?: number; // candidates left for the next fire
-  confirmAsked?: number; // confirm-intent DMs sent this pass (WIP confirm-intent gate)
+  /** Always 0 since 2026-10-27: a pass only ARMS confirm-asks; fireDueConfirmAsks (heartbeat) is the one sender. */
+  confirmAsked?: number;
   runId: string;
 }
 
@@ -124,27 +125,42 @@ function turnPayload(
 // nextSpacedFanSlotIso / armConfirmAsksSpaced below), so multiple agents' fresh items arrive spread ≥45
 // min apart across the day rather than bunched in one autowork pass, and never outside those hours.
 
-/** The directive the assigned agent runs to confirm intent + propose a Definition of Done. */
-function confirmIntentDirective(task: {
-  id: string;
-  title: string;
-  assigned_agent: string | null;
-  category?: string | null;
-  tags?: string[] | null;
-}): string {
+/**
+ * The directive the assigned agent runs to confirm intent + propose a Definition of Done. `followUp` = this is
+ * a RE-ask (the user never answered an earlier check-in on the same task): same instructions — including
+ * propose_task_intent, so the Confirm button has a recorded proposal to act on — but it opens as a follow-up
+ * to the earlier message, not a first-contact greeting (owner OQ-2: a new message in the same DM thread).
+ */
+export function confirmIntentDirective(
+  task: {
+    id: string;
+    title: string;
+    assigned_agent: string | null;
+    category?: string | null;
+    tags?: string[] | null;
+  },
+  opts: { followUp?: boolean } = {},
+): string {
   // Assist/produce router: shape the proposal so the user CONFIRMS a concrete assumed action rather than
   // explaining from scratch, and so an assist task (e.g. "Go to church") proposes a reminder, not a
   // fabricated document. The mode hint also tells the agent to self-correct if the mode is wrong — the
   // user's confirmation is the final catch for a mis-classification.
   const mode = classifyTaskMode(task);
+  const opener = opts.followUp
+    ? `FOLLOW-UP: you already checked in with the user about this task earlier and haven't heard back. ` +
+      `In ONE natural, brief message (not an interrogation, and not a guilt-trip): open by circling back ` +
+      `on your earlier check-in (e.g. "Circling back on this one —"), not with a fresh first-contact ` +
+      `greeting, then briefly restate what you believe they're trying to accomplish with this task, ` +
+      `propose a concrete, testable Definition of Done, and ask them to confirm it, add to it, or correct it.\n`
+    : `In ONE natural, brief message (not an interrogation): open with a brief, natural greeting that ` +
+      `frames what this is about (e.g. "Hi — before I get going on this, wanted to check something:"), ` +
+      `then say what you believe they're trying to accomplish with this task, propose a concrete, ` +
+      `testable Definition of Done, and ask them to confirm it, add to it, or correct it.\n`;
   return (
     `This task is on the board for you: "${task.title}". Before starting (or continuing) the work, ` +
     `confirm with the user what they actually want to achieve here — ground your understanding in ` +
     `their Executive Profile and anything you remember about their goals (already in your context). ` +
-    `In ONE natural, brief message (not an interrogation): open with a brief, natural greeting that ` +
-    `frames what this is about (e.g. "Hi — before I get going on this, wanted to check something:"), ` +
-    `then say what you believe they're trying to accomplish with this task, propose a concrete, ` +
-    `testable Definition of Done, and ask them to confirm it, add to it, or correct it.\n` +
+    opener +
     `${modeProposalHint(mode)}\n` +
     `In this SAME message/turn, also call propose_task_intent with task_id "${task.id}", task_title ` +
     `"${task.title}", and the definition_of_done you just proposed — this records what you proposed ` +
@@ -165,12 +181,33 @@ function confirmIntentDirective(task: {
   );
 }
 
+/**
+ * The internal nudge for a task whose Definition of Done the user CONFIRMED but whose approach was never
+ * proposed (the confirm turn didn't reach propose_approach) — without it nothing ever asks again and the task
+ * sits in Up Next forever (F10). The user is not involved: DoD stays confirmed, nobody is asked to re-confirm.
+ */
+export function approachRedriveDirective(task: { id: string; title: string }): string {
+  return (
+    `The user already CONFIRMED the Definition of Done for "${task.title}", but your approach for it was never ` +
+    `submitted, so the work can't start. Do NOT ask the user to re-confirm the Definition of Done — it is ` +
+    `already locked in. Draft your APPROACH now — how you'll actually get to that Definition of Done (method, ` +
+    `sources, structure, depth) — and call propose_approach with task_id "${task.id}" and that approach. It is ` +
+    `graded automatically. If it comes back needing revision, redraft and call propose_approach again with the ` +
+    `feedback folded in. If it comes back escalated, say so to the user plainly and ask them to weigh in. Do not ` +
+    `start the real work until the approach is approved. Keep any reply to the user short. Do not create tasks ` +
+    `or send email.`
+  );
+}
+
 // Minute-granular confirm-ask throttle. Reach-outs are spread by ARMING each ask INSIDE a fan-out window
 // (see nextSpacedFanSlotIso — business 9–18 + evening 20–22 by default), SEQUENCED a randomized 45–90 min
 // gap after the prior ask so they never bunch. Firing is checked every heartbeat and only proceeds while
-// we're inside a window; a small per-user per-tick cap smooths any residual pile-up so it still feels
-// like a teammate, not a blast.
-const CONFIRM_FIRE_MAX_PER_USER_PER_TICK = 2;
+// we're inside a window AND at least the gap's minimum has passed since the user's LAST SENT ask
+// (getLastConfirmSentAt) — first asks and re-asks alike.
+// ONE per user per tick (was 2): with re-asks riding the same chain, two due asks in one tick were two pushes
+// in the same minute, which breaks the "never closer than the gap" property the chain exists for (AC-41). Any
+// other ask that is due in that tick is re-fanned a spaced slot after the one just sent.
+const CONFIRM_FIRE_MAX_PER_USER_PER_TICK = 1;
 
 // ── Fan-out window math ─────────────────────────────────────────────────────────────────────────
 // Windows are inclusive-start/exclusive-end LOCAL hour ranges (in the user's tz). We place each ask a
@@ -250,18 +287,23 @@ export function nextSpacedFanSlotIso(prev: Date, tz: string, windows: WinRange[]
   return new Date(candMs).toISOString();
 }
 
+/** One ask to place on the spacing chain: a FIRST ask (awaiting, never armed) or a RE-ask (asked, unanswered). */
+export type ArmItem = { taskId: string; kind: "first" | "reask" };
+
 /**
- * Arm each un-armed task's confirm-ask, SEQUENCED so consecutive reach-outs for this user are spaced by
- * a randomized gap (resolveConfirmGap, default 45–90 min) and land only inside the fan-out windows. The
- * cursor is anchored on the user's latest already-pending ask (so a later pass doesn't collide with one
- * already scheduled), falling back to `now`. Best-effort throughout: a config/lookup failure degrades to
- * defaults / now-anchor, and a single arm write failing never blocks the rest. `ensureConfirmAskAt` is
- * set-once, so a task that somehow already has an instant is left unchanged.
+ * Arm each item's confirm-ask, SEQUENCED so consecutive reach-outs for this user are spaced by a randomized gap
+ * (resolveConfirmGap, default 45–90 min) and land only inside the fan-out windows. The cursor is anchored on the
+ * user's latest already-pending ask — first asks AND re-armed re-asks (getLatestPendingConfirmAskAt) — so a later
+ * pass doesn't collide with one already scheduled, falling back to `now`. Re-asks ride THIS chain rather than a
+ * selector of their own (owner, 2026-10-27: "the throttle already exists"). Best-effort throughout: a
+ * config/lookup failure degrades to defaults / now-anchor, and a single arm write failing never blocks the rest.
+ * Both writes are set-once per round (`ensureConfirmAskAt` for a first ask; `armConfirmReAskAt` for a re-ask), so
+ * a task that already has a pending instant is left unchanged — and a re-ask that did NOT arm gives its slot back.
  */
-async function armConfirmAsksSpaced(taskIds: string[], email: string, tz: string, windows: WinRange[]): Promise<void> {
-  if (!taskIds.length) return;
+async function armConfirmAsksSpaced(items: ArmItem[], email: string, tz: string, windows: WinRange[]): Promise<void> {
+  if (!items.length) return;
   const { resolveConfirmGap, CONFIRM_GAP_DEFAULT } = await import("../identity/scheduling-config.server");
-  const { getLatestPendingConfirmAskAt, ensureConfirmAskAt } = await import("./tasks.server");
+  const { getLatestPendingConfirmAskAt, ensureConfirmAskAt, armConfirmReAskAt } = await import("./tasks.server");
   let gap = CONFIRM_GAP_DEFAULT;
   try {
     gap = await resolveConfirmGap(email);
@@ -279,19 +321,116 @@ async function armConfirmAsksSpaced(taskIds: string[], email: string, tz: string
   // Cursor = the latest instant we've placed so far. Seed from the user's last pending ask (if any is
   // still in the future) or now, so the FIRST new ask lands a full gap after whichever is later.
   let cursor = new Date(Math.max(Date.now(), floor ? floor.getTime() : 0));
-  for (const taskId of taskIds) {
+  for (const item of items) {
     const slotIso = nextSpacedFanSlotIso(cursor, tz, windows, gapMinMs, gapMaxMs);
-    cursor = new Date(slotIso);
-    await ensureConfirmAskAt(taskId, email, slotIso).catch(() => {});
+    if (item.kind === "first") {
+      cursor = new Date(slotIso);
+      await ensureConfirmAskAt(item.taskId, email, slotIso).catch(() => {});
+    } else {
+      const armed = await armConfirmReAskAt(item.taskId, email, slotIso).catch(() => false);
+      if (armed) cursor = new Date(slotIso); // not armed (raced / answered meanwhile) → the slot stays free
+    }
   }
 }
 
+/** Terms shared by the arming planner and the pass: what an agent's ask LANE is, and who may be asked. */
+type EngagementLike = {
+  confirm_status?: string | null;
+  confirm_ask_at?: string | Date | null;
+  confirm_last_sent_at?: string | Date | null;
+  clarify_status?: string | null;
+  approach_status?: string | null;
+};
+
+const ms = (v: string | Date | null | undefined): number | null => (v ? new Date(v).getTime() : null);
+
 /**
- * Fire every confirm-intent ask whose jittered `confirm_ask_at` has elapsed, at its own instant — the
- * random fan-out across the working day (vs the old "all bunch onto 9/13/17"). Called each scheduler
- * heartbeat (scheduler.server.ts). ARMING (setting confirm_ask_at) stays on the auto-work/groom passes;
- * only FIRING is decoupled here. `markConfirmAsked` is set-once (awaiting→asked), so this never
- * double-sends against the full pass's own confirmDue path. Never throws.
+ * May this item be confirm-asked at all? Not yet confirmed, not paused on an open clarifying question (AC-33),
+ * and not escalated (the owner-override flow owns it — AC-36). A missing row = never asked = awaiting.
+ */
+function askEligible(s: EngagementLike | undefined): boolean {
+  const status = s?.confirm_status ?? "awaiting";
+  return (status === "awaiting" || status === "asked") && s?.clarify_status !== "open" && s?.approach_status !== "escalated";
+}
+
+/** Armed and not yet sent (mirrors tasks.server.ts ARMED_UNSENT_SQL). */
+function armedUnsent(s: EngagementLike | undefined): boolean {
+  const at = ms(s?.confirm_ask_at);
+  if (at === null) return false;
+  if ((s?.confirm_status ?? "awaiting") === "awaiting") return true;
+  return s?.confirm_status === "asked" && at > (ms(s?.confirm_last_sent_at) ?? -Infinity);
+}
+
+/**
+ * An agent's ASK LANE, in lane order: its unconfirmed in-flight DOING item (if any) first, then EVERY Up Next
+ * item (owner, 2026-10-27: rotate the whole lane — the lane is already capped, so no second cap). DOING is in
+ * the lane on purpose: DOING_CAP=1 means an unconfirmed DOING item (live: tess, reached DOING by a manual move)
+ * blocks the agent's whole Up Next from starting, so it is the ask that most needs answering.
+ */
+function askLane(doing: BoardTaskRow[], upNext: BoardTaskRow[]): BoardTaskRow[] {
+  return [...doing.slice(0, DOING_CAP), ...upNext];
+}
+
+/**
+ * Decide which asks to put on the spacing chain this pass (pure — the rotation rules live here and nowhere else).
+ *   FIRST asks: every ask-eligible lane item still 'awaiting' with no instant yet, in lane order.
+ *   RE-asks:    per agent, only when NONE of its lane items is already armed-and-unsent (so an agent never has
+ *               two asks queued — AC-26 — and re-asks never pile up behind its fresh first asks). Then its
+ *               'asked' item whose last SEND is oldest, past the per-item floor (`reaskMinMs`, the owner's 24h),
+ *               ties broken by lane order (AC-24/25: keyed on send history, never on a lane index, so a re-sort
+ *               between passes can't make it skip or repeat an item). Across agents the oldest send goes first.
+ * Only gated agents are asked at all (a discretionary agent's work never waits on a confirm). The result's
+ * order IS the chain order: first asks, then re-asks.
+ */
+export function planConfirmArming(input: {
+  lanes: { agent: string; lane: BoardTaskRow[] }[];
+  states: Map<string, EngagementLike>;
+  required: Map<string, boolean>;
+  now: number;
+  reaskMinMs: number;
+}): ArmItem[] {
+  const first: ArmItem[] = [];
+  const reasks: { item: ArmItem; sent: number; idx: number }[] = [];
+  for (const { agent, lane } of input.lanes) {
+    if (!(input.required.get(agent) ?? true)) continue;
+    let agentHasPending = false;
+    let best: { taskId: string; sent: number; idx: number } | null = null;
+    lane.forEach((t, idx) => {
+      const s = input.states.get(t.id);
+      if (!askEligible(s)) return;
+      if (armedUnsent(s)) {
+        agentHasPending = true;
+        return;
+      }
+      if ((s?.confirm_status ?? "awaiting") === "awaiting") {
+        first.push({ taskId: t.id, kind: "first" });
+        agentHasPending = true;
+        return;
+      }
+      const sent = ms(s?.confirm_last_sent_at);
+      if (sent === null || input.now - sent < input.reaskMinMs) return;
+      if (!best || sent < best.sent) best = { taskId: t.id, sent, idx };
+    });
+    const chosen = best as { taskId: string; sent: number; idx: number } | null;
+    if (!agentHasPending && chosen) reasks.push({ item: { taskId: chosen.taskId, kind: "reask" }, sent: chosen.sent, idx: chosen.idx });
+  }
+  reasks.sort((a, b) => a.sent - b.sent || a.idx - b.idx);
+  return [...first, ...reasks.map((r) => r.item)];
+}
+
+/**
+ * Fire every confirm-intent ask — FIRST asks and re-armed RE-asks alike — whose spaced `confirm_ask_at` has
+ * elapsed, at its own instant. Called each scheduler heartbeat (scheduler.server.ts) and the ONLY place a
+ * confirm-ask is sent: ARMING (setting confirm_ask_at) stays on the auto-work/groom passes. Per user, per tick:
+ *   - outside the fan-out windows, nothing is sent and every due ask is re-fanned into the next window;
+ *   - inside, at most ONE ask is sent, and only once the gap's minimum has passed since the user's last SENT ask
+ *     (getLastConfirmSentAt) — so any two confirm pushes are at least that far apart (AC-41); any other ask due
+ *     in the same tick is re-fanned a spaced slot after the one just sent;
+ *   - a task in its reminder window is skipped (AC-15/40; the lane/blocker/parking filters are in the SQL).
+ * Each send is a compare-and-set CLAIM on the row's ask count (claimConfirmAskSend), then a turn with a NEW
+ * UNIQUE id — the first ask and every re-ask get their own id and their own chat.pending_turns row (AC-22). If
+ * enqueueTurn refuses (id conflict -> false) or throws, the claim is RELEASED and the ask is not counted: an ask
+ * that did not go out never reads as sent (AC-23). Never throws (AC-53).
  */
 export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number> {
   let due: import("./tasks.server").DueConfirmAsk[];
@@ -303,97 +442,152 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
   }
   if (!due.length) return 0;
 
-  const { markConfirmAsked, reArmConfirmAskAt } = await import("./tasks.server");
-  const { enqueueTurn } = await import("./turns.server");
-  const { resolveJobCadence, resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT } = await import(
-    "../identity/scheduling-config.server"
-  );
-
-  const byUser = new Map<string, typeof due>();
-  for (const row of due) {
-    const arr = byUser.get(row.user_email) ?? [];
-    arr.push(row);
-    byUser.set(row.user_email, arr);
-  }
-
   let fired = 0;
-  for (const [email, rows] of byUser) {
-    // Working-hours window in the user's own tz (from their scheduling config; ET default).
-    let tz = "America/New_York";
-    try {
-      tz = (await resolveJobCadence(email, "autowork")).tz || tz;
-    } catch {
-      /* default tz */
-    }
-    // Fan-out windows for this user (business + evening by default).
-    let windows = CONFIRM_FAN_WINDOWS_DEFAULT;
-    try {
-      windows = await resolveConfirmFanWindows(email);
-    } catch {
-      /* default windows */
-    }
-    // Only fire while we're INSIDE a window. If we're outside one, any ask that's come due is a
-    // STRAGGLER (armed the old now+jitter way, or left unsent when a window closed) — re-fan it across
-    // the NEXT open window rather than holding the whole batch to dump at the window's opening edge.
-    if (!insideFanWindow(now, tz, windows)) {
-      // Re-fan stragglers into the next open window, SPACED (45–90 min, config) so a backlog of due asks
-      // doesn't dump bunched at the window's opening edge.
-      const { resolveConfirmGap, CONFIRM_GAP_DEFAULT } = await import("../identity/scheduling-config.server");
-      const { getLatestPendingConfirmAskAt } = await import("./tasks.server");
-      let gap = CONFIRM_GAP_DEFAULT;
-      try {
-        gap = await resolveConfirmGap(email);
-      } catch {
-        /* default gap */
-      }
-      const gapMinMs = Math.max(1, gap.min) * 60_000;
-      const gapMaxMs = Math.max(gap.min + 1, gap.max) * 60_000;
-      let floor: Date | null = null;
-      try {
-        floor = await getLatestPendingConfirmAskAt(email);
-      } catch {
-        /* anchor on now */
-      }
-      let cursor = new Date(Math.max(now.getTime(), floor ? floor.getTime() : 0));
-      for (const row of rows) {
-        try {
-          const slotIso = nextSpacedFanSlotIso(cursor, tz, windows, gapMinMs, gapMaxMs);
-          cursor = new Date(slotIso);
-          await reArmConfirmAskAt(row.task_id, email, slotIso);
-        } catch {
-          /* one bad re-arm never blocks the rest */
-        }
-      }
-      continue;
+  try {
+    const { claimConfirmAskSend, releaseConfirmAskSend, reArmConfirmAskAt, getLatestPendingConfirmAskAt, getLastConfirmSentAt } =
+      await import("./tasks.server");
+    const { enqueueTurn, taskIdsInReminderWindow } = await import("./turns.server");
+    const { resolveJobCadence, resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT, resolveConfirmGap, CONFIRM_GAP_DEFAULT } =
+      await import("../identity/scheduling-config.server");
+
+    const byUser = new Map<string, typeof due>();
+    for (const row of due) {
+      const arr = byUser.get(row.user_email) ?? [];
+      arr.push(row);
+      byUser.set(row.user_email, arr);
     }
 
-    let sent = 0;
-    for (const row of rows) {
-      if (sent >= CONFIRM_FIRE_MAX_PER_USER_PER_TICK) break;
-      if (!row.assigned_agent) continue;
+    for (const [email, allRows] of byUser) {
       try {
-        const justAsked = await markConfirmAsked(row.task_id); // set-once awaiting→asked; wins the race
-        if (!justAsked) continue;
-        const caller: Caller = { entra_email: email };
-        const directive = confirmIntentDirective({
-          id: row.task_id,
-          title: row.title,
-          assigned_agent: row.assigned_agent,
-          category: row.category,
-          tags: row.tags,
-        });
-        await enqueueTurn(
-          `autowork-confirm-${row.task_id}`,
-          `dm-${row.assigned_agent}`,
-          email,
-          turnPayload({ assigned_agent: row.assigned_agent }, directive, tz, caller, "push"),
-        );
-        fired++;
-        sent++;
+        // Working-hours window in the user's own tz (from their scheduling config; ET default).
+        let tz = "America/New_York";
+        try {
+          tz = (await resolveJobCadence(email, "autowork")).tz || tz;
+        } catch {
+          /* default tz */
+        }
+        // Fan-out windows for this user (business + evening by default).
+        let windows = CONFIRM_FAN_WINDOWS_DEFAULT;
+        try {
+          windows = await resolveConfirmFanWindows(email);
+        } catch {
+          /* default windows */
+        }
+        let gap = CONFIRM_GAP_DEFAULT;
+        try {
+          gap = await resolveConfirmGap(email);
+        } catch {
+          /* default gap */
+        }
+        const gapMinMs = Math.max(1, gap.min) * 60_000;
+        const gapMaxMs = Math.max(gap.min + 1, gap.max) * 60_000;
+
+        // Re-fan `rows` across the next open window(s), SPACED (45–90 min, config) after `after` and after any
+        // ask already on the calendar, so a backlog of due asks never dumps bunched at one edge.
+        const reFan = async (rows: typeof allRows, after: Date) => {
+          let floor: Date | null = null;
+          try {
+            floor = await getLatestPendingConfirmAskAt(email);
+          } catch {
+            /* anchor on `after` */
+          }
+          let cursor = new Date(Math.max(after.getTime(), floor ? floor.getTime() : 0));
+          for (const row of rows) {
+            try {
+              const slotIso = nextSpacedFanSlotIso(cursor, tz, windows, gapMinMs, gapMaxMs);
+              cursor = new Date(slotIso);
+              await reArmConfirmAskAt(row.task_id, email, slotIso);
+            } catch {
+              /* one bad re-arm never blocks the rest */
+            }
+          }
+        };
+
+        // Only fire while we're INSIDE a window. If we're outside one, any ask that's come due is a
+        // STRAGGLER (armed the old now+jitter way, or left unsent when a window closed) — re-fan it across
+        // the NEXT open window rather than holding the whole batch to dump at the window's opening edge.
+        if (!insideFanWindow(now, tz, windows)) {
+          await reFan(allRows, now);
+          continue;
+        }
+
+        // A task in its reminder window has already had its decision made by the user — never ask about it
+        // while it waits (same rule runScheduledAutoWork applies at candidate selection). It stays armed, so it
+        // is asked once the reminder has fired and it is back in the lane.
+        let inReminder = new Set<string>();
+        try {
+          inReminder = await taskIdsInReminderWindow(email);
+        } catch {
+          /* no reminder filter */
+        }
+        const rows = allRows.filter((r) => r.assigned_agent && !inReminder.has(r.task_id));
+        if (!rows.length) continue;
+
+        // Fire-time half of the spacing chain. If we cannot read when the user was last asked, we cannot prove
+        // a send would respect the gap — so this user waits a tick rather than risk a double-buzz.
+        let lastSent: Date | null;
+        try {
+          lastSent = await getLastConfirmSentAt(email);
+        } catch {
+          continue;
+        }
+        if (lastSent && now.getTime() - lastSent.getTime() < gapMinMs) continue;
+
+        let sent = 0;
+        const unsent: typeof rows = [];
+        for (const row of rows) {
+          if (sent >= CONFIRM_FIRE_MAX_PER_USER_PER_TICK) {
+            unsent.push(row);
+            continue;
+          }
+          const followUp = row.confirm_status === "asked";
+          const claim = await claimConfirmAskSend(row.task_id, row.confirm_ask_count).catch(() => null);
+          if (!claim) continue; // another tick sent it / it was answered or reassigned meanwhile
+          const stamp = now.getTime().toString(36);
+          // NEW id for every ask: never the bare legacy `autowork-confirm-${task_id}`, which ON CONFLICT DO
+          // NOTHING made a silent no-op for any second ask on the same task (F3).
+          const turnId = followUp
+            ? `autowork-reask-${row.task_id}-${claim.count}-${stamp}`
+            : `autowork-confirm-${row.task_id}-${claim.count}-${stamp}`;
+          const directive = confirmIntentDirective(
+            { id: row.task_id, title: row.title, assigned_agent: row.assigned_agent, category: row.category, tags: row.tags },
+            { followUp },
+          );
+          let ok = false;
+          try {
+            ok = await enqueueTurn(
+              turnId,
+              `dm-${row.assigned_agent}`,
+              email,
+              turnPayload({ assigned_agent: row.assigned_agent }, directive, tz, { entra_email: email }, "push"),
+            );
+          } catch {
+            ok = false;
+          }
+          if (!ok) {
+            // Refused or failed: put the row back exactly as it was (still armed, still due) and stop for this
+            // user this tick — the next tick retries with a fresh id.
+            await releaseConfirmAskSend(row.task_id, claim, {
+              status: row.confirm_status,
+              lastSentAt: row.confirm_last_sent_at,
+            }).catch(() => {});
+            break;
+          }
+          fired++;
+          sent++;
+        }
+        // Whatever else was due this tick goes back on the chain AFTER the ask just sent, instead of firing a
+        // minute later at the gap's exact minimum (which would turn a backlog into a metronome).
+        if (sent && unsent.length) await reFan(unsent, now);
+        // Queue the NEXT ask the moment one goes out, so the loop through the lane is paced only by the spacing
+        // chain — not by waiting for the next 9/13/17 cadence pass (which made it ≤3 re-asks per agent per day).
+        if (sent) await runScheduledAutoWork({ entra_email: email }, { timeZone: tz, armOnly: true }).catch(() => {});
       } catch {
-        /* one bad ask never blocks the rest */
+        /* one user's failure never blocks the rest */
       }
     }
+  } catch {
+    /* a module/config failure: report what was sent so far, never throw into the heartbeat */
   }
   return fired;
 }
@@ -500,7 +694,7 @@ interface AgentBucket {
  */
 export async function runScheduledAutoWork(
   caller: Caller | undefined,
-  opts: { timeZone?: string; force?: boolean; runId?: string; promoteOnly?: boolean } = {},
+  opts: { timeZone?: string; force?: boolean; runId?: string; promoteOnly?: boolean; armOnly?: boolean } = {},
 ): Promise<AutoWorkRunResult> {
   const runId =
     opts.runId?.trim() || `autowork-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -516,7 +710,6 @@ export async function runScheduledAutoWork(
     getTaskBlockers,
     setAutoWorkSignature,
     getTaskEngagementStates,
-    markConfirmAsked,
   } = await import("./tasks.server");
   const { listArtifacts } = await import("../artifacts/artifacts.server");
   const { enqueueTurn } = await import("./turns.server");
@@ -538,6 +731,7 @@ export async function runScheduledAutoWork(
   const signature = backlogSignature(assigned);
 
   if (!assigned.length && !opts.force) {
+    if (opts.armOnly) return { ok: true, skipped: true, reason: "empty", enqueued: 0, promoted: 0, blocked: 0, remaining: 0, runId };
     await setAutoWorkSignature(email, signature);
     return { ok: true, skipped: true, reason: "empty", enqueued: 0, promoted: 0, blocked: 0, remaining: 0, runId };
   }
@@ -569,11 +763,15 @@ export async function runScheduledAutoWork(
   // confirm-intent flow when requireStructuredWorkflow is ON for that agent (Part 0/1 of
   // docs/plan-wip-confirm-review-gate.md) — a pending (asked-but-unconfirmed) task occupies its UP_NEXT
   // slot but never competes for the DOING slot, so one unanswered ask can't starve the rest of the lane.
+  // That sentence used to describe the spec while the code did the opposite: only upNextAfterTopUp[0] was ever
+  // evaluated, so an unanswered ask on top blocked a confirmed + approved item behind it forever
+  // (scripts/autowork-lane-starvation.test.ts case A, 2026-10-20). Now the WHOLE lane is evaluated and the first
+  // READY item in lane order starts, wherever it sits (AC-1, AC-11).
   const promotions: { task_id: string; status: string }[] = [];
-  // Every item staged in an agent's UP_NEXT this pass (existing + freshly promoted), with its agent — used
-  // by promoteOnly (the grooming chain) to arm each one's confirm-intent reach-out so agents begin checking
-  // in for the whole plate from grooming completion.
-  const stagedForConfirm: { agent: string; task: BoardTaskRow }[] = [];
+  // Each agent's ASK lane (its unconfirmed DOING item + every Up Next item after top-up) — what the confirm-ask
+  // rotation arms over. Built for EVERY agent, review-frozen or not: owner 2026-10-27, asks keep looping while
+  // review is full; only promotion to DOING waits for the user to clear review.
+  const lanes: { agent: string; lane: BoardTaskRow[] }[] = [];
   // freshPromotion=false candidates are tasks ALREADY sitting in DOING (however they got there — a
   // normal earlier promotion, or a race/stale-mirror read that skipped the gate entirely, as happened
   // 2026-08-05: a task reached DOING and completed to IN_REVIEW without ever confirming intent). They
@@ -581,21 +779,86 @@ export async function runScheduledAutoWork(
   // for a new research turn — closing that gap regardless of how a task lands in DOING.
   type Candidate = { agent: string; task: BoardTaskRow; freshPromotion: boolean };
   const doingSlotCandidates: Candidate[] = [];
+  // Agents whose DOING slot is open (and who aren't review-frozen) this pass, with their whole Up Next lane in
+  // lane order — any READY item in it may start.
+  const laneCandidates: { agent: string; tasks: BoardTaskRow[] }[] = [];
   const doingCandidates: BoardTaskRow[] = [];
   for (const [agent, bucket] of byAgent.entries()) {
     for (const t of bucket.doing.slice(0, DOING_CAP)) {
       doingSlotCandidates.push({ agent, task: t, freshPromotion: false });
     }
     const frozen = bucket.inReview.length >= REVIEW_CAP;
-    if (frozen) continue;
-    const room = Math.max(0, UP_NEXT_CAP - bucket.upNext.length);
+    // armOnly writes nothing, so it must not plan a top-up it will never make (or arm asks for backlog items).
+    const room = frozen || opts.armOnly ? 0 : Math.max(0, UP_NEXT_CAP - bucket.upNext.length);
     const toPromote = bucket.backlog.slice(0, room);
     for (const t of toPromote) promotions.push({ task_id: t.id, status: "UP_NEXT" });
     const upNextAfterTopUp = [...bucket.upNext, ...toPromote];
-    for (const t of upNextAfterTopUp) stagedForConfirm.push({ agent, task: t });
-    if (bucket.doing.length < DOING_CAP && upNextAfterTopUp.length) {
-      doingSlotCandidates.push({ agent, task: upNextAfterTopUp[0], freshPromotion: true });
+    lanes.push({ agent, lane: askLane(bucket.doing, upNextAfterTopUp) });
+    if (!frozen && bucket.doing.length < DOING_CAP && upNextAfterTopUp.length) {
+      laneCandidates.push({ agent, tasks: upNextAfterTopUp });
     }
+  }
+  // Every id the gate or the ask rotation needs — read in ONE query per pass, never per item (AC-19).
+  const gateIds = [
+    ...new Set([...doingSlotCandidates.map((c) => c.task.id), ...lanes.flatMap((l) => l.lane.map((t) => t.id))]),
+  ];
+
+  // Per-agent gate requirement. FAIL-CLOSED twice over: a resolver that THROWS (or resolves to anything but an
+  // explicit `false`) counts as REQUIRED, so a config hiccup can never treat a task as ungated — and one
+  // agent's failure can no longer reject the whole Promise.all and throw the pass (AC-13).
+  const resolveRequired = async (): Promise<Map<string, boolean>> =>
+    new Map(
+      await Promise.all(
+        [...new Set(lanes.map((l) => l.agent))].map(async (a): Promise<[string, boolean]> => {
+          try {
+            return [a, (await isStructuredWorkflowRequired(email, a)) !== false];
+          } catch {
+            return [a, true];
+          }
+        }),
+      ),
+    );
+
+  const { resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT, resolveConfirmReaskMinHours, CONFIRM_REASK_MIN_HOURS_DEFAULT } =
+    await import("../identity/scheduling-config.server");
+  // The per-ITEM re-ask floor (owner: 24h). A non-positive / non-numeric value falls back to the default —
+  // never to "re-ask every gap".
+  let reaskMinHours = CONFIRM_REASK_MIN_HOURS_DEFAULT;
+  try {
+    const h = await resolveConfirmReaskMinHours(email);
+    if (Number.isFinite(h) && h > 0) reaskMinHours = h;
+  } catch {
+    /* default floor */
+  }
+  const reaskMinMs = reaskMinHours * 3_600_000;
+
+  // Put this pass's asks on the spacing chain: first asks for never-asked lane items, and at most one re-ask
+  // per agent for its least-recently-asked unanswered item (planConfirmArming holds the rotation rules). This
+  // only SCHEDULES — fireDueConfirmAsks (heartbeat) is the only sender.
+  const armLanes = async (states: Map<string, EngagementLike>, required: Map<string, boolean>) => {
+    let windows = CONFIRM_FAN_WINDOWS_DEFAULT;
+    try {
+      windows = await resolveConfirmFanWindows(email);
+    } catch {
+      /* default windows */
+    }
+    const plan = planConfirmArming({ lanes, states, required, now: Date.now(), reaskMinMs });
+    await armConfirmAsksSpaced(plan, email, tz, windows);
+  };
+
+  // armOnly (the heartbeat, right after it SENDS an ask): ONLY put the next asks on the spacing chain — no top-up,
+  // no promotion, no research turn, no signature write. Without this, a re-ask was re-armed only at the 9/13/17
+  // passes, and with one queued re-ask per agent that capped each agent at 3 re-asks a day on top of the 45–90 min
+  // spacing — a second cap the owner ruled out (2026-10-27, "no double capping"; VERIFY-confirm-ask-rotation-1).
+  if (opts.armOnly) {
+    if (lanes.length) {
+      try {
+        await armLanes(await getTaskEngagementStates(gateIds), await resolveRequired());
+      } catch {
+        /* best-effort — the next send or cadence pass re-arms */
+      }
+    }
+    return { ok: true, skipped: false, reason: "arm_only", enqueued: 0, promoted: 0, blocked: 0, remaining: 0, runId };
   }
 
   // promoteOnly (the grooming→auto-work chain): ONLY top up UP_NEXT from the freshly-ranked backlog.
@@ -627,41 +890,14 @@ export async function runScheduledAutoWork(
         /* top-up write failed — backlog stays as-is, retried by the next full pass */
       }
     }
-    // Chain the confirm-intent REACH-OUT scheduling to grooming completion: arm each freshly-staged
-    // UP_NEXT item with a ONE-TIME `confirm_ask_at`, sequenced a randomized 45–90 min gap apart inside the
-    // fan-out windows, for gated agents whose intent isn't already confirmed/asked. This SCHEDULES the
-    // reach-out relative to grooming; the auto-work cadence (9/13/17) is what FIRES each ask once its
-    // instant passes, so agents begin checking in for confirmations spaced across the day from the groom.
-    // We schedule only — no ask is fired and no work starts here (that stays behind the gate on cadence).
-    if (stagedForConfirm.length) {
+    // Chain the confirm-intent REACH-OUT scheduling to grooming completion: arm each lane item's ONE-TIME
+    // `confirm_ask_at` (and any due re-ask), sequenced a randomized 45–90 min gap apart inside the fan-out
+    // windows, for gated agents. This SCHEDULES the reach-out relative to grooming; the heartbeat
+    // (fireDueConfirmAsks) is what FIRES each ask once its instant passes. No ask is fired and no work starts
+    // here (that stays behind the gate).
+    if (lanes.length) {
       try {
-        const armStates = await getTaskEngagementStates(stagedForConfirm.map((f) => f.task.id));
-        const armRequired = new Map(
-          await Promise.all(
-            [...new Set(stagedForConfirm.map((f) => f.agent))].map(
-              async (a): Promise<[string, boolean]> => [a, await isStructuredWorkflowRequired(email, a)],
-            ),
-          ),
-        );
-        const { resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT } = await import(
-          "../identity/scheduling-config.server"
-        );
-        let armWindows = CONFIRM_FAN_WINDOWS_DEFAULT;
-        try {
-          armWindows = await resolveConfirmFanWindows(email);
-        } catch {
-          /* default windows */
-        }
-        const armIds = stagedForConfirm
-          .filter((f) => {
-            if (!(armRequired.get(f.agent) ?? true)) return false; // discretionary agent — no ask needed
-            const s = armStates.get(f.task.id);
-            return (s?.confirm_status ?? "awaiting") !== "confirmed" && !s?.confirm_ask_at; // not confirmed & not already armed
-          })
-          .map((f) => f.task.id);
-        // Space the freshly-staged asks 45–90 min apart (config) inside the windows, instead of each
-        // picking an independent uniform slot that could bunch two reach-outs minutes apart.
-        await armConfirmAsksSpaced(armIds, email, tz, armWindows);
+        await armLanes(await getTaskEngagementStates(gateIds), await resolveRequired());
       } catch {
         /* arming is best-effort — the next full cadence pass still schedules any un-armed asks */
       }
@@ -670,80 +906,91 @@ export async function runScheduledAutoWork(
     return { ok: true, skipped: false, reason: "promote_only", enqueued: 0, promoted, blocked: 0, remaining: 0, runId };
   }
 
-  const engagementByTaskId = await getTaskEngagementStates(doingSlotCandidates.map((c) => c.task.id));
-  const requiredByAgent = new Map(
-    await Promise.all(
-      [...new Set(doingSlotCandidates.map((c) => c.agent))].map(
-        async (agent): Promise<[string, boolean]> => [agent, await isStructuredWorkflowRequired(email, agent)],
-      ),
-    ),
-  );
+  const engagementByTaskId = await getTaskEngagementStates(gateIds);
+  const requiredByAgent = await resolveRequired();
 
-  const needsAskAt: string[] = [];
-  const confirmDue: { agent: string; task: BoardTaskRow }[] = [];
-  const now = Date.now();
+  // READY = may start real work: the gate is satisfied (confirmed DoD + APPROVED approach — 'pending' means the
+  // agent hasn't proposed one yet, 'escalated' means its cap was exhausted and the owner-override flow owns it;
+  // neither is promoted) AND no open clarifying question (that pauses a task whether or not it is gated).
+  // `?? true`: an agent missing from the map defaults to REQUIRED (fail-closed).
+  const isReady = (agent: string, task: BoardTaskRow): boolean => {
+    const state = engagementByTaskId.get(task.id);
+    if (state?.clarify_status === "open") return false;
+    if (!(requiredByAgent.get(agent) ?? true)) return true;
+    return state?.confirm_status === "confirmed" && state?.approach_status === "approved";
+  };
   for (const c of doingSlotCandidates) {
-    let promotedToDoing = false;
-    const state = engagementByTaskId.get(c.task.id);
-    if (!(requiredByAgent.get(c.agent) ?? true)) {
-      // Fail-closed: an agent missing from the map (or a fail-open upstream) defaults to REQUIRED, so a
-      // config hiccup can never silently treat a task as ungated and auto-promote it to DOING.
-      promotedToDoing = true;
-    } else {
-      const status = state?.confirm_status ?? "awaiting";
-      if (status === "confirmed") {
-        // DoD confirmed — also needs an APPROVED approach (the pre-work gate, approach-gate.server.ts)
-        // before real work starts. The assigned agent resolves this inline, in the same turn, right
-        // after confirm_task_intent — 'pending' here just means that hasn't happened yet (or the turn
-        // never reached it); 'escalated' means its cap was exhausted and the agent already raised it
-        // with the user directly. Neither is auto-promoted; only 'approved' is.
-        promotedToDoing = state?.approach_status === "approved";
-      } else if (status === "awaiting") {
-        if (!state?.confirm_ask_at) {
-          needsAskAt.push(c.task.id);
-        } else if (new Date(state.confirm_ask_at).getTime() <= now) {
-          confirmDue.push({ agent: c.agent, task: c.task });
+    if (isReady(c.agent, c.task)) doingCandidates.push(c.task);
+  }
+  for (const { agent, tasks } of laneCandidates) {
+    // The FIRST ready item in lane order — one per agent, so DOING_CAP holds (AC-4).
+    const ready = tasks.find((t) => isReady(agent, t));
+    if (ready) {
+      promotions.push({ task_id: ready.id, status: "DOING" });
+      doingCandidates.push(ready);
+    }
+  }
+
+  try {
+    await armLanes(engagementByTaskId, requiredByAgent);
+  } catch {
+    /* arming is best-effort — retried next pass */
+  }
+
+  // Approach RE-DRIVE (F10, AC-34/35): a lane item whose DoD the user confirmed but whose approach is still
+  // 'pending' was never proposed (the confirm turn didn't reach propose_approach), and nothing else ever asks
+  // again. Nudge the agent with an internal turn — no phone push, the user is not re-asked — no sooner than the
+  // per-item floor after the last nudge (or the confirmation), at most WorkflowCaps.approach times; after that
+  // it follows the existing escalation (approach_status='escalated', owner-override flow). 'escalated' items
+  // are never nudged (AC-36).
+  {
+    const redrives: { agent: string; task: BoardTaskRow }[] = [];
+    for (const { agent, lane } of lanes) {
+      if (!(requiredByAgent.get(agent) ?? true)) continue;
+      for (const t of lane) {
+        const s = engagementByTaskId.get(t.id);
+        if (s?.confirm_status === "confirmed" && s.approach_status === "pending" && s.clarify_status !== "open") {
+          redrives.push({ agent, task: t });
         }
-        // else: jitter hasn't elapsed yet — wait for a later pass
       }
-      // status === "asked": already sent, waiting on the user's reply — nothing to do this pass
     }
-    // A task with an OPEN clarifying question (ask_clarifying_question) is paused — don't enqueue a
-    // new research turn while the agent is waiting on the user's answer, whether or not it's otherwise
-    // eligible. Applies regardless of requireStructuredWorkflow since the tool is generally available.
-    if (promotedToDoing && state?.clarify_status === "open") {
-      promotedToDoing = false;
-    }
-    if (promotedToDoing) {
-      if (c.freshPromotion) promotions.push({ task_id: c.task.id, status: "DOING" });
-      doingCandidates.push(c.task);
-    }
-  }
-
-  if (needsAskAt.length) {
-    const { resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT } = await import(
-      "../identity/scheduling-config.server"
-    );
-    let askWindows = CONFIRM_FAN_WINDOWS_DEFAULT;
-    try {
-      askWindows = await resolveConfirmFanWindows(email);
-    } catch {
-      /* default windows */
-    }
-    // Space these asks 45–90 min apart (config) inside the windows — same anti-bunching rule as the groom path.
-    await armConfirmAsksSpaced(needsAskAt, email, tz, askWindows);
-  }
-
-  let confirmAsked = 0;
-  for (const { agent, task } of confirmDue) {
-    try {
-      const justAsked = await markConfirmAsked(task.id);
-      if (!justAsked) continue; // another pass already asked (race) — don't double-send
-      const id = `autowork-confirm-${runId}-${task.id}`;
-      await enqueueTurn(id, `dm-${agent}`, email, turnPayload({ assigned_agent: agent }, confirmIntentDirective(task), tz, caller, "push"));
-      confirmAsked++;
-    } catch {
-      /* enqueue failure is non-fatal — confirm_ask_at already passed, so it's retried next pass */
+    if (redrives.length) {
+      const { getWorkflowCaps } = await import("../identity/agent-workflow-config.server");
+      const { claimApproachRedrive, releaseApproachRedrive, escalateApproach } = await import("./tasks.server");
+      const nowMs = Date.now();
+      for (const { agent, task } of redrives) {
+        try {
+          const s = engagementByTaskId.get(task.id)!;
+          const caps = await getWorkflowCaps(email, agent);
+          const n = s.approach_redrive_count ?? 0;
+          // Floor first: the agent gets the same full window after its LAST nudge before it is escalated.
+          const since = ms(s.approach_redrive_last_at) ?? ms(s.confirmed_at);
+          if (since !== null && nowMs - since < reaskMinMs) continue;
+          if (n >= caps.approach) {
+            await escalateApproach(task.id, email);
+            continue;
+          }
+          const claimed = await claimApproachRedrive(task.id, n);
+          if (claimed === null) continue;
+          let ok = false;
+          try {
+            ok = await enqueueTurn(
+              `autowork-approach-${task.id}-${claimed}-${runId}`,
+              `dm-${agent}`,
+              email,
+              turnPayload({ assigned_agent: agent }, approachRedriveDirective(task), tz, caller),
+            );
+          } catch {
+            ok = false;
+          }
+          if (!ok) {
+            const prev = ms(s.approach_redrive_last_at);
+            await releaseApproachRedrive(task.id, claimed, prev === null ? null : new Date(prev).toISOString()).catch(() => {});
+          }
+        } catch {
+          /* one bad re-drive never blocks the rest */
+        }
+      }
     }
   }
 
@@ -830,5 +1077,5 @@ export async function runScheduledAutoWork(
 
   await setAutoWorkSignature(email, signature);
   const remaining = Math.max(0, candidates.length - enqueued);
-  return { ok: true, skipped: false, enqueued, promoted, blocked: blockedItems.length, remaining, confirmAsked, runId };
+  return { ok: true, skipped: false, enqueued, promoted, blocked: blockedItems.length, remaining, confirmAsked: 0, runId };
 }

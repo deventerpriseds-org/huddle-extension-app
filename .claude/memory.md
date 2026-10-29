@@ -117,7 +117,38 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
-## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED 4332c41, NOT owner-confirmed)
+## Confirm-ask LANE STARVATION + no re-ask (2026-10-27; DEPLOYED 33f625e / #108 on 2026-10-28, live re-asks armed for 10-29 — NOT owner-confirmed)
+- Root cause (code read + offline test `scripts/autowork-lane-starvation.test.ts`): autowork considers only `upNextAfterTopUp[0]` per agent for DOING and arms only that item's ask; `markConfirmAsked` is set-once and nothing re-asks. One unanswered top ask freezes the whole lane forever.
+- Groom is WEEKLY (Mon 8am, owner's 2026-07-31 choice) and never writes status; autowork 9/13/17 daily — a daily groom would NOT unstick a lane.
+- Owner policy 2026-10-27: keep re-asking, rotate through the lane, NO auto-shelving (supersedes 2026-08-26 "move stuck to backlog").
+- Hidden hazard: plain "yes" in a 1:1 binds to the newest-`updated_at` asked task (`getPendingConfirmForAgent`) — with rotation there are several asked rows, so binding must be by last-SENT or it leaks the gate. Ship together.
+- `journey_tasks.tags` is NOT NULL DEFAULT '{}' — the NULL-tags parking-lot trap does not occur.
+- Owner re-scope: whole lane, re-asks ride the EXISTING 45–90 min spacing chain (armConfirmAsksSpaced) + windows, no new day cap, no review pause; 24h per-item floor only. The heartbeat re-arms right after each send (armOnly pass) — re-arming only at 9/13/17 was a hidden 3/day/agent cap.
+- Memory architecture: owner chose (a) SOFT preference (2026-10-27) and "thought it was already this way" — it largely IS: runAgentTurn's laneBoost re-ranks shared memory by the agent's domains/themes (topic text, not agent name). Gaps: voice has no lane boost/Executive Profile; the owner's ChatGPT knowledge isn't ingested yet.
+- ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
+
+## Deep 1:1 asks: HYBRID — act now, or answer + offer to produce; never hold (2026-10-28, PR #116, NOT deployed yet, NOT owner-confirmed)
+**Trigger:** owner asked Iris (dm-iris-chase) to plan the day — gym 3pm, vitamin shop, DBA 702/782 papers, eulogy,
+app work. Scorer rated it difficulty 3 (length), the old gate HELD it behind the canned "produce or quick?" literal
+(`produceVsQuickAsk`, before any model call), and "produce" made ONE vague task "Plan daily activities" (UP_NEXT,
+iris-chase). Evidence: `chat.pending_turns` u-1793205271396 / u-1793205494452; decision.reason
+`1:1 [deep-confirm: produce-vs-quick]`. Owner: "why didnt she just do it? this isnt what i wanted." Owner picked the hybrid.
+**Now:** `scoreAskLLM` (routing.ts) returns difficulty + shape `act|deliverable` in the SAME call. Gate in
+`runHuddleTurn` routes via `routeDeepAsk` (tasks/ask-shape.ts): act → runs normally (persona site still budget-caps,
+never Sol); deliverable/unknown → answered now on `terra-med` + `PRODUCE_OFFER_LINE` appended by
+`ensureProduceOfferDelivered` at both terminal paths; go-ahead in the CURRENT line → runProduce. Offer stored as
+`chat.deep_confirm.kind='offer'` only after it landed; only explicit produce phrases accept it (`isOfferAccepted`);
+any other next message clears it. Legacy `kind='ask'` rows still use `classifyConfirmReply`. Remembered verdicts no
+longer auto-produce fresh asks (no question left to re-ask). Tests: `test:ask-shape`, `test:verdict-memory` (structural
+section superseded). 4 mutations FIRED.
+**Open:** stray task "Plan daily activities" (3304d84c) — owner said delete; two Supabase-MCP deletes timed out on an unanswered confirm; owner will delete via the new board Delete (follow-up PR) or journey app.
+
+## Chat messages: dated timestamps + per-message copy (2026-10-28, DEPLOYED bee838b / #120, NOT owner-confirmed)
+`ClientTime` (HuddleView.tsx) → `formatMessageTimestamp`: always month+day+time, year only for past years. User
+bubbles have a timestamp + copy row beneath; agent header has timestamp + copy. `CopyMessageButton` returns null
+for empty text. Reference pattern: journey `src/components/CommsConsole/TranscriptScroll.tsx`.
+
+## Chat transcript scroll: opens at the newest, follows only if YOU did not scroll up (2026-10-27, DEPLOYED, OWNER-CONFIRMED on his phone 2026-10-28)
 A push deep link (`?huddle=dm-<agent>`) switches threads BEFORE the workspace history downloads, so any
 "scroll to bottom on thread switch" fires on an empty thread. The old follow rule re-measured near-bottom
 after each update, which a bulk history load always fails (view at 0, list grew 27k px) — so it landed at
@@ -1712,6 +1743,7 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+- [2026-10-28] Iris scheduled pushes: `turnPushStyle` (lib/push/turn-push.ts) names the push per job via `payload.pushStyle`; priority check is STICKY ("Iris: confirm ... priorities"), briefs carry Open Schedule + "adjust anything?" and one item per line (owner reversed the 10-15 "NO bullet points"). #122 `8302cb6` live, NOT owner-confirmed.
 **ARTIFACTS ARE NOT MARKDOWN-ONLY — `create_artifact` takes a `format` (2026-09-13).**
 Owner: *"why is it saying we are limited to .md when full document, mermaid, d3 abilities etc were
 early requirements for the artifact library?"* The agent was right about its own contract: four of
