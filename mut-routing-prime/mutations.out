@@ -54,10 +54,14 @@ tree clean: 'R12-fitness-pattern warm' passes again on the restored tree (build 
 FIRED: 'R12-travel warm' failed with the defect reinstated. The guard is real.
 restored: src/features/huddle/data/agents.ts matches HEAD
 tree clean: 'R12-travel warm' passes again on the restored tree (build output regenerated)
-### g-drive (src/features/huddle/data/agents.ts) must fail: R-CW-drive warm
-INERT: 'R-CW-drive warm' still PASSED with its defect reinstated.
+### g-drive (src/features/huddle/data/agents.ts) must fail: R-CW-gdrive warm
+FIRED: 'R-CW-gdrive warm' failed with the defect reinstated. The guard is real.
 restored: src/features/huddle/data/agents.ts matches HEAD
-tree clean: 'R-CW-drive warm' passes again on the restored tree (build output regenerated)
+tree clean: 'R-CW-gdrive warm' passes again on the restored tree (build output regenerated)
+### g-drive-nexus (src/features/huddle/data/agents.ts) must fail: R-CW-drive-nexus warm
+FIRED: 'R-CW-drive-nexus warm' failed with the defect reinstated. The guard is real.
+restored: src/features/huddle/data/agents.ts matches HEAD
+tree clean: 'R-CW-drive-nexus warm' passes again on the restored tree (build output regenerated)
 ### g-cost (src/features/huddle/data/agents.ts) must fail: R-CW-cost warm
 FIRED: 'R-CW-cost warm' failed with the defect reinstated. The guard is real.
 restored: src/features/huddle/data/agents.ts matches HEAD
