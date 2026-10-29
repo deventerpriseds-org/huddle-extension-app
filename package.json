@@ -18,6 +18,7 @@
     "test:mode": "bun scripts/task-mode.test.mjs",
     "test:voice-tools": "bun scripts/voice-toolset-hidden.test.ts",
     "test:cross-app": "bun scripts/cross-app-turn-gate.test.ts",
+    "test:uat-server-check": "bun scripts/uat-check-server-side.test.ts",
     "format": "prettier --write .",
     "fetch:assistants": "bun run scripts/fetch-openai-assistants.ts",
     "test:email-gate": "bun scripts/email-self-send.test.ts",

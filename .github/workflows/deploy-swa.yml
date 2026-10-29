@@ -59,8 +59,8 @@ jobs:
             if [ -n "${!k}" ]; then echo "$k: present"; else echo "$k: not set (Web Push disabled)"; fi
           done
           # UAT bypass is optional — absence just means the prod UAT auth-bypass path stays inert
-          # (VITE_UAT_BYPASS_TOKEN resolves empty, the runtime check can never match). Never echo the
-          # value itself, only presence.
+          # (the UAT_BYPASS_TOKEN app setting is empty, so the server-side check can never match).
+          # Never echo the value itself, only presence.
           if [ -n "$UAT_BYPASS_TOKEN" ]; then echo "UAT_BYPASS_TOKEN: present"; else echo "UAT_BYPASS_TOKEN: MISSING (UAT bypass inert)"; fi
         env:
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
@@ -198,8 +198,10 @@ jobs:
             echo "VITE_ENTRA_AUTHORITY=${AUTH}"
             echo "VITE_ENTRA_TENANT_ID=${AZURE_TENANT_ID}"
             echo "VITE_ENTRA_TENANT_NAME=enterpriseds"
-            echo "VITE_UAT_BYPASS_TOKEN=${{ secrets.UAT_BYPASS_TOKEN }}"
           } > .env.production
+          # NEVER put UAT_BYPASS_TOKEN (or any secret) in a VITE_* line above: Vite inlines every
+          # VITE_* value into the PUBLIC browser bundle. The UAT check runs server-side and reads the
+          # UAT_BYPASS_TOKEN app setting synced below (docs/FIX-uat-check-server-side.md).
           # Hand the resolved client id + authority to later steps so the server
           # runtime verifies tokens against the SAME authority the client used.
           {
@@ -438,6 +440,7 @@ jobs:
               NEXUS_OWNER_ID="${{ secrets.NEXUS_OWNER_ID || 'a3378f93-d655-4913-b2fa-ca5b1d8020f1' }}" \
               UAT_BYPASS_TOKEN="${{ secrets.UAT_BYPASS_TOKEN }}" \
               AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
+              UAT_BYPASS_TOKEN="${{ secrets.UAT_BYPASS_TOKEN }}" \
               HUDDLE_APP_URL="https://${SWA_HOST}"
 
       - name: Deploy to Static Web Apps
