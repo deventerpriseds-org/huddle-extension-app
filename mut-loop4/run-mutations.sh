@@ -10,10 +10,10 @@ M=mut-loop4
 ROUTE="bun scripts/nexus-write-routing.test.ts"
 declare -A FILE PAT CMD
 FILE[m1]=src/features/huddle/lib/routing.ts;        CMD[m1]=$ROUTE; PAT[m1]="R13-S1 warm 1:1 with ANY agent"
-FILE[m2]=src/features/huddle/lib/capabilities.ts;   CMD[m2]=$ROUTE; PAT[m2]="R13-L10 cold 1:1 with ANY agent"
+FILE[m2]=src/features/huddle/lib/capabilities.ts;   CMD[m2]=$ROUTE; PAT[m2]="R13-L10 warm 1:1 with ANY agent"
 FILE[m3]=src/features/huddle/data/agents.ts;        CMD[m3]=$ROUTE; PAT[m3]="R13-ovr-data"
 FILE[m4]=src/features/huddle/data/agents.ts;        CMD[m4]=$ROUTE; PAT[m4]="R13-ovr-neg \"add my new passport number"
-FILE[m5]=src/features/huddle/lib/routing.ts;        CMD[m5]=$ROUTE; PAT[m5]="R-M0-grooming"
+FILE[m5]=src/features/huddle/lib/routing.ts;        CMD[m5]=$ROUTE; PAT[m5]="R-M0-task creation"
 FILE[m6]=src/features/huddle/lib/routing.ts;        CMD[m6]=$ROUTE; PAT[m6]="assigned wins"
 FILE[m7]=src/features/huddle/lib/huddle.functions.ts; CMD[m7]=$ROUTE; PAT[m7]="R-M0-site exactly one primeHint"
 FILE[m8]=src/features/huddle/lib/voice/realtime-tools.server.ts; CMD[m8]="bun scripts/nexus-write-tool.test.ts"; PAT[m8]="voice toolset pushes the write tools"
