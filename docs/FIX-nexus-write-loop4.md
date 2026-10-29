@@ -184,3 +184,61 @@ Every run ended `restored: … matches HEAD` and `tree clean`. Output: `mut-loop
 - `scripts/focus.test.ts` F22 fails (24 passed, 1 failed) **on origin/main itself** (measured on a `git archive
   origin/main` export): #124 made the voice `raw` list multi-line and F22 still greps the old one-line shape. Not
   touched here; the FOCUS_TOOL journey gate itself is guarded by ask-shape (m9 FIRED).
+
+## Group-veto rows (resolves the first residual above: the 6 GROUP leaders that differed from origin/main)
+
+**Change, data only, `src/features/huddle/data/agents.ts`** (no routing/capabilities code, no agent names):
+- `NEXUS_PROGRAM_WORDS` = account, passport, vehicle, membership, renewal, interview, enrollment, enrolment, global
+  entry, border -- the NEXUS trusted-traveler program's vocabulary. ONE list, used twice: appended to the shared
+  `NEXUS_NOT_THE_APP` lookahead ("Nexus" right before one of them is not the app; the strong pattern AND the explicit
+  override both read it), and as a new clause veto `NEXUS_PROGRAM_CLAUSE` on the coursework capability ("nexus" and a
+  program word in the same clause, either order, within 80 chars). The clause form is needed because O1 ("in NEXUS
+  before my next border crossing") and O2 ("my interview in NEXUS") put the word away from, or before, "Nexus". The
+  explicit override is still checked before every veto.
+- Dining / food veto group gains meal, meals, meal prep, cook, cooking, recipe, groceries, grocery, snack
+  (grocery/groceries were already household vetoes; listed in both).
+
+**Before -> after (GROUP leader; `mut-loop4/measure-d13.fixed.out` -> `mut-group-veto/measure-d13.after.out`):**
+
+| Row | Ask | Cache | Before | After | origin/main |
+|---|---|---|---|---|---|
+| O1 | update my address in NEXUS before my next border crossing | warm + cold | iris-chase | eli-vaughn | eli-vaughn |
+| O2 | reschedule my interview in NEXUS, I can't make the 14th | warm + cold | iris-chase | cole-blake | cole-blake |
+| O3 | change my vehicle info in my NEXUS account | warm + cold | iris-chase | ezra-miles | ezra-miles |
+| L8 | plan my meals for MGT-782 exam week | warm | iris-chase | charleston-lewis | charleston-lewis |
+| S11 | meal prep for my MGT-782 exam week | warm | iris-chase | charleston-lewis | charleston-lewis |
+| S12 | what should I cook the night before my MGT-782 exam | warm | iris-chase | tess-sutton | tess-sutton |
+
+All 27 D13 rows x warm/cold: group, `laneOwnerFor` and prime hand-offs byte-identical to `measure-d13.main.out`
+(`diff` of the first five columns is empty).
+
+**Tests (`scripts/nexus-write-routing.test.ts`, 1224 -> 1303):** the 6 rows' group columns re-measured; every R13 row
+now also asserts `group = origin/main leader` (54); `R13-G6-*` asserts the six rows match NO coursework capability and
+lead as origin/main, warm and cold (24 + 1 presence check). No assertion was weakened; every coursework positive and
+every explicit-override positive passes unchanged.
+
+**Suites:** nexus-write-redteam 39/0, router-redteam 12/0, nexus-write-tool 115/0, router-winners 39/0, nexus-read-tools
+190/0, cross-app-turn-gate 92/0, voice-toolset-hidden 36/0, nexus-write-fix 51/0, nexus-write-loop2 185/0,
+nexus-write-loop3 315/0, nexus-write-voice-gate 43/0, nexus-write-routing 1303/0; #124 ownership-judge /
+assign-on-create / ask-shape / board-delete ALL PASS; `npx tsc --noEmit -p .` exit 0.
+
+**Mutations** (`mut-group-veto/run-mutations.sh`, anchors cut from source by `mut-group-veto/make-anchors.py`; output
+`mut-group-veto/mutations.out`; each run ended `restored: … matches HEAD` and `tree clean`):
+
+| id | Defect reinstated | Named test | Verdict (verbatim) |
+|---|---|---|---|
+| v1 | dining/food group's new words removed | R13-G6-L8 warm group | FIRED |
+| v2 | `NEXUS_PROGRAM_CLAUSE` veto removed | R13-G6-O2 warm group | FIRED |
+| v3 | `NEXUS_PROGRAM_WORDS` back to membership + interview only | R13-G6-O1 warm group | FIRED |
+
+**Collateral, measured on asks outside the suite** (`bun mut-group-veto/probe-edges.ts <tree>`, PR head ->
+this fix: `mut-group-veto/probe-edges.{before,after}.out`), for the owner:
+- "add my essay to my Nexus account" is **no longer an explicit override** (the shared lookahead now reads "Nexus
+  account" as the program); group leader unchanged (elle-rowan). Removing "account" from the list would restore it
+  and O3 would still match origin/main through "vehicle".
+- "my MGT-782 interview assignment is due in Nexus": group iris-chase -> **cole-blake** (the clause veto on
+  "interview"). "add my interview reflection paper to Nexus" is unaffected (the override still wins).
+- "log into my Nexus account and check what's due": group iris-chase -> **tess-sutton**.
+- Coursework whose TOPIC is food ("essay on meal kit startups", "paper on the cooking industry", "the recipe for
+  success essay") no longer matches the capability, but the keyword router still leads with Elle/Iris (unchanged
+  group). "case study on grocery pricing" was already vetoed by the household group before this change.

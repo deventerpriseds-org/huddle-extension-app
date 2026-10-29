@@ -1,0 +1,3 @@
+const NEXUS_PROGRAM_WORDS = [
+  "membership", "interview",
+];

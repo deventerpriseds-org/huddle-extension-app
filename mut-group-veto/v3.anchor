@@ -1,0 +1,4 @@
+const NEXUS_PROGRAM_WORDS = [
+  "account", "passport", "vehicle", "membership", "renewal", "interview", "enrollment", "enrolment", "global entry",
+  "border",
+];
