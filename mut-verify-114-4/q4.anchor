@@ -1,0 +1,1 @@
+      ["\\b(?:place|somewhere|where) to stay\\b|\\bstay(?:ing)? (?:at|near|in|with|overnight)\\b", "i"],

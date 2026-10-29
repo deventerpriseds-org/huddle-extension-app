@@ -130,10 +130,31 @@ PR hands off deterministically where origin/main keeps the ask with the addresse
 | L12 | "find a babysitter for the MGT-701 residency weekend, deadline Friday" (Charleston) | -> Elle | keep | **steal** |
 | L1/L2/L5/L9/L11/L15/S3/S13 | meeting/Zoom/coffee/workout/"to my calendar"/pack list/"in my calendar"/gym | keep | keep | correct |
 
-**D13 (new, D12 class): 17 deterministic 1:1 lane steals origin/main does not make** -- 14 from lane vocabulary
-missing from the veto LIST (calendar without "my", schedule, send/share/DM/reply, room, ride, order, meals/cook,
-stretch, babysitter) and 3 from the explicit override beating a veto (NEXUS trusted-traveler account/passport,
-"set a reminder to log into Nexus"). The trigger needs only "exam"/"deadline"/"due"; a real course code is strong
-context; nothing else is required. The veto list is a word list over open-ended lane vocabulary, so this class
-cannot be closed by adding words -- loop 3 found 13, the fix vetoed those words, and 17 new ones were found here
-in ~10 minutes. **C4: REFUTED. C9: REFUTED.**
+**D13 (new, D12 class): 21 deterministic 1:1 lane steals origin/main does not make** (counted from the table:
+L10 S1 S2 S4, L13 S5 L14 S7, L3 S8, L4 S9, L6 S10, L8 S11, S14, L12 = 18 from lane vocabulary missing from the veto
+LIST -- calendar without "my", schedule, send/share/DM/reply, room, ride, order, meals, stretch, babysitter -- plus
+O3 O4 O8 = 3 from the explicit override beating a veto: NEXUS trusted-traveler account/passport, "set a reminder to
+log into Nexus"). S12 is excluded: `classifyTurnIntent` = query, and both the directive (:2465) and the follow-up
+(:6822) require `perform`; every other row is `perform` (probe-c9-steal2 prints it). The trigger needs only
+"exam"/"deadline"/"due"; a real course code is strong context; nothing else is required. The veto list is a word
+list over open-ended lane vocabulary, so this class is not closed by adding words -- loop 3 found 13, the fix
+vetoed those words, and 21 new ones were found here in ~10 minutes. **C4: REFUTED. C9: REFUTED.**
+
+## C8 — mutations (mutate.sh; anchors/replacements are files in mut-verify-114-4/, generated and count-checked by
+`make-anchors.py`)
+
+| id | Mutation | Suite | Named test | Verdict (verbatim) |
+|---|---|---|---|---|
+| q1 | override verb list drops `put` | nexus-write-routing | `put my travel industry essay due Nov 3 into Nexus" -> holders are Elle/Iris` | FIRED |
+| q2 | NEXUS-not-the-app drops `trusted|traveler|traveller` | nexus-write-routing | `"update my address in NEXUS trusted traveler before the deadline" matches NO coursework prime capability` | FIRED |
+| q3 | D12 email veto group deleted | nexus-write-routing | `1:1 with ANY agent: "email my professor that my MGT-782 paper will be a day late" makes no prime hand-off` | FIRED |
+| q4 | D12 lodging veto PATTERN deleted | nexus-write-routing | `1:1 with ANY agent: "find a place to stay for the MGT-701 residency, the deadline is Friday" makes no prime hand-off` | FIRED |
+| q5 | keyed reset no longer dedups a turn key (V5) | nexus-write-voice-gate | first named VG-V5b -> **UNDETERMINED** (a different test failed); re-run named `VG-V5d` | FIRED |
+| q6 | hook settles the write AFTER the hang-up early return (V3, the loop-3 defect) | nexus-write-voice-gate | first named VG-V3b -> **UNDETERMINED**; re-run named `VG-H3c` | FIRED |
+| q7 | server throw returns the loop-3 `{error,tool}` shape (V1) | nexus-write-voice-gate | `VG-V1a` | FIRED |
+
+Every run ended `restored: … matches HEAD` / `tree clean`. q1-q4 are from the new routing/override work, q5-q7 from
+the voice-gate work. Observation on q6: the ONLY test that catches reverting the hook's ordering is `VG-H3c`, a
+source-shape check of the hook; the behavioural VG-V3a-f run a simulation of the hook and stayed green with the
+hook reverted (the hook itself is React and is not executed by any suite). **C8: CONFIRMED** (7 FIRED, 0 INERT,
+0 NOT-APPLIED; 2 UNDETERMINED first attempts were mis-named tests, re-run and FIRED).
