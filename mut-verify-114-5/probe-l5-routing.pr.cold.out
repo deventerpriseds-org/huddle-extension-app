@@ -1,0 +1,33 @@
+N1	cold	intent=perform	group=elle-rowan	prime=elle-rowan	lane=elle-rowan	eli-vaughn	set a reminder to submit my MGT-782 paper in Nexus Friday
+N2	cold	intent=perform	group=iris-chase	prime=iris-chase	lane=iris-chase	eli-vaughn	add the exam dates in Nexus to my calendar
+N3	cold	intent=perform	group=iris-chase	prime=iris-chase	lane=iris-chase	eli-vaughn	put the due dates in Nexus on my calendar
+N4	cold	intent=perform	group=elle-rowan	prime=elle-rowan	lane=elle-rowan	eli-vaughn	add my essay deadline in Nexus to my calendar
+N5	cold	intent=perform	group=iris-chase	prime=iris-chase	lane=iris-chase	flex-grimes	move my workout to tomorrow so I can finish my paper in Nexus
+N6	cold	intent=perform	group=iris-chase	prime=iris-chase	lane=iris-chase	eli-vaughn	reschedule my study session, the exam in Nexus moved to Friday
+N7	cold	intent=perform	group=elle-rowan	prime=elle-rowan	lane=elle-rowan	charleston-lewis	save me some dinner, I'm finishing my essay in Nexus
+N8	cold	intent=perform	group=iris-chase	prime=iris-chase	lane=iris-chase	finn-reid	log the textbook I bought for my MGT-782 project in Nexus
+N9	cold	intent=perform	group=elle-rowan	prime=elle-rowan	lane=elle-rowan	cam-post	email my professor and then update the due date in Nexus
+N10	cold	intent=perform	group=iris-chase	prime=iris-chase	lane=iris-chase	eli-vaughn	set up a study block tonight for the exam in Nexus
+N11	cold	intent=perform	group=iris-chase	prime=iris-chase	lane=iris-chase	eli-vaughn	add the MGT-782 exam to my calendar, it's listed in Nexus
+N12	cold	intent=perform	group=iris-chase	prime=-	lane=-	cam-post	can you text my MGT-782 group the proposal is due Friday
+N13	cold	intent=perform	group=iris-chase	prime=-	lane=-	charleston-lewis	grab me a coffee before my MGT-782 exam
+N14	cold	intent=perform	group=iris-chase	prime=-	lane=-	troy-lennox	find me a quiet coworking spot to finish my MGT-782 paper due Friday
+N15	cold	intent=query	group=elle-rowan	prime=-	lane=-	finn-reid	how much will the EMBA694 exam fee be, it's due Friday
+N16	cold	intent=perform	group=sam-trent	prime=-	lane=-	sam-trent	draft a pitch deck for my startup, the MGT-701 deadline is Friday
+N17	cold	intent=perform	group=iris-chase	prime=-	lane=-	tess-sutton	write the PRD for my MGT-782 capstone app, due Friday
+P4	cold	intent=perform	group=iris-chase	prime=iris-chase	lane=iris-chase	finn-reid	add my MGT-782 reflection paper to Nexus, due Sunday
+P5	cold	intent=perform	group=elle-rowan	prime=elle-rowan	lane=elle-rowan	cam-post	please put the EMBA694 case analysis into my Nexus
+P6	cold	intent=perform	group=elle-rowan	prime=elle-rowan	lane=elle-rowan	troy-lennox	add my essay to my Nexus account
+P7	cold	intent=perform	group=iris-chase	prime=iris-chase	lane=iris-chase	sam-trent	update the due date for my MGT-701 proposal in Nexus to Dec 3
+P8	cold	intent=perform	group=liam-kingsley	prime=-	lane=-	finn-reid	help me outline my MGT-782 strategy paper due Friday
+P9	cold	intent=query	group=iris-chase	prime=keep	lane=-	iris-chase	what's due in Nexus this week
+K1	cold	intent=perform	group=elle-rowan	prime=-	lane=-	iris-chase	book a room near campus for the MGT-701 residency, deadline is Friday
+K2	cold	intent=perform	group=iris-chase	prime=-	lane=-	iris-chase	I need a ride to my MGT-782 exam
+K3	cold	intent=perform	group=elle-rowan	prime=-	lane=-	elle-rowan	send my MGT-782 group the slides before the deadline
+K4	cold	intent=perform	group=elle-rowan	prime=-	lane=-	iris-chase	order the EMBA694 textbook before the exam
+K5	cold	intent=perform	group=iris-chase	prime=-	lane=-	elle-rowan	stretch routine before my MGT-782 exam
+K6	cold	intent=perform	group=iris-chase	prime=-	lane=-	iris-chase	put the MGT-782 exam on the calendar for Friday
+K7	cold	intent=perform	group=elle-rowan	prime=-	lane=-	elle-rowan	find a babysitter for the MGT-701 residency weekend, deadline Friday
+K8	cold	intent=perform	group=elle-rowan	prime=-	lane=-	iris-chase	share the slides with my MGT-782 group before Friday's deadline
+K9	cold	intent=perform	group=iris-chase	prime=-	lane=-	elle-rowan	can you get the MGT-782 exam onto my schedule
+K10	cold	intent=perform	group=elle-rowan	prime=keep	lane=-	iris-chase	set a reminder to submit my MGT-782 paper in Nexus Friday
