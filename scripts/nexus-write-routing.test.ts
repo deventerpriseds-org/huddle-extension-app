@@ -1,4 +1,5 @@
-// WHAT:       D12 of the independent verifier's loop-3 report, pinned as tests: other lanes' asks that name one of
+// WHAT:       (loop 4, docs/FIX-nexus-write-loop4.md: + D13/D13-ovr rows vs origin/main, warm+cold, and the M0 primeHint
+//             opt-in -- chat hand-off only, never grooming/task creation.) D12 of the independent verifier's loop-3 report, pinned as tests: other lanes' asks that name one of
 //             the owner's REAL courses (warm course list) or "my professor/instructor" (cold cache, weak signals)
 //             keep their origin/main routing -- group leader, 1:1 lane owner -- and make NO deterministic prime
 //             hand-off / follow-up DM. Plus the coursework asks that must stay with Elle/Iris, and (A) the
@@ -227,6 +228,115 @@ async function main() {
     setNexusCourseContext(REAL_COURSES);
   }
 
+  console.log("=== D13 / D13-ovr (loop 4): 1:1 matches origin/main unless the ask is an EXPLICIT Nexus write of an assignment ===");
+  {
+    // docs/VERIFY-nexus-write-tool-4.md D13 (18 lane-vocabulary steals) + D13-ovr (O3 O4 O8) + the override-adjacent
+    // rows O1 O2 O11 O15. Owner decision (docs/FIX-nexus-write-loop4.md): the coursework rule keeps deciding the GROUP
+    // leader; in a 1:1 with a non-holder the deterministic hand-off fires ONLY on the explicit override.
+    const D13: Array<[string, string, AgentId, string, string, string, string, string]> = [
+    // [tag, ask, addressed, origin/main laneOwnerFor (warm=cold), group warm, group cold, origin/main group warm, origin/main group cold]
+    // GENERATED from mut-loop4/measure-d13.{main,fixed}.out (bun mut-loop4/measure-d13.ts <tree>), not typed.
+    ["O1", "update my address in NEXUS before my next border crossing", "troy-lennox", "eli-vaughn", "iris-chase", "iris-chase", "eli-vaughn", "eli-vaughn"],
+    ["O2", "reschedule my interview in NEXUS, I can't make the 14th", "troy-lennox", "cole-blake", "iris-chase", "iris-chase", "cole-blake", "cole-blake"],
+    ["O3", "change my vehicle info in my NEXUS account", "troy-lennox", "null", "iris-chase", "iris-chase", "ezra-miles", "ezra-miles"],
+    ["O4", "add my new passport number to NEXUS", "troy-lennox", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
+    ["O8", "set a reminder to log into Nexus tonight and check my grades", "eli-vaughn", "null", "terry-locke", "terry-locke", "terry-locke", "terry-locke"],
+    ["O11", "Finn, add the EMBA694 textbook cost to Nexus", "finn-reid", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
+    ["O15", "save my flight confirmation to Nexus", "troy-lennox", "null", "troy-lennox", "troy-lennox", "troy-lennox", "troy-lennox"],
+    ["L3", "book a room near campus for the MGT-701 residency, deadline is Friday", "troy-lennox", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
+    ["L4", "get me a ride to the MGT-782 exam on Friday", "troy-lennox", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
+    ["L6", "order the MGT-782 textbook, it is due to arrive before the exam", "finn-reid", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
+    ["L8", "plan my meals for MGT-782 exam week", "charleston-lewis", "null", "iris-chase", "charleston-lewis", "charleston-lewis", "charleston-lewis"],
+    ["L10", "put the MGT-782 exam on the calendar for Friday", "eli-vaughn", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
+    ["L12", "find a babysitter for the MGT-701 residency weekend, deadline Friday", "charleston-lewis", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
+    ["L13", "send my MGT-782 group the slides before the deadline", "cam-post", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
+    ["L14", "DM my MGT-782 group that the proposal deadline moved", "cam-post", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
+    ["S1", "put my MGT-782 exam on the calendar", "eli-vaughn", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
+    ["S2", "add the MGT-782 final exam to the calendar, it's Dec 12", "eli-vaughn", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
+    ["S4", "can you get the MGT-782 exam onto my schedule", "eli-vaughn", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
+    ["S5", "share the slides with my MGT-782 group before Friday's deadline", "cam-post", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
+    ["S6", "send the MGT-782 group my draft before the deadline", "cam-post", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
+    ["S7", "reply to my MGT-782 professor about the exam", "cam-post", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
+    ["S8", "book a room for the MGT-701 residency, it's due by Friday", "troy-lennox", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
+    ["S9", "I need a ride to my MGT-782 exam", "troy-lennox", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
+    ["S10", "order the EMBA694 textbook before the exam", "finn-reid", "null", "elle-rowan", "elle-rowan", "elle-rowan", "elle-rowan"],
+    ["S11", "meal prep for my MGT-782 exam week", "charleston-lewis", "null", "iris-chase", "charleston-lewis", "charleston-lewis", "charleston-lewis"],
+    ["S12", "what should I cook the night before my MGT-782 exam", "charleston-lewis", "null", "iris-chase", "tess-sutton", "tess-sutton", "tess-sutton"],
+    ["S14", "stretch routine before my MGT-782 exam", "flex-grimes", "null", "iris-chase", "iris-chase", "iris-chase", "iris-chase"],
+    ];
+    for (const [cache, prime] of CACHES) {
+      prime();
+      for (const [tag, text, self, mainLane, gWarm, gCold, mainGWarm, mainGCold] of D13) {
+        const id = `R13-${tag} ${cache}`;
+        const g = cache === "warm" ? gWarm : gCold;
+        const mainG = cache === "warm" ? mainGWarm : mainGCold;
+        // GROUP: the hard coursework rule decides (owner); where that differs from origin/main the name says so.
+        t(`${id} group "${text}" -> ${g}${g === mainG ? " (= origin/main)" : ` (coursework group rule; origin/main ${mainG})`}`, lead(text), g);
+        // 1:1: no deterministic prime hand-off from ANY non-holder (holders may only "keep").
+        const handoffs = ALL_IDS.map((a) => primeLaneDecision(text, a)).filter((x) => x !== null && x !== "keep");
+        t(`${id} 1:1 with ANY agent: "${text}" makes no deterministic prime hand-off / follow-up DM`, handoffs.length, 0);
+        t(`${id} 1:1 ${self}: "${text}" directive lane = origin/main laneOwnerFor`, laneOwnerFor(text, self)?.id ?? "null", mainLane);
+        t(`${id} 1:1 ${self}: "${text}" is NOT an explicit Nexus override`, sharedCapabilityHolders(text).some((h) => capabilityExplicitOverride(h.cap, text)), false);
+        const one = routeMessage({
+          text, scope: "one-to-one", members: [self], history: [], targetAgentId: self,
+        } as Parameters<typeof routeMessage>[0]);
+        t(`${id} 1:1 ${self} answers "${text}" itself`, one.winners.join(","), self);
+      }
+    }
+    setNexusCourseContext(REAL_COURSES);
+
+    // D13-ovr: the override needs a write verb + an ASSIGNMENT OBJECT + to/in/into Nexus. DATA on the capability.
+    const cap = AGENTS.flatMap((a) => a.capabilities ?? []).find((c) => c.id === "nexus-assignments")!;
+    t("R13-ovr-data the capability's 1:1 hand-off is DATA: oneToOneHandoff = explicit-override", cap.oneToOneHandoff, "explicit-override");
+    const OVR_NEG = [
+      "add my new passport number to NEXUS",
+      "change my vehicle info in my NEXUS account",
+      "set a reminder to log into Nexus tonight and check my grades",
+      "save my flight confirmation to Nexus",
+      "Finn, add the EMBA694 textbook cost to Nexus",
+      "update my address in NEXUS before my next border crossing",
+      "reschedule my interview in NEXUS, I can't make the 14th",
+      "add my phone number to my Nexus profile",
+      "log into Nexus and check my grades",
+      "put my new email address in Nexus",
+    ];
+    for (const text of OVR_NEG) t(`R13-ovr-neg "${text}" is NOT an explicit override (no assignment object)`, capabilityExplicitOverride(cap, text), false);
+    // Each listed assignment noun, in the same carrier sentences, IS an override (owner's list, 2026-10-29).
+    const NOUNS = [
+      "assignment", "paper", "essay", "proposal", "case", "case study", "case analysis", "analysis", "memo", "reflection",
+      "post", "quiz", "exam", "project", "presentation", "problem set", "deliverable", "brief", "review", "report", "due date",
+      "assignments", "case studies", "quizzes", "problem sets",
+    ];
+    for (const n of NOUNS) {
+      t(`R13-ovr-pos "add the MGT-782 ${n} to Nexus" IS an explicit override`, capabilityExplicitOverride(cap, `add the MGT-782 ${n} to Nexus`), true);
+      t(`R13-ovr-pos "update my ${n} in my Nexus" IS an explicit override`, capabilityExplicitOverride(cap, `update my ${n} in my Nexus`), true);
+    }
+    // The verifier's intended overrides still hand off deterministically from a non-holder in a 1:1.
+    const OVR_POS: Array<[string, AgentId]> = [
+      ["put the MGT-782 email marketing case analysis due Nov 3 into Nexus", "cam-post"],
+      ["hey Troy, please add the travel industry essay due Nov 3 to my Nexus", "troy-lennox"],
+      ["add the MGT-701 research proposal due Dec 1 to Nexus", "troy-lennox"],
+      ["update the due date of my research paper in Nexus to Dec 9", "cam-post"],
+      ["add the flight operations essay to my Nexus assignments", "troy-lennox"],
+    ];
+    for (const [cache, prime] of CACHES) {
+      prime();
+      for (const [text, self] of OVR_POS) {
+        t(`R13-ovr-hand ${cache} "${text}" IS an explicit override`, capabilityExplicitOverride(cap, text), true);
+        t(`R13-ovr-hand ${cache} 1:1 ${self} hands "${text}" to Elle/Iris deterministically`, PRIME.has(String(primeLaneDecision(text, self))), true);
+        t(`R13-ovr-hand ${cache} 1:1 Elle/Iris keep "${text}"`, `${primeLaneDecision(text, "elle-rowan")}/${primeLaneDecision(text, "iris-chase")}`, "keep/keep");
+        t(`R13-ovr-hand ${cache} group "${text}" is led by Elle/Iris`, PRIME.has(lead(text)), true);
+      }
+    }
+    setNexusCourseContext(REAL_COURSES);
+    // Coursework (non-override) asks addressed to Elle/Iris stay with them (unchanged); to anyone else: no deterministic
+    // hand-off -- the ordinary 1:1 owner path decides, as on origin/main.
+    for (const text of ["my MGT-782 paper is due Friday", "update the due date on my MGT-782 essay to Friday", "put my MGT-782 exam on the calendar"]) {
+      t(`R13-cw "${text}": Elle/Iris keep`, `${primeLaneDecision(text, "elle-rowan")}/${primeLaneDecision(text, "iris-chase")}`, "keep/keep");
+      t(`R13-cw "${text}": Finn makes no deterministic hand-off`, primeLaneDecision(text, "finn-reid" as AgentId), null);
+    }
+  }
+
   console.log("=== (A) the LLM routers carry an additive, data-built prime-owners hint ===");
   {
     const dir = primeOwnershipDirectory();
@@ -306,6 +416,42 @@ async function main() {
       t("R-A4c ...ADDITIVE: the keep-with-the-addressed-agent default is still there", userOf().includes('Use "cam-post" to KEEP'), true);
       t("R-A4d ...ADDITIVE: the resolver's system prompt is unchanged in kind", sysOf().includes("DEFAULT STRONGLY to keeping"), true);
       t("R-A4e the resolver's own decision is used", owner, "cam-post");
+
+      // M0 (loop 4, docs/FIX-nexus-write-loop4.md): since origin/main #124 resolveOwnerLLM is ALSO the grooming judge
+      // and the 1:1 task-creation / produce-task judge. Only the live 1:1 chat hand-off may carry the prime hint.
+      const PRIME_MARK = /\[prime for: /;
+      const variants: Array<[string, Parameters<typeof resolveOwnerLLM>[3] | undefined, boolean]> = [
+        ["chat hand-off { primeHint: true }", { primeHint: true }, true],
+        ["grooming { framing: 'assigned' }", { framing: "assigned" }, false],
+        ["task creation / produce task (no opts)", undefined, false],
+        ["{ framing: 'dm' } without primeHint", { framing: "dm" }, false],
+        ["{ framing: 'assigned', primeHint: true } (assigned wins)", { framing: "assigned", primeHint: true }, false],
+      ];
+      for (const [name, opts, want] of variants) {
+        bodies.length = 0;
+        if (opts === undefined) await resolveOwnerLLM(ask, "cam-post" as AgentId, { backend: "openai", model: "test-model" });
+        else await resolveOwnerLLM(ask, "cam-post" as AgentId, { backend: "openai", model: "test-model" }, opts);
+        t(`R-M0-${name}: resolver called once (offline fake)`, bodies.length, 1);
+        t(`R-M0-${name}: prompt carries the PRIME OWNERS directory`, userOf().includes("PRIME OWNERS"), want);
+        t(`R-M0-${name}: roster lines carry [prime for: …]`, PRIME_MARK.test(userOf()), want);
+      }
+      bodies.length = 0;
+      await resolveOwnerLLM("Draft the MGT-782 essay outline", "flex-grimes" as AgentId, { backend: "openai", model: "test-model" }, { framing: "assigned" });
+      t("R-M0-groom-shape grooming keeps #124's assigned framing (task owner, not a 1:1)", userOf().includes("This task is currently owned by Flex"), true);
+
+      // Call-site shape: the opt-in is EXPLICIT at the chat hand-off and absent everywhere else.
+      const turnSrc = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+      const groomSrc = readFileSync("src/features/huddle/lib/tasks/groom.ts", "utf8");
+      t("R-M0-site exactly one primeHint opt-in in huddle.functions.ts", (turnSrc.match(/primeHint: true/g) ?? []).length, 1);
+      t(
+        "R-M0-site ...and it is the 1:1 chat hand-off call (resolveOwnerLLM(data.text, nextId, …))",
+        /resolveOwnerLLM\(data\.text, nextId, \{[\s\S]{0,200}?\}, \{ primeHint: true \}\)/.test(turnSrc),
+        true,
+      );
+      t("R-M0-site the 1:1 task-creation judge call has no primeHint", /resolveOwnerLLM\(title, winner\.id, \{[^}]*\}\)/.test(turnSrc), true);
+      t("R-M0-site the produce-task judge call has no primeHint", /resolveOwnerLLM\(askText, agentId, \{[^}]*\}\)/.test(turnSrc), true);
+      t("R-M0-site grooming calls the judge with framing 'assigned'", /resolveOwnerLLM\([\s\S]{0,200}?\{ framing: "assigned" \},?\s*\)/.test(groomSrc), true);
+      t("R-M0-site grooming never passes primeHint", /primeHint/.test(groomSrc), false);
     } finally {
       globalThis.fetch = realFetch;
       if (prevKey === undefined) delete process.env.OPENAI_API_KEY;

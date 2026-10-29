@@ -179,7 +179,9 @@ const NEXUS_ASSIGNMENTS_CAPABILITY: AgentCapability = {
     "or a reminder (calendar lane), dinner after an exam (dining lane), training around exam week (fitness lane). " +
     "An EXPLICIT request to add, put, log, save, update, change, move or reschedule something TO, IN or INTO Nexus " +
     "is theirs even when its topic names another lane (an email marketing case analysis, a travel industry essay, " +
-    "an Airbnb pricing case study).",
+    "an Airbnb pricing case study) -- provided the thing written is an assignment (a paper, essay, case study, " +
+    "proposal, exam, project, due date …); a passport number, a NEXUS-program account or a reminder to log into " +
+    "Nexus is not.",
   // WHOSE job: the owner's coursework. Loop 3 (D6, docs/FIX-nexus-write-loop3.md, owner-specified):
   //   VETOES are evaluated FIRST and win (another lane's unmistakable vocabulary).
   //   STRONG = DATA FROM NEXUS -- one of the owner's REAL course codes or names (`strongSources:

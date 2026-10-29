@@ -6884,7 +6884,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       };
       // SHARED capability (agents.ts, exclusive:false): deterministic too, and decided BEFORE the LLM
       // resolver so the 1:1 directive (laneOwnerFor) and this follow-up can never disagree. "keep" =
-      // the addressed agent is prime for this ask -> no follow-up to anyone.
+      // the addressed agent is prime for this ask -> no follow-up to anyone. A non-holder gets a deterministic
+      // hand-off only where the capability data allows it (D13: Nexus coursework = an explicit Nexus write of an
+      // assignment); any other ask returns null and takes the LLM judge below (docs/FIX-nexus-write-loop4.md).
       const prime = capOwnerId ? null : primeLaneDecision(data.text, nextId);
       if (capOwnerId) {
         deliverIfOwner(capOwnerId);

@@ -1,0 +1,54 @@
+warm	O1	group=iris-chase	lane=eli-vaughn	handoffs=none	troy-lennox	update my address in NEXUS before my next border crossing
+warm	O2	group=iris-chase	lane=cole-blake	handoffs=none	troy-lennox	reschedule my interview in NEXUS, I can't make the 14th
+warm	O3	group=iris-chase	lane=null	handoffs=none	troy-lennox	change my vehicle info in my NEXUS account
+warm	O4	group=iris-chase	lane=null	handoffs=none	troy-lennox	add my new passport number to NEXUS
+warm	O8	group=terry-locke	lane=null	handoffs=none	eli-vaughn	set a reminder to log into Nexus tonight and check my grades
+warm	O11	group=elle-rowan	lane=null	handoffs=none	finn-reid	Finn, add the EMBA694 textbook cost to Nexus
+warm	O15	group=troy-lennox	lane=null	handoffs=none	troy-lennox	save my flight confirmation to Nexus
+warm	L3	group=elle-rowan	lane=null	handoffs=none	troy-lennox	book a room near campus for the MGT-701 residency, deadline is Friday
+warm	L4	group=iris-chase	lane=null	handoffs=none	troy-lennox	get me a ride to the MGT-782 exam on Friday
+warm	L6	group=iris-chase	lane=null	handoffs=none	finn-reid	order the MGT-782 textbook, it is due to arrive before the exam
+warm	L8	group=iris-chase	lane=null	handoffs=none	charleston-lewis	plan my meals for MGT-782 exam week
+warm	L10	group=iris-chase	lane=null	handoffs=none	eli-vaughn	put the MGT-782 exam on the calendar for Friday
+warm	L12	group=elle-rowan	lane=null	handoffs=none	charleston-lewis	find a babysitter for the MGT-701 residency weekend, deadline Friday
+warm	L13	group=elle-rowan	lane=null	handoffs=none	cam-post	send my MGT-782 group the slides before the deadline
+warm	L14	group=elle-rowan	lane=null	handoffs=none	cam-post	DM my MGT-782 group that the proposal deadline moved
+warm	S1	group=iris-chase	lane=null	handoffs=none	eli-vaughn	put my MGT-782 exam on the calendar
+warm	S2	group=iris-chase	lane=null	handoffs=none	eli-vaughn	add the MGT-782 final exam to the calendar, it's Dec 12
+warm	S4	group=iris-chase	lane=null	handoffs=none	eli-vaughn	can you get the MGT-782 exam onto my schedule
+warm	S5	group=elle-rowan	lane=null	handoffs=none	cam-post	share the slides with my MGT-782 group before Friday's deadline
+warm	S6	group=elle-rowan	lane=elle-rowan	handoffs=none	cam-post	send the MGT-782 group my draft before the deadline
+warm	S7	group=elle-rowan	lane=null	handoffs=none	cam-post	reply to my MGT-782 professor about the exam
+warm	S8	group=iris-chase	lane=null	handoffs=none	troy-lennox	book a room for the MGT-701 residency, it's due by Friday
+warm	S9	group=iris-chase	lane=null	handoffs=none	troy-lennox	I need a ride to my MGT-782 exam
+warm	S10	group=elle-rowan	lane=null	handoffs=none	finn-reid	order the EMBA694 textbook before the exam
+warm	S11	group=iris-chase	lane=null	handoffs=none	charleston-lewis	meal prep for my MGT-782 exam week
+warm	S12	group=iris-chase	lane=null	handoffs=none	charleston-lewis	what should I cook the night before my MGT-782 exam
+warm	S14	group=iris-chase	lane=null	handoffs=none	flex-grimes	stretch routine before my MGT-782 exam
+cold	O1	group=iris-chase	lane=eli-vaughn	handoffs=none	troy-lennox	update my address in NEXUS before my next border crossing
+cold	O2	group=iris-chase	lane=cole-blake	handoffs=none	troy-lennox	reschedule my interview in NEXUS, I can't make the 14th
+cold	O3	group=iris-chase	lane=null	handoffs=none	troy-lennox	change my vehicle info in my NEXUS account
+cold	O4	group=iris-chase	lane=null	handoffs=none	troy-lennox	add my new passport number to NEXUS
+cold	O8	group=terry-locke	lane=null	handoffs=none	eli-vaughn	set a reminder to log into Nexus tonight and check my grades
+cold	O11	group=elle-rowan	lane=null	handoffs=none	finn-reid	Finn, add the EMBA694 textbook cost to Nexus
+cold	O15	group=troy-lennox	lane=null	handoffs=none	troy-lennox	save my flight confirmation to Nexus
+cold	L3	group=elle-rowan	lane=null	handoffs=none	troy-lennox	book a room near campus for the MGT-701 residency, deadline is Friday
+cold	L4	group=iris-chase	lane=null	handoffs=none	troy-lennox	get me a ride to the MGT-782 exam on Friday
+cold	L6	group=iris-chase	lane=null	handoffs=none	finn-reid	order the MGT-782 textbook, it is due to arrive before the exam
+cold	L8	group=charleston-lewis	lane=null	handoffs=none	charleston-lewis	plan my meals for MGT-782 exam week
+cold	L10	group=iris-chase	lane=null	handoffs=none	eli-vaughn	put the MGT-782 exam on the calendar for Friday
+cold	L12	group=elle-rowan	lane=null	handoffs=none	charleston-lewis	find a babysitter for the MGT-701 residency weekend, deadline Friday
+cold	L13	group=elle-rowan	lane=null	handoffs=none	cam-post	send my MGT-782 group the slides before the deadline
+cold	L14	group=elle-rowan	lane=null	handoffs=none	cam-post	DM my MGT-782 group that the proposal deadline moved
+cold	S1	group=iris-chase	lane=null	handoffs=none	eli-vaughn	put my MGT-782 exam on the calendar
+cold	S2	group=iris-chase	lane=null	handoffs=none	eli-vaughn	add the MGT-782 final exam to the calendar, it's Dec 12
+cold	S4	group=iris-chase	lane=null	handoffs=none	eli-vaughn	can you get the MGT-782 exam onto my schedule
+cold	S5	group=elle-rowan	lane=null	handoffs=none	cam-post	share the slides with my MGT-782 group before Friday's deadline
+cold	S6	group=elle-rowan	lane=elle-rowan	handoffs=none	cam-post	send the MGT-782 group my draft before the deadline
+cold	S7	group=elle-rowan	lane=null	handoffs=none	cam-post	reply to my MGT-782 professor about the exam
+cold	S8	group=iris-chase	lane=null	handoffs=none	troy-lennox	book a room for the MGT-701 residency, it's due by Friday
+cold	S9	group=iris-chase	lane=null	handoffs=none	troy-lennox	I need a ride to my MGT-782 exam
+cold	S10	group=elle-rowan	lane=null	handoffs=none	finn-reid	order the EMBA694 textbook before the exam
+cold	S11	group=charleston-lewis	lane=null	handoffs=none	charleston-lewis	meal prep for my MGT-782 exam week
+cold	S12	group=tess-sutton	lane=null	handoffs=none	charleston-lewis	what should I cook the night before my MGT-782 exam
+cold	S14	group=iris-chase	lane=null	handoffs=none	flex-grimes	stretch routine before my MGT-782 exam
