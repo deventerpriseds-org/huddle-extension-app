@@ -129,7 +129,10 @@ export interface AgentCapability {
 // vehicle info in my NEXUS account" put the program word away from, or before, "Nexus", and the strong "in (my)
 // Nexus" pattern then made Iris lead the GROUP instead of origin/main's Eli / Cole / Ezra.
 const NEXUS_PROGRAM_WORDS = [
-  "account", "passport", "vehicle", "membership", "renewal", "interview", "enrollment", "enrolment", "global entry",
+  // NOT "account": "add my essay to my Nexus account" is an explicit coursework write (owner decision 1,
+  // 2026-10-29); the program sense of "my NEXUS account" is still caught by the words that travel with it
+  // ("vehicle", "passport", "border", ...).
+  "passport", "vehicle", "membership", "renewal", "interview", "enrollment", "enrolment", "global entry",
   "border",
 ];
 const NEXUS_PROGRAM_ALT = NEXUS_PROGRAM_WORDS.map((w) => w.replace(/ /g, "\\s+")).join("|");

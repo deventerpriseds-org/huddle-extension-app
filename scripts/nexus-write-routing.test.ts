@@ -175,6 +175,7 @@ async function main() {
       ["log the tax accounting paper due Friday in Nexus", "finn-reid"],
       ["hey Elle, add my airline pricing essay to Nexus", "cam-post"],
       ["I need you to put the restaurant case study into Nexus", "charleston-lewis"],
+      ["add my essay to my Nexus account", "cam-post"],
     ];
     // [guard, ask, addressed agent, origin/main group leader, origin/main laneOwnerFor(ask, addressed)] -- MEASURED:
     // mut-explicit-override/probe-override.main.out (origin/main ee8f7b6), identical warm and cold.
