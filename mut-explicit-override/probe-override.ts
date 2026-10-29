@@ -49,6 +49,8 @@ export const CASES: Array<[string, string, string]> = [
   ["neg-card", "renew my NEXUS card before the deadline", "troy-lennox"],
   ["neg-card", "update the address on my NEXUS card", "troy-lennox"],
   ["neg-card", "add my NEXUS card renewal fee to my budget", "finn-reid"],
+  ["neg-card", "add the renewal date to my NEXUS card", "troy-lennox"],
+  ["neg-program", "update the interview date in my NEXUS program", "troy-lennox"],
   ["neg-program", "my NEXUS program application deadline is Friday", "troy-lennox"],
   ["neg-program", "move my NEXUS program interview to Friday", "troy-lennox"],
   ["neg-apply", "apply to NEXUS for me before my Toronto trip", "troy-lennox"],

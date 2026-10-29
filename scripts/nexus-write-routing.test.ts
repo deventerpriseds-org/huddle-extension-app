@@ -178,6 +178,8 @@ async function main() {
       ["card", "renew my NEXUS card before the deadline", "troy-lennox", "elle-rowan", "null"],
       ["card", "update the address on my NEXUS card", "troy-lennox", "eli-vaughn", "eli-vaughn"],
       ["card", "add my NEXUS card renewal fee to my budget", "finn-reid", "finn-reid", "null"],
+      ["card", "add the renewal date to my NEXUS card", "troy-lennox", "iris-chase", "null"],
+      ["program", "update the interview date in my NEXUS program", "troy-lennox", "cole-blake", "cole-blake"],
       ["program", "my NEXUS program application deadline is Friday", "troy-lennox", "elle-rowan", "elle-rowan"],
       ["program", "move my NEXUS program interview to Friday", "troy-lennox", "cole-blake", "cole-blake"],
       ["apply", "apply to NEXUS for me before my Toronto trip", "troy-lennox", "troy-lennox", "null"],

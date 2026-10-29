@@ -16,6 +16,8 @@ warm	pos	I need you to put the restaurant case study into Nexus	holders=n/a	lead
 warm	neg-card	renew my NEXUS card before the deadline	holders=n/a	lead=elle-rowan	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
 warm	neg-card	update the address on my NEXUS card	holders=n/a	lead=eli-vaughn	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=eli-vaughn	handoffs=n/a	elle/iris=n/a
 warm	neg-card	add my NEXUS card renewal fee to my budget	holders=n/a	lead=finn-reid	1:1(finn-reid)=finn-reid	lane(finn-reid)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-card	add the renewal date to my NEXUS card	holders=n/a	lead=iris-chase	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+warm	neg-program	update the interview date in my NEXUS program	holders=n/a	lead=cole-blake	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=cole-blake	handoffs=n/a	elle/iris=n/a
 warm	neg-program	my NEXUS program application deadline is Friday	holders=n/a	lead=elle-rowan	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=elle-rowan	handoffs=n/a	elle/iris=n/a
 warm	neg-program	move my NEXUS program interview to Friday	holders=n/a	lead=cole-blake	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=cole-blake	handoffs=n/a	elle/iris=n/a
 warm	neg-apply	apply to NEXUS for me before my Toronto trip	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
@@ -50,6 +52,8 @@ cold	pos	I need you to put the restaurant case study into Nexus	holders=n/a	lead
 cold	neg-card	renew my NEXUS card before the deadline	holders=n/a	lead=elle-rowan	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
 cold	neg-card	update the address on my NEXUS card	holders=n/a	lead=eli-vaughn	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=eli-vaughn	handoffs=n/a	elle/iris=n/a
 cold	neg-card	add my NEXUS card renewal fee to my budget	holders=n/a	lead=finn-reid	1:1(finn-reid)=finn-reid	lane(finn-reid)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-card	add the renewal date to my NEXUS card	holders=n/a	lead=iris-chase	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
+cold	neg-program	update the interview date in my NEXUS program	holders=n/a	lead=cole-blake	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=cole-blake	handoffs=n/a	elle/iris=n/a
 cold	neg-program	my NEXUS program application deadline is Friday	holders=n/a	lead=elle-rowan	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=elle-rowan	handoffs=n/a	elle/iris=n/a
 cold	neg-program	move my NEXUS program interview to Friday	holders=n/a	lead=cole-blake	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=cole-blake	handoffs=n/a	elle/iris=n/a
 cold	neg-apply	apply to NEXUS for me before my Toronto trip	holders=n/a	lead=troy-lennox	1:1(troy-lennox)=troy-lennox	lane(troy-lennox)=null	handoffs=n/a	elle/iris=n/a
