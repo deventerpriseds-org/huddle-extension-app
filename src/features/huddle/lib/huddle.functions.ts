@@ -33,6 +33,8 @@ import {
   type PromptDebug,
 } from "./fallbacks";
 import { buildRoster } from "./roster";
+// Pure (no server imports) -- the 1:1 owner hand-off directive (F1-3 / F2).
+import { buildFollowupDirective, type FollowupMode } from "./handoff-followup";
 // Pure (no server imports) -- the Nexus write tool's reply-honesty guard, run in reply assembly.
 import {
   presentNexusWriteTurn,
@@ -54,6 +56,9 @@ import {
   exclusiveCapabilities,
   capabilityOwnerFor,
   classifyTurnIntent,
+  classifyAsk,
+  laneHandoffSuppression,
+  stripTeammateDeferral,
   type TurnIntent,
 } from "./capabilities";
 // Surface-independent half of task creation — the capability meta-task guard, cross-turn dedup,
@@ -1960,10 +1965,28 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // awaits it briefly: an agent that just handed the ask to a teammate must not also offer to produce it
   // (measured live 2026-10-28: Finn passed a GTM ask to Tess, then the offer was still appended).
   let followupResolution: Promise<void> | null = null;
+  // F1: the owner of a 1:1 ask that the addressed agent CANNOT perform itself — an exclusive capability's
+  // owner, else a deterministic prime-holder hand-off (capability data, e.g. an explicit Nexus write).
+  // Only these survive an explicit "do it now"; the semantic lane hand-off does not.
+  const toolGatedOwnerFor = (addressedId: AgentId): AgentId | null => {
+    const cap = capabilityOwnerFor(data.text)?.agent.id ?? null;
+    if (cap) return cap;
+    const prime = primeLaneDecision(data.text, addressedId);
+    return prime && prime !== "keep" ? prime : null;
+  };
+  // F1 (AC-F1-2): a genuine user 1:1 "perform" ask classified urgency "now" (classifyAsk), with no
+  // tool-gated owner other than the addressed agent → the addressed agent does it now, no hand-off.
+  const oneToOneNowKeeps = (addressedId: AgentId, intent: TurnIntent): boolean => {
+    if (data.scope === "group" || data.internal || intent !== "perform") return false;
+    if (classifyAsk(data.text).urgency !== "now") return false;
+    const gated = toolGatedOwnerFor(addressedId);
+    return !gated || gated === addressedId;
+  };
   async function deliverOwnerFollowup(
     ownerId: AgentId,
     fromName: string,
     ask: string,
+    mode: FollowupMode = "confirm",
   ): Promise<void> {
     try {
       const owner = AGENT_BY_ID[ownerId];
@@ -1985,13 +2008,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // The context package handed to the owner. Careful language: the owner was TAPPED/PASSED by
       // the addressed agent and is replying in ITS OWN 1:1 with the user — it did NOT join the other
       // agent's conversation. (Delivered as the turn's user-text; the client renders only the reply.)
-      const directive =
-        `You are ${owner.name}. ${fromName} just tapped you and passed something your way: the user, ` +
-        `in their separate 1:1 with ${fromName}, asked — "${cleanAsk}". You are now replying in YOUR OWN ` +
-        `1:1 channel with the user; you did NOT join ${fromName}'s conversation. Send ONE brief, warm ` +
-        `opening message: greet the user, say ${fromName} passed this to you and briefly why (reference the ` +
-        `ask in your own words), and offer to take it from here — ask them to confirm before you act. Do ` +
-        `not restate ${fromName} verbatim, and do not perform the work yet.`;
+      // Built in handoff-followup.ts (pure, tested): "now" starts the work (F1-3); "confirm" carries the
+      // hand-off framing plus the confirm ask.
+      const directive = buildFollowupDirective({ ownerName: owner.name, fromName, ask: cleanAsk, mode });
       // Enqueue a REAL durable turn in the owner's DM. It rides the proven path: the runner produces
       // the owner's reply, persists it, and fires the away-notification (send_push → Android bridge) —
       // exactly like any other reply. Idempotent id so a retry can't double-post.
@@ -2481,7 +2500,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       ? classifyTurnIntent(data.text)
       : "perform";
     let laneDirective = "";
-    if (data.scope !== "group" && !data.internal && turnIntent === "perform") {
+    // F1 (AC-handoff-confirm-flow.md AC-F1-2): an explicit "do it now" (classifyAsk urgency — the ONE
+    // urgency classifier) means the addressed agent does the work itself, this turn, instead of being
+    // told to defer — UNLESS the ask is tool-gated to someone else (an exclusive capability, or a
+    // deterministic prime-holder hand-off), which this agent cannot perform. The follow-up decision below
+    // (oneToOneNowKeeps) reads the same predicate, so the directive and the hand-off cannot disagree.
+    const doItNowHere = oneToOneNowKeeps(nextId, turnIntent);
+    if (doItNowHere) {
+      laneDirective = `\n\nThe user asked for this NOW — treat that as their go-ahead. Do the work yourself in THIS turn with your own tools (run the research or web search, delegate_to_specialist, create_artifact — whatever fits the ask), then tell them briefly what you did or set in motion. Do NOT hand it to a teammate, do NOT ask them to confirm first, and do NOT just promise to start later.`;
+    } else if (data.scope !== "group" && !data.internal && turnIntent === "perform") {
       const owner = laneOwnerFor(data.text, nextId);
       if (owner && owner.id !== nextId) {
         const o = AGENT_BY_ID[owner.id];
@@ -6876,12 +6903,23 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // Owner resolution is SEMANTIC in a 1:1 (the LLM router is group-only). capabilityOwnerFor
       // (exclusive powers) is authoritative + synchronous — deliver it immediately, exactly as before.
       const capOwnerId = capabilityOwnerFor(data.text)?.agent.id ?? null;
+      // F1-3: a tool-gated hand-off of a "now" ask starts the work in the owner's turn (the "now" is the
+      // owner's live go-ahead); every other hand-off carries a task + Confirm buttons (F2).
+      const followupMode: "now" | "confirm" = classifyAsk(data.text).urgency === "now" ? "now" : "confirm";
       const deliverIfOwner = (ownerId: AgentId | null) => {
         if (ownerId && ownerId !== nextId && !followupDelivered.has(ownerId)) {
           followupDelivered.add(ownerId);
-          void deliverOwnerFollowup(ownerId, winner.name, data.text);
+          void deliverOwnerFollowup(ownerId, winner.name, data.text, followupMode);
         }
       };
+      // F1 (AC-F1-1/F1-2): the SEMANTIC lane hand-off is skipped when the addressed agent already did the
+      // work this turn (read from its own toolUses) or the ask is an explicit "now". Tool-gated hand-offs
+      // below (exclusive owner, deterministic prime holder) are unaffected.
+      const laneSuppressed = laneHandoffSuppression({
+        text: data.text,
+        addressedId: nextId,
+        toolUses: r.toolUses,
+      });
       // SHARED capability (agents.ts, exclusive:false): deterministic too, and decided BEFORE the LLM
       // resolver so the 1:1 directive (laneOwnerFor) and this follow-up can never disagree. "keep" =
       // the addressed agent is prime for this ask -> no follow-up to anyone. A non-holder gets a deterministic
@@ -6894,6 +6932,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // in its own lane: nothing to pass along
       } else if (prime) {
         deliverIfOwner(prime);
+      } else if (laneSuppressed) {
+        // No hand-off: this agent handled it (or was told to do it now). F1-4 — its reply must not also
+        // promise that a named teammate will pick it up; the reply was pushed just above.
+        const last = replies.length - 1;
+        if (last >= 0 && replies[last].agentId === nextId) {
+          replies[last] = { ...replies[last], text: stripTeammateDeferral(replies[last].text, nextId) };
+        }
       } else {
         // No exclusive owner → resolve the LANE owner. The LLM router doesn't run in a 1:1, so classify
         // SEMANTICALLY (a cheap dedicated LLM call, mirroring scoreDifficultyLLM) — replacing the keyword

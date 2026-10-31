@@ -6,6 +6,7 @@
 // roster with zero per-case code. See AgentCapability in agents.ts.
 import { AGENTS, type Agent, type AgentCapability, type AgentId } from "../data/agents";
 import { nexusCourseMentioned } from "./nexus/course-context";
+import { agentPerformedWork, type ToolUseLike } from "./tasks/board-claims";
 
 // ─── Turn intent classification ────────────────────────────────────────────────
 // Lightweight, trait-driven intent classifier. Determines the SEMANTIC INTENT of
@@ -150,10 +151,29 @@ const URGENCY_RE: RegExp[] = [
   /^\s*now\b[,\s]/i, // leading "now,"
 ];
 
+// The over-matches URGENCY_RE has no context for (AC-handoff-confirm-flow.md S-U10..S-U13, measured live
+// defects): a NEGATED now ("not now", "not right now", "don't do it now"), a "bad time" now ("right now
+// is a bad time", "now isn't a good time") and the discourse marker "now that you mention it". Each one is
+// a reason NOT to start, so any match forces `default` — the safe direction, since "now" is what lets an
+// agent skip the confirm step (F1/F3). A negation only governs a "now" within three plain words of it, so
+// "don't wait, do it now" (comma between) is still urgent.
+const NOT_URGENT_RE: RegExp[] = [
+  /\b(?:not|don'?t|don’t|do not|never|no need to)\s+(?:[a-z']+\s+){0,3}?now\b/i,
+  /\bnow(?:\s+is|'s|’s)?\s+(?:not|isn'?t|a\s+(?:bad|terrible|tough|awful|busy|hard|rough)\b)/i,
+  /\bnow\s+isn'?t\b/i,
+  /\bnow\s+that\b/i,
+];
+
+/** Is this ask an explicit "do it now"? ONE classifier for urgency — consumers read `classifyAsk().urgency`. */
+function askIsUrgentNow(t: string): boolean {
+  if (!URGENCY_RE.some((re) => re.test(t))) return false;
+  return !NOT_URGENT_RE.some((re) => re.test(t));
+}
+
 export function classifyAsk(text: string): AskClass {
   const t = (text ?? "").trim();
   const intent = classifyTurnIntent(t);
-  const urgency: AskUrgency = URGENCY_RE.some((re) => re.test(t)) ? "now" : "default";
+  const urgency: AskUrgency = askIsUrgentNow(t) ? "now" : "default";
   let type: AskType;
   switch (intent) {
     case "query":
@@ -169,6 +189,67 @@ export function classifyAsk(text: string): AskClass {
       break;
   }
   return { type, urgency, intent };
+}
+
+// ─── 1:1 hand-off suppression (F1, docs/qc-evidence/AC-handoff-confirm-flow.md) ─────────────────────
+// Whoever is asked does the work when they can. The SEMANTIC lane hand-off (a teammate's lane, resolved
+// by the LLM owner judge) is skipped when the addressed agent already HANDLED the ask this turn (it
+// dispatched a specialist, saved a document or created the task row -- read from what it DID, never from
+// what it said), or when the owner asked for it NOW (the existing classifyAsk urgency, the one urgency
+// classifier). Tool-gated hand-offs (an EXCLUSIVE capability, or a deterministic prime-holder hand-off
+// such as a Nexus write) are NOT suppressed here: the addressed agent cannot perform those at all.
+export type LaneHandoffSuppression = "handled" | "now" | null;
+
+export function laneHandoffSuppression(opts: {
+  text: string;
+  addressedId: string;
+  toolUses: readonly ToolUseLike[];
+}): LaneHandoffSuppression {
+  if (agentPerformedWork(opts.toolUses, opts.addressedId)) return "handled";
+  if (classifyAsk(opts.text).urgency === "now") return "now";
+  return null;
+}
+
+const escapeName = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** The deferral shapes a reply uses to hand an ask to teammate `N` (F1-4). */
+function deferralPatterns(name: string): RegExp[] {
+  const n = escapeName(name);
+  return [
+    new RegExp(`\\bloop(?:ing)?\\s+(?:in\\s+)?${n}\\b|\\bloop\\s+${n}\\s+in\\b`, "i"),
+    new RegExp(`\\bpass(?:ed|ing)?\\s+(?:(?:this|it|that)\\s+)?(?:(?:along|over)\\s+)?to\\s+${n}\\b`, "i"),
+    new RegExp(`\\bhand(?:ed|ing)?\\s+(?:(?:this|it|that)\\s+)?(?:(?:off|over)\\s+)?to\\s+${n}\\b`, "i"),
+    new RegExp(`\\b${n}(?:'s|’s|\\s+is)\\s+(?:much\\s+|really\\s+)?(?:better\\s+suited|the\\s+(?:right|best)\\s+(?:person|one|fit))`, "i"),
+    new RegExp(`\\b${n}(?:\\s+will|'ll|’ll)\\s+(?:reach\\s+out|follow\\s+up|be\\s+in\\s+touch|get\\s+back|pick\\s+(?:this|it)\\s+up|take\\s+it\\s+from\\s+here)`, "i"),
+    new RegExp(`\\b(?:have|get|let)\\s+${n}\\s+(?:reach\\s+out|follow\\s+up|take\\s+(?:this|it|over))`, "i"),
+    new RegExp(`\\b${n}(?:'s|’s)\\s+(?:area|lane|domain|wheelhouse)\\b`, "i"),
+  ];
+}
+
+/**
+ * F1-4: when the runtime decided NOT to hand off, a reply must not tell the owner a teammate will pick it
+ * up (the directive and the follow-up must never disagree). Drops each sentence that defers to a NAMED
+ * teammate (any roster agent other than `addressedId`); everything else is kept verbatim. Returns the
+ * original text when nothing matches, or when dropping would leave nothing to say. Pure.
+ */
+export function stripTeammateDeferral(text: string, addressedId: string): string {
+  const src = String(text ?? "");
+  const others = AGENTS.filter((a) => a.id !== addressedId).map((a) => a.name.split(/\s+/)[0]);
+  const pats = others.flatMap(deferralPatterns);
+  const parts = src.split(/((?<=[.!?])\s+|\n+)/);
+  let changed = false;
+  const kept: string[] = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const sentence = parts[i] ?? "";
+    const sep = parts[i + 1] ?? "";
+    if (sentence.trim() && pats.some((re) => re.test(sentence))) {
+      changed = true;
+      continue;
+    }
+    kept.push(sentence + sep);
+  }
+  if (!changed) return src;
+  const out = kept.join("").trim();
+  return out ? out : src;
 }
 
 // Immediate, TYPE-AWARE, VARIED acknowledgement voiced the instant the user hands an agent a task —
