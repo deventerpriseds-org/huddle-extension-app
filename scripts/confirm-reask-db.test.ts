@@ -182,9 +182,29 @@ try {
   await task("bind-B", "UP_NEXT", "cole-blake");
   await eng("bind-A", "asked", "2026-10-20T10:00:00Z", "confirm_last_sent_at='2026-10-20T10:00:00Z', confirm_ask_count=1");
   await eng("bind-B", "asked", "2026-10-21T10:00:00Z", "confirm_last_sent_at='2026-10-21T10:00:00Z', confirm_ask_count=1");
-  await T.proposeTaskDod("bind-A", E, "Test- a DoD written AFTER B was asked"); // bumps A's updated_at
+  // An UNRELATED write that bumps A's updated_at (a re-arm / metadata touch). This used to be a proposeTaskDod
+  // call, but since F4 (docs/qc-evidence/AC-handoff-confirm-flow.md AC-F4-3) a proposal IS a send and is
+  // stamped as one, so it is no longer "unrelated" -- see the F4 checks right below.
+  await db.query(`UPDATE tasks.task_engagement_state SET updated_at = now() + interval '1 hour' WHERE task_id='bind-A'`);
   const pc = await T.getPendingConfirmForAgent(E, "cole-blake");
   check("AC-27 a plain yes binds to B (asked last), not A (written last)", pc?.taskId === "bind-B", JSON.stringify(pc));
+  // F4 / AC-F4-3: a LIVE proposal on A is a real send -- it now outranks B's older autowork ask.
+  await T.proposeTaskDod("bind-A", E, "Test- a live proposal made AFTER B was asked");
+  const pcLive = await T.getPendingConfirmForAgent(E, "cole-blake");
+  const aLive = (await T.getTaskEngagementStates(["bind-A"])).get("bind-A")!;
+  check(
+    "AC-F4-3 a live propose_task_intent stamps asked + last_sent and outranks an older autowork ask",
+    pcLive?.taskId === "bind-A" && aLive.confirm_status === "asked" && !!aLive.confirm_last_sent_at,
+    JSON.stringify({ pcLive, aLive }),
+  );
+  check(
+    "AC-F4-4 the live stamp leaves the row NOT armed-unsent (confirm_ask_at <= last_sent), so no extra autowork send",
+    !!aLive.confirm_ask_at && new Date(aLive.confirm_ask_at).getTime() <= new Date(aLive.confirm_last_sent_at!).getTime() &&
+      (await T.getDueConfirmAsks(new Date(Date.now() + 86_400_000).toISOString())).every((r: { task_id: string }) => r.task_id !== "bind-A"),
+    JSON.stringify(aLive),
+  );
+  // Restore the AC-27/28 fixture shape: B is the most recently sent ask again.
+  await db.query(`UPDATE tasks.task_engagement_state SET confirm_last_sent_at='2026-10-20T10:00:00Z', confirm_ask_at='2026-10-20T10:00:00Z' WHERE task_id='bind-A'`);
   // Same property on the OTHER SQL branch: a user linked to an identity profile (user_id set) — the live owner's
   // shape. The unlinked email above takes the email-only branch.
   const E2 = "linked@test.local";
@@ -199,15 +219,16 @@ try {
       [id, E2, OID, sent],
     );
   }
-  await T.proposeTaskDod("link-A", E2, "Test- a DoD written AFTER link-B was asked");
+  await db.query(`UPDATE tasks.task_engagement_state SET updated_at = now() + interval '1 hour' WHERE task_id='link-A'`);
   const pc2 = await T.getPendingConfirmForAgent(E2, "sam-trent");
   check("AC-27 (linked user / user_id branch) a plain yes binds to the last-SENT ask", pc2?.taskId === "link-B", JSON.stringify(pc2));
-  // The text and voice call sites pass that row's id straight through — no re-selection in between.
+  // VOICE still passes getPendingConfirmForAgent's row straight through. TEXT, since F4 (AC-F4-1/2/8), confirms only
+  // the ask carried by the most recent agent message in the huddle, through the ONE confirm writer.
   const hf = readFileSync(`${import.meta.dir}/../src/features/huddle/lib/huddle.functions.ts`, "utf8");
   const rt = readFileSync(`${import.meta.dir}/../src/features/huddle/lib/voice/realtime-tools.server.ts`, "utf8");
   check(
-    "AC-27 the deterministic 'yes' path confirms exactly getPendingConfirmForAgent's task (text + voice)",
-    /const pc = await getPendingConfirmForAgent\(em, dmAgent\);[\s\S]{0,400}await confirmTaskIntent\(pc\.taskId, em, dod\);/.test(hf) &&
+    "AC-27/F4 the deterministic 'yes' paths: text binds to the latest message's ask via confirmTaskFromProposal; voice to getPendingConfirmForAgent",
+    /confirmAskTaskIdOfLatestReply\(await getLatestAgentReplyTurn\(em, data\.huddleId, turnId\)\)[\s\S]{0,2400}confirmTaskFromProposal\(\{ caller: data\.caller, taskId: binding\.confirm\.taskId, email: em/.test(hf) &&
       /const pending = await getPendingConfirmForAgent\(email, ctx\.agentId\);[\s\S]{0,900}taskId: pending\.taskId,/.test(rt),
   );
 

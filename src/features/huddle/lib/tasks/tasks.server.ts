@@ -1605,12 +1605,34 @@ export async function proposeTaskDod(
   // confirmTaskIntent's full column list rather than a minimal proposed_dod-only insert.
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { userId } = await resolveScopeByEmail(userEmail);
+  // F4 / AC-F4-3 (docs/qc-evidence/AC-handoff-confirm-flow.md, CF-3): a propose_task_intent IS an ask the
+  // user can now see and answer, so it is stamped as SENT — confirm_status='asked', confirm_last_sent_at=now.
+  // Without this a LIVE ask (a hand-off, an in-chat proposal) could never be "the pending ask" for
+  // getPendingConfirmForAgent, which filters 'asked' and orders by confirm_last_sent_at, so a typed "yes"
+  // bound to whatever older autowork ask existed. Three guards:
+  //  - a CONFIRMED row is never downgraded (status, stamp and schedule all left exactly as they were);
+  //  - confirm_ask_at is set to the SAME instant as the send stamp, so the row is not "armed but unsent"
+  //    (ARMED_UNSENT_SQL needs confirm_ask_at > confirm_last_sent_at) — fireDueConfirmAsks therefore sends
+  //    no second ask for it, and planConfirmArming's 24h per-item floor runs from this send (AC-F4-4);
+  //  - confirm_ask_count is only raised to at least 1, never incremented: it is the CAS key autowork's
+  //    claimConfirmAskSend uses, and an autowork ask turn that calls propose_task_intent must not count twice.
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, proposed_dod, user_id, proposed_reminder_at)
-     VALUES ($1,$2,$3,$4,$5)
+    `INSERT INTO tasks.task_engagement_state
+       (task_id, user_email, proposed_dod, user_id, proposed_reminder_at,
+        confirm_status, confirm_ask_at, confirm_last_sent_at, confirm_ask_count)
+     VALUES ($1,$2,$3,$4,$5,'asked',date_trunc('milliseconds', now()),date_trunc('milliseconds', now()),1)
      ON CONFLICT (task_id) DO UPDATE SET
        proposed_dod=EXCLUDED.proposed_dod,
        proposed_reminder_at=EXCLUDED.proposed_reminder_at,
+       confirm_status = CASE WHEN tasks.task_engagement_state.confirm_status = 'confirmed'
+                             THEN tasks.task_engagement_state.confirm_status ELSE 'asked' END,
+       confirm_ask_at = CASE WHEN tasks.task_engagement_state.confirm_status = 'confirmed'
+                             THEN tasks.task_engagement_state.confirm_ask_at ELSE EXCLUDED.confirm_ask_at END,
+       confirm_last_sent_at = CASE WHEN tasks.task_engagement_state.confirm_status = 'confirmed'
+                             THEN tasks.task_engagement_state.confirm_last_sent_at ELSE EXCLUDED.confirm_last_sent_at END,
+       confirm_ask_count = CASE WHEN tasks.task_engagement_state.confirm_status = 'confirmed'
+                             THEN tasks.task_engagement_state.confirm_ask_count
+                             ELSE GREATEST(tasks.task_engagement_state.confirm_ask_count, 1) END,
        user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
     [taskId, userEmail.toLowerCase(), dod, userId, proposedReminderAtIso || null],
   );

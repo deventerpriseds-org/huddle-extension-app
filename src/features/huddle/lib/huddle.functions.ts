@@ -647,15 +647,94 @@ export interface RunHuddleTurnOpts {
 // confirm-intent deterministically without the model. Deliberately conservative: a question, a negation,
 // or anything long enough to be a real refinement returns false and is left to the model + the injected
 // directive (which asks it to call confirm_task_intent with the final, folded-in DoD).
-function isPlainConfirmation(text: string): boolean {
-  const t = text.trim().toLowerCase();
+//
+// F4 (docs/qc-evidence/AC-handoff-confirm-flow.md, spelling rows S-C1..S-C17): the message must be made
+// ENTIRELY of affirmation vocabulary. It used to pass as soon as ONE affirmative word appeared anywhere in
+// <=40 chars, so "great job on the last one" (praise about other work) and "yes, but make it a 2-page brief"
+// (a refinement — which the contract above says is left to the model) both confirmed, dropping the
+// refinement. Now every affirmative phrase is stripped and anything left over means "not plain". And "👍"
+// was listed but could never match: `\b` needs a word character beside it, and an emoji is not one.
+// Exported for the table-driven test (scripts/handoff-confirm-binding.test.ts).
+const PLAIN_CONFIRM_PHRASES = [
+  "works for me",
+  "sounds good",
+  "sounds great",
+  "looks good",
+  "looks great",
+  "go ahead",
+  "go for it",
+  "do it",
+  "that works",
+  "thank you",
+  "let'?s do it",
+  "let'?s go",
+  "yes",
+  "yep",
+  "yeah",
+  "yup",
+  "confirm(?:ed)?",
+  "correct",
+  "right",
+  "perfect",
+  "approved?",
+  "okay",
+  "ok",
+  "sure",
+  "great",
+  "proceed",
+  "absolutely",
+  "definitely",
+  // Filler that never changes the meaning of an affirmation.
+  "thanks",
+  "please",
+  "that'?s",
+  "it'?s",
+  "now",
+  "then",
+  "and",
+  "so",
+  "just",
+  "all",
+];
+const PLAIN_CONFIRM_RE = new RegExp(`\\b(?:${PLAIN_CONFIRM_PHRASES.join("|")})\\b`, "g");
+export function isPlainConfirmation(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[‘’]/g, "'");
   if (!t || t.length > 40) return false;
   if (t.includes("?")) return false;
   if (/\b(no|not|don'?t|stop|wait|hold|cancel|nope|instead|change|revise|actually)\b/.test(t))
     return false;
-  return /\b(yes|yep|yeah|yup|confirm(ed)?|correct|right|sounds good|looks good|go ahead|do it|that works|works for me|perfect|approved?|okay?|ok|sure|great|👍)\b/.test(
-    t,
-  );
+  // At least one REAL affirmation (filler alone — "thanks", "now" — is not a confirmation).
+  const hasAffirmation =
+    t.includes("👍") ||
+    /\b(yes|yep|yeah|yup|confirm(ed)?|correct|right|sounds good|sounds great|looks good|looks great|go ahead|go for it|do it|that works|works for me|perfect|approved?|okay|ok|sure|great|proceed|absolutely|definitely|let'?s go)\b/.test(
+      t,
+    );
+  if (!hasAffirmation) return false;
+  // Nothing may be left once affirmations, filler, emoji thumbs and punctuation are removed.
+  const residue = t
+    .replace(/👍(?:[\u{1F3FB}-\u{1F3FF}])?/gu, " ")
+    .replace(PLAIN_CONFIRM_RE, " ")
+    .replace(/[\s.,!;:—–\-'"]+/g, "");
+  return residue.length === 0;
+}
+
+/**
+ * F4 binding rule, pure (docs/qc-evidence/AC-handoff-confirm-flow.md AC-F4-1/2, rows S-C2/S-C2n/S-C7/S-C14n).
+ *   `bound`   = the task whose ask the MOST RECENT agent message in this huddle carries (owned, assigned to this
+ *               agent, not yet confirmed), or null when that message carries no ask.
+ *   `plain`   = isPlainConfirmation(text).
+ *   `pending` = getPendingConfirmForAgent's pick; only consulted when nothing is bound and the text is not a
+ *               bare affirmation (a longer message can still be about an older check-in — the model decides).
+ * Deterministic confirmation happens ONLY for a plain reply to a bound ask. A bare "ok great" / "Confirmed" when
+ * the latest message carried no ask confirms nothing and gets no confirm directive: it is answering whatever
+ * that message said.
+ */
+export function decideTypedConfirmBinding<T>(i: { bound: T | null; plain: boolean; pending: T | null }): {
+  confirm: T | null;
+  directive: T | null;
+} {
+  if (i.bound) return { confirm: i.plain ? i.bound : null, directive: i.bound };
+  return { confirm: null, directive: i.plain ? null : i.pending };
 }
 
 /** Conservative "the blocker is cleared" matcher — used to route an unblock reply from a non-owner
@@ -736,29 +815,49 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         data.caller?.entra_email ??
         null;
       if (em) {
-        const { getPendingConfirmForAgent } = await import("./tasks/tasks.server");
-        const pc = await getPendingConfirmForAgent(em, dmAgent);
-        if (pc) {
-          pendingConfirm = { ...pc, agentId: dmAgent };
-          if (isPlainConfirmation(replyText)) {
-            const dod = (pc.proposedDod ?? replyText).trim() || replyText;
-            try {
-              const { confirmTaskIntent } = await import("./tasks/tasks.server");
-              await confirmTaskIntent(pc.taskId, em, dod);
-              try {
-                const { invokeJourneyTool } = await import("./journey/proxy.functions");
-                await invokeJourneyTool({
-                  toolName: "update_task",
-                  args: { task_id: pc.taskId, definition_of_done: dod },
-                  caller: data.caller ?? {},
-                  context: { source: "huddle" },
-                });
-              } catch {
-                /* journey mirror sync is best-effort */
-              }
-            } catch {
-              /* deterministic capture is best-effort */
-            }
+        const { getPendingConfirmForAgent, getOwnedTaskForConfirmAsk } = await import("./tasks/tasks.server");
+        // F4 binding (docs/qc-evidence/AC-handoff-confirm-flow.md AC-F4-1/2/8): a typed confirmation answers
+        // the MOST RECENT agent message in THIS huddle, so only the ask that message carried may be confirmed
+        // deterministically. It used to confirm getPendingConfirmForAgent's pick — the newest SENT ask for the
+        // agent — which, because live asks were never stamped as sent (CF-3), was always an older autowork
+        // ask the owner was not looking at. Read from the durable turn store, never from client input.
+        let latestAskTaskId: string | null = null;
+        try {
+          const { getLatestAgentReplyTurn, confirmAskTaskIdOfLatestReply } = await import("./tasks/turns.server");
+          latestAskTaskId = confirmAskTaskIdOfLatestReply(await getLatestAgentReplyTurn(em, data.huddleId, turnId));
+        } catch {
+          latestAskTaskId = null; // unreadable = no binding = nothing confirmed deterministically (fail closed)
+        }
+        let bound: { taskId: string; title: string; proposedDod: string | null } | null = null;
+        if (latestAskTaskId) {
+          const t = await getOwnedTaskForConfirmAsk(latestAskTaskId, em).catch(() => null);
+          // Same assignee filter getPendingConfirmForAgent applies (AC-F4-6): a typed confirm in dm-A never
+          // confirms a task assigned to B, even if B's ask is somehow the latest message here.
+          if (
+            t &&
+            t.assigned_agent === dmAgent &&
+            t.confirm_status !== "confirmed" &&
+            (t.status ?? "").toUpperCase() !== "DONE"
+          ) {
+            bound = { taskId: t.id, title: t.title, proposedDod: t.proposed_dod };
+          }
+        }
+        const plain = isPlainConfirmation(replyText);
+        const binding = decideTypedConfirmBinding({
+          bound,
+          plain,
+          pending: bound || plain ? null : await getPendingConfirmForAgent(em, dmAgent),
+        });
+        if (binding.directive) pendingConfirm = { ...binding.directive, agentId: dmAgent };
+        if (binding.confirm) {
+          try {
+            // THE one confirm writer (AC-F3-9): the same server-authoritative unlock the Confirm button and
+            // voice use — ownership check, server-recorded DoD only (never the typed text), idempotent,
+            // remind-mode scheduling, journey DoD write.
+            const { confirmTaskFromProposal } = await import("./tasks/confirm-ask.functions");
+            await confirmTaskFromProposal({ caller: data.caller, taskId: binding.confirm.taskId, email: em });
+          } catch {
+            /* deterministic capture is best-effort; the directive below still reaches the model */
           }
         }
       }

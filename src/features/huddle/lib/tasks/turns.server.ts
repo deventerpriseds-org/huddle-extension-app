@@ -379,6 +379,64 @@ export async function getTurnsSince(huddleId: string, sinceMs: number): Promise<
   return res.rows.map(mapRow);
 }
 
+/**
+ * F4 (docs/qc-evidence/AC-handoff-confirm-flow.md, AC-F4-1/2/8): the user's most recent turn in a huddle that
+ * has at least one persisted agent reply, excluding the turn being executed right now. This is the durable
+ * record of "the message the owner is replying to" — read server-side, never taken from the client — so a
+ * typed "Confirmed" can bind to the ask that message carried and to nothing else. Scope mirrors
+ * getUserTurnsSince (user_id, falling back to the email set). Replies live in `replies` for a chunked turn and
+ * in `result->'replies'` for a synchronously completed one; both count.
+ */
+export async function getLatestAgentReplyTurn(
+  userEmail: string,
+  huddleId: string,
+  excludeTurnId?: string | null,
+): Promise<TurnRecord | null> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId, emails } = await resolveScopeByEmail(userEmail);
+  const hasReplies = `(jsonb_array_length(COALESCE(replies, '[]'::jsonb)) > 0
+         OR jsonb_array_length(CASE WHEN jsonb_typeof(result->'replies') = 'array' THEN result->'replies' ELSE '[]'::jsonb END) > 0)`;
+  const res = await getPool().query(
+    userId
+      ? `SELECT ${ROW_COLS} FROM chat.pending_turns
+          WHERE huddle_id = $1 AND id <> $2
+            AND (user_id = $3 OR (user_id IS NULL AND lower(user_email) = ANY($4)))
+            AND status IN ('done', 'partial', 'running', 'error')
+            AND ${hasReplies}
+          ORDER BY updated_at DESC
+          LIMIT 1`
+      : `SELECT ${ROW_COLS} FROM chat.pending_turns
+          WHERE huddle_id = $1 AND id <> $2 AND lower(user_email) = lower($3)
+            AND status IN ('done', 'partial', 'running', 'error')
+            AND ${hasReplies}
+          ORDER BY updated_at DESC
+          LIMIT 1`,
+    userId ? [huddleId, excludeTurnId ?? "", userId, emails] : [huddleId, excludeTurnId ?? "", userEmail],
+  );
+  return res.rows[0] ? mapRow(res.rows[0]) : null;
+}
+
+/**
+ * The confirm-ask task id carried by the LAST agent reply of a turn, or null. Pure. "Last" because the most
+ * recent agent message is the one the owner is answering; an ask on an earlier reply of the same turn that
+ * was followed by another agent message is no longer the thing on screen (F4 binding rule).
+ */
+export function confirmAskTaskIdOfLatestReply(turn: Pick<TurnRecord, "replies" | "result"> | null): string | null {
+  if (!turn) return null;
+  const fromResult = (turn.result as { replies?: unknown } | null)?.replies;
+  const list = Array.isArray(turn.replies) && turn.replies.length ? turn.replies : Array.isArray(fromResult) ? fromResult : [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const r = list[i] as { text?: unknown; confirmAsk?: { taskId?: unknown } } | null;
+    if (!r || typeof r !== "object") continue;
+    const id = r.confirmAsk?.taskId;
+    if (typeof id === "string" && id.trim()) return id.trim();
+    // A real agent message without an ask is the latest thing on screen: nothing to bind to.
+    if (typeof r.text === "string" && r.text.trim()) return null;
+  }
+  return null;
+}
+
 export async function getTurn(id: string): Promise<TurnRecord | null> {
   await ensureBootstrapped();
   const res = await getPool().query(`SELECT ${ROW_COLS} FROM chat.pending_turns WHERE id = $1`, [id]);
