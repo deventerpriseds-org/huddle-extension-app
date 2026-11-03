@@ -20,3 +20,14 @@ Branch: `claude_inbox-read` off `origin/main` 32f50e4. Additive only. Not merged
 | Graph-gated tool push | `huddle.functions.ts` OpenAI path (~3644) and Lovable path (~6071); voice `realtime-tools.server.ts` (~372) | New tools pushed inside the same `graphEmailConfigured()` blocks |
 | Voice NATIVE dispatch set | `realtime-tools.server.ts` `NATIVE` | Both names added, else they fall through to journey |
 
+## Step 2 - implementation + wiring (tsc exit 0)
+
+| File | Change (all additive) |
+|---|---|
+| `src/features/huddle/lib/email/inbox-read.ts` | NEW. Pure half: `SEARCH_EMAIL_TOOL` / `READ_EMAIL_TOOL` schemas, `buildInboxSearchQuery` ($search KQL vs $filter+$orderby), `cleanEmailBody` (HTML->text, whitespace, cap default 4000 / hard 12000), `formatReceived` (owner tz), `mapGraphMailError` (403 -> `needsConsent`), `finishSearchHits` |
+| `src/features/huddle/lib/email/graph-email.server.ts` | Appended `searchInboxMessages`, `readInboxMessage` (GET only, same `getAppToken`), and `runInboxReadTool` - the ONE executor every surface calls; mailbox = `resolveCalendarMailbox(caller) ?? caller.entra_email`, never from args |
+| `src/features/huddle/lib/huddle.functions.ts` | OpenAI path: push both tools inside the existing `graphEmailConfigured()` block, dispatch branch before `get_external_calendar_events`. Lovable path: two `tool()` entries in the same gated block |
+| `src/features/huddle/lib/voice/realtime-tools.server.ts` | Push both inside the existing Graph-gated email `try`, names added to `NATIVE`, dispatch branch |
+
+Graph query shape: free text or a sender NAME -> `$search` (KQL `from:`, `received>=`, `received<=`; unread post-filtered because KQL here cannot express it, so it over-fetches 3x). Otherwise -> `$filter` led by `receivedDateTime ge` (Graph needs the `$orderby` property first in `$filter`), default lookback 90 days, `from/emailAddress/address eq '<addr>'` with OData quote doubling, `isRead eq false`.
+

@@ -102,6 +102,7 @@ import {
   mimeForFilename,
 } from "./openai-builtin-tools";
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
+import { SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL, INBOX_READ_TOOL_NAMES } from "./email/inbox-read";
 import {
   DELEGATE_TO_SPECIALIST_TOOL,
   workerDirectory,
@@ -3708,6 +3709,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           });
           // Raw external Outlook/Microsoft calendar (Graph) — explicit-only, gated on Graph config.
           emailTools.push(GET_EXTERNAL_CALENDAR_EVENTS_TOOL);
+          // INBOX READ (2026-11-03, additive): read-only search/read of the OWNER's own mailbox.
+          // Same Graph gate as the calendar read; never sends (executor: runInboxReadTool).
+          emailTools.push(SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL);
         }
 
         const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
@@ -4704,6 +4708,46 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               recordToolUse(winner.id, "create_email_draft", "draft crashed", false, msg);
+              return JSON.stringify({ ok: false, error: msg });
+            }
+          }
+          if (INBOX_READ_TOOL_NAMES.has(c.name)) {
+            // INBOX READ (2026-11-03, additive): read-only, owner's own mailbox, one shared executor.
+            try {
+              const { runInboxReadTool } = await import("./email/graph-email.server");
+              const r = await runInboxReadTool(
+                c.name,
+                c.arguments as Record<string, unknown>,
+                data.caller,
+                data.timeZone,
+              );
+              const ok = r.ok === true;
+              recordToolUse(
+                winner.id,
+                c.name,
+                ok
+                  ? c.name === "search_email"
+                    ? `${String(r.count ?? 0)} message(s)`
+                    : "message read"
+                  : r.needsConsent
+                    ? "Mail.Read consent missing"
+                    : "inbox read failed",
+                ok,
+                ok ? undefined : String(r.error ?? "unknown"),
+              );
+              if (!ok) {
+                const ev = recordFallback(
+                  "tool",
+                  `${winner.name}: ${c.name} failed — ${String(r.error ?? "unknown")}`,
+                  `${c.name} failed`,
+                  winner.id,
+                );
+                perAgentFallbacks.push(ev.inline);
+              }
+              return JSON.stringify(r);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, c.name, "inbox read crashed", false, msg);
               return JSON.stringify({ ok: false, error: msg });
             }
           }
@@ -6216,6 +6260,46 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 );
                 return JSON.stringify(r);
               },
+            });
+            // INBOX READ (2026-11-03, additive) - mirrors the OpenAI path: same schemas' descriptions,
+            // same shared executor, same Graph gate. Read-only; never sends.
+            const runLovableInboxRead = async (name: string, args: Record<string, unknown>) => {
+              const { runInboxReadTool } = await import("./email/graph-email.server");
+              const r = await runInboxReadTool(name, args, data.caller, data.timeZone);
+              const ok = r.ok === true;
+              recordToolUse(
+                winner.id,
+                name,
+                ok
+                  ? name === "search_email"
+                    ? `${String(r.count ?? 0)} message(s)`
+                    : "message read"
+                  : r.needsConsent
+                    ? "Mail.Read consent missing"
+                    : "inbox read failed",
+                ok,
+                ok ? undefined : String(r.error ?? "unknown"),
+              );
+              return JSON.stringify(r);
+            };
+            lovableTools.search_email = tool({
+              description: SEARCH_EMAIL_TOOL.description,
+              inputSchema: z.object({
+                query: z.string().optional(),
+                from: z.string().optional(),
+                since: z.string().optional(),
+                until: z.string().optional(),
+                unread_only: z.boolean().optional(),
+                top: z.number().optional(),
+              }),
+              execute: async (args) =>
+                runLovableInboxRead("search_email", args as Record<string, unknown>),
+            });
+            lovableTools.read_email = tool({
+              description: READ_EMAIL_TOOL.description,
+              inputSchema: z.object({ id: z.string(), max_chars: z.number().optional() }),
+              execute: async (args) =>
+                runLovableInboxRead("read_email", args as Record<string, unknown>),
             });
           }
         }
