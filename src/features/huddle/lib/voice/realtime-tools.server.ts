@@ -46,7 +46,14 @@ import {
   invokeJourneyTool,
 } from "../journey/proxy.functions";
 import { FOCUS_TOOL, PRIORITIZE_TOOL } from "../tasks/tools";
-import { SCHEDULE_REMINDER_TOOL } from "../tasks/reminders";
+import {
+  SCHEDULE_REMINDER_TOOL,
+  // ADDITIVE: list / cancel / move existing reminders — all three registration points below
+  // (raw toolset, NATIVE, dispatch branch), same rule as every other native tool.
+  LIST_REMINDERS_TOOL,
+  CANCEL_REMINDER_TOOL,
+  MOVE_REMINDER_TOOL,
+} from "../tasks/reminders";
 import { GROOM_BACKLOG_TOOL } from "../tasks/groom";
 import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../tavily-search.functions";
 // SINGLE SOURCE — the same calendar schemas the text turn engine uses (no voice-local copy).
@@ -196,6 +203,9 @@ export async function buildRealtimeToolset(
     PRIORITIZE_TOOL,
     ...(opts.journey !== false ? [FOCUS_TOOL] : []),
     SCHEDULE_REMINDER_TOOL,
+    LIST_REMINDERS_TOOL,
+    CANCEL_REMINDER_TOOL,
+    MOVE_REMINDER_TOOL,
     GET_CALENDAR_EVENTS_TOOL,
     GET_EXTERNAL_CALENDAR_EVENTS_TOOL,
     ...nexusReadTools(),
@@ -525,6 +535,9 @@ export async function executeRealtimeTool(
     "get_calendar_events",
     "get_external_calendar_events",
     "schedule_reminder",
+    "list_reminders",
+    "cancel_reminder",
+    "move_reminder",
     "groom_backlog",
     "tavily_web_search",
     "send_email",
@@ -582,6 +595,20 @@ export async function executeRealtimeTool(
       return done(
         await dispatchScheduleReminder(ctx.caller, args, ctx.huddleId, ctx.agentId, ctx.timeZone),
       );
+    }
+    // A voice call is one agent, one speaker — there is no per-turn group ledger to share, so no
+    // claim is passed; cancel/move are idempotent on their own (they only act on a pending row).
+    if (name === "list_reminders") {
+      const { dispatchListReminders } = await import("../tasks/reminders");
+      return done(await dispatchListReminders(ctx.caller, args, ctx.timeZone));
+    }
+    if (name === "cancel_reminder") {
+      const { dispatchCancelReminder } = await import("../tasks/reminders");
+      return done(await dispatchCancelReminder(ctx.caller, args, ctx.timeZone));
+    }
+    if (name === "move_reminder") {
+      const { dispatchMoveReminder } = await import("../tasks/reminders");
+      return done(await dispatchMoveReminder(ctx.caller, args, ctx.timeZone));
     }
     if (name === "groom_backlog") {
       const { dispatchGroomBacklog } = await import("../tasks/groom");
