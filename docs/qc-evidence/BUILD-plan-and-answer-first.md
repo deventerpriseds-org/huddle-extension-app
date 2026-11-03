@@ -22,3 +22,29 @@ Branch: `claude_plan-and-answer-first` off origin/main `32f50e4`. Not merged, no
   its REPLY_LINE tells the owner he can reply with what to work on. His reply is an ordinary user turn
   in `dm-iris`, with that check message in history. No flag marks it; the model recognises it from
   history. The new trigger wording must keep naming that case explicitly.
+- Change 2 sites: `laneDirective` (1:1, perform intent, `laneOwnerFor` resolves another agent) and the
+  generic scene sentence (no scope check — told 1:1 agents to `@mention`). Exclusive capabilities ride a
+  separate block (`capabilityHandoffBlock`), untouched. `deliverOwnerFollowup` fires from its own
+  intent/owner resolution later in the turn, untouched.
+
+## Step 1 — change 1, planning contract (tools.ts + both backends)
+
+- `FOCUS_SYSTEM_HINT` trigger rewritten: focus_on ONLY on explicit start ('start X', 'begin working on X
+  now', 'work on these now') or a reply to the scheduled priority check; plan/organize/lay out is NOT a start.
+- `FOCUS_TOOL.description` trigger sentence rewritten the same way (this is the copy the VOICE path and both
+  text backends see in the tool schema). The executor, gates and the priority check itself are untouched.
+- NEW `PLANNING_SYSTEM_HINT` (shared runtime layer, appended right after FOCUS_SYSTEM_HINT on the OpenAI
+  stableInstructions AND the Lovable usedInstructions): read fixed commitments with schedule_and_priorities /
+  get_calendar_events / find_open_slots; reply as short `time · item · note` lines; create missing items with
+  create_huddle_tasks; never focus_on / Doing; times saved only on explicit request via existing schedule tools.
+- No snapshot / persona text touched. No keyword forcing added.
+
+## Step 2 — change 2, answer first in a 1:1
+
+- NEW `src/features/huddle/lib/lane-handoff.ts` (pure): `GROUP_OUT_OF_LANE_LINE` is the original scene
+  sentence VERBATIM; `ONE_TO_ONE_OUT_OF_LANE_LINE` = answer first, then name the owner, no @handle;
+  `laneAnswerFirstDirective(owner)` replaces the 1:1 "Do NOT answer it yourself" literal: answer a question
+  you can reasonably answer, then name the owner; substantive lane work still hands off; exclusive
+  capabilities still hand off per the capability rules.
+- `huddle.functions.ts`: scene uses `outOfLaneSceneLine(scope)`; laneDirective uses `laneAnswerFirstDirective`.
+- `npx tsc --noEmit -p .` → exit 0.
