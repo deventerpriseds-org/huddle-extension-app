@@ -336,3 +336,168 @@ A narrower alternative that changes nothing: inject in every mode only the keys 
 **(4) Size: S–M. Repo: huddle.** New structure: none.
 
 ---
+
+## j) Importing the owner's ChatGPT history into memory
+
+**(1) What exists**
+- The memory store is `rag_chunks` (`lib/rag/azure-pg.server.ts:127-136`: `scope, agent_id, text, source,
+  embedding, metadata, created_at`, plus `author_agent_ids`) with a write-time dedup unique index
+  (`:150-172`), written through `writeChunk`. Facts go to `rag_triples` (`:177`). Every live user message
+  is already written the same way (`huddle.functions.ts:1072-1082`) with `source = huddle:<id>`.
+- Uploads: the chat attachment path stores files in `artifacts.items` with an **8MB** cap
+  (`.claude/memory.md:2902-2903`). A ChatGPT export (`conversations.json` inside a zip) is often larger.
+- Ops precedent for heavy one-shot DB work: GitHub-Actions workflows with the org Azure SP
+  (`bootstrap-memory-db.yml`, `migrate-huddle-db.yml`, `azure-pg-query.yml` — CLAUDE.md).
+
+**(2) Smallest design — a one-shot importer that calls the existing writer**
+- Input: the export zip, uploaded either through the existing attachment path (if under the cap) or
+  committed nowhere and handed to a `workflow_dispatch` importer that reads it from blob storage.
+- Process: parse `conversations.json`, keep USER messages (and optionally assistant summaries), chunk,
+  embed with the same embedding model, `writeChunk({scope:"global", source:"import:chatgpt:<conversation_id>",
+  metadata:{imported:true, original_at:<message time>, title}})`. Re-running is idempotent by the dedup key.
+- Optional second pass: extract durable facts into `rag_triples` with the existing researched-mode
+  extractor, marked `imported`.
+- Must run off-box (workflow), not in a turn: thousands of embeddings exceed a 45s request.
+
+**(3) Behaviour change**
+
+| Today | Becomes | Why | Impact on the owner | Reversible |
+|---|---|---|---|---|
+| Auto-retrieval only ever surfaces things said inside Huddle | It can surface ChatGPT-era content in any reply | That is the point of importing | Agents may cite old/stale context from years of chats; noisier recall until relevance is tuned; one-off embedding cost | Yes — `DELETE FROM rag_chunks WHERE source LIKE 'import:chatgpt:%'` |
+
+Privacy note for the owner, not a code change: the export may contain other people's details; it
+lands in the same store as everything else.
+
+**(4) Size: M. Repo: huddle (importer script + workflow).** New structure: none (a `source` prefix).
+
+---
+
+## k) Overcommit warning when planning ("this doesn't fit in your day")
+
+**(1) What exists**
+- journey's nightly planner already computes capacity: `WindowCapacity {totalMinutes, usedMinutes,
+  remainingMinutes}` (`functions/nightly-schedule-builder/index.ts:110-123`, computed `:163+`, per-day
+  `:876`) and records placements/deferrals (`:858`, `tierA … deferred`). It knows when work does not fit,
+  but only logs it.
+- `find_open_slots` (`execute-tool/index.ts:2854-2864`) reads calendar events per day — the free-time
+  side of the sum.
+- `tasks.estimate_minutes` (`types.ts:3609-3636`) is the demand side.
+- CLAUDE.md backlog #4 already names this: *"a capacity guard that flags overcommitment instead of
+  scheduling into nonexistent time"*, and the `after_work` window drift (17–22 vs 17–19,
+  `execute-tool/index.ts:2735`).
+- Huddle's priority check (`lib/tasks/priority-check.server.ts:1-8`, 6am/8pm) and schedule brief
+  (`lib/tasks/schedule-brief.server.ts`) are the existing pushed moments where a warning would land.
+
+**(2) Smallest design — compute once in journey, surface through existing Huddle messages**
+- journey: a read-only `check_day_capacity(date)` execute-tool case = (window minutes from the user's
+  scheduling windows) − (calendar busy minutes, as `find_open_slots` computes) − (sum of
+  `estimate_minutes` of tasks scheduled that day). Returns `{free, demand, overBy, items}`.
+- Huddle: call it (a) when an agent schedules or plans a day (`schedule_task` / `move_task_to_day`
+  results) and (b) inside the 8pm schedule-brief / priority-check edition; add one sentence when
+  `overBy > 0`. Never auto-moves anything.
+- Missing `estimate_minutes` is the weak point: fall back to a per-category default and SAY it is assumed.
+
+**(3) Behaviour change**
+
+| Today | Becomes | Why | Impact on the owner | Reversible |
+|---|---|---|---|---|
+| The 8pm brief / planning replies list what is scheduled, with no capacity judgement | They add "this is ~Xh over what fits" when it is | The planner silently defers or overflows today | One extra line on over-full days; may be wrong where estimates are missing | Yes — drop the line |
+
+**(4) Size: M. Repos: journey (read-only case) + huddle (surfacing).** New structure: none.
+
+---
+
+## l) Alert when a calendar or email connection expires
+
+**(1) What exists — three different "connections", three expiries**
+- **journey calendar OAuth (Google/Outlook):** `calendar_connections.expires_at / refresh_token /
+  is_active` (`types.ts:785-804`). `calendar-delta-sync` tries a refresh and on failure only appends
+  `'Token expired and refresh failed - needs re-authentication'` to its result
+  (`calendar-delta-sync/index.ts:80-91`) and logs it (`:146`) — **nobody is told**.
+- **Huddle Graph mail subscription:** `chat.graph_mail_subscriptions.expires_at`
+  (`lib/email/mail-subscription.server.ts:39-48`) — renewed by Huddle's own code.
+- **Huddle's app-only Graph client** (`getAppToken`, `graph-email.server.ts:101`) uses a client SECRET
+  that itself expires in Azure AD; a 401/403 from Graph today surfaces as a per-call error
+  (e.g. `needsConsent` on artifact mirroring — CLAUDE.md).
+- Delivery: the existing away-notification (`send_push` via a durable DM turn), as the schedule brief
+  and priority check do (`schedule-brief.server.ts:21-22`). Scheduling: `tasks.scheduled_jobs`.
+
+**(2) Smallest design — one daily health job, existing delivery**
+- New `job_type = "connection-health"` row in `tasks.scheduled_jobs` (one per owner, `JOB_ROWS` entry).
+  It reads: journey `calendar_connections` health via a read-only execute-tool case
+  (`is_active`, `expires_at`, last sync error); Huddle `graph_mail_subscriptions.expires_at`; one cheap
+  Graph probe call. Any failure → one DM from the owning agent (Iris) with what broke and where to
+  reconnect, deduped per connection per day.
+- Better fidelity, optional, journey-side: have `calendar-delta-sync` persist its failure (e.g. into the
+  existing `calendar_connections.metadata` JSON, not a new table) so the health job reads a fact rather
+  than inferring from `expires_at`.
+
+**(3) Behaviour change:** the job itself is additive. Writing the failure into `metadata` is a new key
+on an existing JSON column — additive. **None to existing behaviour.**
+
+**(4) Size: S–M. Repos: huddle (+ small journey read case; optional journey metadata write).**
+New structure: none.
+
+---
+
+## m) Delete a task from chat, with a confirm step
+
+**(1) What exists**
+- journey `delete_task` (`execute-tool/index.ts:350-356`, body `:947-962`) — owner-scoped, comment says
+  *"Not advertised to LLMs — agents never delete."*
+- Huddle gate: `UI_ONLY_JOURNEY_TOOLS = new Set(["delete_task"])`
+  (`lib/journey/proxy.functions.ts:114`), enforced in `invokeJourneyTool` (`:120`) — the single chokepoint
+  for text agents, the voice executor and the debug fn (`:106-113`). Only the board's `deleteBoardTask`
+  passes `allowUiOnly` (`lib/tasks/board.functions.ts:85-105`), behind the card's confirm.
+- **Deletes are recoverable**: `task_events` keeps the full row on DELETE
+  (`migrations/20260821153000_task_events_capture_deletes.sql:31-41`).
+- Interactive chat payloads already exist: the in-chat checklist renders board-wired controls
+  (`components/HuddleView.tsx:423-465`), so a chat message can carry a button whose click is a real user
+  action.
+
+**(2) Smallest design — keep the gate; let the agent PROPOSE, the user's click DELETES**
+- Agent tool `propose_delete({task_id})` returns a `deleteProposal` payload; the chat renders a card
+  ("Delete 'Call dentist'? This is permanent — [Delete] [Keep]"). The [Delete] click calls the EXISTING
+  `deleteBoardTask` server fn. The model still can never invoke `delete_task`; `UI_ONLY_JOURNEY_TOOLS`
+  is unchanged.
+- Voice: the same proposal is spoken and rendered; deletion still needs the tap (no spoken "yes"
+  executing it) unless the owner explicitly wants that, which WOULD loosen the gate.
+
+**(3) Behaviour change**
+
+| Today | Becomes | Why | Impact on the owner | Reversible |
+|---|---|---|---|---|
+| Agents never raise deletion; "delete X" in chat gets a pointer to the board (by design in #124) | Agents can offer an in-chat Delete card for a named task; the delete still happens only on your click | Deleting from chat saves a trip to the board | You may see delete offers when you ask; a mis-matched task title could be offered (the card shows the exact title, and `task_events` makes it restorable) | Yes — remove the tool; the gate never moved |
+| (Only if chosen) a spoken/typed "yes" deletes | Confirmation by reply rather than click | Hands-free in voice | **Loosens #124's gate**: a model-interpreted "yes" executes a permanent delete | Code: yes. Each delete: only via `task_events` restore |
+
+Recommended: row 1 only.
+
+**(4) Size: S. Repo: huddle.** New structure: none.
+
+---
+
+## Summary
+
+| Capability | Extends | New structure needed? | Changes existing behaviour? | Size |
+|---|---|---|---|---|
+| a) Recurring tasks / habits | Huddle `tasks.scheduled_jobs` + `JobCadence`; journey create path | No (new `job_type`) | No (decide: auto-work skips `recurring:*`) | M |
+| b) Undo last agent action | journey `task_events` (old/new values incl. DELETE); `undo_dedup` precedent; `pending_turns.result` | No; optional journey `actor` column | No | M |
+| c) Subtasks / hierarchy | journey `task_checklist_items` (tier 1); `priority_rank` + dead `blocked_by` (tier 2) | Tier 1 no; tier 2 `parent_task_id` (sign-off) | Tier 2 yes — grooming becomes two-level | S / L |
+| d) Quick notes | `rag_chunks` (`metadata.kind='note'`) | No | No | S |
+| e) Shopping / errand list | `chat.user_ledger` + `applyLedgerOps`; `build_checklist` UI | No | Only if the researched-mode gate is lifted (default proposal avoids it) | S |
+| f) Contacts lookup | app-only Graph client; `lookup_facts` | No (needs `Contacts.Read` consent; `/people` app-only unverified) | No | S |
+| g) Google calendar reads | journey `external_calendar_events` (already synced); Huddle `get_calendar_events` | No | Yes — calendar tool + schedule brief include Google events | S–M |
+| h) Exact chat recall | `chat.pending_turns` (+ `ceremony_transcript`) | No | No | S |
+| i) PDF/Word reading | `resolveAttachmentContent` else-branch; `artifacts.items.text` | No | Yes — agents read files instead of asking | S–M |
+| j) ChatGPT import | `rag_chunks` via `writeChunk`, `source='import:chatgpt:…'` | No | Yes — recall can surface imported content | M |
+| k) Overcommit warning | journey `WindowCapacity`, `find_open_slots`, `estimate_minutes`; schedule brief / priority check | No | Yes — one extra line on over-full days | M |
+| l) Connection-expiry alert | `calendar_connections`, `graph_mail_subscriptions.expires_at`, `scheduled_jobs`, `send_push` DM | No | No | S–M |
+| m) Delete from chat with confirm | `deleteBoardTask` + in-chat interactive payload; `UI_ONLY_JOURNEY_TOOLS` unchanged | No | Yes — agents may OFFER deletion (gate unchanged); voice "yes" variant would loosen #124 | S |
+
+**Genuinely new structure across all thirteen: only `parent_task_id` (c, tier 2, already pending in
+ACT:task-hierarchy) and the optional journey `task_events.actor` (b).** Everything else extends an
+existing table, tool, job runner or UI.
+
+**Rows needing the owner's 👍 before build:** c tier 2 (two-level grooming), e (only if the mode gate
+lifts), g (Google events in briefs), i (agents read attachments), j (imported memory in recall),
+k (capacity line), m (agents offer deletion; and separately whether a spoken "yes" may delete).
