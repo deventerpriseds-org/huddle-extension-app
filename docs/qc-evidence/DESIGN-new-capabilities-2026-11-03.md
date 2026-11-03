@@ -155,3 +155,184 @@ the `actor` column is approved.** New structure: none required; `actor` column o
 New structure: tier 1 none; tier 2 `parent_task_id`.
 
 ---
+
+## d) Quick notes ("note: the eulogy should mention the lake house")
+
+**(1) What exists**
+- **Every user message is already saved.** `runHuddleTurn` writes the user's text as a `scope='global'`
+  `rag_chunks` row (`lib/huddle.functions.ts:1072-1082`), and `rag_chunks` already has `metadata JSONB`
+  and `source` columns (`lib/rag/azure-pg.server.ts:127-136`). So "note: …" is ALREADY stored and
+  semantically recallable via auto-retrieval and `search_memory` (`lib/rag/tools.ts:9`). What is missing
+  is (i) marking it AS a note, and (ii) listing notes back exactly ("show my eulogy notes").
+- `artifacts.items` (`lib/artifacts/artifacts.server.ts:29-48`) holds documents with `folder`, `name`,
+  `task_id` — the right home only once a note grows into a document.
+- journey `session_notes` (`types.ts:3059-3068`) is class-session notes keyed to `session_id` — a
+  different domain; not a fit.
+
+**(2) Smallest design — extend `rag_chunks`, no new table**
+- A `save_note` agent tool (or a deterministic `^note:` prefix check) that writes ONE extra chunk with
+  `metadata = {kind:"note", topic:"eulogy"}` through the existing `writeChunk`, and a `list_notes(topic?)`
+  tool that selects `WHERE metadata->>'kind'='note'` newest first. Reuses the write-time dedup key
+  (`azure-pg.server.ts:150-172`) and the existing owner scoping.
+- Optional: when a note mentions an existing task, set `metadata.task_id` so the board card can show it.
+
+**(3) Behaviour change:** none. The user-message auto-write is unchanged; notes are additional rows.
+
+**(4) Size: S. Repo: huddle.** New structure: none (a `metadata.kind` value).
+
+---
+
+## e) A shopping or errand list
+
+**(1) What exists**
+- **Huddle already has a user-scoped list store: `chat.user_ledger`**
+  (`lib/rag/ledger-store.server.ts:29-35`: `user_email PK, ledger JSONB`), whose entries are
+  `{type:"list", value:string[]}` mutated by `add/remove/set/clear` ops (`:53-90`, `applyLedgerOps`).
+  Its header (`:1-7`) describes exactly this use: *"a LIST edited by deltas ('drop Cobalt, add Delta')"*.
+  It is rendered into agent prompts (`huddle.functions.ts:2640-2645`).
+- **But it is gated to `memoryMode === "researched"`** for both the write
+  (`huddle.functions.ts:1371-1376`) and the read (inside the `if (data.memoryMode === "researched" …)`
+  block opened at `:2620`), and the default mode is `"reconstruction"` (`huddle.functions.ts:1466`,
+  `components/SettingsSheet.tsx:469`). Ops are LLM-extracted after the turn
+  (`ledger-store.server.ts:182`), not a deterministic tool.
+- `build_checklist` (`lib/tasks/tools.ts:58`, prompt `:94`) renders tick-boxes — but over BOARD TASKS,
+  so it is the wrong backing for groceries (each "milk" would be a board card).
+- journey `task_checklist_items` (see c) is per-task.
+
+**(2) Smallest design — extend `chat.user_ledger` with an explicit tool**
+- Add a deterministic `update_list({list:"shopping", add:[…], remove:[…]})` / `get_list(list)` tool that
+  calls the EXISTING `applyLedgerOps` + upsert. Lists are keys in the same JSON doc. No new table.
+- Render through `build_checklist`'s tick-box UI by giving it a `source:"ledger"` mode (ticking = a
+  `remove` op), so the UI is reused, not rebuilt.
+- Errands that need a TIME or a PLACE stay tasks or reminders; the list is for items.
+
+**(3) Behaviour change** — only if the mode gate is lifted:
+
+| Today | Becomes | Why | Impact on the owner | Reversible |
+|---|---|---|---|---|
+| The ledger is read into prompts and written only in "researched" memory mode | The ledger block is injected in EVERY mode | A shopping list that vanishes when memory mode is "reconstruction" is useless | Agents in default mode start seeing any facts/lists already in the ledger, including ones captured earlier in researched mode | Yes — restore the mode gate |
+
+A narrower alternative that changes nothing: inject in every mode only the keys the new tool wrote
+(e.g. a `list:` key prefix), leaving the LLM-extracted part researched-only. **Proposed as the default.**
+
+**(4) Size: S. Repo: huddle.** New structure: none.
+
+---
+
+## f) Contacts / people lookup ("email my advisor")
+
+**(1) What exists**
+- **No contacts or people store or tool exists in Huddle or journey.** Grep for `/contacts`, `/people`,
+  `Contacts.Read`, `People.Read` across Huddle `src/` returns nothing. The router's prose mentions
+  "calendar/tasks/contacts" journey tools (`lib/routing.ts:517, 707`), but journey's `execute-tool`
+  dispatch (`execute-tool/index.ts:333-463`) has no contacts case — that wording is aspirational.
+- The app-only Graph client exists: `getAppToken()` (`lib/email/graph-email.server.ts:101`), already used
+  for send/draft, inbox reads (`listInboxMessagesSince`, `:249`) and calendar (`getGraphCalendarEvents`,
+  `:530`). The owner's own addresses live in `identity.profile_emails`
+  (`lib/identity/identity.server.ts:33`).
+- RAG memory can hold "my advisor is Dr. X" (triples via `lookup_facts`, `rag/tools.ts:26`).
+
+**(2) Smallest design — one more Graph read on the existing client**
+- `find_contact(query)` → `GET /users/{mailbox}/contacts?$filter=…` and/or
+  `GET /users/{mailbox}/people?$search=…` with the same `getAppToken()`. Resolve ROLE words ("my
+  advisor") through `lookup_facts` first, then the name through Graph. Returns name + email only; the
+  existing `send_email` / `create_email_draft` path sends (with its existing claim-ledger guard).
+- **Prerequisite (tenant-admin action, not code):** the Graph app needs an application permission —
+  `Contacts.Read` for `/contacts`. Whether app-only `People.Read.All` is honoured for `/people` is
+  **inference, unverified** — a one-call probe workflow should settle it before building (same as the
+  inbox probe precedent in `lib/email/inbound-email.ts:5-7`). A 403 = "grant consent", exactly as with
+  `Calendars.Read`.
+- Fallback needing no new permission: harvest correspondents from the inbox read the app already has.
+
+**(3) Behaviour change:** none.
+
+**(4) Size: S (plus an admin consent). Repo: huddle.** New structure: none.
+
+---
+
+## g) Google calendar reads
+
+**(1) What exists — and the route is shorter than mail-and-appointments**
+- **journey already syncs Google calendars.** `calendar_connections` (`types.ts:785-804`: `provider`,
+  `expires_at`, `refresh_token`, `is_active`, …) holds Google and Outlook connections;
+  `functions/calendar-delta-sync/index.ts` refreshes Google tokens (`:73-79`) and upserts into
+  `public.external_calendar_events` (`:246-381`; columns `types.ts:1747-1766` — `title, start_time,
+  end_time, is_all_day, location, attendees, organizer_email, show_as, is_recurring, connection_id`).
+- journey already READS that table inside `find_open_slots` (`execute-tool/index.ts:2854-2864`), but no
+  execute-tool case returns the events themselves.
+- Huddle's `get_calendar_events` is Graph-only (`graph-email.server.ts:530-560`), so a Google-only
+  calendar never appears.
+- `deventerpriseds-org/mail-and-appointments` (the "mail-watcher") is an M365 + Google middleware. Not
+  cloned per instructions; `lib/email/inbound-email.ts:5-6` records it was checked for inbox reading and
+  did not provide that path.
+
+**(2) Smallest design — read journey's synced events, not a third provider client**
+- journey: add a `get_calendar_events` case to `execute-tool` selecting `external_calendar_events` by
+  `user_id` and date range (all providers), reusing `find_open_slots`' query shape.
+- Huddle: in the existing `get_calendar_events` tool, merge the Graph result with that journey call via
+  `invokeJourneyTool` (`lib/journey/proxy.functions.ts:116`), dedup on `external_event_id` or
+  subject+start. The schedule brief (`lib/tasks/schedule-brief.server.ts:19-22`) inherits it for free.
+- mail-and-appointments is the route only if journey's sync is NOT running for the owner's Google
+  account — one read-only check of `calendar_connections` for an active `provider='google'` row decides it.
+
+**(3) Behaviour change**
+
+| Today | Becomes | Why | Impact on the owner | Reversible |
+|---|---|---|---|---|
+| `get_calendar_events` and the 8am/8pm schedule brief show Outlook/M365 events only | They also show Google events journey has synced | Google-only events are invisible today | Briefs get longer; an event on both calendars could appear twice if dedup misses | Yes — drop the merge |
+
+**(4) Size: S–M. Repos: journey (one execute-tool case) + huddle (merge).** New structure: none.
+
+---
+
+## h) Exact recall of past chats by date or agent
+
+**(1) What exists**
+- `chat.pending_turns` (`lib/tasks/turns.server.ts:36-58`) holds every durable chat turn: `huddle_id`
+  (`dm-<agentId>` = that agent's 1:1; `all-members`/`daily` = group), `payload` (user text at
+  `payload->>'text'`), `replies` / `result` (agent replies), `created_at`, `user_id`; indexed on
+  `(huddle_id, updated_at DESC)` and `user_id` (`:48, :67`).
+- Voice ceremonies live in `chat.ceremony_transcript` instead (`lib/ceremony/ceremony-transcript.server.ts:30`).
+- Existing recall is SEMANTIC only: `rag_chunks` stores the user text with `source=huddle:<id>`, plus a
+  "<Agent> said: <gist>" chunk (`huddle.functions.ts:7138-7154`) — a gist, not the verbatim reply. So
+  `search_memory` cannot answer "what exactly did Finn say last Tuesday".
+
+**(2) Smallest design — a read tool over `pending_turns`**
+- `recall_conversation({agent?, from, to, query?})` → select `payload->>'text'`, `replies`, `result`,
+  `created_at` from `chat.pending_turns` where `user_id` matches, `huddle_id` in the agent's DM (and group
+  huddles filtered to replies whose `agentId` matches), `created_at` in range, optional `ILIKE`. Union
+  `ceremony_transcript` when the range covers a stand-up. Cap rows and truncate replies to fit a prompt.
+
+**(3) Behaviour change:** none (read-only). A `(user_id, created_at)` index may be wanted; additive.
+
+**(4) Size: S. Repo: huddle.** New structure: none.
+
+---
+
+## i) Reading attached PDF/Word files
+
+**(1) What exists**
+- Chat attachments shipped 2026-08-12 (`.claude/memory.md:2899-2911`): uploads go to the existing
+  artifact blob store (`artifacts.items`, folder "Uploads") via `uploadChatAttachmentFn`; the mime
+  allow-list already ACCEPTS pdf/docx/office (`lib/artifacts/attachments.functions.ts:19-23`).
+- `resolveAttachmentContent` (`lib/huddle.functions.ts:1336-1364`): images → `input_image`; artifacts
+  with stored `row.text` → inlined; **everything else (PDF, Word) → "contents aren't readable inline yet —
+  acknowledge it and ask for the key details"** (`:1355-1356`). memory.md:2911 names the follow-on:
+  "PDF/docx real parse (input_file)".
+
+**(2) Smallest design — fill the existing `else` branch**
+- PDF: add an `input_file` content part beside `input_image`, using the same fresh SAS URL. The exact
+  `input_file` shape must be read from the OpenAI SDK before coding — not asserted here.
+- DOCX: extract text once at upload and store it in the artifact's existing `text` field, so the existing
+  inline-text branch handles it with no turn-time change.
+- Lovable `generateText` path: flatten to extracted text, as images are flattened today.
+
+**(3) Behaviour change**
+
+| Today | Becomes | Why | Impact on the owner | Reversible |
+|---|---|---|---|---|
+| A PDF/Word attachment is acknowledged by name; the agent asks you for the key details | The agent reads the document | That is what attaching it is for | Longer, slower, costlier turns on big files (input tokens); answers now grounded in the file | Yes — restore the acknowledge branch |
+
+**(4) Size: S–M. Repo: huddle.** New structure: none.
+
+---
