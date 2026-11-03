@@ -1,5 +1,27 @@
 # Huddle — working rules
 
+## NEVER change, undo, pivot or regress an existing design without the owner's thumbs-up (hard rule, owner 2026-11-03)
+
+> *"my bigger concern is you undoing or pivoting or regressing previous design without getting my thumbs up
+> first. i need to know if something is going to change along with the impact."* — and earlier (2026-10-29):
+> *"You should always mention that when saying you are changing or undoing existing flows."*
+
+**ADDITIVE work** (a new tool, a new screen, a new action that changes nothing that already happens) needs no
+extra sign-off once the work itself is approved — build it and ship it.
+
+**ANY change to existing behaviour** — a flow, a default, a rule an agent follows, who owns what, what a
+gate does, what a reply looks like — must be put to the owner FIRST, in this shape, and wait for 👍:
+
+| Existing behaviour today | What it becomes | Why (the problem it fixes) | Impact on you (what you'll notice, what you lose) | Reversible? |
+
+This includes "fixes" that a reviewer or test found: a defect fix that changes behaviour the owner relies on
+is still a change. It also includes reverting or reworking something shipped earlier in the same session.
+**The tell:** you are about to write "replaced", "removed", "now instead", "no longer", "simplified", or
+you are editing a rule/prompt/gate that already exists. Stop and put the row to the owner.
+*(2026-10-28/29: a deep-ask fix grew, across review loops, into changes to grooming ownership, a produce
+offer, a "start these" tool gate and time limits — each described as "fixing", none framed as "this changes
+what you have today". The owner caught it: "Wait what? Why are you changing so much.")*
+
 ## Confirm the SCOPE, never the shipping (hard rule — both halves matter)
 
 **The gate is on scope, not on deployment.** Two different failures, and conflating them caused the
