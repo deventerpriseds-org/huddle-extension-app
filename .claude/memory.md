@@ -3837,8 +3837,19 @@ here as fact three times before being checked.)
 - **Every reply path must attach a widget, not just the normal one.** Amy's alert lost its card because Iris timed out after the tool call and `ensureNotSilentOnRealWork` / `hardReply` built a bare reply. Wire any reply-borne widget through one helper used by all three paths (`emailCardFor`).
 - **Durable turn `text` is `.max(4000)`** (huddle.functions.ts input schema) — an over-long directive fails the WHOLE turn as `status=error`. Cap any directive that embeds outside content.
 
+<<<<<<< HEAD
 ## Plan-and-answer-first — what is TRUE on branch `claude_plan-and-answer-first` (2026-11-04; NOT on main, NOT live)
 - focus_on trigger (FOCUS_SYSTEM_HINT + FOCUS_TOOL.description, tasks/tools.ts) = explicit start wording OR a reply to the scheduled priority check. "Plan/organize/lay out" is NOT a start.
 - PLANNING_SYSTEM_HINT (tasks/tools.ts) is appended right after FOCUS_SYSTEM_HINT on BOTH backends; voice has no system hint slot for it — it only sees the new FOCUS_TOOL.description.
 - Out-of-lane wording lives in `lib/lane-handoff.ts`: group line is the original verbatim; 1:1 answers first then names the owner (no @). deliverOwnerFollowup / capabilityHandoffBlock / meta-task guard untouched.
 - With journey disabled, a focus_on attempt is still recorded in result.toolUses ("focus_on -- journey disabled") — a harness can observe "was it called?" with zero board writes.
+=======
+## schedule_and_priorities can now see BLOCKED tasks and returns the whole schedule (2026-11-04, branch claude_status-answers, NOT merged/deployed)
+- `include_blocked: true` or `view:"blocked"` → BLOCKED tasks come back in a SEPARATE `blocked` array (`blocker_reason` from
+  `tasks.task_blockers`, explicit `blocked_count`; parked ones excluded like getStandupTasks). `ranked` is byte-identical with or
+  without it — priority ranking and widgets untouched. Lovable zod schema mirrors the args (zod strips undeclared keys).
+- `view:"scheduled"` defaults to every item (200 ceiling); every response has `total` + `truncated`. Root cause of "2 of 6"
+  (reproduced offline on main 32f50e4): default limit 10 + scheduled view spans all days + starred items sort first.
+- Times were ALREADY localized on main (formatInTz + resolveJourneyIdentity tz). Edge: no profile + no browser zone → UTC.
+- Guard: `npm run test:status-answers` (23 checks, 7 mutations FIRED). Evidence: docs/qc-evidence/BUILD-status-answers.md.
+>>>>>>> origin/claude_status-answers

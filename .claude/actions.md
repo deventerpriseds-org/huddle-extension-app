@@ -4870,8 +4870,18 @@ Owner: *"Go on 3 and 4, I don't understand why voice can't trigger the same jobs
 - [x] Read journey `public.tasks` (canonical): 4 exact-duplicate groups + near-duplicates via pg_trgm ≥0.55. Presented grouped with a recommended keep per group.
 - [ ] Owner approves rows → DELETE from journey public.tasks only (mirror follows via trigger) → read back 0 remaining.
 
+<<<<<<< HEAD
 ## ACT:plan-and-answer-first — planning contract + answer-first in a 1:1 (owner-approved 2026-11-03)
 - [x] Planning contract: focus_on only on explicit start / priority-check reply; PLANNING_SYSTEM_HINT on both backends (branch `claude_plan-and-answer-first`, evidence `docs/qc-evidence/BUILD-plan-and-answer-first.md`).
 - [x] Answer-first in a 1:1 via `lib/lane-handoff.ts`; group wording byte-identical.
 - [x] Offline `npm run test:plan-and-answer-first` 35/35; 7/7 mutations FIRED (BUILD file step 4).
 - [ ] Live harness `qa-plan-and-answer-first.mjs` written, NOT run. Not merged, no PR, not deployed. NOT confirmed live.
+=======
+## ACT:status-answers — blocker questions reach BLOCKED tasks; schedule answers in ET and complete (owner-approved A + B, 2026-11-04)
+Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `docs/qc-evidence/BUILD-status-answers.md`.
+- [x] Re-verified on main 32f50e4 (offline fixture `scripts/status-answers.test.ts`): UTC already fixed (times read "9:00 AM EST"); over-trim REPRODUCED 2 of 6; BLOCKED unreachable from `schedule_and_priorities`.
+- [x] (implemented on branch, offline-verified 23/0) A: `include_blocked` / `view:"blocked"` on `schedule_and_priorities` → separate `blocked` array (+ reasons, explicit `blocked_count`); ranked list untouched.
+- [x] (implemented on branch, offline-verified) B: scheduled view returns every item by default; `total`/`truncated` say when a list was cut.
+- [x] Offline: 23/0, tsc 0, 4 regression suites green, 7/7 mutations FIRED.
+- [ ] Merge + deploy (caller), then owner confirms live ("anything blocking me?" names the blocked task; "what's on today" lists all items in ET). NOT yet confirmed.
+>>>>>>> origin/claude_status-answers
