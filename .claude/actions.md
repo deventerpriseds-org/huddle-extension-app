@@ -4835,6 +4835,17 @@ judge time limits (5s create, 3s in-chat groom, 20s weekly). 2 verifier loops (V
 - Open (pre-existing, not built): agents can reassign via journey update_task without the judge; caller identity is
   client-asserted (owner chose to ship on today's trust model).
 
+### ACT:change-register-2026-11-03 — owner verdicts + 8 build lanes (2026-11-03/04)
+Owner: *"go until deployed. my bigger concern is you undoing or pivoting or regressing previous design without getting my thumbs up first."* → hard rule merged (#128, 32f50e4).
+- Verdicts: #1 MODIFIED (short "ok"/"great" in a 1:1 confirms the task last asked about, AFTER the agent reads the message) + NEW: 1:1 widgets/buttons/process rows missing from agent context + NEW BUG: attachment button broken. #2-#13, #15 APPROVED; #11 = agents write @handle to bring teammates in. #14 ON HOLD (recommended hold).
+- Lanes (background, worktree-isolated, branch claude_<slug>):
+  - [x] inbox read (search_email/read_email, GET only) — `claude_inbox-read` f9ecccd; 68 checks; mutate.sh 12/12 FIRED; not merged. Needs Mail.Read consent live.
+  - [x] calendar edit/delete — journey PR #84 (claude_calendar-edit 0684ed0, `_shared/calendar-edit.ts`); Huddle `claude_calendar-edit` d314dfb (exposure test only). CI pending.
+  - [ ] plan + answer-first, [ ] reminder tools, [ ] attachment fix, [ ] context capture + confirm, [ ] status answers (ET times, no dropped items), [ ] journey planner (#7 no demote) + update_task scope (#9).
+- Queued (approved, not started): #3 #5 #6 #8 #10 #11 #12 #13 #15 + additive design items (DESIGN-new-capabilities-2026-11-03.md on claude_design-new-capabilities a7f6d1a).
+- Owner decisions open: #14 hold/build; background work skips recurring tasks (rec. yes); A-F (Google events, attached PDF/Word, ChatGPT import, overcapacity line, in-chat Delete card, real subtasks); G-I (mirror row after calendar edit, confirm card before agent calendar delete, shared token helper).
+- Status: NOTHING from this register deployed yet; nothing owner-confirmed.
+
 ### ACT:plan-intent-map (2026-10-29) — APPROVED, NOT BUILT
 Owner: planning = short timed table, create missing tasks, start NOTHING; times only when asked ("if i tell it to add
 the times... not automatically"); 1:1 out-of-lane → answer first, offer hand-off. Philosophy: "don't be so prescriptive
