@@ -72,7 +72,11 @@ check(
   "conversation mode carries the summaries in instructions",
   /instructions:\s*\n?\s*personaArgs\.instructions \+ streamContextInstructionBlock\(data\.history\)/.test(HF),
 );
-check("client history map sends the summary", /streamItemSummary\(m, \{\s*live: useHuddleStore\.getState\(\)\.checklistState/.test(HV));
+check(
+  "client history map sends the summary",
+  /streamItemSummary\(m, \{\s*live: useHuddleStore\.getState\(\)\.checklistState/.test(HV) &&
+    /return context \? \{ context \} : \{\};/.test(HV),
+);
 
 // ---------------------------------------------------------------- (2) the summariser, behaviourally
 console.log("\n(2b) each stream item type summarises with its state");
