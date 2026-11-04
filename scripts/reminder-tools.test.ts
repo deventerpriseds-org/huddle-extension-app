@@ -172,7 +172,7 @@ console.log("matching");
   const rows = seed().filter((r) => r.email === OWNER && r.status === "pending");
   t("about 'dentist' matches BOTH dentist reminders (prefix: dentist's)", matchReminders(rows, { about: "dentist" }, TZ).kind, "many");
   t("about 'dentist' + currently_at 2pm narrows to one", matchReminders(rows, { about: "dentist", currently_at: "2pm" }, TZ).matches[0]?.id, "r-dentist-2pm");
-  t("currently_at compares in OWNER tz (14:00 NY hits)", matchReminders(rows, { currently_at: "14:00" }, TZ).kind, "one");
+  t("currently_at compares in OWNER tz (14:00 NY hits the 2pm one)", matchReminders(rows, { currently_at: "14:00" }, TZ).matches.map((r) => r.id).join(","), "r-dentist-2pm");
   t("currently_at compares in OWNER tz (in UTC, 14:00 is the OTHER reminder: 9am NY on Nov 5)", matchReminders(rows, { currently_at: "14:00" }, "UTC").matches.map((r) => r.id).join(","), "r-dentist-tmrw");
   t("on_date in owner tz", matchReminders(rows, { about: "dentist", on_date: "2026-11-05" }, TZ).matches[0]?.id, "r-dentist-tmrw");
   t("about needs EVERY word", matchReminders(rows, { about: "dentist water" }, TZ).kind, "none");
