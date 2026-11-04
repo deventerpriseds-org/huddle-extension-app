@@ -7,6 +7,20 @@
 // dev@enterpriseds.io; HUDDLE_EMAIL_FROM overrides the allow-list (first = default).
 
 import { insertReplyIntoBody, replyTextToHtml } from "./draft-html";
+import {
+  buildInboxSearchQuery,
+  cleanEmailBody,
+  finishSearchHits,
+  formatReceived,
+  mapGraphMailError,
+  normalizeSearchArgs,
+  READ_EMAIL_TOOL_NAME,
+  SEARCH_EMAIL_TOOL_NAME,
+  type InboxReadFailure,
+  type InboxSearchHit,
+  type RawGraphMessage,
+  type SearchEmailArgs,
+} from "./inbox-read";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 
@@ -794,4 +808,146 @@ export async function sendOrDraftEmail(input: SendEmailInput): Promise<SendEmail
       `${why} It is waiting in the ${draft.from} Drafts folder for you to review and send.` +
       (draft.webLink ? ` (${draft.webLink})` : ""),
   };
+}
+
+// ---------------------------------------------------------------------------------------------------
+// INBOX READ (search_email / read_email) -- added 2026-11-03, additive. READ-ONLY: every request below
+// is a GET with the same app-only token and the same Mail.Read grant listInboxMessagesSince already
+// uses. The pure half (schemas, query builder, body cleaner, 403 mapping) is ./inbox-read.ts.
+// ---------------------------------------------------------------------------------------------------
+
+/** Search ONE mailbox's messages. `mailbox` must come from the caller's identity, never the model. */
+export async function searchInboxMessages(
+  mailbox: string,
+  args: SearchEmailArgs,
+  timeZone: string,
+): Promise<
+  | { ok: true; mode: "search" | "filter"; count: number; messages: InboxSearchHit[] }
+  | InboxReadFailure
+> {
+  try {
+    const built = buildInboxSearchQuery(args);
+    const token = await getAppToken();
+    const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/messages?${built.qs}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return mapGraphMailError(res.status, await res.text(), "Mailbox search");
+    const j = (await res.json()) as { value?: RawGraphMessage[] };
+    const messages = finishSearchHits(j.value ?? [], built, timeZone);
+    return { ok: true, mode: built.mode, count: messages.length, messages };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export interface InboxReadMessage {
+  id: string;
+  subject: string;
+  fromName: string | null;
+  fromAddress: string | null;
+  to: string[];
+  cc: string[];
+  received: string | null;
+  receivedUtc: string | null;
+  isRead: boolean;
+  hasAttachments: boolean;
+  webLink: string | null;
+  body: string;
+  bodyTruncated: boolean;
+  bodyLength: number;
+}
+
+/** Read ONE message by id from ONE mailbox, body as cleaned, capped text. */
+export async function readInboxMessage(
+  mailbox: string,
+  id: string,
+  timeZone: string,
+  maxChars?: number,
+): Promise<{ ok: true; message: InboxReadMessage } | InboxReadFailure> {
+  const msgId = String(id ?? "").trim();
+  if (!msgId) return { ok: false, error: "read_email needs the message id from search_email." };
+  try {
+    const token = await getAppToken();
+    const select = encodeURIComponent(
+      "id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,hasAttachments,webLink,body",
+    );
+    const res = await fetch(
+      `${GRAPH}/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(msgId)}?$select=${select}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' },
+      },
+    );
+    if (!res.ok) return mapGraphMailError(res.status, await res.text(), "Reading that email");
+    const r = (await res.json()) as RawGraphMessage;
+    const body = cleanEmailBody(r.body?.content, r.body?.contentType, maxChars);
+    const addrs = (xs?: { emailAddress?: { address?: string; name?: string } }[]) =>
+      (xs ?? []).map((x) => x.emailAddress?.address || x.emailAddress?.name || "").filter(Boolean);
+    return {
+      ok: true,
+      message: {
+        id: r.id ?? msgId,
+        subject: r.subject?.trim() || "(no subject)",
+        fromName: r.from?.emailAddress?.name ?? null,
+        fromAddress: r.from?.emailAddress?.address ?? null,
+        to: addrs(r.toRecipients),
+        cc: addrs(r.ccRecipients),
+        received: formatReceived(r.receivedDateTime, timeZone),
+        receivedUtc: r.receivedDateTime ?? null,
+        isRead: !!r.isRead,
+        hasAttachments: !!r.hasAttachments,
+        webLink: r.webLink ?? null,
+        body: body.text,
+        bodyTruncated: body.truncated,
+        bodyLength: body.fullLength,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * The ONE entry point every search_email / read_email dispatch site calls (OpenAI text, Lovable text,
+ * voice), so the three surfaces cannot drift. The mailbox is resolved from `caller` EXACTLY as the
+ * inbound watch, the calendar tool and reply drafts do -- any `mailbox` the model puts in `args` is
+ * ignored. The time zone is the owner's canonical zone (profile -> this turn's browser zone -> UTC).
+ * Never throws; never sends.
+ */
+export async function runInboxReadTool(
+  name: string,
+  args: Record<string, unknown> | undefined,
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+  browserTimeZone?: string,
+): Promise<Record<string, unknown>> {
+  try {
+    if (name !== SEARCH_EMAIL_TOOL_NAME && name !== READ_EMAIL_TOOL_NAME) {
+      return { ok: false, error: `not an inbox read tool: ${name}` };
+    }
+    let mailbox: string | undefined;
+    let timeZone = browserTimeZone || "UTC";
+    try {
+      const { resolveCalendarMailbox, resolveTimeZone } = await import("../journey/identity");
+      mailbox = (await resolveCalendarMailbox(caller)) ?? caller?.entra_email;
+      timeZone = await resolveTimeZone(caller, browserTimeZone);
+    } catch {
+      mailbox = mailbox ?? caller?.entra_email;
+    }
+    if (!mailbox) return { ok: false, error: "Could not resolve your mailbox, so no email was read." };
+    if (name === SEARCH_EMAIL_TOOL_NAME) {
+      return { ...(await searchInboxMessages(mailbox, normalizeSearchArgs(args), timeZone)) };
+    }
+    const maxChars = Number(args?.max_chars ?? args?.maxChars);
+    return {
+      ...(await readInboxMessage(
+        mailbox,
+        String(args?.id ?? ""),
+        timeZone,
+        Number.isFinite(maxChars) ? maxChars : undefined,
+      )),
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
