@@ -85,3 +85,21 @@ Evidence (run in scratchpad, node v22.22.0, same flags as checks.yml `npm test`)
   `agents[id].journey.enabled` -> the new tools are opt-in exactly like create.
 - Voice: `buildRealtimeToolset` pushes the catalog only `if (opts.journey !== false)` (L454).
 - NEW `scripts/journey-calendar-edit-exposure.test.ts` (+ `npm run test:calendar-edit`): 13/13.
+
+### Huddle verification
+- `npx tsc --noEmit -p .` -> exit 0, no output
+- `npm run test:calendar-edit` -> 13 passed, 0 failed; `npm run test:voice-tools` -> 36 passed, 0 failed (regression control)
+- mutate.sh (all FIRED, restore matched HEAD each time):
+  - realtime-tools `if (opts.journey !== false) {` -> `if (true) {` -> FIRED 'voice journey:false does NOT offer delete_calendar_event'
+  - HIDDEN_FROM_HUDDLE += delete_calendar_event -> FIRED 'catalog: delete_calendar_event passes HIDDEN_FROM_HUDDLE'
+  - UI_ONLY_JOURNEY_TOOLS += update_calendar_event -> FIRED 'invokeJourneyTool forwards update_calendar_event (not UI-only)'
+- No real calendar call, no live app, no DB touched.
+
+## NEEDS OWNER 👍
+
+| Today | Becomes | Why | Impact | Reversible |
+|---|---|---|---|---|
+| Create's token code (connection pick, decrypt, refresh) lives privately in send-unified-notification; edit/delete carry a second, matching copy in `_shared/calendar-edit.ts` | Create moves onto the shared copy, so there's one token path | Two copies of OAuth refresh logic will drift | Create's code path changes (it should behave the same) and needs a live re-test of event creation | Yes, git revert |
+| `external_calendar_events` is written only by calendar-delta-sync (plus task-linked Outlook creates) | Edit/delete also update or remove the mirror row right away | Until the next delta sync, a moved event still shows at its old time to briefs, alarms and a second find-by-time | Briefs and reads would see changes sooner; this is the data path the brief froze | Yes |
+| Delete consent is a model-set flag (`user_explicitly_requested: true`) plus the tool description | Optionally a hard user confirmation (a confirm card, or UI-only like `delete_task`) | The flag is the model's own claim, not proof the user asked | Adds a confirm step before deletes | Yes |
+| Google edits target `primary` only (same as delta-sync reads) | Edit events on other Google calendars | Events on secondary calendars can't be found or edited | None today; it's a known limit | n/a |
