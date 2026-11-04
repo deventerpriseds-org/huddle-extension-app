@@ -514,3 +514,5 @@ is **loop 4**.
 | Source that would have settled it | `git show --stat 84b262c` in eds-claude-skills vs `c0e8c40` in huddle |
 | Root cause | PR numbers are per-repo; a multi-repo session that writes "#131" alone is ambiguous to any reader |
 | Guard implied | In a multi-repo session always write `<repo>#<n>`, never a bare `#<n>` |
+
+| 2026-11-04 | "Nexus tools only read — a fix is yours" (told the owner) | `write_nexus_assignments` exists (`scripts/nexus-write-tool.test.ts`); grep of `nexus.server.ts` alone missed it | grep the whole `src/` + `scripts/` tool surface, not one file | capability-absent claim from a single-file grep | corrected to the owner in the same session; sweep tool names across `src/**` before saying "no tool" |

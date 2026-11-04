@@ -1775,6 +1775,11 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+
+### Task pick-up fit (2026-11-04, branch `claude_task-pickup-fit`)
+- Owner rule: agents take tickets they can FINISH end to end; a reminder only when the user says "remind me to…"; research is just done; for user-last-click tasks (subscribe/sign up/order/start a course) do the legwork — exact link on the card, comparisons always with reviews + forum feedback.
+- Mechanism: grooming may return `assigned_agent:"none"` → `groomOwner` clears the owner (journey clears on ""), and the owner judge skips it. `reminder` tag is derived from the title (`asksForReminder`), never kept or taken from the model. REMIND mode keys off the title, not the tag.
+- Live finding that drove it: 7 tasks had reminder-only proposals (6 research tasks), several invented "evidence-based Trinnex" briefs. A Nexus WRITE tool exists (`write_nexus_assignments`) — I first said it didn't.
 - [2026-10-28] Iris scheduled pushes: `turnPushStyle` (lib/push/turn-push.ts) names the push per job via `payload.pushStyle`; priority check is STICKY ("Iris: confirm ... priorities"), briefs carry Open Schedule + "adjust anything?" and one item per line (owner reversed the 10-15 "NO bullet points"). #122 `8302cb6` live, NOT owner-confirmed.
 **ARTIFACTS ARE NOT MARKDOWN-ONLY — `create_artifact` takes a `format` (2026-09-13).**
 Owner: *"why is it saying we are limited to .md when full document, mermaid, d3 abilities etc were

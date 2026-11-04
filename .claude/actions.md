@@ -4906,4 +4906,6 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 
 ## ACT:task-pickup-fit — why agents pick up tasks they can't add value to (2026-11-04)
 - [x] Fact-find: live queue read (journey public.tasks + huddle-extension-app azure-pg-query run 41816077919, 26 rows). Every assigned task is confirm-asked; mode only shapes wording (workability.ts). Groom's `reminder` tag is over-applied to research ("when in doubt ADD", sticky) and missing on you-only/needs-data tasks.
-- [ ] Owner 👍 on the proposed changes (grooming tag rule, remind-mode helpful slice, needs-input rule). Nothing changed yet.
+- [x] Owner 👍 2026-11-04 with refinement: reminders ONLY on an explicit "remind me to…"; grooming must not assign a task an agent can't finish; research is just done; user-last-click tasks get the legwork (link on the card, comparisons with reviews + forum feedback).
+- [x] Built on `claude_task-pickup-fit` (a9cbb05e): groom.ts NO_AGENT/groomOwner/groomTags, workability.ts asksForReminder + rewritten hints, work directive puts exact links on the card. test:mode 54/54, ownership-judge, lane-starvation 26, priority-lane, week-order, assign-on-create, ask-shape all pass. 6/6 mutations FIRED.
+- [ ] Merge + deploy, then live: strip stale reminder tags, reset the 7 reminder-only proposals so they get a real ask, re-groom, owner confirms the new check-ins.
