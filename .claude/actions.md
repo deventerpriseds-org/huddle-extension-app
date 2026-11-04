@@ -4864,4 +4864,5 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [x] Re-verified on main 32f50e4 (offline fixture `scripts/status-answers.test.ts`): UTC already fixed (times read "9:00 AM EST"); over-trim REPRODUCED 2 of 6; BLOCKED unreachable from `schedule_and_priorities`.
 - [x] (implemented on branch, offline-verified 23/0) A: `include_blocked` / `view:"blocked"` on `schedule_and_priorities` → separate `blocked` array (+ reasons, explicit `blocked_count`); ranked list untouched.
 - [x] (implemented on branch, offline-verified) B: scheduled view returns every item by default; `total`/`truncated` say when a list was cut.
-- [ ] Owner confirms live ("anything blocking me?" names the blocked task; "what's on today" lists all items in ET). NOT yet confirmed.
+- [x] Offline: 23/0, tsc 0, 4 regression suites green, 7/7 mutations FIRED.
+- [ ] Merge + deploy (caller), then owner confirms live ("anything blocking me?" names the blocked task; "what's on today" lists all items in ET). NOT yet confirmed.
