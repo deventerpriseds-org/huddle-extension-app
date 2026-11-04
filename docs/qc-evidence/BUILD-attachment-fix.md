@@ -53,3 +53,9 @@
   realtime-tools.server.ts. HuddleView.tsx and lib/artifacts/ are untouched. The huddle.functions.ts hunks
   matching attach|Input are two new tool `inputSchema`s (inbox read), NOT the turn Input / attachments field.
 - Inference: the 11-04 deploys cannot have broken the paperclip -> upload chain either.
+
+## Step 5 -- single-check module for the live run
+- Added `.claude/skills/test-agent-serverfn/scripts/attachment-checks.mjs` (filters huddle-checks to
+  `attachmentButton` only; throws if the filter does not find exactly one). Loads locally: `['attachmentButton']`.
+- Next: dispatch verify-uat.yml on claude_attachment-fix with checks_file=that module, desktop 1000x680,
+  then phone 390x844 (sequential -- both force-push the uat-shots branch).
