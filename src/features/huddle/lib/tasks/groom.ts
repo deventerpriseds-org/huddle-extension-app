@@ -6,7 +6,7 @@
 // the normal sync into Huddle's mirror. Gated to Terry (scrum master) at the call site.
 
 import { AGENTS, type AgentId } from "../../data/agents";
-import { REMINDER_TAG, asksForReminder } from "./workability";
+import { REMINDER_TAG, alarmFits } from "./workability";
 
 export const GROOM_BACKLOG_TOOL = {
   type: "function",
@@ -165,7 +165,7 @@ export function groomOwner(current: string | null | undefined, batchPick: string
 /**
  * The tags grooming writes back. Model tags replace the old descriptive ones; `parking-lot` and
  * `blocked` (user control state) are preserved. `reminder` is DERIVED, never preserved and never taken
- * from the model: present iff the task itself asks to be reminded. Before 2026-11-04 the model added it
+ * from the model: present iff the task itself asks to be reminded or is somewhere to GO (alarmFits). Before 2026-11-04 the model added it
  * "when in doubt" and it was sticky, so "Research AI-assisted SDLC practices" and five other doable
  * tasks got reminder-only check-ins — the agent kicking the work down the road.
  */
@@ -173,7 +173,7 @@ export function groomTags(llmTags: string[], currentTags: string[], title: strin
   const keep = currentTags.filter((t) => t === "parking-lot" || t === "blocked");
   const fresh = llmTags.filter((t) => t !== REMINDER_TAG);
   const out = Array.from(new Set([...fresh, ...keep])).slice(0, 5);
-  return asksForReminder(title) ? Array.from(new Set([...out.slice(0, 4), REMINDER_TAG])) : out;
+  return alarmFits(title) ? Array.from(new Set([...out.slice(0, 4), REMINDER_TAG])) : out;
 }
 
 /** Run `fn` over `items` with at most `limit` in flight (no dependency for one call site). */
@@ -258,13 +258,15 @@ STILL assignable when there is real legwork an agent can finish: "Subscribe to A
 options and the exact subscription link and put them on the card; "Start AI certification course" →
 compare courses including reviews and forum feedback; "Order more fat burners" → find where to reorder
 and the price. The agent does that legwork; the user only does the last click.
-Set "assigned_agent":"none" when NO agent can finish anything real: a pure physical act or errand with
-no legwork ("Go to church", "Get a haircut"), or work that depends on private files, systems or facts no
+Somewhere the user has to GO ("Go to church", "Go to the mall Saturday", an appointment) IS assignable:
+the agent sets an alarm before they need to leave and adds the hours, address or travel time.
+Set "assigned_agent":"none" when NO agent can finish anything real: a pure act with no place, time or
+legwork ("Meditate", "Clean the garage"), or work that depends on private files, systems or facts no
 agent can reach (an internal company dataset nobody has been given, a system with no tool). Do not assign
 such a task just to have an owner — an unassigned task stays on the user's board and no agent pesters
 them about it.
 Never add the tag "${REMINDER_TAG}" — the system sets it only when the user explicitly asks to be
-reminded. A reminder is never an agent's substitute for doing the work.
+reminded or has to go somewhere. A reminder is never an agent's substitute for doing the work.
 
 ASSIGNMENT STABILITY — if a task already has an assignee and that agent is still a reasonable fit, KEEP
 them. Do not reshuffle owners between passes for a marginal improvement: re-assigning resets the task's
