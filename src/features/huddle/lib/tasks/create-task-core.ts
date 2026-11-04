@@ -127,6 +127,70 @@ export async function loadOpenTaskTitles(caller: TaskCaller | undefined): Promis
   }
 }
 
+// ── Cross-turn create claim (F7, docs/qc-evidence/BUILD-handoff-lane-b.md) ───────────────────────
+//
+// The open-title read above is a SNAPSHOT of the mirror (once per turn), and the mirror lags journey by the
+// async pg_net sync. The `createdTaskTitles` ledger is per turn. Neither can see a create made by ANOTHER turn a
+// moment ago -- two identical messages minutes apart, a user turn racing its follow-up / worker turn, two agents
+// -- which is how one request became 3 "Obtain official transcript" tasks (AC file, observation 6). This is the
+// shared half: a durable, atomic claim on the SAME key (normalizeTaskTitle), taken right before a journey create.
+// It extends the existing dedup; it is not a third layer with its own key or normalizer (AC-F7-9).
+
+/** How long a create claim blocks an identical create. Covers mirror lag and a repeated message minutes later;
+ *  after it, the open-title read (the mirror) is authoritative again. A DONE task releases it early (AC-F7-6). */
+export const CREATE_CLAIM_WINDOW_MINUTES = 10;
+
+export type TitleClaim = { ok: true; unavailable?: string } | { ok: false };
+
+/**
+ * Claim (user, title key) for a create that is about to be sent to journey. `ok:false` = another turn created
+ * this same title within the window and it is not DONE: treat as a duplicate. FAIL-OPEN BUT LOUD like
+ * loadOpenTaskTitles (AC-F7-7): a claim store failure lets the create proceed and says so in `unavailable`.
+ * No caller identity = no board write follows = nothing to claim.
+ */
+export async function claimCreateTitle(caller: TaskCaller | undefined, titleKey: string): Promise<TitleClaim> {
+  const email = caller?.entra_email;
+  if (!email || !titleKey) return { ok: true };
+  try {
+    const { resolveTaskEmail } = await import("../journey/identity");
+    const resolved = (await resolveTaskEmail(caller ?? {})) ?? email;
+    const { claimTaskCreateTitle, getTitlesCompletedSince, retakeTaskCreateTitle } = await import("./tasks.server");
+    const r = await claimTaskCreateTitle(resolved, titleKey, CREATE_CLAIM_WINDOW_MINUTES);
+    if (r.claimed) return { ok: true };
+    // AC-F7-6: the earlier task with this title was finished since it was claimed -- a re-create is a NEW task.
+    const done = await getTitlesCompletedSince(resolved, r.claimedAt);
+    if (done.some((t) => normalizeTaskTitle(t) === titleKey)) {
+      await retakeTaskCreateTitle(resolved, titleKey);
+      return { ok: true };
+    }
+    return { ok: false };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.warn(`[task-dedup] cross-turn create claim failed — creating WITHOUT it: ${reason}`);
+    return { ok: true, unavailable: reason || "create claim failed" };
+  }
+}
+
+/** Give back a claim whose journey create FAILED (best-effort), so the retry is not called a duplicate. */
+export async function releaseCreateTitle(caller: TaskCaller | undefined, titleKey: string): Promise<void> {
+  const email = caller?.entra_email;
+  if (!email || !titleKey) return;
+  try {
+    const { resolveTaskEmail } = await import("../journey/identity");
+    const resolved = (await resolveTaskEmail(caller ?? {})) ?? email;
+    const { releaseTaskCreateTitle } = await import("./tasks.server");
+    await releaseTaskCreateTitle(resolved, titleKey);
+  } catch {
+    /* a stuck claim expires on its own after CREATE_CLAIM_WINDOW_MINUTES */
+  }
+}
+
+/** Release every claim a forwarded raw create took (call when journey refused the create). */
+export async function releaseRawCreateClaims(caller: TaskCaller | undefined, decision: RawCreateDecision): Promise<void> {
+  if (decision.action !== "forward" || !decision.claimedKeys?.length) return;
+  await Promise.all(decision.claimedKeys.map((k) => releaseCreateTitle(caller, k)));
+}
+
 // ── Raw journey create interception (AC-55..AC-61, AC-67) ────────────────────────────────────────
 //
 // F14: journey's own catalog offers `quick_create_task` / `parse_and_create_tasks` / `create_task`
@@ -156,13 +220,21 @@ export type RawCreateDecision =
   /** Not a create tool (or nothing to screen): dispatch exactly as before. */
   | { action: "pass" }
   /** Dispatch to journey with `args` — the original args, or a batch with duplicates removed. */
-  | { action: "forward"; args: Record<string, unknown>; skipped: RawCreateSkip[]; dedupUnavailable: string | null }
+  | {
+      action: "forward";
+      args: Record<string, unknown>;
+      skipped: RawCreateSkip[];
+      dedupUnavailable: string | null;
+      /** Title keys this create CLAIMED cross-turn (F7) -- release them if journey refuses the create. */
+      claimedKeys?: string[];
+    }
   /** Do NOT call journey. `result` is what the model gets back, the same shape create_huddle_task /
    *  create_huddle_tasks already return for a duplicate. */
   | { action: "skip"; result: Record<string, unknown>; skipped: RawCreateSkip[]; dedupUnavailable: string | null };
 
 const DUP_THIS_TURN = "already created this turn";
 const DUP_ON_BOARD = "an open task with this title already exists";
+const DUP_RECENT = "the same task was just created for this request";
 
 /**
  * Screen a raw journey tool call for duplicate task creates. Non-create tools return `pass` WITHOUT
@@ -176,7 +248,12 @@ const DUP_ON_BOARD = "an open task with this title already exists";
 export async function screenRawJourneyCreate(
   toolName: string,
   rawArgs: unknown,
-  deps: { ledger: TitleLedger; loadTitles: () => Promise<OpenTitleLoad> },
+  deps: {
+    ledger: TitleLedger;
+    loadTitles: () => Promise<OpenTitleLoad>;
+    /** F7 cross-turn claim (claimCreateTitle bound to the caller). Every live call site passes it. */
+    claim?: (titleKey: string) => Promise<TitleClaim>;
+  },
 ): Promise<RawCreateDecision> {
   if (!RAW_JOURNEY_CREATE_TOOLS.has(toolName)) return { action: "pass" };
   const args = (rawArgs && typeof rawArgs === "object" ? rawArgs : {}) as Record<string, unknown>;
@@ -190,6 +267,8 @@ export async function screenRawJourneyCreate(
   const load = await deps.loadTitles();
   const survivors: string[] = [];
   const skipped: RawCreateSkip[] = [];
+  const claimedKeys: string[] = [];
+  let claimUnavailable: string | null = null;
   for (const entry of entries) {
     const key = normalizeTaskTitle(entry);
     if (deps.ledger.has(key)) {
@@ -201,13 +280,23 @@ export async function screenRawJourneyCreate(
       skipped.push({ title: entry, reason: DUP_ON_BOARD });
       continue;
     }
+    if (deps.claim) {
+      const c = await deps.claim(key);
+      if (!c.ok) {
+        deps.ledger.add(key);
+        skipped.push({ title: entry, reason: DUP_RECENT });
+        continue;
+      }
+      if (c.unavailable) claimUnavailable = claimUnavailable ?? c.unavailable;
+      else claimedKeys.push(key);
+    }
     deps.ledger.add(key);
     survivors.push(entry);
   }
-  const dedupUnavailable = load.unavailable;
+  const dedupUnavailable = load.unavailable ?? claimUnavailable;
 
   if (!isBatch) {
-    if (survivors.length === 1) return { action: "forward", args, skipped, dedupUnavailable };
+    if (survivors.length === 1) return { action: "forward", args, skipped, dedupUnavailable, claimedKeys };
     // Byte-identical to create_huddle_task's duplicate return.
     return {
       action: "skip",
@@ -225,13 +314,13 @@ export async function screenRawJourneyCreate(
       dedupUnavailable,
     };
   }
-  if (skipped.length === 0) return { action: "forward", args, skipped, dedupUnavailable };
+  if (skipped.length === 0) return { action: "forward", args, skipped, dedupUnavailable, claimedKeys };
   // Partial: forward only the survivors, in whichever field the model used (splitTaskEntries prefers
   // a `tasks` array, so rewrite that if it was the source; otherwise the text blob).
   const forwarded: Record<string, unknown> = Array.isArray(args.tasks)
     ? { ...args, tasks: survivors }
     : { ...args, text: survivors.join("\n") };
-  return { action: "forward", args: forwarded, skipped, dedupUnavailable };
+  return { action: "forward", args: forwarded, skipped, dedupUnavailable, claimedKeys };
 }
 
 /** One-line tool-use summary for a skipped raw create. */

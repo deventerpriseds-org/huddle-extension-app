@@ -22,6 +22,11 @@ let reminderIds = new Set<string>();
 let marks: { taskId: string; via: string }[] = [];
 let ownedTask: any = null;
 let confirmWrites: string[] = [];
+// F7: an in-memory stand-in for tasks.task_create_claims (its real SQL is proven in handoff-lane-b-db.test.ts).
+let claims = new Map<string, number>();
+let completedTitles: string[] = [];
+let claimStoreDown = false;
+let releases: string[] = [];
 
 mock.module(P("tasks/tasks.server.ts"), () => ({
   getOpenAssignedTasks: async () => board.filter((t) => t.status !== "DONE" && !t.blocked && t.assigned_agent),
@@ -59,6 +64,25 @@ mock.module(P("tasks/tasks.server.ts"), () => ({
     if (s) s.live_started_at = null;
   },
   getOwnedTaskForConfirmAsk: async () => ownedTask,
+  claimTaskCreateTitle: async (email: string, key: string, windowMinutes: number) => {
+    if (claimStoreDown) throw new Error("claim store unreachable");
+    const k = `${email}|${key}`;
+    const at = claims.get(k);
+    if (at !== undefined && Date.now() - at < windowMinutes * 60_000) {
+      return { claimed: false, claimedAt: new Date(at).toISOString() };
+    }
+    claims.set(k, Date.now());
+    return { claimed: true };
+  },
+  retakeTaskCreateTitle: async (email: string, key: string) => {
+    claims.set(`${email}|${key}`, Date.now());
+  },
+  releaseTaskCreateTitle: async (email: string, key: string) => {
+    releases.push(key);
+    claims.delete(`${email}|${key}`);
+  },
+  getTitlesCompletedSince: async () => completedTitles,
+  getTasksForUser: async () => [],
   confirmTaskIntent: async (taskId: string) => {
     confirmWrites.push(taskId);
     const s = engagement.get(taskId) ?? { task_id: taskId };
@@ -91,6 +115,7 @@ mock.module(P("journey/proxy.functions.ts"), () => ({
 
 const A = await import(`${SRC}/tasks/autowork.server.ts`);
 const { confirmTaskFromProposal } = await import(`${SRC}/tasks/confirm-ask.functions.ts`);
+const C = await import(`${SRC}/tasks/create-task-core.ts`);
 
 const failures: string[] = [];
 function check(name: string, ok: boolean, detail = "") {
@@ -139,6 +164,10 @@ beforeEach(() => {
   marks = [];
   ownedTask = null;
   confirmWrites = [];
+  claims = new Map();
+  completedTitles = [];
+  claimStoreDown = false;
+  releases = [];
 });
 
 // ---------------------------------------------------------------- pure verdict (AC-F3-5, AC-F3-6, AC-F3-10)
@@ -290,5 +319,65 @@ test("F3 wiring", () => {
     /status:\s*"DOING"/.test(readFileSync(`${SRC}/${f}`, "utf8")),
   );
   check("AC-F3-9 no DOING writer outside autowork.server.ts in the files this lane touched", writers.length === 0, writers.join(","));
+  expect(failures).toEqual([]);
+});
+
+// ================================================================================================ F7
+const CALLER = { entra_email: "owner@test" };
+const freshTurn = () => ({
+  ledger: new Set<string>(), // per-turn ledger: a different turn never sees it
+  loadTitles: async () => ({ titles: new Set<string>(), unavailable: null }), // stale mirror: not synced yet
+  claim: (k: string) => C.claimCreateTitle(CALLER, k),
+});
+
+test("F7 one request never creates the same task twice", async () => {
+  const title = "Test-Obtain official transcript";
+  const t1 = await C.screenRawJourneyCreate("quick_create_task", { title }, freshTurn());
+  const t2 = await C.screenRawJourneyCreate("quick_create_task", { title: "test-obtain  official transcript." }, freshTurn());
+  check("AC-F7-1 two identical requests minutes apart (stale mirror both times) -> 1 create", t1.action === "forward" && t2.action === "skip", JSON.stringify([t1.action, t2.action]));
+  claims = new Map();
+  const race = await Promise.all([1, 2, 3].map(() => C.screenRawJourneyCreate("quick_create_task", { title }, freshTurn())));
+  check("AC-F7-2 three CONCURRENT turns (user + follow-up + worker) -> exactly 1 forwards", race.filter((d) => d.action === "forward").length === 1, JSON.stringify(race.map((d) => d.action)));
+  claims = new Map();
+  const single = C.claimCreateTitle(CALLER, C.normalizeTaskTitle(title));
+  const raw = C.screenRawJourneyCreate("quick_create_task", { title }, freshTurn());
+  const [a, b] = await Promise.all([single, raw]);
+  check("AC-F7-3/F7-9 create_huddle_task's claim and a raw create collide on the SAME key", (a.ok ? 1 : 0) + (b.action === "forward" ? 1 : 0) === 1);
+  claims = new Map();
+  const d1 = await C.screenRawJourneyCreate("quick_create_task", { title: "Test-buy studio camera bag" }, freshTurn());
+  const d2 = await C.screenRawJourneyCreate("quick_create_task", { title: "Test-buy studio camera" }, freshTurn());
+  check("AC-F7-5 distinct titles are NOT merged", d1.action === "forward" && d2.action === "forward");
+  completedTitles = ["Test-buy studio camera"];
+  const d3 = await C.screenRawJourneyCreate("quick_create_task", { title: "Test-buy studio camera" }, freshTurn());
+  check("AC-F7-6 a task finished since the claim never blocks a re-create", d3.action === "forward");
+  completedTitles = [];
+  claimStoreDown = true;
+  const d4 = await C.screenRawJourneyCreate("quick_create_task", { title: "Test-claim store down" }, freshTurn());
+  check("AC-F7-7 claim store down -> the create proceeds AND says dedup unavailable", d4.action === "forward" && !!d4.dedupUnavailable, JSON.stringify(d4));
+  claimStoreDown = false;
+  claims = new Map();
+  const b1 = await C.screenRawJourneyCreate("parse_and_create_tasks", { tasks: ["Test-A", "Test-B"] }, freshTurn());
+  const b2 = await C.screenRawJourneyCreate("parse_and_create_tasks", { tasks: ["Test-B", "Test-C"] }, freshTurn());
+  check("F7 a second batch forwards only its new entry", b2.action === "forward" && JSON.stringify((b2 as any).args.tasks) === JSON.stringify(["Test-C"]) && b1.action === "forward");
+  check("F7 a forwarded create reports the keys it claimed", b1.action === "forward" && (b1 as any).claimedKeys.length === 2);
+  await C.releaseRawCreateClaims(CALLER, b1);
+  const b3 = await C.screenRawJourneyCreate("quick_create_task", { title: "Test-A" }, freshTurn());
+  check("F7 a FAILED create's claims are released, so the retry is not called a duplicate", releases.length === 2 && b3.action === "forward");
+  const noCaller = await C.claimCreateTitle(undefined, "x");
+  check("F7 no caller identity (no board write follows) claims nothing", noCaller.ok === true && !claims.has("undefined|x"));
+  expect(failures).toEqual([]);
+});
+
+test("F7 wiring: every create path takes the claim and releases it on failure", () => {
+  const hf = readFileSync(`${SRC}/huddle.functions.ts`, "utf8");
+  const rt = readFileSync(`${SRC}/voice/realtime-tools.server.ts`, "utf8");
+  const core = readFileSync(`${SRC}/tasks/create-task-core.ts`, "utf8");
+  check("AC-F7-9 text raw-create guard + produce path pass the claim", (hf.match(/claim: \(k\) => claimCreateTitle\(data\.caller, k\)/g) ?? []).length === 2);
+  check("AC-F7-9 voice raw-create router passes the claim", /claim: \(k\) => claimCreateTitle\(ctx\.caller, k\)/.test(rt));
+  check("AC-F7-2 create_huddle_task claims before the journey write", /const claim = await claimCreateTitle\(data\.caller, titleKey\);\s*if \(!claim\.ok\)/.test(hf));
+  check("AC-F7-2 create_huddle_tasks claims per survivor", /const c = await claimCreateTitle\(data\.caller, key\);/.test(hf));
+  check("AC-F7-2 voice create_huddle_task(s) claims per survivor", /const claim = await claimCreateTitle\(ctx\.caller, key\);/.test(rt));
+  check("F7 failed creates release (text single, batch x2, raw x2, produce)", (hf.match(/releaseCreateTitle\(data\.caller, titleKey\)/g) ?? []).length === 1 && (hf.match(/await releaseBatchClaims\(\);/g) ?? []).length === 2 && (hf.match(/releaseRawCreateClaims\(data\.caller, (dedup\.decision|dedup)\)/g) ?? []).length === 3);
+  check("AC-F7-9 still ONE normalizer definition", (core.match(/function normalizeTaskTitle/g) ?? []).length === 0 && (readFileSync(`${SRC}/tasks/scoring.ts`, "utf8").match(/export function normalizeTaskTitle/g) ?? []).length === 1);
   expect(failures).toEqual([]);
 });

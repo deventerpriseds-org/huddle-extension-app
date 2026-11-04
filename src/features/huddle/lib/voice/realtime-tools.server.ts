@@ -79,6 +79,9 @@ import {
   normalizeTaskTitle,
   screenCapabilityMetaTask,
   screenRawJourneyCreate,
+  claimCreateTitle,
+  releaseCreateTitle,
+  releaseRawCreateClaims,
   splitTaskEntries,
   summarizeQuickCreateOutcome,
 } from "../tasks/create-task-core";
@@ -741,9 +744,10 @@ export async function executeRealtimeTool(
       const load = await loadOpenTaskTitles(ctx.caller);
       const seen = load.titles;
       // AC-64: a failed open-title read proceeds but is SAID, on every result below.
-      const dedupNote = load.unavailable
+      let dedupNote: { dedup_note?: string } = load.unavailable
         ? { dedup_note: "dedup unavailable — the duplicate check could not run, so this was created without it" }
         : {};
+      const claimedKeys: string[] = []; // F7: released if journey refuses the create
       const survivors: string[] = [];
       const deferred: Array<{ title: string; handedTo?: string; reason: string }> = [];
       const skipped: Array<{ title: string; reason: string }> = [];
@@ -759,6 +763,15 @@ export async function executeRealtimeTool(
           continue;
         }
         seen.add(key); // also dedups repeats WITHIN this one call
+        // F7: the SAME cross-turn claim the text paths take (create-task-core.ts claimCreateTitle).
+        const claim = await claimCreateTitle(ctx.caller, key);
+        if (!claim.ok) {
+          skipped.push({ title: entry, reason: "the same task was just created for this request" });
+          continue;
+        }
+        if (claim.unavailable) {
+          dedupNote = { dedup_note: "dedup unavailable — the duplicate check could not run, so this was created without it" };
+        } else claimedKeys.push(key);
         survivors.push(entry);
       }
       if (survivors.length === 0) {
@@ -789,6 +802,7 @@ export async function executeRealtimeTool(
           context: jctx,
         });
         if (!r.ok) {
+          await Promise.all(claimedKeys.map((k) => releaseCreateTitle(ctx.caller, k)));
           return done(
             JSON.stringify({
               ok: false,
@@ -823,6 +837,7 @@ export async function executeRealtimeTool(
         context: jctx,
       });
       if (!r.ok) {
+        await Promise.all(claimedKeys.map((k) => releaseCreateTitle(ctx.caller, k)));
         return done(
           JSON.stringify({
             ok: false,
@@ -912,6 +927,7 @@ export async function executeRealtimeTool(
       const dedup = await screenRawJourneyCreate(name, args, {
         ledger: new Set<string>(),
         loadTitles: () => loadOpenTaskTitles(ctx.caller),
+        claim: (k) => claimCreateTitle(ctx.caller, k), // F7
       });
       if (dedup.action === "skip") {
         return done(
@@ -928,6 +944,7 @@ export async function executeRealtimeTool(
         caller: ctx.caller ?? {},
         context: { source: "huddle", huddleId: ctx.huddleId, agentId: ctx.agentId },
       });
+      if (!r.ok) await releaseRawCreateClaims(ctx.caller, dedup); // F7
       return done(annotateRawCreateOutput(r.output, dedup));
     }
     return done(JSON.stringify({ error: `Tool not available on the voice path: ${name}` }));

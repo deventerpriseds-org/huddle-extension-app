@@ -137,6 +137,20 @@ CREATE TABLE IF NOT EXISTS tasks.task_blockers (
   flagged_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS task_blockers_user_idx ON tasks.task_blockers (lower(user_email));
+-- CROSS-TURN CREATE CLAIM (docs/qc-evidence/BUILD-handoff-lane-b.md, F7). The open-title dedup reads a once-per-
+-- turn snapshot of the MIRROR, which lags journey by the async pg_net sync (~1-3s, and longer when a sync fails),
+-- and the createdTaskTitles ledger is per turn. So two turns for one request (two identical messages, a user turn
+-- and its follow-up/worker turn, two agents) could each see "not on the board" and each create. This is a
+-- write-ahead claim on (user, normalized title) taken right before the journey create: an atomic INSERT ... ON
+-- CONFLICT, so exactly one concurrent creator wins; a claim younger than the window blocks a second create. Not
+-- a second dedup KEY: title_key is normalizeTaskTitle's output, the one normalizer (AC-F7-9). Released when the
+-- create fails, so a failed create never blocks the retry.
+CREATE TABLE IF NOT EXISTS tasks.task_create_claims (
+  user_key    TEXT NOT NULL,
+  title_key   TEXT NOT NULL,
+  claimed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_key, title_key)
+);
 
 -- WIP confirm-intent gate + hardened review gate (docs/plan-wip-confirm-review-gate.md). One row per
 -- task, Huddle-native bookkeeping (journey only holds the confirmed definition_of_done itself).
@@ -618,6 +632,77 @@ export async function getTasksForUser(
     : ` AND completed_at IS NULL AND (status IS NULL OR status NOT IN ('DONE','BLOCKED')) LIMIT 500`;
   const { rows } = await getPool().query<ScorableTask>(sql, params);
   return rows;
+}
+
+/** The claim key for a user: the identity profile id when linked (so every alias email shares one key), else
+ *  the lowercased email. */
+async function createClaimUserKey(userEmail: string): Promise<string> {
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { userId } = await resolveScopeByEmail(userEmail);
+  return userId ? `uid:${userId}` : `email:${userEmail.trim().toLowerCase()}`;
+}
+
+/**
+ * F7 write-ahead create claim (see the DDL note). Atomic: of N concurrent callers for the same (user, title_key)
+ * exactly one gets `claimed:true`. A claim older than `windowMinutes` is taken over (the mirror is authoritative
+ * by then). On refusal, returns the holder's `claimedAt` so the caller can tell a finished task (DONE since then)
+ * from an in-flight duplicate.
+ */
+export async function claimTaskCreateTitle(
+  userEmail: string,
+  titleKey: string,
+  windowMinutes: number,
+): Promise<{ claimed: true } | { claimed: false; claimedAt: string }> {
+  await ensureBootstrapped();
+  const userKey = await createClaimUserKey(userEmail);
+  const r = await getPool().query(
+    `INSERT INTO tasks.task_create_claims (user_key, title_key, claimed_at) VALUES ($1, $2, now())
+     ON CONFLICT (user_key, title_key) DO UPDATE SET claimed_at = now()
+       WHERE tasks.task_create_claims.claimed_at < now() - make_interval(mins => $3::int)
+     RETURNING claimed_at`,
+    [userKey, titleKey, Math.max(1, Math.round(windowMinutes))],
+  );
+  if ((r.rowCount ?? 0) > 0) return { claimed: true };
+  const held = await getPool().query<{ claimed_at: string | Date }>(
+    `SELECT claimed_at FROM tasks.task_create_claims WHERE user_key = $1 AND title_key = $2`,
+    [userKey, titleKey],
+  );
+  const at = held.rows[0]?.claimed_at;
+  return { claimed: false, claimedAt: at ? new Date(at).toISOString() : new Date().toISOString() };
+}
+
+/** Take a held claim over unconditionally (the earlier task with this title is already DONE -- AC-F7-6). */
+export async function retakeTaskCreateTitle(userEmail: string, titleKey: string): Promise<void> {
+  await ensureBootstrapped();
+  const userKey = await createClaimUserKey(userEmail);
+  await getPool().query(
+    `INSERT INTO tasks.task_create_claims (user_key, title_key, claimed_at) VALUES ($1, $2, now())
+     ON CONFLICT (user_key, title_key) DO UPDATE SET claimed_at = now()`,
+    [userKey, titleKey],
+  );
+}
+
+/** Drop a claim whose create FAILED, so the user's retry is not mistaken for a duplicate. */
+export async function releaseTaskCreateTitle(userEmail: string, titleKey: string): Promise<void> {
+  await ensureBootstrapped();
+  const userKey = await createClaimUserKey(userEmail);
+  await getPool().query(`DELETE FROM tasks.task_create_claims WHERE user_key = $1 AND title_key = $2`, [userKey, titleKey]);
+}
+
+/** Titles (raw) of the user's tasks completed at or after `sinceIso` -- the AC-F7-6 escape from a held claim. */
+export async function getTitlesCompletedSince(userEmail: string, sinceIso: string): Promise<string[]> {
+  await ensureBootstrapped();
+  const { resolveScopeByEmail } = await import("../identity/identity.server");
+  const { emails } = await resolveScopeByEmail(userEmail);
+  const { rows } = await getPool().query<{ title: string }>(
+    `SELECT title FROM tasks.journey_tasks
+      WHERE lower(user_email) = ANY($1)
+        AND (status = 'DONE' OR completed_at IS NOT NULL)
+        AND COALESCE(completed_at, updated_at) >= $2::timestamptz
+      LIMIT 500`,
+    [emails, sinceIso],
+  );
+  return rows.map((r) => r.title).filter(Boolean);
 }
 
 /** Record an agent-discovered blocker (ACT-5): the specific real reason a task can't be advanced. */

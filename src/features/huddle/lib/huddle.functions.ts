@@ -69,6 +69,9 @@ import {
   normalizeTaskTitle,
   screenCapabilityMetaTask,
   screenRawJourneyCreate,
+  claimCreateTitle,
+  releaseCreateTitle,
+  releaseRawCreateClaims,
   splitTaskEntries,
   summarizeQuickCreateOutcome,
   type OpenTitleLoad,
@@ -1629,7 +1632,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
             ? await screenRawJourneyCreate(
                 "quick_create_task",
                 { title },
-                { ledger: new Set<string>(), loadTitles: () => loadOpenTaskTitles(data.caller) },
+                {
+                  ledger: new Set<string>(),
+                  loadTitles: () => loadOpenTaskTitles(data.caller),
+                  claim: (k) => claimCreateTitle(data.caller, k), // F7
+                },
               )
             : ({ action: "pass" } as const);
           if (dedup.action !== "pass" && dedup.dedupUnavailable) {
@@ -1652,6 +1659,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
               context: { source: "huddle", huddleId: data.huddleId, agentId },
             });
             created = !!r.ok;
+            if (!r.ok) await releaseRawCreateClaims(data.caller, dedup); // F7: failed create never blocks a retry
             if (r.ok && r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
             // ASSIGN IT TO THE AGENT THAT IS TAKING IT ON. Without this the row lands with
             // assigned_agent = NULL and `runScheduledAutoWork` — kicked on the very next line —
@@ -2884,6 +2892,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       const decision = await screenRawJourneyCreate(toolName, rawArgs, {
         ledger: createdTaskTitles,
         loadTitles: loadExistingOpenTitles,
+        claim: (k) => claimCreateTitle(data.caller, k), // F7: cross-turn, atomic
       });
       if (decision.action === "pass") return { args: rawArgs, decision };
       reportDedupUnavailable(decision.dedupUnavailable, toolName);
@@ -3031,6 +3040,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // mirror row and nothing on the real board, however confident the reply sounds.
       let journeyFailed: string | null = null;
       if (agentBackend.journey?.enabled && data.caller?.entra_email) {
+        // F7 (docs/qc-evidence/BUILD-handoff-lane-b.md): the per-turn ledger and the mirror snapshot above cannot
+        // see a create made by ANOTHER turn moments ago (mirror lag, concurrent user / follow-up / worker turns).
+        // Claim the title durably and atomically right before the canonical write; a held claim = duplicate.
+        const claim = await claimCreateTitle(data.caller, titleKey);
+        if (!claim.ok) {
+          recordToolUse(
+            winner.id,
+            "create_huddle_task",
+            "the same task was just created for this request — skipped duplicate",
+            true,
+          );
+          return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
+        }
+        reportDedupUnavailable(claim.unavailable ?? null, "create_huddle_task");
         try {
           const { invokeJourneyTool } = await import("./journey/proxy.functions");
           // Defense in depth: journey's `date` param only understands 'today'/'tomorrow'/YYYY-MM-DD.
@@ -3148,6 +3171,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // (no journey row -> no mirror row). ok:false so the model reports the failure instead of the
       // flat "added it" the user saw, and the breadcrumb shows a cross rather than a tick.
       if (journeyFailed) {
+        await releaseCreateTitle(data.caller, titleKey); // F7: a failed create never blocks the retry
         recordToolUse(
           winner.id,
           "create_huddle_task",
@@ -3244,6 +3268,31 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 
       // Journey batch path: ONE parse_and_create_tasks call creates every survivor, co-scheduled.
       if (agentBackend.journey?.enabled && data.caller?.entra_email) {
+        // F7: the cross-turn claim, per survivor (same rule as the single path); a held claim = duplicate.
+        const batchClaimed: string[] = [];
+        const claimedSurvivors: string[] = [];
+        for (const entry of survivors) {
+          const key = normTitle(entry);
+          const c = await claimCreateTitle(data.caller, key);
+          if (!c.ok) {
+            skipped.push({ title: entry, reason: "the same task was just created for this request" });
+            continue;
+          }
+          reportDedupUnavailable(c.unavailable ?? null, "create_huddle_tasks");
+          if (!c.unavailable) batchClaimed.push(key);
+          claimedSurvivors.push(entry);
+        }
+        survivors.splice(0, survivors.length, ...claimedSurvivors);
+        if (!survivors.length) {
+          recordToolUse(
+            winner.id,
+            "create_huddle_tasks",
+            `no new tasks created — ${deferred.length} deferred, ${skipped.length} duplicate`,
+            true,
+          );
+          return { ok: true, requested: entries.length, created: 0, deferred, skipped, tasks: [] };
+        }
+        const releaseBatchClaims = () => Promise.all(batchClaimed.map((k) => releaseCreateTitle(data.caller, k)));
         try {
           const { invokeJourneyTool } = await import("./journey/proxy.functions");
           const target_date = normalizeJourneyDate(args.date);
@@ -3301,6 +3350,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             winner.id,
           );
           perAgentFallbacks.push(ev.inline);
+          await releaseBatchClaims(); // F7: a failed create never blocks the retry
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           const ev = recordFallback(
@@ -3310,6 +3360,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             winner.id,
           );
           perAgentFallbacks.push(ev.inline);
+          await releaseBatchClaims();
         }
       }
 
@@ -4948,6 +4999,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   winner.id,
                 );
                 perAgentFallbacks.push(ev.inline);
+                await releaseRawCreateClaims(data.caller, dedup.decision); // F7: a failed create never blocks the retry
               }
               return annotateRawCreateOutput(r.output, dedup.decision);
             } catch (err) {
@@ -6612,6 +6664,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                         winner.id,
                       );
                       perAgentFallbacks.push(ev.inline);
+                      await releaseRawCreateClaims(data.caller, dedup.decision); // F7
                     }
                     return annotateRawCreateOutput(r.output, dedup.decision);
                   } catch (err) {

@@ -119,6 +119,29 @@ try {
   s = (await T.getTaskEngagementStates(["f3-live"])).get("f3-live")!;
   check("F3 a reassignment clears the live marker (the new assignee never got the owner's live go-ahead)", s.live_start_at === null && s.live_started_at === null && s.live_start_via === null, JSON.stringify(s));
 
+
+  // ================================ F7 ==========================================================================
+  // The cross-turn create claim's REAL SQL: atomic under concurrency, held for the window, per user, releasable.
+  const K = "test-obtain official transcript";
+  const raceC = await Promise.all([1, 2, 3, 4].map(() => T.claimTaskCreateTitle(E, K, 10)));
+  check("AC-F7-2 four concurrent claims for one (user,title) -> exactly one wins", raceC.filter((r) => r.claimed).length === 1, JSON.stringify(raceC));
+  const later = await T.claimTaskCreateTitle(E, K, 10);
+  check("AC-F7-1/F7-4 a second create seconds later (mirror not synced) is refused", later.claimed === false);
+  await db.query(`UPDATE tasks.task_create_claims SET claimed_at = now() - interval '2 minutes' WHERE title_key = $1`, [K]);
+  check("AC-F7-1 two minutes later is still refused (the observed gap)", (await T.claimTaskCreateTitle(E, K, 10)).claimed === false);
+  await db.query(`UPDATE tasks.task_create_claims SET claimed_at = now() - interval '11 minutes' WHERE title_key = $1`, [K]);
+  check("F7 after the window the claim is taken over (the mirror is authoritative again)", (await T.claimTaskCreateTitle(E, K, 10)).claimed === true);
+  check("AC-F7-3 per USER: another user's identical title is independent", (await T.claimTaskCreateTitle("other@test.local", K, 10)).claimed === true);
+  check("AC-F7-5 distinct titles are independent", (await T.claimTaskCreateTitle(E, "test-buy studio camera", 10)).claimed === true && (await T.claimTaskCreateTitle(E, "test-buy studio camera bag", 10)).claimed === true);
+  await T.releaseTaskCreateTitle(E, K);
+  check("F7 a released claim (failed create) can be taken again at once", (await T.claimTaskCreateTitle(E, K, 10)).claimed === true);
+  const held = await T.claimTaskCreateTitle(E, K, 10);
+  await task("f7-done", "DONE");
+  await db.query(`UPDATE tasks.journey_tasks SET title='Test-Obtain official transcript', completed_at=now() WHERE id='f7-done'`);
+  const doneTitles = held.claimed ? [] : await T.getTitlesCompletedSince(E, held.claimedAt);
+  check("AC-F7-6 a task finished since the claim is visible to the claim escape", doneTitles.includes("Test-Obtain official transcript"), JSON.stringify(doneTitles));
+  await T.retakeTaskCreateTitle(E, K);
+  check("AC-F7-6 retake refreshes the claim (still held afterwards)", (await T.claimTaskCreateTitle(E, K, 10)).claimed === false);
 } catch (e) {
   failures++;
   console.log(`FAIL harness threw -- ${e instanceof Error ? e.stack : String(e)}`);
