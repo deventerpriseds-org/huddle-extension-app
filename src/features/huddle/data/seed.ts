@@ -49,7 +49,15 @@ export interface HuddleMessage {
   // an old reach-out after scrolling past unrelated conversation still targets the right task. `resolved`
   // is set client-side once a button action succeeds, swapping the live buttons for a resolved badge.
   // Absent on messages from before this feature shipped, or on any non-confirm-ask message → no row.
-  confirmAsk?: { taskId: string; taskTitle: string; proposedDod: string; resolved?: boolean };
+  // `resolvedAs` (client-only, like `resolved`) records WHICH button resolved it, so the agent's stream
+  // context can say "user tapped Confirm" rather than only "handled". Absent on older messages.
+  confirmAsk?: {
+    taskId: string;
+    taskTitle: string;
+    proposedDod: string;
+    resolved?: boolean;
+    resolvedAs?: "confirmed" | "backlogged" | "parked";
+  };
   // Present when THIS message reports an approach gate that ESCALATED — the agent tried to propose an
   // approach, the reviewer wouldn't pass it, and the task is now stuck waiting on the user. Renders the
   // "Approve anyway" row. Before this existed, escalation reached NO component at all, so the owner's

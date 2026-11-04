@@ -59,7 +59,8 @@
     "test:test-push": "bun scripts/test-push-validation.test.ts",
     "test:turn-catchup": "bun scripts/turn-catchup.test.ts",
     "test:turn-push": "bun scripts/turn-push.test.ts",
-    "test:inbox-read": "bun scripts/inbox-read.test.ts"
+    "test:inbox-read": "bun scripts/inbox-read.test.ts",
+    "test:context-and-confirm": "bun scripts/context-and-confirm.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

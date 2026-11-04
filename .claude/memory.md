@@ -117,6 +117,20 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04, branch claude_context-and-confirm, NOT merged, NOT deployed, NOT owner-confirmed)
+- **Confirm-intent:** the pre-model `isPlainConfirmation` short-circuit is GONE. Block A of `runHuddleTurn` is
+  READ-ONLY (looks up the last-asked pending confirm, also on chunk continuations). A typed "ok"/"great" is
+  recorded ONLY when the agent calls `confirm_task_intent` after reading it; `confirmReplyDirective` carries
+  the task_id, the proposed DoD, and says a short affirmative confirms THIS task. Buttons + voice unchanged
+  (model-free `confirmTaskFromProposal`). Gate resolvers / ensureReviewFlip untouched (still fail CLOSED).
+  Risk to watch live: a model that ignores the directive leaves the task 'asked' (fails closed, re-ask path).
+- **Stream context:** `lib/stream-context.ts` turns every non-text item (priorities/schedule/checklist widgets,
+  confirm-ask + which button, approach escalation, email card, artifact chips, attachments, navLink, briefs)
+  into a bracketed line. Client sends it as `history[i].context`; `HistoryMessage` declares it; the per-agent
+  transcript appends it; conversation mode puts the newest 6 in the instructions. Routing does not read it.
+  System + reminder messages are STILL dropped from the transcript (deliberate de-noise; owner decision pending).
+- Evidence: `docs/qc-evidence/BUILD-context-and-confirm.md`, `npm run test:context-and-confirm`.
+
 ## Confirm-ask LANE STARVATION + no re-ask (2026-10-27; DEPLOYED 33f625e / #108 on 2026-10-28, live re-asks armed for 10-29 — NOT owner-confirmed)
 - Root cause (code read + offline test `scripts/autowork-lane-starvation.test.ts`): autowork considers only `upNextAfterTopUp[0]` per agent for DOING and arms only that item's ask; `markConfirmAsked` is set-once and nothing re-asks. One unanswered top ask freezes the whole lane forever.
 - Groom is WEEKLY (Mon 8am, owner's 2026-07-31 choice) and never writes status; autowork 9/13/17 daily — a daily groom would NOT unstick a lane.
