@@ -33,6 +33,8 @@ import {
   type PromptDebug,
 } from "./fallbacks";
 import { buildRoster } from "./roster";
+// Pure -- out-of-lane wording: group unchanged, 1:1 answers first (owner-approved 2026-11-03).
+import { outOfLaneSceneLine, laneAnswerFirstDirective } from "./lane-handoff";
 // Pure (no server imports) -- the Nexus write tool's reply-honesty guard, run in reply assembly.
 import {
   presentNexusWriteTurn,
@@ -102,6 +104,7 @@ import {
   mimeForFilename,
 } from "./openai-builtin-tools";
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
+import { SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL, INBOX_READ_TOOL_NAMES } from "./email/inbox-read";
 import {
   DELEGATE_TO_SPECIALIST_TOOL,
   workerDirectory,
@@ -124,6 +127,7 @@ import {
   type EmailReplyAsk,
 } from "./email/email-reply-ask";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
+import { textWithStreamContext, streamContextInstructionBlock } from "./stream-context";
 import {
   assignCreatedJourneyTasks,
   isOneToOne,
@@ -167,6 +171,11 @@ const HistoryMessage = z.object({
   ts: z.number(),
   mentions: z.array(z.enum(AgentIds)).optional(),
   replyTo: z.string().optional(),
+  // Compact text summary of the non-text items on this message (widgets, cards + button state, chips),
+  // built client-side by lib/stream-context.ts. MUST be declared: zod strips undeclared keys, and the
+  // durable path re-parses the stored payload with this schema. Read ONLY by the per-agent transcript
+  // (and the conversation-mode instruction block) -- never by routing, so it cannot steer who answers.
+  context: z.string().max(1_500).optional(),
 });
 
 const RouterConfigInput = z.object({
@@ -643,21 +652,6 @@ export interface RunHuddleTurnOpts {
 // `opts.turnId` it runs in CHUNKED mode: sub-45s chunks, each agent's reply streamed to the durable
 // store the instant its wave lands, and a budget-deferred agent re-queued (never dropped) so the
 // runner continues the turn across executions until every routed agent has replied.
-// A short, UNAMBIGUOUS confirmation reply ("yes", "sounds good", "go ahead"). Used to record a pending
-// confirm-intent deterministically without the model. Deliberately conservative: a question, a negation,
-// or anything long enough to be a real refinement returns false and is left to the model + the injected
-// directive (which asks it to call confirm_task_intent with the final, folded-in DoD).
-function isPlainConfirmation(text: string): boolean {
-  const t = text.trim().toLowerCase();
-  if (!t || t.length > 40) return false;
-  if (t.includes("?")) return false;
-  if (/\b(no|not|don'?t|stop|wait|hold|cancel|nope|instead|change|revise|actually)\b/.test(t))
-    return false;
-  return /\b(yes|yep|yeah|yup|confirm(ed)?|correct|right|sounds good|looks good|go ahead|do it|that works|works for me|perfect|approved?|okay?|ok|sure|great|👍)\b/.test(
-    t,
-  );
-}
-
 /** Conservative "the blocker is cleared" matcher — used to route an unblock reply from a non-owner
  *  (e.g. the coordinator who surfaced the blocker) to the OWNING agent. Broader than a plain confirm
  *  because a real unblock is usually a sentence ("you're cleared, go ahead"). Negations short-circuit. */
@@ -711,13 +705,21 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   const MAX_CHUNKS = 6;
   const turnStore = chunked ? await import("./tasks/turns.server") : null;
 
-  // ---- A: confirm-intent capture (WIP gate). When the user REPLIES in a 1:1 DM that has a task at
-  // confirm_status='asked' for that agent, this message IS the confirmation response. The reply turn
-  // historically carried NO confirm context, so the agent just acknowledged and the task froze in
-  // UP_NEXT. Fix, both fully guarded (a failure degrades to prior behavior, never breaks the turn):
-  //   (1) record the confirmation DETERMINISTICALLY for a clear yes/refinement (not model-dependent);
-  //   (2) hand the responding agent a directive (below, in its scene) to lock the DoD if not already
-  //       AND call propose_approach — so the task actually advances, not just records the DoD.
+  // ---- A: confirm-intent CONTEXT (WIP gate). When the user REPLIES in a 1:1 DM that has a task at
+  // confirm_status='asked' for that agent, this message is probably the confirmation response. The reply
+  // turn historically carried NO confirm context, so the agent just acknowledged and the task froze in
+  // UP_NEXT. This block is now READ-ONLY: it looks up the last-asked pending confirm and hands the
+  // responding agent a directive (confirmReplyDirective, in its scene) to call confirm_task_intent with
+  // that exact task_id when the reply confirms it — "ok", "great", "sure" included.
+  //
+  // OWNER-APPROVED 2026-11-04 (BUILD-context-and-confirm): a short "ok"/"great" used to be recorded HERE,
+  // deterministically, before any model read the message (the former isPlainConfirmation short-circuit).
+  // The owner wants the confirmation recorded AFTER the agent reads his message, so the agent decides
+  // whether "ok" confirms the task or answers something else in the thread. Nothing in this block may
+  // write a confirmation; the ONLY writers stay the confirm_task_intent tool and the button row.
+  //
+  // Also runs on a chunked continuation (`resume`): the lookup is read-only, and a task the first chunk
+  // already confirmed is no longer 'asked', so it simply returns null.
   let pendingConfirm: {
     taskId: string;
     title: string;
@@ -730,7 +732,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         ? (data.huddleId.slice(3) as AgentId)
         : null;
     const replyText = (data.text ?? "").trim();
-    if (dmAgent && AGENT_BY_ID[dmAgent] && replyText && !data.internal && !resume) {
+    if (dmAgent && AGENT_BY_ID[dmAgent] && replyText && !data.internal) {
       const em =
         (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
         data.caller?.entra_email ??
@@ -738,29 +740,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       if (em) {
         const { getPendingConfirmForAgent } = await import("./tasks/tasks.server");
         const pc = await getPendingConfirmForAgent(em, dmAgent);
-        if (pc) {
-          pendingConfirm = { ...pc, agentId: dmAgent };
-          if (isPlainConfirmation(replyText)) {
-            const dod = (pc.proposedDod ?? replyText).trim() || replyText;
-            try {
-              const { confirmTaskIntent } = await import("./tasks/tasks.server");
-              await confirmTaskIntent(pc.taskId, em, dod);
-              try {
-                const { invokeJourneyTool } = await import("./journey/proxy.functions");
-                await invokeJourneyTool({
-                  toolName: "update_task",
-                  args: { task_id: pc.taskId, definition_of_done: dod },
-                  caller: data.caller ?? {},
-                  context: { source: "huddle" },
-                });
-              } catch {
-                /* journey mirror sync is best-effort */
-              }
-            } catch {
-              /* deterministic capture is best-effort */
-            }
-          }
-        }
+        if (pc) pendingConfirm = { ...pc, agentId: dmAgent };
       }
     }
   } catch {
@@ -2484,8 +2464,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     if (data.scope !== "group" && !data.internal && turnIntent === "perform") {
       const owner = laneOwnerFor(data.text, nextId);
       if (owner && owner.id !== nextId) {
-        const o = AGENT_BY_ID[owner.id];
-        laneDirective = `\n\nThis request is squarely in ${o.name}'s lane (${o.role}: ${o.domains.slice(0, 3).join(", ")}), not yours. Do NOT answer it yourself or improvise in their lane — tell the user plainly, by NAME, that ${o.name} is better suited and that you'll loop them in (e.g. "That's really ${o.name}'s area — let me pass it to them"). Do NOT use an @handle: ${o.name} is not in this 1:1 (@ is for group rooms). The system brings ${o.name} in automatically — they'll follow up with you in their own channel. Keep it to one or two short sentences.`;
+        // Answer-first in a 1:1 (owner-approved 2026-11-03, lane-handoff.ts): a question the agent can
+        // reasonably answer is answered, then the owner is named; substantive lane work still hands off.
+        laneDirective = laneAnswerFirstDirective(AGENT_BY_ID[owner.id]);
       }
     }
     const isInterjector = interjectorSet.has(nextId);
@@ -2499,11 +2480,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       : "";
 
     // A: if the user is replying to THIS agent's pending confirm-intent ask, direct it to lock the DoD
-    // and propose its approach — so the task advances out of Up Next. If the runtime already recorded a
-    // plain "yes" above, confirm_task_intent is idempotent; propose_approach is what actually moves it.
+    // and propose its approach — so the task advances out of Up Next. The runtime no longer records a
+    // plain "yes" before the model reads the message (owner-approved 2026-11-04), so this directive is
+    // the ONLY route a typed confirmation takes: it must say that a short "ok"/"great"/"sure" counts, and
+    // hand over the proposed DoD so a bare "ok" locks exactly what the user was shown.
     const confirmReplyDirective =
       pendingConfirm && pendingConfirm.agentId === winner.id
-        ? `\n\nIMPORTANT — the user is replying to your earlier check-in that asked them to confirm the assumed action + Definition of Done for their task "${pendingConfirm.title}". This message is that reply. If they confirmed it (as-is or with tweaks), call confirm_task_intent NOW with task_id "${pendingConfirm.taskId}" and the FINAL definition_of_done (fold in any change they made) — actually call the tool, don't just acknowledge in prose. Then, in this SAME turn, call propose_approach for that task so it can move forward. If the reply instead shows the task genuinely CANNOT proceed (it needs a decision, a credential, or access the team lacks), call flag_blocker with that EXACT task_id "${pendingConfirm.taskId}" — use that id verbatim, NEVER the task's title or an invented id — and a specific reason. If they declined or are still deciding, don't call the tools — just help them decide.`
+        ? `\n\nIMPORTANT — the user is replying to your earlier check-in that asked them to confirm the assumed action + Definition of Done for their task "${pendingConfirm.title}". This message is that reply.${pendingConfirm.proposedDod ? ` The Definition of Done you proposed was: "${pendingConfirm.proposedDod.replace(/\s+/g, " ").slice(0, 600)}".` : ""} A short affirmative on its own — "ok", "okay", "sure", "great", "yes", "perfect", "sounds good", "go ahead", 👍 — IS a confirmation of THIS task as proposed, unless the rest of the conversation shows it answers something else. If they confirmed it (as-is or with tweaks), call confirm_task_intent NOW with task_id "${pendingConfirm.taskId}" and the FINAL definition_of_done (the proposed one verbatim for a plain "ok"; fold in any change they made) — actually call the tool, don't just acknowledge in prose. Then, in this SAME turn, call propose_approach for that task so it can move forward. If the reply instead shows the task genuinely CANNOT proceed (it needs a decision, a credential, or access the team lacks), call flag_blocker with that EXACT task_id "${pendingConfirm.taskId}" — use that id verbatim, NEVER the task's title or an invented id — and a specific reason. If they declined or are still deciding, don't call the tools — just help them decide.`
         : "";
 
     // Single capture-owner (group): exactly ONE agent — the lead/primary — captures the user's task
@@ -2525,7 +2508,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 
     const scene = ` You are ${winner.name} in a ${
       data.scope === "group" ? "group huddle" : "1:1"
-    }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail. Do NOT repeat a reply you already gave earlier in this conversation — your own past messages are in the history above; if you genuinely have nothing new since your last update, say that briefly (e.g. "same as before — nothing new on my end") instead of restating the same line word-for-word (that "broken record" repetition is a real failure to avoid).${
+    }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. ${outOfLaneSceneLine(
+      data.scope === "group" ? "group" : "1:1",
+    )} Do not speak as anyone else. 1–3 short sentences unless asked for detail. Do NOT repeat a reply you already gave earlier in this conversation — your own past messages are in the history above; if you genuinely have nothing new since your last update, say that briefly (e.g. "same as before — nothing new on my end") instead of restating the same line word-for-word (that "broken record" repetition is a real failure to avoid).${
       priorInThisTurn && !ceremonyDirective
         ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
         : ""
@@ -2714,14 +2699,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       )
       .slice(-14)
       .map((m) => {
-        if (m.author.kind === "user") return { role: "user" as const, content: m.text };
+        // `context` = what the user SAW besides the prose (widgets, cards + button state) --
+        // lib/stream-context.ts. Absent for plain text, so those entries are byte-for-byte unchanged.
+        const body = textWithStreamContext(m.text, m.context);
+        if (m.author.kind === "user") return { role: "user" as const, content: body };
         const a = AGENT_BY_ID[(m.author as { kind: "agent"; agentId: AgentId }).agentId];
         if (a?.id === winner.id) {
-          return { role: "assistant" as const, content: m.text };
+          return { role: "assistant" as const, content: body };
         }
         return {
           role: "user" as const,
-          content: `(context — ${a?.name ?? "another agent"} said): ${m.text}`,
+          content: `(context — ${a?.name ?? "another agent"} said): ${body}`,
         };
       });
     const transcript: Array<{ role: "user" | "assistant"; content: TranscriptContent }> = [
@@ -3420,7 +3408,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const effectiveInstructions = overrideInstructions || snapshotInstructions;
         fromSnapshot = !overrideInstructions && !!snapshotInstructions;
         const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
-        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT } = await import(
+        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT, PLANNING_SYSTEM_HINT } = await import(
           "./tasks/tools"
         );
         // Grooming is now gated on the data-driven capability (agents.ts), with the legacy
@@ -3491,6 +3479,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           WIDGET_SYSTEM_HINT +
           "\n\n" +
           FOCUS_SYSTEM_HINT +
+          // The planning contract (owner-approved 2026-11-03): plan/organize = a short timed list, missing
+          // items created, nothing started. Same shared slot on both backends; additive to the prompt.
+          "\n\n" +
+          PLANNING_SYSTEM_HINT +
           // Same slot and same rule as the hints above: the built-in tools are offered in
           // `mergedTools` below ONLY when builtInToolsAllowed, so the hint that says the capability
           // exists is added under exactly the same condition. Purely ADDITIVE — it takes nothing away
@@ -3708,6 +3700,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           });
           // Raw external Outlook/Microsoft calendar (Graph) — explicit-only, gated on Graph config.
           emailTools.push(GET_EXTERNAL_CALENDAR_EVENTS_TOOL);
+          // INBOX READ (2026-11-03, additive): read-only search/read of the OWNER's own mailbox.
+          // Same Graph gate as the calendar read; never sends (executor: runInboxReadTool).
+          emailTools.push(SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL);
         }
 
         const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
@@ -3715,6 +3710,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
         const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
+        // ADDITIVE: list / cancel / move the owner's existing reminders and alarms (same store).
+        const { LIST_REMINDERS_TOOL, CANCEL_REMINDER_TOOL, MOVE_REMINDER_TOOL } = await import(
+          "./tasks/reminders"
+        );
         // Direction 1 of the cross-app bridge: READ the owner's live Nexus coursework. Empty array
         // when Nexus is unconfigured, so an unconfigured environment shows the model no tool rather
         // than one that exists and fails.
@@ -3746,6 +3745,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           ASK_CLARIFYING_QUESTION_TOOL,
           RESOLVE_CLARIFYING_QUESTION_TOOL,
           SCHEDULE_REMINDER_TOOL,
+          LIST_REMINDERS_TOOL,
+          CANCEL_REMINDER_TOOL,
+          MOVE_REMINDER_TOOL,
           PRIORITIZE_TOOL,
           CHECKLIST_TOOL,
           // The two in-chat journey widgets. Ungated, exactly like CHECKLIST_TOOL above: whichever
@@ -4396,6 +4398,23 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             );
             return out;
           }
+          // ADDITIVE reminder management. list is read-only (no ledger); cancel/move pass claimAction
+          // so the dispatcher claims `<tool>:<reminder id>` once the target is resolved — two agents in
+          // one group turn cannot both cancel/move the same reminder.
+          if (c.name === "list_reminders" || c.name === "cancel_reminder" || c.name === "move_reminder") {
+            const rem = await import("./tasks/reminders");
+            const a = c.arguments as Record<string, unknown>;
+            const out =
+              c.name === "list_reminders"
+                ? await rem.dispatchListReminders(data.caller, a, data.timeZone)
+                : c.name === "cancel_reminder"
+                  ? await rem.dispatchCancelReminder(data.caller, a, data.timeZone, { claim: claimAction })
+                  : await rem.dispatchMoveReminder(data.caller, a, data.timeZone, { claim: claimAction });
+            const parsed = JSON.parse(out) as { error?: string; ok?: boolean };
+            const ok = !parsed.error || parsed.error === "ambiguous" || parsed.error === "no_match";
+            recordToolUse(winner.id, c.name, parsed.error ? `${c.name} · ${parsed.error}` : c.name, ok);
+            return out;
+          }
           if (c.name === "build_checklist") {
             // Per-turn decision right: the FIRST responder to render a checklist owns it. Without
             // this, a group turn where two agents both answer produces two widgets over the same tasks.
@@ -4704,6 +4723,46 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               recordToolUse(winner.id, "create_email_draft", "draft crashed", false, msg);
+              return JSON.stringify({ ok: false, error: msg });
+            }
+          }
+          if (INBOX_READ_TOOL_NAMES.has(c.name)) {
+            // INBOX READ (2026-11-03, additive): read-only, owner's own mailbox, one shared executor.
+            try {
+              const { runInboxReadTool } = await import("./email/graph-email.server");
+              const r = await runInboxReadTool(
+                c.name,
+                c.arguments as Record<string, unknown>,
+                data.caller,
+                data.timeZone,
+              );
+              const ok = r.ok === true;
+              recordToolUse(
+                winner.id,
+                c.name,
+                ok
+                  ? c.name === "search_email"
+                    ? `${String(r.count ?? 0)} message(s)`
+                    : "message read"
+                  : r.needsConsent
+                    ? "Mail.Read consent missing"
+                    : "inbox read failed",
+                ok,
+                ok ? undefined : String(r.error ?? "unknown"),
+              );
+              if (!ok) {
+                const ev = recordFallback(
+                  "tool",
+                  `${winner.name}: ${c.name} failed — ${String(r.error ?? "unknown")}`,
+                  `${c.name} failed`,
+                  winner.id,
+                );
+                perAgentFallbacks.push(ev.inline);
+              }
+              return JSON.stringify(r);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, c.name, "inbox read crashed", false, msg);
               return JSON.stringify({ ok: false, error: msg });
             }
           }
@@ -5133,8 +5192,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         try {
           persona = await callOpenAIResponses({
             ...personaArgs,
+            // Conversation mode sends only the new user message, and the conversation object never saw
+            // the widgets/cards in this thread -- so their summaries ride in the instructions (not
+            // persisted into the thread, so no duplicates accumulate). Reconstruction mode already has
+            // them inline in `transcript`, so nothing is added there.
+            ...(conversationId
+              ? {
+                  instructions:
+                    personaArgs.instructions + streamContextInstructionBlock(data.history),
+                  conversation: conversationId,
+                }
+              : {}),
             transcript: personaTranscript,
-            ...(conversationId ? { conversation: conversationId } : {}),
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -5857,6 +5926,66 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           });
         }
 
+        // ADDITIVE reminder management (mirrors the OpenAI path): list is read-only; cancel/move pass
+        // claimAction so the per-turn ledger owns each reminder id once it is resolved.
+        {
+          const rem = await import("./tasks/reminders");
+          const selector = {
+            reminder_id: z.string().optional(),
+            about: z.string().optional(),
+            currently_at: z.string().optional(),
+            on_date: z.string().optional(),
+            kind: z.enum(["reminder", "alarm"]).optional(),
+          };
+          const record = (name: string, out: string) => {
+            const parsed = JSON.parse(out) as { error?: string };
+            const ok = !parsed.error || parsed.error === "ambiguous" || parsed.error === "no_match";
+            recordToolUse(winner.id, name, parsed.error ? `${name} · ${parsed.error}` : name, ok);
+            return out;
+          };
+          lovableTools.list_reminders = tool({
+            description: rem.LIST_REMINDERS_TOOL.description,
+            inputSchema: z.object({
+              about: z.string().optional(),
+              kind: z.enum(["reminder", "alarm"]).optional(),
+              limit: z.number().optional(),
+            }),
+            execute: async (args) =>
+              record(
+                "list_reminders",
+                await rem.dispatchListReminders(data.caller, args as Record<string, unknown>, data.timeZone),
+              ),
+          });
+          lovableTools.cancel_reminder = tool({
+            description: rem.CANCEL_REMINDER_TOOL.description,
+            inputSchema: z.object(selector),
+            execute: async (args) =>
+              record(
+                "cancel_reminder",
+                await rem.dispatchCancelReminder(data.caller, args as Record<string, unknown>, data.timeZone, {
+                  claim: claimAction,
+                }),
+              ),
+          });
+          lovableTools.move_reminder = tool({
+            description: rem.MOVE_REMINDER_TOOL.description,
+            inputSchema: z.object({
+              ...selector,
+              to_time: z.string().optional(),
+              to_date: z.string().optional(),
+              shift_minutes: z.number().optional(),
+              delay_minutes: z.number().optional(),
+            }),
+            execute: async (args) =>
+              record(
+                "move_reminder",
+                await rem.dispatchMoveReminder(data.caller, args as Record<string, unknown>, data.timeZone, {
+                  claim: claimAction,
+                }),
+              ),
+          });
+        }
+
         // schedule_and_priorities — shared schedule/priorities tool (mirrors the OpenAI path).
         {
           const { dispatchPrioritize } = await import("./tasks/tools");
@@ -5864,9 +5993,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             description:
               "The user's schedule + tasks: their nightly-planned schedule (scheduled items for a day) plus their open tasks/backlog, ranked by priority, due dates, and staleness. Call it for ANY question about the user's schedule, calendar, agenda, day, meetings, tasks, backlog, priorities, or what's next. Use view 'scheduled' for 'what's on my schedule/calendar/day today'. (Only an explicit 'external/Outlook calendar' ask uses get_calendar_events instead.)",
             inputSchema: z.object({
-              view: z.enum(["priorities", "backlog", "up_next", "scheduled", "overdue"]).optional(),
+              view: z.enum(["priorities", "backlog", "up_next", "scheduled", "overdue", "blocked"]).optional(),
               category: z.string().optional(),
               limit: z.number().optional(),
+              // Mirrors PRIORITIZE_TOOL. Without it zod strips the key and this backend could never
+              // see a BLOCKED task (status-answers.test.ts L1 pins the parity).
+              include_blocked: z.boolean().optional(),
             }),
             execute: async (args) => {
               const ident = await (
@@ -6217,6 +6349,46 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 return JSON.stringify(r);
               },
             });
+            // INBOX READ (2026-11-03, additive) - mirrors the OpenAI path: same schemas' descriptions,
+            // same shared executor, same Graph gate. Read-only; never sends.
+            const runLovableInboxRead = async (name: string, args: Record<string, unknown>) => {
+              const { runInboxReadTool } = await import("./email/graph-email.server");
+              const r = await runInboxReadTool(name, args, data.caller, data.timeZone);
+              const ok = r.ok === true;
+              recordToolUse(
+                winner.id,
+                name,
+                ok
+                  ? name === "search_email"
+                    ? `${String(r.count ?? 0)} message(s)`
+                    : "message read"
+                  : r.needsConsent
+                    ? "Mail.Read consent missing"
+                    : "inbox read failed",
+                ok,
+                ok ? undefined : String(r.error ?? "unknown"),
+              );
+              return JSON.stringify(r);
+            };
+            lovableTools.search_email = tool({
+              description: SEARCH_EMAIL_TOOL.description,
+              inputSchema: z.object({
+                query: z.string().optional(),
+                from: z.string().optional(),
+                since: z.string().optional(),
+                until: z.string().optional(),
+                unread_only: z.boolean().optional(),
+                top: z.number().optional(),
+              }),
+              execute: async (args) =>
+                runLovableInboxRead("search_email", args as Record<string, unknown>),
+            });
+            lovableTools.read_email = tool({
+              description: READ_EMAIL_TOOL.description,
+              inputSchema: z.object({ id: z.string(), max_chars: z.number().optional() }),
+              execute: async (args) =>
+                runLovableInboxRead("read_email", args as Record<string, unknown>),
+            });
           }
         }
 
@@ -6426,7 +6598,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
 
         {
-          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT } = await import(
+          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT, PLANNING_SYSTEM_HINT } = await import(
             "./tasks/tools"
           );
           usedInstructions =
@@ -6443,6 +6615,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             WIDGET_SYSTEM_HINT +
             "\n\n" +
             FOCUS_SYSTEM_HINT +
+            "\n\n" +
+            PLANNING_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
         }
 

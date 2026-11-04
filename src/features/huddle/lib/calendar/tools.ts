@@ -23,7 +23,7 @@ export const GET_CALENDAR_EVENTS_TOOL = {
     properties: {
       category: {
         type: "string",
-        description: "Optional domain to scope to (LIFE, VENTURES, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION). Omit to span everything.",
+        description: "Optional domain to scope to (LIFE, VENTURES, JOB, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION; JOB = work for the user's employer; CAREER = getting their next role). Omit to span everything.",
       },
     },
     required: [] as string[],

@@ -81,6 +81,7 @@ import {
   backlogTaskFromButtonFn,
   parkTaskFromButtonFn,
 } from "../lib/tasks/confirm-ask.functions";
+import { streamItemSummary } from "../lib/stream-context";
 
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
 import { ViewSwitcher } from "./ViewSwitcher";
@@ -696,7 +697,12 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
     try {
       const res = await fn();
       if (res.ok) {
-        useHuddleStore.getState().resolveConfirmAsk(m.id);
+        useHuddleStore
+          .getState()
+          .resolveConfirmAsk(
+            m.id,
+            action === "confirm" ? "confirmed" : action === "backlog" ? "backlogged" : "parked",
+          );
         // res.error here means a non-fatal partial failure (e.g. the journey mirror write failed)
         if (res.error) toast(doneLabel, { description: res.error });
         else if (!res.alreadyDone) toast.success(doneLabel);
@@ -1638,6 +1644,15 @@ function Composer({ huddle }: { huddle: Huddle }) {
           ts: m.ts,
           mentions: m.mentions,
           replyTo: m.replyTo,
+          // What the user SAW besides the prose: widgets, cards + their button state, chips, nav
+          // buttons (lib/stream-context.ts). Omitted for a plain text message, so its payload is
+          // unchanged. Live checklist/priority row state overlays the message's snapshot.
+          ...(() => {
+            const context = streamItemSummary(m, {
+              live: useHuddleStore.getState().checklistState,
+            });
+            return context ? { context } : {};
+          })(),
         })),
       targetAgentId,
       router: backendsCfg.router,

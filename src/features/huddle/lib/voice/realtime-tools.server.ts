@@ -46,12 +46,20 @@ import {
   invokeJourneyTool,
 } from "../journey/proxy.functions";
 import { FOCUS_TOOL, PRIORITIZE_TOOL } from "../tasks/tools";
-import { SCHEDULE_REMINDER_TOOL } from "../tasks/reminders";
+import {
+  SCHEDULE_REMINDER_TOOL,
+  // ADDITIVE: list / cancel / move existing reminders — all three registration points below
+  // (raw toolset, NATIVE, dispatch branch), same rule as every other native tool.
+  LIST_REMINDERS_TOOL,
+  CANCEL_REMINDER_TOOL,
+  MOVE_REMINDER_TOOL,
+} from "../tasks/reminders";
 import { GROOM_BACKLOG_TOOL } from "../tasks/groom";
 import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../tavily-search.functions";
 // SINGLE SOURCE — the same calendar schemas the text turn engine uses (no voice-local copy).
 // get_calendar_events = alias → combined schedule; get_external_calendar_events = raw Outlook (Graph).
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "../calendar/tools";
+import { SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL, INBOX_READ_TOOL_NAMES } from "../email/inbox-read";
 // Direction 1 of the cross-app bridge. Present on voice from the FIRST commit, deliberately: this
 // file records nine native tools that exist on text and are silently absent when spoken, and the
 // drift is always one-directional. Adding it to one surface "for now" is how that list got to nine.
@@ -196,6 +204,9 @@ export async function buildRealtimeToolset(
     PRIORITIZE_TOOL,
     ...(opts.journey !== false ? [FOCUS_TOOL] : []),
     SCHEDULE_REMINDER_TOOL,
+    LIST_REMINDERS_TOOL,
+    CANCEL_REMINDER_TOOL,
+    MOVE_REMINDER_TOOL,
     GET_CALENDAR_EVENTS_TOOL,
     GET_EXTERNAL_CALENDAR_EVENTS_TOOL,
     ...nexusReadTools(),
@@ -440,6 +451,9 @@ export async function buildRealtimeToolset(
             required: ["subject", "body"],
           },
       });
+      // INBOX READ (2026-11-03, additive): read-only search/read of the OWNER's own mailbox, same
+      // shared schemas + executor (runInboxReadTool) as both text paths. Never sends.
+      raw.push(SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL);
     }
   } catch {
     // Email is optional — voice still works without it.
@@ -525,10 +539,14 @@ export async function executeRealtimeTool(
     "get_calendar_events",
     "get_external_calendar_events",
     "schedule_reminder",
+    "list_reminders",
+    "cancel_reminder",
+    "move_reminder",
     "groom_backlog",
     "tavily_web_search",
     "send_email",
     "create_email_draft",
+    ...INBOX_READ_TOOL_NAMES,
     "create_artifact",
     "list_artifacts",
     "create_huddle_task",
@@ -549,6 +567,10 @@ export async function executeRealtimeTool(
           }),
         ),
       );
+    }
+    if (INBOX_READ_TOOL_NAMES.has(name)) {
+      const { runInboxReadTool } = await import("../email/graph-email.server");
+      return done(JSON.stringify(await runInboxReadTool(name, args, ctx.caller, ctx.timeZone)));
     }
     if (name === "get_external_calendar_events") {
       const { resolveCalendarMailbox } = await import("../journey/identity");
@@ -582,6 +604,20 @@ export async function executeRealtimeTool(
       return done(
         await dispatchScheduleReminder(ctx.caller, args, ctx.huddleId, ctx.agentId, ctx.timeZone),
       );
+    }
+    // A voice call is one agent, one speaker — there is no per-turn group ledger to share, so no
+    // claim is passed; cancel/move are idempotent on their own (they only act on a pending row).
+    if (name === "list_reminders") {
+      const { dispatchListReminders } = await import("../tasks/reminders");
+      return done(await dispatchListReminders(ctx.caller, args, ctx.timeZone));
+    }
+    if (name === "cancel_reminder") {
+      const { dispatchCancelReminder } = await import("../tasks/reminders");
+      return done(await dispatchCancelReminder(ctx.caller, args, ctx.timeZone));
+    }
+    if (name === "move_reminder") {
+      const { dispatchMoveReminder } = await import("../tasks/reminders");
+      return done(await dispatchMoveReminder(ctx.caller, args, ctx.timeZone));
     }
     if (name === "groom_backlog") {
       const { dispatchGroomBacklog } = await import("../tasks/groom");

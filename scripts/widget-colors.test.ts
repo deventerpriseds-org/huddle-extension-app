@@ -34,8 +34,19 @@ function hueGap(a: number, b: number): number {
   return d > 180 ? 360 - d : d;
 }
 
-// journey's real category set — _shared/tool-definitions.ts
-const JOURNEY_CATEGORIES = ["LIFE", "CAREER", "VENTURES", "EDUCATION"];
+// journey's real category set — _shared/tool-definitions.ts. JOB added 2026-11-04 (work for the
+// owner's employer); being in this list puts it under the seeded check and the all-pairs gap check.
+const JOURNEY_CATEGORIES = ["LIFE", "CAREER", "VENTURES", "EDUCATION", "JOB"];
+
+// ── 0. The four spec hues are PINNED — adding JOB must not move any of them (AC-F3) ─────────────
+for (const [c, h] of [
+  ["LIFE", 250],
+  ["EDUCATION", 70],
+  ["CAREER", 149],
+  ["VENTURES", 303],
+] as const) {
+  check(`${c} hue is unchanged at ${h}`, CATEGORY_HUES[c] === h, `${c} -> ${CATEGORY_HUES[c]}`);
+}
 
 // ── 1. Every known category is SEEDED, not hashed ───────────────────────────────────────────────
 for (const c of JOURNEY_CATEGORIES) {
@@ -78,7 +89,7 @@ for (let i = 0; i < JOURNEY_CATEGORIES.length; i++) {
   }
 }
 check(
-  "every pair of journey's four categories is visually distinct",
+  "every pair of journey's seeded categories (incl. JOB) is visually distinct",
   worst >= MIN_GAP,
   `closest pair ${worstPair} = ${worst}° (floor ${MIN_GAP}°)`,
 );
@@ -123,6 +134,7 @@ for (const [topic, category] of [
   ["Career", "CAREER"],
   ["Ventures", "VENTURES"],
   ["Family", "FAMILY"],
+  ["Job", "JOB"],
 ] as const) {
   check(
     `topic "${topic}" and category "${category}" agree in colour`,

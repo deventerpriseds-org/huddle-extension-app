@@ -17,7 +17,8 @@
  * rather than by eyeballing the numbers.
  */
 
-/** journey's real category set — `journey-voice/supabase/functions/_shared/tool-definitions.ts`.
+/** journey's real category set — `journey-voice/supabase/functions/_shared/tool-definitions.ts`
+ *  (JOB added 2026-11-04; see its line in the table).
  *  Seeded explicitly because the spec colour-codes them and a hash cannot be asked for a particular
  *  colour; the hash below still covers anything the user adds, which is why this is a seed table and
  *  not an exhaustive one. Keys are upper-snake, the shape journey stores.
@@ -33,6 +34,12 @@ export const CATEGORY_HUES: Readonly<Record<string, number>> = Object.freeze({
   EDUCATION: 70, // amber — spec
   CAREER: 149, // green   — spec
   VENTURES: 303, // purple — spec
+  // JOB (added 2026-11-04): work for the owner's employer; CAREER now means getting the next role.
+  // NOT in the spec screenshot, so this one IS chosen, not measured. Unseeded it hashed to 189 —
+  // 40 degrees from CAREER, under the 45-degree floor the test enforces. 200 is a cyan-blue that sits
+  // 50 from LIFE, 51 from CAREER, 103 from VENTURES and 130 from EDUCATION. The four hues above are
+  // unchanged (pinned by scripts/widget-colors.test.ts).
+  JOB: 200, // cyan-blue — chosen (journey-voice docs/qc-evidence/AC-job-category.md AC-F2)
 });
 
 // CAREER AND VENTURES WERE INVENTED, AND WERE EFFECTIVELY SWAPPED (fixed 2026-09-13, loop 3).

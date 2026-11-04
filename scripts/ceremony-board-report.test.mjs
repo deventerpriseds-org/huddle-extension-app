@@ -1,7 +1,7 @@
 // Offline proof of buildCeremonyReport (ACT-huddle-24): the stand-up reports the BOARD's real lanes —
 // active WIP + done-this-week — never raw backlog, never a re-derived "up next". Pure function → no API.
 // Run with bun: bun scripts/ceremony-board-report.test.mjs
-import { buildCeremonyReport, boardLaneFor } from "../src/features/huddle/lib/tasks/ceremonies.ts";
+import { buildCeremonyReport, boardLaneFor, ownerForCategory } from "../src/features/huddle/lib/tasks/ceremonies.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
 const ago = (d) => new Date(Date.now() - d * DAY).toISOString();
@@ -113,6 +113,20 @@ const titles = (arr) => (arr ?? []).map((t) => t.title);
   ok(laneOf(rep, "sam-trent")?.backlog.some((t) => t.title === "b1"), "AC16 planning surfaces backlog");
   const stand = buildCeremonyReport("standup", [T({ title: "b1", status: "BACKLOG" })]);
   ok(stand.lanes.length === 0, "AC16 standup does NOT surface backlog");
+}
+
+// ---- JOB category (2026-11-04, owner ruling): Cole owns JOB; CAREER keeps its owner ----
+{
+  ok(ownerForCategory("JOB") === "cole-blake", `JOB owner is cole-blake (got ${ownerForCategory("JOB")})`);
+  ok(ownerForCategory("job") === "cole-blake", "JOB owner lookup is case-insensitive");
+  ok(ownerForCategory("CAREER") === "cole-blake", "CAREER owner unchanged (cole-blake)");
+  ok(ownerForCategory("LIFE") === "iris-chase" && ownerForCategory("VENTURES") === "sam-trent" &&
+     ownerForCategory("EDUCATION") === "elle-rowan" && ownerForCategory("FAMILY") === "faith-hartley",
+     "existing category owners unchanged");
+  // An UNASSIGNED JOB task lands in Cole's standup lane, not the iris-chase fallback.
+  const rep = buildCeremonyReport("standup", [T({ title: "job1", status: "DOING", category: "JOB", assigned_agent: null })]);
+  ok(titles(laneOf(rep, "cole-blake")?.doing).includes("job1"), "unassigned JOB task reports in Cole's lane");
+  ok(!laneOf(rep, "iris-chase"), "unassigned JOB task does NOT fall back to iris-chase");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
