@@ -39,3 +39,27 @@ Sections: 1 query builder (19), 2 body cleaning (9), 3 owner tz (3), 4 error map
 6 network half with GET-only and 403 assertions (9), 7 executor mailbox scoping (7), 8 read-only source scan (3),
 9 wiring on OpenAI/Lovable/voice, inside the Graph gate and outside the send gate (10).
 
+## Step 4 - mutation proofs (`mutate.sh`, baseline + mutated + restored runs each; tree clean after)
+
+| # | Defect reinstated | File | Check that must fail | Outcome |
+|---|---|---|---|---|
+| M1 | mailbox taken from `args.mailbox` before the resolver | graph-email.server.ts | 7b | FIRED |
+| M2 | 403 no longer mapped to needsConsent | inbox-read.ts | 4a | FIRED |
+| M3 | OData single-quote doubling removed | inbox-read.ts | 1k | FIRED |
+| M4 | `read_email` issued as POST | graph-email.server.ts | 6g | FIRED |
+| M5 | 12000-char hard cap removed | inbox-read.ts | 2g | FIRED |
+| M6 | names dropped from voice `NATIVE` (would fall through to journey) | realtime-tools.server.ts | 9h | FIRED |
+| M7 | voice push moved OUTSIDE the `graphEmailConfigured()` gate | realtime-tools.server.ts | 9f | FIRED |
+| M8 | owner zone not resolved (browser zone used) | graph-email.server.ts | 7g | FIRED |
+| M9 | unread post-filter disabled | inbox-read.ts | 5a | FIRED |
+| M10 | OpenAI push placed INSIDE the `send_email` gate | huddle.functions.ts | 9b | FIRED |
+| M11 | Lovable `search_email` not registered | huddle.functions.ts | 9d | FIRED |
+| M12 | empty-id guard removed (would GET /messages/) | graph-email.server.ts | 6i | FIRED |
+
+12/12 FIRED, 0 INERT, 0 NOT-APPLIED. The first attempt passed `"FAIL 7b"` as the pattern; mutate.sh prefixes
+`FAIL ` itself, so it reported "a DIFFERENT test failed ... NOTHING IS PROVEN" for all 12. Re-run with bare names.
+
+## Step 5 - pre-merge suites
+
+`npx tsc --noEmit` exit 0. test:voice-tools 36/0, test:email-gate 73/0, test:router 39/0, test:inbox-read 68/0.
+
