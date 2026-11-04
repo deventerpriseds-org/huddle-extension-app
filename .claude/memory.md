@@ -117,6 +117,20 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04, branch claude_context-and-confirm, NOT merged, NOT deployed, NOT owner-confirmed)
+- **Confirm-intent:** the pre-model `isPlainConfirmation` short-circuit is GONE. Block A of `runHuddleTurn` is
+  READ-ONLY (looks up the last-asked pending confirm, also on chunk continuations). A typed "ok"/"great" is
+  recorded ONLY when the agent calls `confirm_task_intent` after reading it; `confirmReplyDirective` carries
+  the task_id, the proposed DoD, and says a short affirmative confirms THIS task. Buttons + voice unchanged
+  (model-free `confirmTaskFromProposal`). Gate resolvers / ensureReviewFlip untouched (still fail CLOSED).
+  Risk to watch live: a model that ignores the directive leaves the task 'asked' (fails closed, re-ask path).
+- **Stream context:** `lib/stream-context.ts` turns every non-text item (priorities/schedule/checklist widgets,
+  confirm-ask + which button, approach escalation, email card, artifact chips, attachments, navLink, briefs)
+  into a bracketed line. Client sends it as `history[i].context`; `HistoryMessage` declares it; the per-agent
+  transcript appends it; conversation mode puts the newest 6 in the instructions. Routing does not read it.
+  System + reminder messages are STILL dropped from the transcript (deliberate de-noise; owner decision pending).
+- Evidence: `docs/qc-evidence/BUILD-context-and-confirm.md`, `npm run test:context-and-confirm`.
+
 ## Confirm-ask LANE STARVATION + no re-ask (2026-10-27; DEPLOYED 33f625e / #108 on 2026-10-28, live re-asks armed for 10-29 — NOT owner-confirmed)
 - Root cause (code read + offline test `scripts/autowork-lane-starvation.test.ts`): autowork considers only `upNextAfterTopUp[0]` per agent for DOING and arms only that item's ask; `markConfirmAsked` is set-once and nothing re-asks. One unanswered top ask freezes the whole lane forever.
 - Groom is WEEKLY (Mon 8am, owner's 2026-07-31 choice) and never writes status; autowork 9/13/17 daily — a daily groom would NOT unstick a lane.
@@ -126,6 +140,7 @@ index into a requirement list**.
 - Owner re-scope: whole lane, re-asks ride the EXISTING 45–90 min spacing chain (armConfirmAsksSpaced) + windows, no new day cap, no review pause; 24h per-item floor only. The heartbeat re-arms right after each send (armOnly pass) — re-arming only at 9/13/17 was a hidden 3/day/agent cap.
 - Memory architecture: owner chose (a) SOFT preference (2026-10-27) and "thought it was already this way" — it largely IS: runAgentTurn's laneBoost re-ranks shared memory by the agent's domains/themes (topic text, not agent name). Gaps: voice has no lane boost/Executive Profile; the owner's ChatGPT knowledge isn't ingested yet.
 - ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
+- Multi-repo PR numbers collide: huddle-extension-app#131 (`c0e8c40`, another session's release) vs eds-claude-skills#131 (`84b262c`, verify-work 0e). Always write `<repo>#<n>` (accuracy-log 2026-11-04).
 
 ## Change register 2026-11-03 — lanes in flight (NOT deployed, NOT owner-confirmed)
 Hard rule (#128): additive work ships; ANY change to existing behaviour needs a Today|Becomes|Why|Impact|Reversible row + owner 👍 first.
@@ -1760,6 +1775,11 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+
+### Task pick-up fit (2026-11-04, branch `claude_task-pickup-fit`)
+- Owner rule: agents take tickets they can FINISH end to end; a reminder only when the user says "remind me to…"; research is just done; for user-last-click tasks (subscribe/sign up/order/start a course) do the legwork — exact link on the card, comparisons always with reviews + forum feedback.
+- Mechanism: grooming may return `assigned_agent:"none"` → `groomOwner` clears the owner (journey clears on ""), and the owner judge skips it. `reminder` tag is derived from the title (`asksForReminder`), never kept or taken from the model. REMIND mode keys off the title, not the tag.
+- Live finding that drove it: 7 tasks had reminder-only proposals (6 research tasks), several invented "evidence-based Trinnex" briefs. A Nexus WRITE tool exists (`write_nexus_assignments`) — I first said it didn't.
 - [2026-10-28] Iris scheduled pushes: `turnPushStyle` (lib/push/turn-push.ts) names the push per job via `payload.pushStyle`; priority check is STICKY ("Iris: confirm ... priorities"), briefs carry Open Schedule + "adjust anything?" and one item per line (owner reversed the 10-15 "NO bullet points"). #122 `8302cb6` live, NOT owner-confirmed.
 **ARTIFACTS ARE NOT MARKDOWN-ONLY — `create_artifact` takes a `format` (2026-09-13).**
 Owner: *"why is it saying we are limited to .md when full document, mermaid, d3 abilities etc were
@@ -3836,3 +3856,18 @@ here as fact three times before being checked.)
 - Live: every 5 min 7–22 ET; `chat.email_replies` ledger (owed→drafted→replied|dismissed); Iris's alert carries a card (Save to Drafts / Edit first / No reply needed, "N owed · M settled today").
 - **Every reply path must attach a widget, not just the normal one.** Amy's alert lost its card because Iris timed out after the tool call and `ensureNotSilentOnRealWork` / `hardReply` built a bare reply. Wire any reply-borne widget through one helper used by all three paths (`emailCardFor`).
 - **Durable turn `text` is `.max(4000)`** (huddle.functions.ts input schema) — an over-long directive fails the WHOLE turn as `status=error`. Cap any directive that embeds outside content.
+
+## Plan-and-answer-first — what is TRUE on branch `claude_plan-and-answer-first` (2026-11-04; NOT on main, NOT live)
+- focus_on trigger (FOCUS_SYSTEM_HINT + FOCUS_TOOL.description, tasks/tools.ts) = explicit start wording OR a reply to the scheduled priority check. "Plan/organize/lay out" is NOT a start.
+- PLANNING_SYSTEM_HINT (tasks/tools.ts) is appended right after FOCUS_SYSTEM_HINT on BOTH backends; voice has no system hint slot for it — it only sees the new FOCUS_TOOL.description.
+- Out-of-lane wording lives in `lib/lane-handoff.ts`: group line is the original verbatim; 1:1 answers first then names the owner (no @). deliverOwnerFollowup / capabilityHandoffBlock / meta-task guard untouched.
+- With journey disabled, a focus_on attempt is still recorded in result.toolUses ("focus_on -- journey disabled") — a harness can observe "was it called?" with zero board writes.
+
+## schedule_and_priorities can now see BLOCKED tasks and returns the whole schedule (2026-11-04, branch claude_status-answers, NOT merged/deployed)
+- `include_blocked: true` or `view:"blocked"` → BLOCKED tasks come back in a SEPARATE `blocked` array (`blocker_reason` from
+  `tasks.task_blockers`, explicit `blocked_count`; parked ones excluded like getStandupTasks). `ranked` is byte-identical with or
+  without it — priority ranking and widgets untouched. Lovable zod schema mirrors the args (zod strips undeclared keys).
+- `view:"scheduled"` defaults to every item (200 ceiling); every response has `total` + `truncated`. Root cause of "2 of 6"
+  (reproduced offline on main 32f50e4): default limit 10 + scheduled view spans all days + starred items sort first.
+- Times were ALREADY localized on main (formatInTz + resolveJourneyIdentity tz). Edge: no profile + no browser zone → UTC.
+- Guard: `npm run test:status-answers` (23 checks, 7 mutations FIRED). Evidence: docs/qc-evidence/BUILD-status-answers.md.
