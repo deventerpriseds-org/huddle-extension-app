@@ -63,3 +63,15 @@ Sections: 1 query builder (19), 2 body cleaning (9), 3 owner tz (3), 4 error map
 
 `npx tsc --noEmit` exit 0. test:voice-tools 36/0, test:email-gate 73/0, test:router 39/0, test:inbox-read 68/0.
 
+## Step 6 - merge latest origin/main, re-run (2026-11-04)
+
+`git fetch` then `git merge --no-edit origin/main` -> "Already up to date." origin/main is still 32f50e4, the
+branch point, so there was nothing to merge (no merge commit). Re-run on that tree: tsc exit 0,
+test:voice-tools 36/0, test:email-gate 73/0, test:router 39/0, test:inbox-read 68/0.
+
+Additive check, `git diff --numstat origin/main...HEAD`: no `src/` file has a deleted line (the only `1` is
+package.json's trailing-comma line). The inbound watch (`inbound-email.server.ts`), draft/reply,
+`send_email` gating and push are untouched. Checks 9b/9e/9g pin the new tools OUTSIDE the send gate.
+
+Lane complete. Not merged to main and no PR, by instruction. Not live-verified: no Graph call from this
+session reached a real mailbox, so "works against a real inbox" is unproven until it is deployed and asked.
