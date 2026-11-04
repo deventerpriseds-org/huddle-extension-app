@@ -25,3 +25,9 @@ Base: origin/main 32f50e4 (fetched 2026-11-04).
     gives no total, so neither the model nor the user can tell the list was cut.
   - **Blockers: REPRODUCED.** `include_blocked` / `view:"blocked"` do not exist: A1/A3/A7/A8 fail, the
     BLOCKED "Start AI certification course" is unreachable from this tool.
+- step 2: IMPLEMENTED (tools.ts `PRIORITIZE_TOOL` + `dispatchPrioritize` + `PRIORITIZE_SYSTEM_HINT`; Lovable zod schema in
+  huddle.functions.ts). `include_blocked: true` or `view:"blocked"` widens ONLY the read (`getTasksForUser(..., {includeBlocked:true})`,
+  the existing dedup option) and returns BLOCKED tasks in a separate `blocked` array with `blocker_reason` (getTaskBlockers) and an
+  explicit `blocked_count`; parked blocked tasks excluded (same rule as getStandupTasks). `ranked` is computed exactly as before.
+  Scheduled view defaults to the 200 ceiling (explicit limit honoured); every response now carries `total` + `truncated`.
+  `bun scripts/status-answers.test.ts` -> `23 passed, 0 failed` (was 10/9 on main).

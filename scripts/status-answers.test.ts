@@ -112,5 +112,20 @@ const run = async (args: Record<string, unknown>, tz = "America/New_York") =>
   t("A8 category scoping applies; an empty set is an explicit 0, not an absent field", none.blocked_count === 0 && Array.isArray(none.blocked), JSON.stringify(none));
 }
 
+// ── Every backend can actually send the new arguments ───────────────────────────────────────────
+// OpenAI + voice share PRIORITIZE_TOOL; the Lovable backend has its own zod schema, and zod STRIPS any
+// key it does not declare -- so a missing `include_blocked` there makes blockers unreachable silently.
+{
+  const { PRIORITIZE_TOOL } = await import("../src/features/huddle/lib/tasks/tools.ts");
+  const props = PRIORITIZE_TOOL.parameters.properties as Record<string, any>;
+  t("L1 shared schema declares include_blocked (boolean)", props.include_blocked?.type === "boolean", JSON.stringify(props.include_blocked));
+  t("L2 shared schema offers view 'blocked'", (props.view.enum as string[]).includes("blocked"), JSON.stringify(props.view.enum));
+  const src = await Bun.file(new URL("../src/features/huddle/lib/huddle.functions.ts", import.meta.url)).text();
+  const block = src.slice(src.indexOf("lovableTools.schedule_and_priorities = tool({"));
+  const schema = block.slice(0, block.indexOf("execute:"));
+  t("L3 Lovable schema declares include_blocked", /include_blocked:\s*z\.boolean\(\)/.test(schema), schema.slice(0, 400));
+  t("L4 Lovable schema offers view 'blocked'", /z\.enum\(\[[^\]]*"blocked"/.test(schema), "");
+}
+
 console.log(`\n${p} passed, ${f} failed`);
 if (f) process.exit(1);
