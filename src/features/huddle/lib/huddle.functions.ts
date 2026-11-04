@@ -643,21 +643,6 @@ export interface RunHuddleTurnOpts {
 // `opts.turnId` it runs in CHUNKED mode: sub-45s chunks, each agent's reply streamed to the durable
 // store the instant its wave lands, and a budget-deferred agent re-queued (never dropped) so the
 // runner continues the turn across executions until every routed agent has replied.
-// A short, UNAMBIGUOUS confirmation reply ("yes", "sounds good", "go ahead"). Used to record a pending
-// confirm-intent deterministically without the model. Deliberately conservative: a question, a negation,
-// or anything long enough to be a real refinement returns false and is left to the model + the injected
-// directive (which asks it to call confirm_task_intent with the final, folded-in DoD).
-function isPlainConfirmation(text: string): boolean {
-  const t = text.trim().toLowerCase();
-  if (!t || t.length > 40) return false;
-  if (t.includes("?")) return false;
-  if (/\b(no|not|don'?t|stop|wait|hold|cancel|nope|instead|change|revise|actually)\b/.test(t))
-    return false;
-  return /\b(yes|yep|yeah|yup|confirm(ed)?|correct|right|sounds good|looks good|go ahead|do it|that works|works for me|perfect|approved?|okay?|ok|sure|great|👍)\b/.test(
-    t,
-  );
-}
-
 /** Conservative "the blocker is cleared" matcher — used to route an unblock reply from a non-owner
  *  (e.g. the coordinator who surfaced the blocker) to the OWNING agent. Broader than a plain confirm
  *  because a real unblock is usually a sentence ("you're cleared, go ahead"). Negations short-circuit. */
@@ -711,13 +696,21 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   const MAX_CHUNKS = 6;
   const turnStore = chunked ? await import("./tasks/turns.server") : null;
 
-  // ---- A: confirm-intent capture (WIP gate). When the user REPLIES in a 1:1 DM that has a task at
-  // confirm_status='asked' for that agent, this message IS the confirmation response. The reply turn
-  // historically carried NO confirm context, so the agent just acknowledged and the task froze in
-  // UP_NEXT. Fix, both fully guarded (a failure degrades to prior behavior, never breaks the turn):
-  //   (1) record the confirmation DETERMINISTICALLY for a clear yes/refinement (not model-dependent);
-  //   (2) hand the responding agent a directive (below, in its scene) to lock the DoD if not already
-  //       AND call propose_approach — so the task actually advances, not just records the DoD.
+  // ---- A: confirm-intent CONTEXT (WIP gate). When the user REPLIES in a 1:1 DM that has a task at
+  // confirm_status='asked' for that agent, this message is probably the confirmation response. The reply
+  // turn historically carried NO confirm context, so the agent just acknowledged and the task froze in
+  // UP_NEXT. This block is now READ-ONLY: it looks up the last-asked pending confirm and hands the
+  // responding agent a directive (confirmReplyDirective, in its scene) to call confirm_task_intent with
+  // that exact task_id when the reply confirms it — "ok", "great", "sure" included.
+  //
+  // OWNER-APPROVED 2026-11-04 (BUILD-context-and-confirm): a short "ok"/"great" used to be recorded HERE,
+  // deterministically, before any model read the message (the former isPlainConfirmation short-circuit).
+  // The owner wants the confirmation recorded AFTER the agent reads his message, so the agent decides
+  // whether "ok" confirms the task or answers something else in the thread. Nothing in this block may
+  // write a confirmation; the ONLY writers stay the confirm_task_intent tool and the button row.
+  //
+  // Also runs on a chunked continuation (`resume`): the lookup is read-only, and a task the first chunk
+  // already confirmed is no longer 'asked', so it simply returns null.
   let pendingConfirm: {
     taskId: string;
     title: string;
@@ -730,7 +723,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         ? (data.huddleId.slice(3) as AgentId)
         : null;
     const replyText = (data.text ?? "").trim();
-    if (dmAgent && AGENT_BY_ID[dmAgent] && replyText && !data.internal && !resume) {
+    if (dmAgent && AGENT_BY_ID[dmAgent] && replyText && !data.internal) {
       const em =
         (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
         data.caller?.entra_email ??
@@ -738,29 +731,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       if (em) {
         const { getPendingConfirmForAgent } = await import("./tasks/tasks.server");
         const pc = await getPendingConfirmForAgent(em, dmAgent);
-        if (pc) {
-          pendingConfirm = { ...pc, agentId: dmAgent };
-          if (isPlainConfirmation(replyText)) {
-            const dod = (pc.proposedDod ?? replyText).trim() || replyText;
-            try {
-              const { confirmTaskIntent } = await import("./tasks/tasks.server");
-              await confirmTaskIntent(pc.taskId, em, dod);
-              try {
-                const { invokeJourneyTool } = await import("./journey/proxy.functions");
-                await invokeJourneyTool({
-                  toolName: "update_task",
-                  args: { task_id: pc.taskId, definition_of_done: dod },
-                  caller: data.caller ?? {},
-                  context: { source: "huddle" },
-                });
-              } catch {
-                /* journey mirror sync is best-effort */
-              }
-            } catch {
-              /* deterministic capture is best-effort */
-            }
-          }
-        }
+        if (pc) pendingConfirm = { ...pc, agentId: dmAgent };
       }
     }
   } catch {
@@ -2499,11 +2470,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       : "";
 
     // A: if the user is replying to THIS agent's pending confirm-intent ask, direct it to lock the DoD
-    // and propose its approach — so the task advances out of Up Next. If the runtime already recorded a
-    // plain "yes" above, confirm_task_intent is idempotent; propose_approach is what actually moves it.
+    // and propose its approach — so the task advances out of Up Next. The runtime no longer records a
+    // plain "yes" before the model reads the message (owner-approved 2026-11-04), so this directive is
+    // the ONLY route a typed confirmation takes: it must say that a short "ok"/"great"/"sure" counts, and
+    // hand over the proposed DoD so a bare "ok" locks exactly what the user was shown.
     const confirmReplyDirective =
       pendingConfirm && pendingConfirm.agentId === winner.id
-        ? `\n\nIMPORTANT — the user is replying to your earlier check-in that asked them to confirm the assumed action + Definition of Done for their task "${pendingConfirm.title}". This message is that reply. If they confirmed it (as-is or with tweaks), call confirm_task_intent NOW with task_id "${pendingConfirm.taskId}" and the FINAL definition_of_done (fold in any change they made) — actually call the tool, don't just acknowledge in prose. Then, in this SAME turn, call propose_approach for that task so it can move forward. If the reply instead shows the task genuinely CANNOT proceed (it needs a decision, a credential, or access the team lacks), call flag_blocker with that EXACT task_id "${pendingConfirm.taskId}" — use that id verbatim, NEVER the task's title or an invented id — and a specific reason. If they declined or are still deciding, don't call the tools — just help them decide.`
+        ? `\n\nIMPORTANT — the user is replying to your earlier check-in that asked them to confirm the assumed action + Definition of Done for their task "${pendingConfirm.title}". This message is that reply.${pendingConfirm.proposedDod ? ` The Definition of Done you proposed was: "${pendingConfirm.proposedDod.replace(/\s+/g, " ").slice(0, 600)}".` : ""} A short affirmative on its own — "ok", "okay", "sure", "great", "yes", "perfect", "sounds good", "go ahead", 👍 — IS a confirmation of THIS task as proposed, unless the rest of the conversation shows it answers something else. If they confirmed it (as-is or with tweaks), call confirm_task_intent NOW with task_id "${pendingConfirm.taskId}" and the FINAL definition_of_done (the proposed one verbatim for a plain "ok"; fold in any change they made) — actually call the tool, don't just acknowledge in prose. Then, in this SAME turn, call propose_approach for that task so it can move forward. If the reply instead shows the task genuinely CANNOT proceed (it needs a decision, a credential, or access the team lacks), call flag_blocker with that EXACT task_id "${pendingConfirm.taskId}" — use that id verbatim, NEVER the task's title or an invented id — and a specific reason. If they declined or are still deciding, don't call the tools — just help them decide.`
         : "";
 
     // Single capture-owner (group): exactly ONE agent — the lead/primary — captures the user's task

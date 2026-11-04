@@ -46,3 +46,14 @@ reminder fire-echoes (`rem-` id / leading "⏰") on purpose (de-noise comment ab
 | tool breadcrumbs | `toolUses` | NO | no | no | no |
 | system/process notices | author system | yes | DROPPED on purpose | no | no |
 | reminder notices | id `rem-` / "⏰" | yes | DROPPED on purpose | no | no |
+
+## Step 2 -- APPROVED 1 implemented (huddle.functions.ts)
+- Block A is now READ-ONLY: removed `isPlainConfirmation` and its `confirmTaskIntent` + journey `update_task`
+  call. Grep after: no code reference left (only the explanatory comment).
+- Dropped the `!resume` gate on block A so a chunked continuation still hands the agent the pending-confirm
+  context (lookup is read-only; an already-confirmed task is no longer 'asked' so it returns null).
+- `confirmReplyDirective` extended (additive): includes the proposed DoD text (capped 600 chars) and states a
+  short "ok/okay/sure/great/yes/perfect/sounds good/go ahead/👍" IS a confirmation of THIS (last-asked) task
+  unless the conversation shows otherwise; DoD = the proposed one verbatim for a plain "ok".
+- Untouched: confirm_task_intent tool (both paths), confirm-ask buttons (model-free, server-text DoD),
+  voice confirm path, ensureReviewFlip, isStructuredWorkflowRequired*, autowork promotion gate.
