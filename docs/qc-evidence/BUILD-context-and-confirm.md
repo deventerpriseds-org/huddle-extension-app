@@ -57,3 +57,21 @@ reminder fire-echoes (`rem-` id / leading "⏰") on purpose (de-noise comment ab
   unless the conversation shows otherwise; DoD = the proposed one verbatim for a plain "ok".
 - Untouched: confirm_task_intent tool (both paths), confirm-ask buttons (model-free, server-text DoD),
   voice confirm path, ensureReviewFlip, isStructuredWorkflowRequired*, autowork promotion gate.
+
+## Step 3 -- APPROVED 2 implemented (extends the existing history path; no new store)
+- NEW `src/features/huddle/lib/stream-context.ts` (pure, type-only imports): `streamItemSummary(m, {live})`
+  -> one bracketed line per item, e.g. `[Priorities widget shown: 1. X (DOING), 2. Y]`,
+  `[Confirm card for task "Z" (task_id ..) — user tapped Confirm]`; "" for plain text. Capped 900 chars.
+  Covers priorities, schedule, checklist (live `checklistState` overlaid), confirmAsk (+which button),
+  overrideAsk, emailReply (+drafted/dismissed), artifacts, attachments, navLink, check-in / briefing.
+- `HuddleView.tsx` history map adds `context` only when non-empty (plain text payload unchanged).
+- `huddle.functions.ts` `HistoryMessage` declares `context` (max 1500) so zod + the durable re-parse keep
+  it; `historyTranscript` appends it via `textWithStreamContext` (OpenAI + Lovable both read `transcript`).
+  Routing does NOT read it. Conversation mode: newest 6 contexts appended to the INSTRUCTIONS of the
+  conversation call only (not persisted into the OpenAI thread; the poisoned-conversation fallback uses the
+  reconstructed transcript, which already carries them).
+- `seed.ts` confirmAsk gains optional client-only `resolvedAs`; `store.resolveConfirmAsk(id, how?)` records it;
+  ConfirmAskRow passes confirmed / backlogged / parked. Badge UI unchanged ("Handled").
+- `npx tsc --noEmit -p .` -> no output (clean).
+- Group effect: group huddles use the same HuddleView history map, so group agents also see the summaries
+  of widgets/cards in the group thread. Ceremony history (MeetingBar.buildCeremonyHistory) is untouched.

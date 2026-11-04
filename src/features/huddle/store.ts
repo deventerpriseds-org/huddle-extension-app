@@ -162,7 +162,7 @@ interface HuddleState {
   addUserMessage: (m: HuddleMessage) => void;
   addAgentMessage: (m: HuddleMessage) => void;
   upsertAgentMessage: (m: HuddleMessage) => void;
-  resolveConfirmAsk: (messageId: string) => void;
+  resolveConfirmAsk: (messageId: string, how?: "confirmed" | "backlogged" | "parked") => void;
   resolveOverrideAsk: (messageId: string) => void;
   resolveEmailReply: (messageId: string, how: "drafted" | "dismissed") => void;
   /** Seed live state for rows not yet tracked. Never overwrites a row the user has already acted on.
@@ -379,11 +379,11 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
   // so the client swaps the live buttons for a resolved badge without re-fetching. Scoped by messageId
   // (not taskId) so acting on an old reach-out never touches a DIFFERENT message that happens to carry
   // the same task (e.g. a later re-ask after reassignment).
-  resolveConfirmAsk: (messageId) =>
+  resolveConfirmAsk: (messageId, how) =>
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === messageId && m.confirmAsk
-          ? { ...m, confirmAsk: { ...m.confirmAsk, resolved: true } }
+          ? { ...m, confirmAsk: { ...m.confirmAsk, resolved: true, ...(how ? { resolvedAs: how } : {}) } }
           : m,
       ),
     })),

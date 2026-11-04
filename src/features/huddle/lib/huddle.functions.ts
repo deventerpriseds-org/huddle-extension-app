@@ -124,6 +124,7 @@ import {
   type EmailReplyAsk,
 } from "./email/email-reply-ask";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
+import { textWithStreamContext, streamContextInstructionBlock } from "./stream-context";
 import {
   assignCreatedJourneyTasks,
   isOneToOne,
@@ -167,6 +168,11 @@ const HistoryMessage = z.object({
   ts: z.number(),
   mentions: z.array(z.enum(AgentIds)).optional(),
   replyTo: z.string().optional(),
+  // Compact text summary of the non-text items on this message (widgets, cards + button state, chips),
+  // built client-side by lib/stream-context.ts. MUST be declared: zod strips undeclared keys, and the
+  // durable path re-parses the stored payload with this schema. Read ONLY by the per-agent transcript
+  // (and the conversation-mode instruction block) -- never by routing, so it cannot steer who answers.
+  context: z.string().max(1_500).optional(),
 });
 
 const RouterConfigInput = z.object({
@@ -2687,14 +2693,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       )
       .slice(-14)
       .map((m) => {
-        if (m.author.kind === "user") return { role: "user" as const, content: m.text };
+        // `context` = what the user SAW besides the prose (widgets, cards + button state) --
+        // lib/stream-context.ts. Absent for plain text, so those entries are byte-for-byte unchanged.
+        const body = textWithStreamContext(m.text, m.context);
+        if (m.author.kind === "user") return { role: "user" as const, content: body };
         const a = AGENT_BY_ID[(m.author as { kind: "agent"; agentId: AgentId }).agentId];
         if (a?.id === winner.id) {
-          return { role: "assistant" as const, content: m.text };
+          return { role: "assistant" as const, content: body };
         }
         return {
           role: "user" as const,
-          content: `(context — ${a?.name ?? "another agent"} said): ${m.text}`,
+          content: `(context — ${a?.name ?? "another agent"} said): ${body}`,
         };
       });
     const transcript: Array<{ role: "user" | "assistant"; content: TranscriptContent }> = [
@@ -5106,8 +5115,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         try {
           persona = await callOpenAIResponses({
             ...personaArgs,
+            // Conversation mode sends only the new user message, and the conversation object never saw
+            // the widgets/cards in this thread -- so their summaries ride in the instructions (not
+            // persisted into the thread, so no duplicates accumulate). Reconstruction mode already has
+            // them inline in `transcript`, so nothing is added there.
+            ...(conversationId
+              ? {
+                  instructions:
+                    personaArgs.instructions + streamContextInstructionBlock(data.history),
+                  conversation: conversationId,
+                }
+              : {}),
             transcript: personaTranscript,
-            ...(conversationId ? { conversation: conversationId } : {}),
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
