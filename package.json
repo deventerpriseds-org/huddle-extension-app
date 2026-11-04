@@ -59,8 +59,12 @@
     "test:test-push": "bun scripts/test-push-validation.test.ts",
     "test:turn-catchup": "bun scripts/turn-catchup.test.ts",
     "test:turn-push": "bun scripts/turn-push.test.ts",
+<<<<<<< HEAD
     "test:inbox-read": "bun scripts/inbox-read.test.ts",
     "test:context-and-confirm": "bun scripts/context-and-confirm.test.ts"
+=======
+    "test:reminder-tools": "bun scripts/reminder-tools.test.ts"
+>>>>>>> origin/claude_reminder-tools
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

@@ -4878,6 +4878,7 @@ Owner: *"Go on 3 and 4, I don't understand why voice can't trigger the same jobs
 - [x] Read journey `public.tasks` (canonical): 4 exact-duplicate groups + near-duplicates via pg_trgm ≥0.55. Presented grouped with a recommended keep per group.
 - [ ] Owner approves rows → DELETE from journey public.tasks only (mirror follows via trigger) → read back 0 remaining.
 
+<<<<<<< HEAD
 ## ACT:plan-and-answer-first — planning contract + answer-first in a 1:1 (owner-approved 2026-11-03)
 - [x] Planning contract: focus_on only on explicit start / priority-check reply; PLANNING_SYSTEM_HINT on both backends (branch `claude_plan-and-answer-first`, evidence `docs/qc-evidence/BUILD-plan-and-answer-first.md`).
 - [x] Answer-first in a 1:1 via `lib/lane-handoff.ts`; group wording byte-identical.
@@ -4891,3 +4892,10 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [x] (implemented on branch, offline-verified) B: scheduled view returns every item by default; `total`/`truncated` say when a list was cut.
 - [x] Offline: 23/0, tsc 0, 4 regression suites green, 7/7 mutations FIRED.
 - [ ] Merge + deploy (caller), then owner confirms live ("anything blocking me?" names the blocked task; "what's on today" lists all items in ET). NOT yet confirmed.
+=======
+## ACT:reminder-tools — agents can LIST, CANCEL and MOVE the owner's reminders/alarms (2026-11-03/04)
+- [x] Additive tools `list_reminders` / `cancel_reminder` / `move_reminder` over `chat.reminders` (owner-scoped, owner time zone, pending-only mutations, ambiguity → candidates). Wired: OpenAI + Lovable text paths (claimAction on mutations) + voice NATIVE. Branch `claude_reminder-tools` commit cc3e742.
+- [x] Offline suite `npm run test:reminder-tools` (scripts/reminder-tools.test.ts). Evidence: docs/qc-evidence/BUILD-reminder-tools.md.
+- [x] Mutation proofs: 12/12 FIRED (mutate.sh). Owner 👍 rows written in the build log.
+- [ ] Owner 👍 on the NEEDS OWNER rows, then PR/merge/deploy, then live check (NOT done from this lane; branch only).
+>>>>>>> origin/claude_reminder-tools
