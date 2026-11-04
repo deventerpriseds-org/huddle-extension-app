@@ -48,3 +48,40 @@ Scope rule: ADDITIVE ONLY. Event creation, calendar reads, briefs and alarms mus
 - `UI_ONLY_JOURNEY_TOOLS = {delete_task}` in `invokeJourneyTool` blocks model calls to user-only tools.
   `delete_calendar_event` is deliberately NOT added there: the brief asks that agents can delete on an explicit
   user request, so the delete guard lives in journey (Step 2).
+
+## Step 2 — Build (resumed after a container restart, 2026-11-04)
+
+### journey-voice: NOT pushed — blocked by this agent's worktree isolation
+This agent runs worktree-isolated in huddle-extension-app. Its harness REFUSED every git
+operation on journey-voice (`cd` into it, `git -C`, and even shell lines naming the repo's
+GitHub URL). Routing around that block via the GitHub MCP `push_files` or a scratchpad clone
+was deliberately NOT done. The journey change was built and tested out of tree at
+`<scratchpad>/journey-patch/` and must be applied by a session that may write journey:
+- NEW `supabase/functions/_shared/calendar-edit.ts` — find (event_id, or match_title +
+  match_start_time within +/-90 min against the caller's own `external_calendar_events` rows),
+  ambiguity -> `candidates` and no provider call, PATCH/DELETE on Graph `/me/events/{id}` or
+  Google `calendars/primary/events/{id}`, token path mirrors create's (calendar_connections by
+  user_id + provider + is_active, decrypt_token, 5-min-buffer refresh). Delete refuses unless
+  `user_explicitly_requested === true`. Original duration kept when only a new start is given.
+- NEW `supabase/functions/_shared/calendar-edit.test.ts` — 14 tests, mocked fetch + DB.
+- HUNKS for `execute-tool/index.ts` (1 import, 2 new cases after `create_calendar_event`, 1 new
+  helper) and `_shared/tool-definitions.ts` (2 definitions after `create_calendar_event`).
+  No existing line changes. Base: journey origin/main 8b7bd07 (local checkout was a stale
+  branch; execute-tool and tool-definitions both have commits on main newer than it).
+
+Evidence (run in scratchpad, node v22.22.0, same flags as checks.yml `npm test`):
+- `node --experimental-strip-types --test calendar-edit.test.ts` -> pass 14 / fail 0
+- `node scripts/undef-check.mjs calendar-edit.ts calendar-edit.test.ts` -> 0 NEW, exit 0
+  (first run flagged `fetchImpl` — the guard misses a parameter bound after an arrow-typed
+  param; fixed by binding through `const http`.)
+- Mutations (scripted harness, anchor-count==1 else NOT-APPLIED, restore md5-asserted;
+  mutate.sh needs a git-tracked file, which the out-of-tree copy is not):
+  FIRED delete GUARD (consent check -> false); FIRED ambiguity (`=== 1` -> `>= 1`);
+  FIRED already-gone (404/410 branch -> false).
+- NOT run: full journey `npm test` (needs the journey tree), deploy-staleness guard (unrelated).
+
+### Huddle: no runtime code needed — confirmed and pinned
+- Text: `ensureJourneyTools()` (huddle.functions.ts L923-941) returns null unless a member has
+  `agents[id].journey.enabled` -> the new tools are opt-in exactly like create.
+- Voice: `buildRealtimeToolset` pushes the catalog only `if (opts.journey !== false)` (L454).
+- NEW `scripts/journey-calendar-edit-exposure.test.ts` (+ `npm run test:calendar-edit`): 13/13.

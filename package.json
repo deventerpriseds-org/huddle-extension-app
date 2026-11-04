@@ -17,6 +17,7 @@
     "test:presence": "bun scripts/presence-timing.test.mjs",
     "test:mode": "bun scripts/task-mode.test.mjs",
     "test:voice-tools": "bun scripts/voice-toolset-hidden.test.ts",
+    "test:calendar-edit": "bun scripts/journey-calendar-edit-exposure.test.ts",
     "test:cross-app": "bun scripts/cross-app-turn-gate.test.ts",
     "test:uat-server-check": "bun scripts/uat-check-server-side.test.ts",
     "format": "prettier --write .",
