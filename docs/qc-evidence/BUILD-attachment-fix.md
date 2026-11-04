@@ -46,3 +46,10 @@
   that accepted an upload at 10-30 12:42Z. So the break is NOT a code regression in this repo's deployed
   code. None of the listed suspect commits (#126 #125 #120 #115 #113 #114 #116 #124) can be the cause,
   because all of them were live during the last success.
+
+## Step 4 -- re-check the 2026-11-04 deploys (observation)
+- origin/main now 4a4fbff (#132) after c0e8c40 (#131). `git diff --stat 9983343 origin/main -- src` touches
+  only graph-email.server.ts, inbox-read.ts, huddle.functions.ts, lane-handoff.ts, tasks/tools.ts,
+  realtime-tools.server.ts. HuddleView.tsx and lib/artifacts/ are untouched. The huddle.functions.ts hunks
+  matching attach|Input are two new tool `inputSchema`s (inbox read), NOT the turn Input / attachments field.
+- Inference: the 11-04 deploys cannot have broken the paperclip -> upload chain either.
