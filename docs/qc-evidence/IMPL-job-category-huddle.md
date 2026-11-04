@@ -37,3 +37,29 @@ router-winners 39/0; `npx tsc --noEmit` 0 errors.
 
 ## The one visible change to existing screens (flag for the owner)
 Because `withKnownCategories` draws a row for every known category even when it is empty (the Family rule, 2026-10-15), the priorities widget now shows an empty, greyed **Job** row before any JOB task exists. Empty rows sink below rows that have tasks, so the order among existing rows is unchanged. This follows from "JOB shows in Huddle, before Career". To hide it while JOB is empty, the fix is to exclude JOB from `withKnownCategories`, which is one line and reversible.
+
+## Proof (run 2026-11-04 on this branch, after commit 7b686d9)
+| Check | Result |
+|---|---|
+| `bun scripts/widget-colors.test.ts` (`npm run test:widget-colors`) | 32 passed, 0 failed (closest pair LIFE/JOB = 50°, floor 45°) |
+| `bun scripts/category-tree.test.ts` | 50 passed, 0 failed |
+| `bun scripts/category-tree-independent.test.ts` | 25 passed, 0 failed |
+| `bun scripts/widget-topic-tree.test.ts` | 20 passed, 0 failed |
+| `bun scripts/category-push.test.ts` | 35 passed, 0 failed |
+| `bun scripts/week-order.test.ts` | 9 passed, 0 failed |
+| `bun scripts/router-winners.test.ts` (`npm run test:router`) | 39 passed, 0 failed |
+| `bun scripts/ceremony-board-report.test.mjs` | 27 passed, 0 failed |
+| `bun scripts/board-digest.test.ts` / `standup-ranking.test.ts` / `priority-lane.test.ts` | 10/0, 13/0, 10/0 |
+| `npx tsc --noEmit -p .` | exit 0, 0 errors (same as baseline) |
+
+Mutation proofs (`mutate.sh`, each restore asserted against HEAD by the script):
+| Mutation | Guard | Outcome |
+|---|---|---|
+| `JOB: 200` -> `JOB: 189` (40° from CAREER 149, the unseeded hash value) | widget-colors "every pair of journey's seeded categories (incl. JOB) is visually distinct" | **FIRED** |
+| drop `"JOB"` from `DISPLAY_CATEGORY_ORDER` (JOB becomes a dynamic bucket) | category-tree "JOB: with tasks, Job sits directly before Career in the fixed order" | **FIRED** |
+| delete `JOB: "cole-blake"` from `CATEGORY_OWNER` | ceremony-board-report "JOB owner is cole-blake" | `mutate.sh` **UNDETERMINED**: the suite went red (rc=1), but it prints `✗ <msg>` lines the script cannot parse, so this run proves nothing by itself. The same defect was observed directly: the suite run BEFORE the ceremonies.ts edit (no JOB entry) printed 4 failures (`✗ JOB owner is cole-blake (got iris-chase)`, case-insensitive, Cole's lane, not iris-chase), and 27/0 after. |
+
+## Not done / open
+- AC-F1 (live sync of a JOB row into `tasks.journey_tasks`) and the live parts of AC-F5/F7 (Playwright chip render, a server-fn `prioritize(category='JOB')` call) were not run: they need the journey enum migration live and this branch deployed. Static path proven by code read above.
+- Phone widget: `"JOB"` is not yet in journey-voice `public/bridge.config.json` `prioritiesWidget.categories` (journey repo, not this lane).
+- Nothing merged or deployed; status is implemented and tested locally, NOT confirmed live.
