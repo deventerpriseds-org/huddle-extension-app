@@ -31,3 +31,11 @@ Branch: `claude_inbox-read` off `origin/main` 32f50e4. Additive only. Not merged
 
 Graph query shape: free text or a sender NAME -> `$search` (KQL `from:`, `received>=`, `received<=`; unread post-filtered because KQL here cannot express it, so it over-fetches 3x). Otherwise -> `$filter` led by `receivedDateTime ge` (Graph needs the `$orderby` property first in `$filter`), default lookback 90 days, `from/emailAddress/address eq '<addr>'` with OData quote doubling, `isRead eq false`.
 
+## Step 3 - offline suite (resumed after a container restart, 2026-11-04)
+
+`scripts/inbox-read.test.ts`, run with `npm run test:inbox-read`. It replaces fetch (token and Graph answer from
+fixtures; any other host throws) and mocks `journey/identity` with `mock.module`. **68 passed, 0 failed.**
+Sections: 1 query builder (19), 2 body cleaning (9), 3 owner tz (3), 4 error mapping (4), 5 shaping (4),
+6 network half with GET-only and 403 assertions (9), 7 executor mailbox scoping (7), 8 read-only source scan (3),
+9 wiring on OpenAI/Lovable/voice, inside the Graph gate and outside the send gate (10).
+
