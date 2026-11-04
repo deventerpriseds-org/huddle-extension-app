@@ -34,7 +34,7 @@ export interface WidgetTaskRow {
   title: string;
   /** journey status verbatim: BACKLOG|TODO|READY|UP_NEXT|DOING|IN_REVIEW|DONE|BLOCKED|PLANNING. */
   status: string | null;
-  /** journey category: LIFE|CAREER|VENTURES|EDUCATION, or null. Drives the category chip. */
+  /** journey category: LIFE|JOB|CAREER|VENTURES|EDUCATION, or null. Drives the category chip. */
   category: string | null;
   isPriority: boolean;
   priorityRank: number | null;
@@ -590,6 +590,9 @@ function toTopicNode(raw: unknown, depth: number): TopicNode | null {
 const CATEGORY_DISPLAY_MAP: Record<string, string> = {
   LIFE: "LIFE",
   PERSONAL: "LIFE",
+  // JOB (2026-11-04) = work for the owner's employer; its own bucket, never folded into CAREER
+  // (which now means getting the next role).
+  JOB: "JOB",
   CAREER: "CAREER",
   VENTURES: "VENTURES",
   EDUCATION: "EDUCATION",
@@ -601,10 +604,13 @@ const CATEGORY_DISPLAY_MAP: Record<string, string> = {
  *  Anything not in here is a DYNAMIC category and is appended alphabetically after these — the
  *  "hybrid dynamic category detection" of `532da6b`, which exists so an unknown key passes through
  *  instead of being silently dropped. Keep that property: this is an ORDERING, not an allow-list. */
-const DISPLAY_CATEGORY_ORDER = ["LIFE", "CAREER", "VENTURES", "EDUCATION", "FAMILY"] as const;
+//  JOB (2026-11-04, owner ruling) takes a FIXED slot directly before CAREER rather than being
+//  appended as a dynamic bucket. Relative order of the other five is unchanged.
+const DISPLAY_CATEGORY_ORDER = ["LIFE", "JOB", "CAREER", "VENTURES", "EDUCATION", "FAMILY"] as const;
 
 const CATEGORY_LABELS: Record<string, string> = {
   LIFE: "Life & Personal",
+  JOB: "Job",
   CAREER: "Career",
   VENTURES: "Ventures",
   EDUCATION: "Education",
@@ -1357,6 +1363,12 @@ export function orderByContent(nodes: readonly TopicNode[]): TopicNode[] {
  * An empty category is `count: null` (rendered blank, never "0", as the spec draws Family) and is
  * greyed by the renderer, the same "nothing to do here yet" signal as an empty topic. Dynamic
  * categories and the Uncategorised bucket are untouched: this ADDS the known five, it never filters.
+ *
+ * JOB (2026-11-04) is now a known category too, so Huddle draws a Job row (directly before Career)
+ * even before any JOB task exists — empty, greyed, sinking below the rows with tasks like Family.
+ * Huddle has NO setting for this list: it is `DISPLAY_CATEGORY_ORDER` above. The phone's own list
+ * is journey-voice `public/bridge.config.json` `prioritiesWidget.categories` (today
+ * `CAREER, VENTURES, EDUCATION, LIFE, FAMILY`) and is changed in that repo, not here.
  */
 export function withKnownCategories(roots: TopicNode[]): TopicNode[] {
   const present = new Set(roots.map((n) => n.id));
