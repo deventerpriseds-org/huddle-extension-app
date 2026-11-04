@@ -4903,3 +4903,17 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 
 ## ACT:pr-number-ambiguity — always write <repo>#<n> (2026-11-04)
 - [x] A Stop-hook review read eds-claude-skills#131 as huddle-extension-app#131. Ground truth: `84b262c` vs `c0e8c40`. Logged in `.claude/accuracy-log.md` (7b96d775) and memory.md. Guard: `<repo>#<n>` in every multi-repo reference.
+
+## ACT:handoff-confirm-flow — 1:1 hand-off, Confirm buttons, confirm-starts-work, honesty, dedup (owner-approved 2026-10-31, session_014kkrf3BS7LaYkxC8HkdzMt)
+Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.pending_turns`). Seven breaks found; owner approved all fixes and Option A (a live confirm starts the work even past the agent's WIP cap).
+- [x] AC set (independent ac-writer): 85 ACs, F1–F8, spelling table. Branch `claude_ac-handoff-confirm` 58ae0ba, `docs/qc-evidence/AC-handoff-confirm-flow.md`.
+- [x] Owner-approved duplicate cleanup (2026-10-31): deleted journey rows 41740671 (Ezra chew-treat dup; Iris's brief already delivered), 9b81b07a + d928d1cd (Elle transcript dups); kept Iris's 67698e16. Snapshot kept in the session scratchpad.
+- [ ] Lane A (F1 skip hand-off when handled/"now", F2 hand-off = real task + Confirm buttons, F6 no claimed-but-unperformed board actions): branch `claude_handoff-lane-a`. Killed twice by container restarts; WIP recovered from autosave (9ce6b83) and pushed 2026-11-04; rebasing onto main d5c465e (#131/#133 overlap).
+- [ ] Lane B (F3 confirm starts the task now, F4 live asks stamped `asked`, F7 one request one task): branch `claude_handoff-lane-b`, same recovery (9fed75e); rebasing onto d5c465e. #133 already removed the pre-model "ok" short-circuit — not reinstated.
+- [ ] F5 task-mode judge (both directions wrong: research parked as reminders; errands produce invented briefs) — WAITING on owner's default: A Assist (recommended) / B Remind / C Produce.
+- [ ] Red-team pass → PR → independent verifier → merge → live E2E with `Test-` tasks + cleanup. NOT deployed, NOT owner-confirmed.
+
+## ACT:harness-pollution-iris — test harness wrote into the owner's real Iris thread (2026-11-04)
+- [x] Owner screenshot: Iris `focus_on` failed "task board isn't connected" at 11-03 22:59/23:03. Ground truth (`chat.pending_turns` payloads via azure-pg-query.yml run 41815988842): those were `dur-qa-paf-5f7a74-*` turns from `qa-plan-and-answer-first.mjs` (other session), journey deliberately OFF; every owner-sent turn had journey ON. The refusal was the #124 guard working as designed — not a regression.
+- [x] Cleanup (standing pre-authorization for provable test artifacts; plan stated in-turn before running): deleted 4 `chat.pending_turns` rows by `dur-qa-paf-%` / `Test- qa-paf-%` marker; rag_chunks had 0. Verified 0 remaining (run 41816128549).
+- [ ] Fix: `qa-plan-and-answer-first.mjs` targets the LIVE `dm-iris-chase` and only prints its cleanup SQL. Point it at a test huddle id and auto-clean by marker. Folded into the handoff PR.

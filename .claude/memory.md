@@ -117,6 +117,12 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Hand-off / confirm / start-now flow (2026-10-31 → 11-04, ACT:handoff-confirm-flow — branches only, NOT merged, NOT deployed, NOT owner-confirmed)
+- Root causes (observed in `chat.pending_turns` + task tables): (1) the 1:1 owner follow-up (`deliverOwnerFollowup`) fires from the user's TEXT alone, even after the addressed agent already delegated/produced the work and even on "do it now"; (2) the follow-up directive says "ask to confirm, do not act" and creates no task, so Confirm buttons can never render on a hand-off (buttons = a successful `propose_task_intent` in that reply; 46/46 in 30 days came from autowork turns); (3) `proposeTaskDod` never stamps `confirm_status='asked'`, so a typed confirm binds to an OLDER autowork ask; (4) confirming moves nothing until the 9/13/17 pass, and that pass may never stage a low-ranked task; (5) task mode = first-word regex + grooming's "when in doubt, tag reminder" — parks research AND turns errands into invented briefs; (6) agents claim board writes that never happened; (7) duplicate creates.
+- Container restarts killed in-session lanes twice; the autosave refs (`eds-wip/*`) were the only surviving copy. Push WIP to a real branch first thing in every lane brief.
+- Another session (`session_014kkrf14UMrBfSWyZ1vzHa1`) shipped #131/#133 into the same code mid-flight; check `git log origin/main` for overlap before resuming any lane.
+- Harness hygiene: `qa-plan-and-answer-first.mjs` wrote 4 `Test- qa-paf-*` turns into the owner's live Iris thread (owner saw `focus_on` failures and thought the app broke). Deleted; 0 remaining. Harnesses must target a test huddle id and auto-clean.
+
 ## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04, branch claude_context-and-confirm, NOT merged, NOT deployed, NOT owner-confirmed)
 - **Confirm-intent:** the pre-model `isPlainConfirmation` short-circuit is GONE. Block A of `runHuddleTurn` is
   READ-ONLY (looks up the last-asked pending confirm, also on chunk continuations). A typed "ok"/"great" is
