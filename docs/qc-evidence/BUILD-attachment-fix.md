@@ -21,3 +21,12 @@
 - HuddleView diffs since 10-15 (#120,#115,#111,#109,#104,#98,#91,#90,#87): NO line touching the
   file input / Paperclip / onPickFiles / uploading.
 - ee8f7b6 (#126) touched entra-auth + deploy-swa appsettings only (adds UAT_BYPASS_TOKEN app setting).
+
+## Step 2 -- reproduce in dev (observation)
+- `VITE_E2E_AUTH_BYPASS=1 vite dev` on origin/main 32f50e4, Playwright headless Chromium.
+- Paperclip button: present, enabled, elementFromPoint at its centre = its own svg (NOT covered).
+- Click -> `filechooser` event fires (multiple=true). setFiles(Test-attach.txt) -> onPickFiles runs ->
+  uploadChatAttachmentFn reaches the server -> toast "AZURE_PG_URL not configured" (expected: sandbox
+  has no DB). So in a DEV build the client chain button -> input -> upload -> error-toast is intact.
+- Interpretation: the break is NOT a dead click handler / overlay in the dev build. Remaining suspects:
+  production build/runtime differences, server side in prod, or the surface the owner uses.
