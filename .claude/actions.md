@@ -5,6 +5,7 @@ Last updated: 2026-10-27
 Status: 🔨 implemented on `claude_context-and-confirm`, offline-verified, NOT merged / deployed / owner-confirmed.
 Evidence: `docs/qc-evidence/BUILD-context-and-confirm.md`; `npm run test:context-and-confirm` (45 PASS);
 tsc clean; priority-check 43/0, override-gate ALL PASS, turn-identity ALL PASS, cross-app 92/0.
+Mutation proofs 8/8 FIRED (m1-m8, table in the evidence file).
 Open owner decisions (NEEDS OWNER 👍 rows in the evidence file): system/reminder notices in the transcript;
 writing widget summaries into RAG memory.
 

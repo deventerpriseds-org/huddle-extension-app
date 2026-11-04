@@ -75,3 +75,37 @@ reminder fire-echoes (`rem-` id / leading "⏰") on purpose (de-noise comment ab
 - `npx tsc --noEmit -p .` -> no output (clean).
 - Group effect: group huddles use the same HuddleView history map, so group agents also see the summaries
   of widgets/cards in the group thread. Ceremony history (MeetingBar.buildCeremonyHistory) is untouched.
+
+## Step 4 -- tests (all run in this worktree, 2026-11-04)
+- `npm run test:context-and-confirm` -> 45 checks, ALL PASS (scripts/context-and-confirm.test.ts)
+- `npx tsc --noEmit -p .` -> exit 0, no output
+- `test:priority-check` 43 passed 0 failed; `test:override-gate` ALL PASS; `test:turn-identity` ALL PASS;
+  `test:cross-app` 92 passed 0 failed
+
+## Step 5 -- mutation proofs (mutate.sh; anchors from files)
+| # | file | defect reinstated | guard | outcome |
+|---|---|---|---|---|
+| m1 | huddle.functions.ts | block A calls confirmTaskIntent again | block A writes no confirmation | FIRED |
+| m2 | huddle.functions.ts | transcript uses `m.text` only | per-agent transcript appends context | FIRED |
+| m3 | huddle.functions.ts | `context` removed from HistoryMessage zod | HistoryMessage declares `context` | FIRED |
+| m4 | stream-context.ts | Confirm tap reads "handled" | confirm card tapped Confirm | FIRED |
+| m5 | HuddleView.tsx | client attaches no context | client history map sends the summary | FIRED |
+| m6 | huddle.functions.ts | `!resume` gate back on block A | block A runs on chunk continuations | FIRED |
+| m7 | stream-context.ts | live row state ignored | live row state overrides the snapshot | FIRED |
+| m8 | huddle.functions.ts | directive drops "ok"/"great" | directive says a short ok/great IS a confirmation | FIRED |
+All 8 restored to HEAD (mutate.sh asserted); `git status` clean after.
+
+## NEEDS OWNER 👍 (NOT built -- each changes existing behaviour or adds a new write)
+| Today | Becomes | Why | Impact on you | Reversible? |
+|---|---|---|---|---|
+| System/process notices and reminder fire-echoes ("⏰ …", `rem-` ids) are DROPPED from what the agent reads, on purpose (de-noise: reminder-heavy threads pushed real dialogue out of the 14-message window) | Include them as one compact line each (or one rolled-up line), outside the 14-message cap | Owner listed "system/process notices" and "reminder notices" among items the agent should see | Agent can say "your 3pm reminder fired"; risk of the old dilution if not capped | Yes, one filter |
+| Widget/card summaries are NOT written to RAG memory (only the user's message is, per turn) | Also write the summary as a memory chunk | Would let a DIFFERENT huddle recall "you were shown priorities X, Y" | Memory fills with point-in-time snapshots that go stale (priorities change); could out-rank fresh facts | Yes, but rows written meanwhile need cleanup |
+| A typed "ok" now relies on the agent calling `confirm_task_intent`; if the model skips the tool the task stays 'asked' (fails closed) | Optionally force `tool_choice` to confirm_task_intent when a pending confirm exists and the reply is short | Belt-and-braces if live testing shows the model sometimes just says "great!" without the call | More reliable confirms; reintroduces a short-reply heuristic (only to pick the tool, never to write) | Yes |
+| The confirm card's "Handled" badge does not survive a reload (client-only `resolved`), so after a reload the summary says "buttons still open" for a card already tapped | Persist the resolution, or derive it from the task's confirm_status at send time | So the agent's view of an old card is right after a reload | Accurate stream context across reloads | Yes |
+
+## Known limits (observations, not built)
+- Group effect: group huddles share the HuddleView history map, so group agents ALSO see summaries of
+  widgets/cards in the group thread. Router does not read `context`.
+- Voice 1:1 calls and ceremonies build their own history (MeetingBar `buildCeremonyHistory`, `history: []`
+  elsewhere); not changed.
+- Live verification not done (branch only; not merged/deployed per brief).
