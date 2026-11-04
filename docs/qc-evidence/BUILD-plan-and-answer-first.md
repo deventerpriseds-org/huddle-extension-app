@@ -60,3 +60,30 @@ Branch: `claude_plan-and-answer-first` off origin/main `32f50e4`. Not merged, no
   the meta-task guard still present).
 - Note: `find_open_slots` named in PLANNING_SYSTEM_HINT ("if you have it") is NOT a Huddle tool in src; it is
   conditional wording, so it is left as is and not asserted by P12.
+
+## Step 4 — mutation proofs (`mutate.sh`, test cmd `bun scripts/plan-and-answer-first.test.ts`)
+
+| # | file | defect reinstated | named test | outcome |
+|---|---|---|---|---|
+| M1 | tasks/tools.ts | old "work on or focus on — a list" trigger back in FOCUS_SYSTEM_HINT | P4 | FIRED, restored, tree clean |
+| M2 | lane-handoff.ts | outOfLaneSceneLine returns the group line for a 1:1 | A3 | FIRED, restored, tree clean |
+| M3 | huddle.functions.ts | Lovable backend drops PLANNING_SYSTEM_HINT | P13 | FIRED, restored, tree clean |
+| M4 | lane-handoff.ts | "Do NOT answer it yourself" back in the 1:1 directive | A7 | FIRED, restored, tree clean |
+| M5 | tasks/tools.ts | focus_on description "whenever the user lists…" trigger back | P5 | FIRED, restored, tree clean |
+| M6 | tasks/tools.ts | planning hint says start them with focus_on | P10 | FIRED, restored, tree clean |
+| M7 | lane-handoff.ts | 1:1 directive says @mention the owner | A10 | FIRED, restored, tree clean |
+
+## Step 5 — live harness (written, NOT run)
+
+- NEW `.claude/skills/test-agent-serverfn/scripts/qa-plan-and-answer-first.mjs` (durable enqueue + poll, same
+  transport as durable-harness.mjs). `journey:{enabled:false}` on every agent; every message `Test-` + run MARK.
+  `node --check` OK. Reads `result.toolUses` — focus_on stays OFFERED with journey off and its attempt is
+  recorded as `focus_on -- journey disabled` (huddle.functions.ts ~4447), so "was focus_on called?" is
+  observable with no board write.
+- Cases: 1 plan → no focus_on, >=3 `time · item · note` lines, <=900 chars; 2 explicit start → focus_on;
+  3 priority-check reply (check message seeded in history) → focus_on; 4 1:1 Roth-vs-traditional to Iris →
+  answered + names Finn + no @; 5 1:1 budget model → hands off to Finn by name, short; 6 1:1 groom → Terry,
+  no groom_backlog by Iris; 7 group → Finn replies or @finn (unchanged).
+- Prints marker cleanup SQL for chat.pending_turns (`id`, `payload`) and public.rag_chunks (`text`) — column
+  names read from turns.server.ts / rag/azure-pg.server.ts. Server-fn ids default to durable-harness's; refresh
+  from the deployed build if they 404.
