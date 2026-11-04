@@ -10,7 +10,8 @@
 // by the user's confirmation (the mode hint explicitly tells the agent to propose the other mode if this
 // one is wrong). Data-driven off the task's title verb + category + tags — no per-task hardcoding.
 
-//   - REMIND  — the user EXPLICITLY asked to be reminded ("Remind me to renew the passport"). Only then.
+//   - REMIND  — the user EXPLICITLY asked to be reminded ("Remind me to renew the passport"), or has to GO
+//               somewhere ("Go to church", "Go to the mall Saturday") — an alarm. Never for research.
 //
 // HISTORY (superseded 2026-11-04). REMIND used to be the mode for "the agent can complete nothing here",
 // keyed off a `reminder` tag grooming added "when in doubt" and kept forever. Measured on the live queue
@@ -39,6 +40,18 @@ const EXPLICIT_REMINDER =
   /^\s*(remind\s+me\b|reminder\s*[:\-–—]|set\s+(a|an)\s+(reminder|alarm)\b)|\bremind\s+me\s+(to|about|of)\b/i;
 export function asksForReminder(title: string | null | undefined): boolean {
   return EXPLICIT_REMINDER.test(title ?? "");
+}
+
+/**
+ * Somewhere the user has to GO ("Go to church", "Go to the mall Saturday", "Attend the open house",
+ * "Pick up the dry cleaning"). The owner, 2026-11-04: "another instance where suggesting to remind me
+ * with an alarm is okay is when i say i need to go somewhere, like church or the mall on saturday, but
+ * still not research etc." Title-initial only, so "Research mall hours" stays research.
+ */
+const GOING_SOMEWHERE = /^\s*(go|head|attend|visit|drive|travel|fly|pick up|drop off)\b/i;
+/** An alarm is the right proposal: the user asked to be reminded, or has to be somewhere. Never for research. */
+export function alarmFits(title: string | null | undefined): boolean {
+  return asksForReminder(title) || GOING_SOMEWHERE.test(title ?? "");
 }
 // Deliverable verbs an agent can produce for the user to consume → produce.
 const PRODUCE_VERBS =
@@ -69,7 +82,7 @@ export function classifyTaskMode(task: {
   // An explicit "remind me" in the task's own words outranks every verb heuristic. The `reminder` TAG no
   // longer decides anything here: a tag grooming added under the old "when in doubt" rule must not keep a
   // research task in reminder-only mode until the next grooming pass strips it.
-  if (asksForReminder(title)) return "remind";
+  if (alarmFits(title)) return "remind";
 
   // Verb in the title is the strongest signal, in priority order.
   if (COMMS_VERBS.test(title)) return "assist";
@@ -99,11 +112,13 @@ export function modeProposalHint(mode: TaskMode): string {
     `result you have no source for.`;
   if (mode === "remind") {
     return (
-      `MODE — REMIND: the user explicitly asked to be reminded about this. Propose WHEN, with a specific ` +
-      `day and time you suggest (pick a sensible one from the task and what you know of their week — do ` +
-      `not ask an open "when works?"). The Definition of Done is the reminder itself: "a reminder is set ` +
-      `for Saturday 10am." If there is legwork you can finish that makes the moment easier (the exact ` +
-      `link, the store hours, the price, the form), include it and say you'll put it on the card. Do NOT ` +
+      `MODE — REMIND: the user explicitly asked to be reminded about this, or it is somewhere they need ` +
+      `to GO (church, the mall, an appointment). Propose an ALARM with a specific day and time you ` +
+      `suggest — for a place, early enough before they need to leave — picked from the task and what you ` +
+      `know of their week (do not ask an open "when works?"). The Definition of Done is the alarm itself: ` +
+      `"an alarm is set for Saturday 10am." If there is legwork you can finish that makes the moment ` +
+      `easier (opening hours, the address, travel time, the exact link, the price), include it and say ` +
+      `you'll put it on the card. Do NOT ` +
       `invent a deliverable, and do NOT promise to "verify", "confirm", "prepare" or "reconstruct" ` +
       `anything that would require information they have not given you.\n` +
       finishIt
