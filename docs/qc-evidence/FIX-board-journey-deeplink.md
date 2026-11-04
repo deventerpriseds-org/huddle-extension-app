@@ -39,4 +39,30 @@ EVIDENCE:      this file; scripts/board-journey-link.test.ts (`npm run test:jour
 <parameter name="command">cd /tmp/claude-0/-home-user/f93a6466-3dfd-5e65-a8de-e415ffea7464/scratchpad/deeplink/huddle; ls src/features/huddle/lib/journey/; git add docs/qc-evidence/FIX-board-journey-deeplink.md && git commit -qm "docs: evidence file for board journey deep link (findings)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01JSjgqm4C4dKpPB28gwWi2Y" && git push -q -u origin claude_board-journey-deeplink 2>&1 | tail -3; git log --oneline -1
+Claude-Session: https://claude.ai/code/session_01JSjgqm4C4dKpPB28gwWi2Y" && git push -q -u origin claude_board-journey-deeplink 2>&1 | tail -3; git log --oneline -1- 2026-10-29 `930401e` findings pushed. Implementation written; session then killed by a container restart
+  before it was committed. The scratch clone survived with the work intact.
+- 2026-11-04 `7ecf0e9` implementation committed + pushed: `journey-links.ts`, `BoardCard` link,
+  `scripts/board-journey-link.test.ts`, `npm run test:journey-link`.
+- 2026-11-04 `c0c8d75` merged `origin/main` (`18778f6`, #130) into the branch — clean merge, no conflicts.
+- On the merged tree: `npm run test:journey-link` 23/23 PASS; `npm run test:board-delete` ALL PASS (same
+  file); `npx tsc --noEmit -p .` exit 0, 0 errors (after `npm ci`).
+
+## 4. Mutations (`mutate.sh`, anchors from files, test cmd `bun scripts/board-journey-link.test.ts`)
+
+| # | defect reinstated | file | named test | outcome |
+|---|---|---|---|---|
+| M1 | builder accepts an empty / non-http base (`if (!id) return null;`) | journey-links.ts | `no link when the base is empty (not configured)` | **FIRED** |
+| M2 | card ignores the configured base (hardcoded host) | BoardView.tsx | `card href is built from the configured base + THIS task's id` | **FIRED** |
+| M3 | link's `onClick` stopPropagation removed | BoardView.tsx | `click does not reach the card` | **FIRED** |
+| M4 | link rendered unconditionally (`{true && (`) | BoardView.tsx | `the link renders only when there is an href` | **FIRED** |
+| M5 | empty override falls back to default instead of switching off | journey-links.ts | `override set to empty -> links OFF` | **FIRED** |
+
+All five restored to HEAD and the named test passes again on the restored tree. A first pass passed the
+pattern as `FAIL  <name>`; mutate.sh matches the bare NAME, so it reported "nothing proven" for all five
+(not INERT) — re-run with bare names, results above.
+
+## 5. Not verified
+
+- Not seen in a real browser or in the Android Huddle app. The Android behaviour (link handed to the OS
+  via `ACTION_VIEW`) is read from `android-bridge-template` source, not observed. Status: implemented,
+  mechanism verified locally, NOT confirmed live.
