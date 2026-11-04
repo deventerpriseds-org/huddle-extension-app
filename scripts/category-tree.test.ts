@@ -21,9 +21,12 @@ import {
   buildCategoryTaskTree,
   buildPrioritiesBand,
   buildPrioritiesTree,
+  categoryLabel,
   classifyTopicFailure,
+  displayCategory,
   findTopicMappings,
   mergeTopicTree,
+  orderByContent,
   UNCATEGORISED_CATEGORY,
   withKnownCategories,
   type TopicNode,
@@ -427,9 +430,14 @@ const allTasks = (roots: TopicNode[]): string[] => {
   // Degradation: journey's tool not deployed / timed out → exactly the category-only tree.
   const rows = [row({ id: "d1", category: "CAREER" }), row({ id: "d2", category: "LIFE" })];
   const shape = (ns: TopicNode[]) => JSON.stringify(ns);
+  // The reference is the category-only tree AS PRODUCTION BUILDS IT (widgets.server.ts, the no-topics
+  // branch of buildPrioritiesTree): orderByContent(withKnownCategories(...)). It used to omit
+  // orderByContent and passed only because no EMPTY known row sat between LIFE and CAREER; the JOB row
+  // (2026-11-04) sits exactly there, so the bare reference stopped being the real category-only tree.
+  const categoryOnly = () => orderByContent(withKnownCategories(buildCategoryTaskTree(rows, TZ, NOW)));
   check("SUB-CATEGORIES: with no topic payload the tree is IDENTICAL to the category-only tree",
-    shape(buildPrioritiesTree(rows, TZ, NOW, undefined)) === shape(withKnownCategories(buildCategoryTaskTree(rows, TZ, NOW))) &&
-      shape(buildPrioritiesTree(rows, TZ, NOW, { topics: [], mappings: [] })) === shape(withKnownCategories(buildCategoryTaskTree(rows, TZ, NOW))),
+    shape(buildPrioritiesTree(rows, TZ, NOW, undefined)) === shape(categoryOnly()) &&
+      shape(buildPrioritiesTree(rows, TZ, NOW, { topics: [], mappings: [] })) === shape(categoryOnly()),
     "a missing journey tool must never cost the owner his categories");
 }
 
@@ -504,8 +512,10 @@ const allTasks = (roots: TopicNode[]): string[] => {
   const order = tree.map((n) => n.categoryAffinity).join(",");
   // Order superseded 2026-10-15 by the owner: "anything with items should be at the top". Career is
   // the only category with a task here, so it leads; the four empty ones keep the phone's order below.
-  check("FAMILY: with topics, all five known categories render — those with tasks first, then the phone's order",
-    order === "CAREER,LIFE,VENTURES,EDUCATION,FAMILY", order);
+  // JOB (2026-11-04) is a sixth known category, slotted directly before CAREER; empty here, so it
+  // sits among the empty rows in known order (LIFE, JOB, ...).
+  check("FAMILY: with topics, all six known categories render — those with tasks first, then the known order",
+    order === "CAREER,LIFE,JOB,VENTURES,EDUCATION,FAMILY", order);
   const fam = tree.find((n) => n.categoryAffinity === "FAMILY")!;
   check("FAMILY: an empty category is a real row with a BLANK count and nothing under it",
     !!fam && fam.name === "Family" && fam.count === null && fam.children.length === 0 && fam.tasks.length === 0,
@@ -517,7 +527,7 @@ const allTasks = (roots: TopicNode[]): string[] => {
     famRows.length === 1 && famRows[0].tasks.map((t) => t.id).join(",") === "f2",
     `${famRows.length} Family row(s), tasks=[${famRows.flatMap((n) => n.tasks.map((t) => t.id))}]`);
   check("FAMILY: the fill only ADDS — a dynamic category is kept, and Uncategorised is last of the rows WITH tasks",
-    deg.map((n) => n.categoryAffinity).join(",") === "FAMILY,SIDE_HUSTLE,UNCATEGORISED,LIFE,CAREER,VENTURES,EDUCATION",
+    deg.map((n) => n.categoryAffinity).join(",") === "FAMILY,SIDE_HUSTLE,UNCATEGORISED,LIFE,JOB,CAREER,VENTURES,EDUCATION",
     deg.map((n) => n.categoryAffinity).join(","));
 }
 
@@ -550,6 +560,29 @@ const allTasks = (roots: TopicNode[]): string[] => {
     names.endsWith(",New empty,Old empty,No-date empty"), names);
   check("ORDER: a category with tasks sorts above every empty category",
     tree[0].categoryAffinity === "CAREER", tree.map((n) => n.categoryAffinity).join(","));
+}
+
+{
+  // JOB (2026-11-04, owner ruling): its own known category labelled "Job", fixed directly before
+  // CAREER — never folded into Career, never appended as a dynamic bucket (AC-F4).
+  check("JOB: displayCategory('JOB') = 'JOB' and categoryLabel('JOB') = 'Job'",
+    displayCategory("JOB") === "JOB" && displayCategory("job") === "JOB" && categoryLabel("JOB") === "Job",
+    `${displayCategory("JOB")} / ${categoryLabel("JOB")}`);
+  const tree = buildPrioritiesTree([row({ id: "j1", category: "JOB" }), row({ id: "c1", category: "CAREER" }),
+    row({ id: "l1", category: "LIFE" }), row({ id: "v1", category: "VENTURES" })], TZ, NOW, undefined);
+  const order = tree.map((n) => n.categoryAffinity).join(",");
+  check("JOB: with tasks, Job sits directly before Career in the fixed order (not after the known ones)",
+    order === "LIFE,JOB,CAREER,VENTURES,EDUCATION,FAMILY", order);
+  const job = tree.find((n) => n.categoryAffinity === "JOB")!;
+  const career = tree.find((n) => n.categoryAffinity === "CAREER")!;
+  check("JOB: JOB tasks render under 'Job' only and CAREER tasks under 'Career' only",
+    job.name === "Job" && job.tasks.map((t) => t.id).join(",") === "j1" &&
+      career.name === "Career" && career.tasks.map((t) => t.id).join(",") === "c1",
+    `Job=[${job.tasks.map((t) => t.id)}] Career=[${career.tasks.map((t) => t.id)}]`);
+  check("JOB: a dynamic category still sorts AFTER every known one, JOB included",
+    buildPrioritiesTree([row({ id: "s1", category: "SIDE_HUSTLE" }), row({ id: "j2", category: "JOB" })], TZ, NOW, undefined)
+      .map((n) => n.categoryAffinity).slice(0, 2).join(",") === "JOB,SIDE_HUSTLE",
+    "JOB has a fixed slot; SIDE_HUSTLE is dynamic");
 }
 
 console.log(`\n==================== ${pass} passed, ${fail} failed ====================`);

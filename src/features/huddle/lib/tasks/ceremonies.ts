@@ -21,6 +21,8 @@ export type CeremonyType = "standup" | "retro" | "planning" | "review";
 const CATEGORY_OWNER: Record<string, AgentId> = {
   VENTURES: "sam-trent",
   CAREER: "cole-blake",
+  // JOB (2026-11-04, owner ruling) = work for the owner's employer; Cole owns it in standups too.
+  JOB: "cole-blake",
   PROF_EDUCATION: "elle-rowan",
   EDUCATION: "elle-rowan",
   PRODUCT: "tess-sutton",
