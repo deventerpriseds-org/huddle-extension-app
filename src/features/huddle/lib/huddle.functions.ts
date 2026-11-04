@@ -3710,6 +3710,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
         const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
+        // ADDITIVE: list / cancel / move the owner's existing reminders and alarms (same store).
+        const { LIST_REMINDERS_TOOL, CANCEL_REMINDER_TOOL, MOVE_REMINDER_TOOL } = await import(
+          "./tasks/reminders"
+        );
         // Direction 1 of the cross-app bridge: READ the owner's live Nexus coursework. Empty array
         // when Nexus is unconfigured, so an unconfigured environment shows the model no tool rather
         // than one that exists and fails.
@@ -3741,6 +3745,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           ASK_CLARIFYING_QUESTION_TOOL,
           RESOLVE_CLARIFYING_QUESTION_TOOL,
           SCHEDULE_REMINDER_TOOL,
+          LIST_REMINDERS_TOOL,
+          CANCEL_REMINDER_TOOL,
+          MOVE_REMINDER_TOOL,
           PRIORITIZE_TOOL,
           CHECKLIST_TOOL,
           // The two in-chat journey widgets. Ungated, exactly like CHECKLIST_TOOL above: whichever
@@ -4389,6 +4396,23 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               ok ? "reminder scheduled" : "reminder · failed",
               ok,
             );
+            return out;
+          }
+          // ADDITIVE reminder management. list is read-only (no ledger); cancel/move pass claimAction
+          // so the dispatcher claims `<tool>:<reminder id>` once the target is resolved — two agents in
+          // one group turn cannot both cancel/move the same reminder.
+          if (c.name === "list_reminders" || c.name === "cancel_reminder" || c.name === "move_reminder") {
+            const rem = await import("./tasks/reminders");
+            const a = c.arguments as Record<string, unknown>;
+            const out =
+              c.name === "list_reminders"
+                ? await rem.dispatchListReminders(data.caller, a, data.timeZone)
+                : c.name === "cancel_reminder"
+                  ? await rem.dispatchCancelReminder(data.caller, a, data.timeZone, { claim: claimAction })
+                  : await rem.dispatchMoveReminder(data.caller, a, data.timeZone, { claim: claimAction });
+            const parsed = JSON.parse(out) as { error?: string; ok?: boolean };
+            const ok = !parsed.error || parsed.error === "ambiguous" || parsed.error === "no_match";
+            recordToolUse(winner.id, c.name, parsed.error ? `${c.name} · ${parsed.error}` : c.name, ok);
             return out;
           }
           if (c.name === "build_checklist") {
@@ -5899,6 +5923,66 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               );
               return out;
             },
+          });
+        }
+
+        // ADDITIVE reminder management (mirrors the OpenAI path): list is read-only; cancel/move pass
+        // claimAction so the per-turn ledger owns each reminder id once it is resolved.
+        {
+          const rem = await import("./tasks/reminders");
+          const selector = {
+            reminder_id: z.string().optional(),
+            about: z.string().optional(),
+            currently_at: z.string().optional(),
+            on_date: z.string().optional(),
+            kind: z.enum(["reminder", "alarm"]).optional(),
+          };
+          const record = (name: string, out: string) => {
+            const parsed = JSON.parse(out) as { error?: string };
+            const ok = !parsed.error || parsed.error === "ambiguous" || parsed.error === "no_match";
+            recordToolUse(winner.id, name, parsed.error ? `${name} · ${parsed.error}` : name, ok);
+            return out;
+          };
+          lovableTools.list_reminders = tool({
+            description: rem.LIST_REMINDERS_TOOL.description,
+            inputSchema: z.object({
+              about: z.string().optional(),
+              kind: z.enum(["reminder", "alarm"]).optional(),
+              limit: z.number().optional(),
+            }),
+            execute: async (args) =>
+              record(
+                "list_reminders",
+                await rem.dispatchListReminders(data.caller, args as Record<string, unknown>, data.timeZone),
+              ),
+          });
+          lovableTools.cancel_reminder = tool({
+            description: rem.CANCEL_REMINDER_TOOL.description,
+            inputSchema: z.object(selector),
+            execute: async (args) =>
+              record(
+                "cancel_reminder",
+                await rem.dispatchCancelReminder(data.caller, args as Record<string, unknown>, data.timeZone, {
+                  claim: claimAction,
+                }),
+              ),
+          });
+          lovableTools.move_reminder = tool({
+            description: rem.MOVE_REMINDER_TOOL.description,
+            inputSchema: z.object({
+              ...selector,
+              to_time: z.string().optional(),
+              to_date: z.string().optional(),
+              shift_minutes: z.number().optional(),
+              delay_minutes: z.number().optional(),
+            }),
+            execute: async (args) =>
+              record(
+                "move_reminder",
+                await rem.dispatchMoveReminder(data.caller, args as Record<string, unknown>, data.timeZone, {
+                  claim: claimAction,
+                }),
+              ),
           });
         }
 

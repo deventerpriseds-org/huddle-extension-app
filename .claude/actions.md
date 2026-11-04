@@ -4891,3 +4891,9 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [x] (implemented on branch, offline-verified) B: scheduled view returns every item by default; `total`/`truncated` say when a list was cut.
 - [x] Offline: 23/0, tsc 0, 4 regression suites green, 7/7 mutations FIRED.
 - [ ] Merge + deploy (caller), then owner confirms live ("anything blocking me?" names the blocked task; "what's on today" lists all items in ET). NOT yet confirmed.
+
+## ACT:reminder-tools — agents can LIST, CANCEL and MOVE the owner's reminders/alarms (2026-11-03/04)
+- [x] Additive tools `list_reminders` / `cancel_reminder` / `move_reminder` over `chat.reminders` (owner-scoped, owner time zone, pending-only mutations, ambiguity → candidates). Wired: OpenAI + Lovable text paths (claimAction on mutations) + voice NATIVE. Branch `claude_reminder-tools` commit cc3e742.
+- [x] Offline suite `npm run test:reminder-tools` (scripts/reminder-tools.test.ts). Evidence: docs/qc-evidence/BUILD-reminder-tools.md.
+- [x] Mutation proofs: 12/12 FIRED (mutate.sh). Owner 👍 rows written in the build log.
+- [ ] Owner 👍 on the NEEDS OWNER rows, then PR/merge/deploy, then live check (NOT done from this lane; branch only).
