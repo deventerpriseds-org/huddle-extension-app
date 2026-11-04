@@ -1,6 +1,13 @@
 # Action Tracker — huddle-extension-app
 Last updated: 2026-10-27
 
+## ACT:context-and-confirm — confirm after the agent reads; agent sees widgets/cards in the 1:1 stream (2026-11-04)
+Status: 🔨 implemented on `claude_context-and-confirm`, offline-verified, NOT merged / deployed / owner-confirmed.
+Evidence: `docs/qc-evidence/BUILD-context-and-confirm.md`; `npm run test:context-and-confirm` (45 PASS);
+tsc clean; priority-check 43/0, override-gate ALL PASS, turn-identity ALL PASS, cross-app 92/0.
+Open owner decisions (NEEDS OWNER 👍 rows in the evidence file): system/reminder notices in the transcript;
+writing widget summaries into RAG memory.
+
 ## ACT:pr-triage-2026-09-21 — 4 open PRs, read-evidence triage
 
 **Asked (2026-09-21, owner):** "go ahead with the triage pass" (cross-repo request also covering
