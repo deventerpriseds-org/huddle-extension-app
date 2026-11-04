@@ -4858,3 +4858,8 @@ Owner: *"Go on 3 and 4, I don't understand why voice can't trigger the same jobs
 ## ACT:duplicate-cleanup — remove existing duplicate tasks (owner "go on 3", 2026-10-28)
 - [x] Read journey `public.tasks` (canonical): 4 exact-duplicate groups + near-duplicates via pg_trgm ≥0.55. Presented grouped with a recommended keep per group.
 - [ ] Owner approves rows → DELETE from journey public.tasks only (mirror follows via trigger) → read back 0 remaining.
+
+## ACT:reminder-tools — agents can LIST, CANCEL and MOVE the owner's reminders/alarms (2026-11-03/04)
+- [x] Additive tools `list_reminders` / `cancel_reminder` / `move_reminder` over `chat.reminders` (owner-scoped, owner time zone, pending-only mutations, ambiguity → candidates). Wired: OpenAI + Lovable text paths (claimAction on mutations) + voice NATIVE. Branch `claude_reminder-tools` commit cc3e742.
+- [x] Offline suite `npm run test:reminder-tools` (scripts/reminder-tools.test.ts). Evidence: docs/qc-evidence/BUILD-reminder-tools.md.
+- [ ] Mutation proofs, merge latest main, owner 👍 rows in the build log, then PR/merge (NOT done from this lane; branch only).
