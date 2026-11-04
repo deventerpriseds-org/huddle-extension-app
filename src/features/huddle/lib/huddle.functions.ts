@@ -71,6 +71,9 @@ import {
   stripTeammateDeferral,
   type TurnIntent,
 } from "./capabilities";
+// Pure (no server imports) -- F6 board-claim honesty, composed into presentedReplies; boardFactFrom records
+// which task a journey board call touched.
+import { presentBoardClaimsTurn, boardFactFrom } from "./tasks/board-claims";
 // Surface-independent half of task creation — the capability meta-task guard, cross-turn dedup,
 // journey date normalization and the honest outcome note. Shared with the VOICE executor
 // (voice/realtime-tools.server.ts) so the two surfaces cannot drift; see create-task-core.ts.
@@ -2242,7 +2245,31 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // where a reply leaves the server -- the 1:1 stream, each chunk save, the final result, the prior shown to
   // later agents, memory -- goes through this, so a turn with a failed/unknown write shows ONLY the
   // code-built status (every reply, every chunk) and a clean write always shows the code-built saved list.
-  const presentedReplies = (list: Reply[] = replies): Reply[] => presentNexusWriteTurn(list, turnNexusWriteUses) as Reply[];
+  // F6 (Lane A, AC-handoff-confirm-flow.md): the SAME presenter now also withholds a board-action claim no
+  // PERFORMED write backs (board-claims.ts presentBoardClaimsTurn) -- an extension of this one turn-level
+  // honesty step, not a second filter. It reads the turn's tool calls (earlier chunks included, via the
+  // resume state) PLUS every running agent's own per-agent buffer (`inFlightToolUses`, registered by
+  // runAgentTurn), so the 1:1 stream does not withhold a true claim before that agent's calls are merged.
+  const inFlightToolUses: Array<readonly import("../data/seed").ToolUseEvent[]> = [];
+  const turnToolUsesForClaims = (): import("../data/seed").ToolUseEvent[] => {
+    if (!inFlightToolUses.length) return toolUses;
+    const byId = new Map(toolUses.map((u) => [u.id, u] as const));
+    for (const buf of inFlightToolUses) for (const u of buf) if (!byId.has(u.id)) byId.set(u.id, u);
+    return [...byId.values()];
+  };
+  const presentedReplies = (list: Reply[] = replies): Reply[] =>
+    presentBoardClaimsTurn(
+      presentNexusWriteTurn(list, turnNexusWriteUses) as Reply[],
+      turnToolUsesForClaims(),
+      {
+        internal: !!data.internal,
+        nameOf: (id) => AGENT_BY_ID[id as AgentId]?.name,
+        statusOf: (title) => {
+          const key = title.trim().toLowerCase();
+          return journeyTaskUpdates.find((t) => String(t.title ?? "").trim().toLowerCase() === key)?.status;
+        },
+      },
+    );
 
   // Lightweight handoff contract for the ad-hoc mention-chain: when an agent @mentions a teammate
   // (the "mention IS the handoff"), we re-queue that teammate — but today they receive no structured
@@ -2308,6 +2335,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // the shared arrays in queue order after the wave settles (append-only).
     const fallbacks: FallbackEvent[] = [];
     const toolUses: import("../data/seed").ToolUseEvent[] = [];
+    // F6: visible to the turn-level board-claim presenter while this agent runs (deduped by id after merge).
+    inFlightToolUses.push(toolUses);
     const journeyTaskUpdates: import("./journey/types").JourneyTask[] = [];
     const suggestedTasks: SuggestedTaskDraft[] = [];
     const reasoningSummaries: string[] = [];
@@ -2340,6 +2369,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       ok: boolean,
       detail?: string,
       args?: unknown,
+      // F6: the task a journey board call touched (board-claims.ts boardFactFrom). Optional, additive.
+      board?: import("../data/seed").ToolUseEvent["board"],
     ) => {
       toolUses.push({
         id: `tu-${Date.now()}-${winner.id}-${tuSeq++}`,
@@ -2349,6 +2380,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         summary,
         ok,
         detail,
+        ...(board ? { board } : {}),
       });
       // Durably record this tool call against the ceremony run (no-op outside a ceremony) — the real
       // error + the args are what make a failure debuggable.
@@ -4935,6 +4967,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   c.name,
                   `deferred — task assigned to ${defer.assignedTo}, not ${winner.id}`,
                   true,
+                  undefined,
+                  undefined,
+                  boardFactFrom(c.name, c.arguments),
                 );
                 return JSON.stringify(defer);
               }
@@ -4960,6 +4995,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 !!r.ok,
                 r.ok ? undefined : String(r.error ?? r.output ?? "unknown"),
                 c.arguments,
+                boardFactFrom(c.name, dedup.args, r.tasks),
               );
               if (!r.ok) {
                 const ev = recordFallback(
@@ -6599,6 +6635,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                         def.name,
                         `deferred — task assigned to ${defer.assignedTo}, not ${winner.id}`,
                         true,
+                        undefined,
+                        undefined,
+                        boardFactFrom(def.name, args),
                       );
                       return JSON.stringify(defer);
                     }
@@ -6623,6 +6662,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                       r.ok ? `journey-voice · ok` : `journey-voice · failed`,
                       !!r.ok,
                       r.ok ? undefined : r.error,
+                      undefined,
+                      boardFactFrom(def.name, dedup.args, r.tasks),
                     );
                     if (!r.ok) {
                       const ev = recordFallback(

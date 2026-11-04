@@ -159,7 +159,11 @@ t("F2-30 configured flag", nexusWriteConfigured(), true);
 
 console.log("=== AC-F2-31/32 — all four registration points, in the pool for every agent ===");
 const textSrc = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
-const PRESENT_RE = /const presentedReplies = \(list: Reply\[\] = replies\): Reply\[\] => presentNexusWriteTurn\(list, turnNexusWriteUses\) as Reply\[\];/;
+// Lane A F6 (docs/qc-evidence/BUILD-handoff-lane-a.md) EXTENDED this same presenter with the board-claim step
+// (presentBoardClaimsTurn over the Nexus result), so the pin accepts that composition; the Nexus presenter must
+// still be the inner step of presentedReplies, applied to the list with every Nexus write of the turn.
+const PRESENT_RE =
+  /const presentedReplies = \(list: Reply\[\] = replies\): Reply\[\] =>\s*presentBoardClaimsTurn\(\s*presentNexusWriteTurn\(list, turnNexusWriteUses\) as Reply\[\],/;
 const voiceSrc = readFileSync("src/features/huddle/lib/voice/realtime-tools.server.ts", "utf8");
 const writeSrc = readFileSync("src/features/huddle/lib/nexus/nexus-write.server.ts", "utf8");
 const readSrc = readFileSync("src/features/huddle/lib/nexus/nexus.server.ts", "utf8");

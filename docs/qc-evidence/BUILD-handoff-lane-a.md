@@ -112,4 +112,50 @@ the first attempt's.
 
 Group 2 test run: `test:handoff-lane-a` 65/0; `tsc` rc=0; every suite in the group 1 list re-run, all rc=0.
 
+## F6: never claim a board action no performed write backs (2026-11-04)
+
+Code (extends the ONE turn-level honesty presenter; no per-agent filter):
+- `tasks/board-claims.ts`: `detectBoardClaim` (completed-action claims: marked done / moved|set to a lane /
+  added to the board | created a task / archived|parked / deleted / "I'm proceeding with" | "I've started"),
+  with a subject check (I / I've / we've, or a subjectless start like "Marked as done ✅"), a modal/offer prefix
+  exclusion ("I'll", "want me to", "let me", "I can"), questions excluded, and double-quoted user text stripped.
+  `presentBoardClaims` replaces each unbacked claim sentence with a code-built line; `presentBoardClaimsTurn`
+  maps it over every reply. "Performed" is the existing predicates (`isPerformedTaskChange` / `isPerformedCreate`
+  / `isPerformedWork`): ok=true deferred, dedup-skipped, suggestion-only (journey off) and failed calls never back
+  a claim (CF-8). Each task NAMED in a claim must be backed by a write on THAT task (F6-12).
+  Corrections: deferred -> "That change wasn't made — X is assigned to <Name>, so it was passed to them";
+  dedup-skipped create -> "X is already on your board — no new card was added"; known DONE -> "X was already
+  done — nothing was changed on the board"; start claim -> "Work on X hasn't started yet"; else "Nothing was
+  changed on the board for X". None of these lines is itself a claim, so the presenter is idempotent.
+- `seed.ts` `ToolUseEvent.board?` (additive, server-only) + `recordToolUse(..., board)`; both journey dispatchers
+  (OpenAI and Lovable, success AND deferral) record `boardFactFrom(tool, args, journeyEcho)`.
+- `huddle.functions.ts` `presentedReplies` = `presentBoardClaimsTurn(presentNexusWriteTurn(list, …), turn tool
+  calls, {internal, nameOf, statusOf})`. Same call sites as before (stream, chunk saves, final result, prior,
+  memory). Tool calls = the merged turn list (earlier chunks via resume) PLUS every running agent's per-agent
+  buffer (`inFlightToolUses`), so the 1:1 stream never withholds a TRUE claim before the agent's calls merge.
+  `statusOf` reads the turn's journey echoes (`journeyTaskUpdates`). Internal turns skip the "started" check.
+
+| AC | Status | Offline evidence |
+|---|---|---|
+| F6-1 | implemented | presenter tests (claim replaced, rest kept) |
+| F6-2 | implemented when the turn knows the task is DONE (journey echo); otherwise "Nothing was changed on the board for X" (still no "I marked") | S-B1 + F6-2 tests |
+| F6-3 | implemented | S-B3, F6-3 |
+| F6-4 | implemented (deferral names the assignee) | S-B4, F6-4 |
+| F6-5 | implemented | S-B11, F6-5 |
+| F6-6 | implemented (failed / no record = not performed) | F6-6 |
+| F6-7, F6-8 | over-match negatives pass untouched | S-B5..S-B10, S-B13 + extra offer/third-party rows |
+| F6-9 | implemented from the turn's work calls (delegate / artifact / web search / a performed move to DOING); internal turns exempt. NOT read from the DB ("X is DOING now"): no DB read on the presenter path | F6-9 test |
+| F6-10 | same call sites; pure; idempotent | idempotency test + wiring assertions |
+| F6-11 | all Nexus BEHAVIOUR checks unchanged and passing; 3 SOURCE pins of the one-line `presentedReplies` definition (nexus-write-tool PRESENT_RE, nexus-write-fix FX-G6, nexus-write-loop2 L2-D3j) widened to the composed form, still requiring `presentNexusWriteTurn(list, turnNexusWriteUses)` as the inner step. Not byte-for-byte for those 3 regexes | nexus-write 115/0, nexus-write-fix 51/0, loop2 185/0, loop3 315/0 |
+| F6-12 | implemented, also within one sentence naming several tasks | S-B15 + two F6-12 tests |
+| S-B1..S-B15 | all rows as expected | spelling-table tests |
+
+Known limits: a claim with no quoted title ("I marked it done") is backed by ANY performed write of its kind in
+the turn (it cannot be tied to a task); the "already done" wording needs a journey echo of the task this turn.
+
+Group 3 test run: `test:handoff-lane-a` 100/0; `tsc` rc=0; group 1 list + nexus-write-fix/loop2/loop3 all rc=0.
+Full sweep of scripts/*.test.*: 78 rc=0; the rest are NOT Lane A: focus F22 (24/1), memory-mode (2/4),
+model-policy (7/8) fail identically on an export of origin/main d5c465e; confirm-reask-db needs a local
+throwaway Postgres (not run); raw-create-dedup (30/0) and autowork-lane-starvation (26/0) pass under `bun test`.
+
 Mutations: see the table at the bottom.

@@ -176,6 +176,10 @@ export interface ToolUseEvent {
   summary: string;
   ok: boolean;
   detail?: string;
+  /** Server-only, additive (Lane A F6): the task a journey board call touched (id, title, status, tags), so
+   *  the turn's board-claim presenter (tasks/board-claims.ts) can tell WHICH task a write backs. Absent on
+   *  non-board tools and older records. The client ignores it. */
+  board?: { taskId?: string; title?: string; status?: string; tags?: string[] };
 }
 
 /** Pure selector for chat tool-use breadcrumbs: the REAL tools a given agent ran on a turn — the turn's

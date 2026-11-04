@@ -306,7 +306,8 @@ const main = async () => {
     t("L2-D3i a tool-level error (no per-item results) is code-built", nexusWriteGuardedReply("Saved it!", [{ tool: N, ok: false, detail: JSON.stringify({ ok: false, error: "network_error" }) }]).includes("• Not saved: the whole write request — Nexus could not be reached"), true);
     // loop 3: was a source check that the per-agent reply assembly calls nexusWriteGuardedReply with teammates'
     // writes. The runtime now presents EVERY reply against EVERY write of the turn.
-    t("L2-D3j the text path presents every reply against every write of the turn (loop 3)", /const presentedReplies = \(list: Reply\[\] = replies\): Reply\[\] => presentNexusWriteTurn\(list, turnNexusWriteUses\) as Reply\[\];/.test(textSrc), true);
+    // Lane A F6 composed the board-claim step around the same Nexus presenter (BUILD-handoff-lane-a.md).
+    t("L2-D3j the text path presents every reply against every write of the turn (loop 3)", /const presentedReplies = \(list: Reply\[\] = replies\): Reply\[\] =>\s*presentBoardClaimsTurn\(\s*presentNexusWriteTurn\(list, turnNexusWriteUses\) as Reply\[\],/.test(textSrc), true);
     // The verifier's own probe inputs, end to end: none of them keeps its original text any more.
     t("L2-D3k none of the verifier's 13 own-writer replies survives verbatim", cases.slice(0, 13).filter(([, reply, mine]) => nexusWriteGuardedReply(reply, mine).includes(reply)).length, 0);
   }

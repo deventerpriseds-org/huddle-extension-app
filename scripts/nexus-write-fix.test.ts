@@ -116,7 +116,8 @@ console.log("=== Teammate honesty (W17) ===");
   t("FX-G5 the suppressed call returns the first call's results", /return JSON\.stringify\(\{ \.\.\.firstOut, already_done_this_turn: true/.test(fn), true);
   // loop 3 D10 (docs/FIX-nexus-write-loop3.md): was "the reply assembly passes teammates' writes" (a per-agent
   // filter). The runtime now presents EVERY reply against EVERY write of the turn, teammates' included.
-  t("FX-G6 every reply is presented against every write of the turn (teammates' included)", /const presentedReplies = \(list: Reply\[\] = replies\): Reply\[\] => presentNexusWriteTurn\(list, turnNexusWriteUses\) as Reply\[\];/.test(fn), true);
+  // Lane A F6 composed the board-claim step around the same Nexus presenter (BUILD-handoff-lane-a.md).
+  t("FX-G6 every reply is presented against every write of the turn (teammates' included)", /const presentedReplies = \(list: Reply\[\] = replies\): Reply\[\] =>\s*presentBoardClaimsTurn\(\s*presentNexusWriteTurn\(list, turnNexusWriteUses\) as Reply\[\],/.test(fn), true);
   t(
     "FX-G7 the claim is keyed on the normalised items, not raw JSON",
     /const claimKey = `\$\{c\.name\}:\$\{nexusWriteMod\.nexusWriteClaimKey\(writeArgs\)\}`;\s*\n\s*if \(!claimAction\(claimKey\)\)/.test(fn),

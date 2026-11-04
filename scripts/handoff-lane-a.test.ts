@@ -14,7 +14,14 @@ import {
   laneHandoffSuppression,
   stripTeammateDeferral,
 } from "../src/features/huddle/lib/capabilities.ts";
-import { agentPerformedWork, type ToolUseLike } from "../src/features/huddle/lib/tasks/board-claims.ts";
+import {
+  agentPerformedWork,
+  boardFactFrom,
+  detectBoardClaim,
+  presentBoardClaims,
+  presentBoardClaimsTurn,
+  type ToolUseLike,
+} from "../src/features/huddle/lib/tasks/board-claims.ts";
 import {
   buildFollowupDirective,
   buildHandoffConfirmRetry,
@@ -312,8 +319,166 @@ describe("F2 wiring in huddle.functions.ts (source assertions)", () => {
     expect(fn).toContain("HANDOFF_CONFIRM_UNAVAILABLE");
     expect(fn).toContain("perAgentFallbacks: [...outcome.perAgentFallbacks, HANDOFF_CONFIRM_UNAVAILABLE]");
   });
-  test("create_huddle_task returns the canonical journey task id (so propose can chain)", () => {
+  test("create_huddle_task returns the canonical journey task id (so propose can chain) [F2]", () => {
     const fn = between("async function createSuggestedTaskFromTool", "async function createBatchTasksFromTool");
     expect(fn).toContain("task_id: (r.tasks ?? [])[0].id");
+  });
+});
+
+// ── F6: never claim a board action no performed write backs ─────────────────────────────────────────
+const E = "ezra-miles";
+const upd = (taskId: string, title: string, status: string, agentId = E, ok = true) => ({
+  ...use(agentId, "update_task", ok ? "journey-voice · ok" : "journey-voice · failed", ok),
+  board: { taskId, title, status },
+});
+const deferredUpd = (taskId: string, status: string) => ({
+  ...use(E, "update_task", `deferred — task assigned to finn-reid, not ${E}`, true),
+  board: { taskId, status },
+});
+const NAME = (id: string) => ({ "finn-reid": "Finn Reid" } as Record<string, string>)[id];
+
+describe("F6 spelling table S-B1..S-B15 (presentBoardClaims)", () => {
+  const ROWS: Array<[string, string, ToolUseLike[], "PASS" | "WITHHOLD", string?]> = [
+    ["S-B1", "I marked 'Order Nike Pegasus Premium' done", [], "WITHHOLD", "already done"],
+    ["S-B2", "I've moved it to review", [], "WITHHOLD"],
+    ["S-B3", "I marked it done", [upd("t1", "Order shoes", "DONE")], "PASS"],
+    ["S-B4", "I've moved it to review", [deferredUpd("t9", "IN_REVIEW")], "WITHHOLD", "passed to them"],
+    ["S-B5", "I'll mark it done", [], "PASS"],
+    ["S-B6", "Want me to move it to review?", [], "PASS"],
+    ["S-B7", "I can add that to your board", [], "PASS"],
+    ["S-B8", "I marked that email as read", [], "PASS"],
+    ["S-B9", "I marked the date in my notes", [], "PASS"],
+    ["S-B10", "I've noted that", [], "PASS"],
+    ["S-B11", "Done — I've added 'Buy milk' to your board", [use(E, "quick_create_task", "skipped duplicate — “Buy milk” (already on the board)")], "WITHHOLD", "already on your board"],
+    ["S-B12", "I'm proceeding with the research", [], "WITHHOLD", "hasn't started"],
+    ["S-B13", 'You asked me to "mark it done", so here\'s what\'s left first', [], "PASS"],
+    ["S-B14", "Marked as done ✅", [], "WITHHOLD"],
+    ["S-B15", "I marked 'Alpha plan' done", [upd("tB", "Beta plan", "DONE")], "WITHHOLD"],
+  ];
+  const statusOf = (t: string) => (t === "Order Nike Pegasus Premium" ? "DONE" : undefined);
+  for (const [id, text, uses, want, mustContain] of ROWS) {
+    test(`${id}: ${JSON.stringify(text)} -> ${want}`, () => {
+      const out = presentBoardClaims(text, uses, { statusOf, nameOf: NAME });
+      if (want === "PASS") expect(out).toBe(text);
+      else {
+        expect(out).not.toBe(text);
+        if (mustContain) expect(out).toContain(mustContain);
+      }
+    });
+  }
+});
+
+describe("F6 ACs", () => {
+  test("AC-F6-1: the claim is replaced by a code-built line; the rest of the reply is kept", () => {
+    const t = "Thanks for the update. I've moved 'Draft budget' to review. Anything else?";
+    const out = presentBoardClaims(t, []);
+    expect(out).toBe("Thanks for the update. Nothing was changed on the board for “Draft budget”. Anything else?");
+  });
+  test("AC-F6-2: an already-DONE task, no write -> says already done, never 'I marked'", () => {
+    const out = presentBoardClaims("I marked 'Test-Order running shoes' done.", [], { statusOf: () => "DONE" });
+    expect(out).toContain("already done");
+    expect(out).not.toContain("I marked");
+  });
+  test("AC-F6-3: a matching performed write leaves the reply untouched", () => {
+    const t = "I marked 'Order shoes' done.";
+    expect(presentBoardClaims(t, [upd("t1", "Order shoes", "DONE")])).toBe(t);
+  });
+  test("AC-F6-4: a deferred status change names the assignee (ok=true is NOT performed)", () => {
+    const out = presentBoardClaims("I've moved it to review.", [deferredUpd("t9", "IN_REVIEW")], { nameOf: NAME });
+    expect(out).toContain("Finn Reid");
+    expect(out).not.toContain("I've moved");
+  });
+  test("AC-F6-5: a dedup-skipped create -> 'already on your board'", () => {
+    const out = presentBoardClaims("I've added it to your board.", [use(E, "create_huddle_task", "an open task with this title already exists — skipped duplicate")]);
+    expect(out).toContain("already on your board");
+  });
+  test("AC-F6-6: a FAILED write does not back the claim; neither does no record (in flight)", () => {
+    expect(presentBoardClaims("I marked it done.", [upd("t1", "X", "DONE", E, false)])).not.toContain("I marked");
+    expect(presentBoardClaims("I marked it done.", [])).not.toContain("I marked");
+  });
+  test("F2-8 / journey off: a suggestion-only create does not back 'added to your board'", () => {
+    const out = presentBoardClaims("I've added 'Budget' to your board.", [use(E, "create_huddle_task", "suggested “Budget” · owner Finn Reid")]);
+    expect(out).not.toContain("I've added");
+  });
+  test("a REAL create backs 'added to your board' (no false refusal)", () => {
+    const t = "Done — I've added 'Budget' to your board.";
+    expect(presentBoardClaims(t, [use(E, "create_huddle_task", "“Budget” → Huddle board + journey · assigned to Finn Reid")])).toBe(t);
+    expect(presentBoardClaims("I created a task for that.", [use(E, "create_huddle_tasks", "created 2/2 → Huddle board + journey")])).toBe(
+      "I created a task for that.",
+    );
+  });
+  test("AC-F6-9: 'started' is backed by real work this turn; internal turns are exempt", () => {
+    expect(presentBoardClaims("I'm proceeding with the research.", [use(E, "delegate_to_specialist", "tasked Researcher: x")])).toBe(
+      "I'm proceeding with the research.",
+    );
+    expect(presentBoardClaims("I've started on it.", [], { internal: true })).toBe("I've started on it.");
+    expect(presentBoardClaims("I've started on it.", [])).toContain("hasn't started");
+  });
+  test("AC-F6-7 more offers/futures: 'I'll set it to Up Next', 'Should I archive it?', 'Let me move it to Doing'", () => {
+    for (const t of ["I'll set it to Up Next.", "Should I archive it?", "Let me move it to Doing.", "I could add it to your board."]) {
+      expect(presentBoardClaims(t, [])).toBe(t);
+    }
+  });
+  test("over-match negatives: someone else's action, past facts about the user", () => {
+    for (const t of ["You marked it done yesterday.", "Finn moved it to review this morning.", "It was archived last week by you."]) {
+      expect(detectBoardClaim(t)).toBe(null);
+    }
+  });
+  test("AC-F6-10: idempotent (presenting twice changes nothing more) and pure", () => {
+    for (const t of ["I marked 'A' done. I've moved it to review.", "Marked as done ✅", "I've added it to your board."]) {
+      const once = presentBoardClaims(t, [deferredUpd("t9", "IN_REVIEW")], { nameOf: NAME });
+      expect(presentBoardClaims(once, [deferredUpd("t9", "IN_REVIEW")], { nameOf: NAME })).toBe(once);
+    }
+  });
+  test("AC-F6-12: claims about A and B, write only on B -> A corrected, B kept", () => {
+    const t = "I marked 'Alpha plan' done. I marked 'Beta plan' done.";
+    const out = presentBoardClaims(t, [upd("tB", "Beta plan", "DONE")]);
+    expect(out).toBe("Nothing was changed on the board for “Alpha plan”. I marked 'Beta plan' done.");
+  });
+  test("AC-F6-12 in one sentence: every named task must be backed on its own", () => {
+    const t = "I've parked 'Gym plan' and set 'Taxes' to Up Next.";
+    const out = presentBoardClaims(t, [upd("tT", "Taxes", "UP_NEXT")]);
+    expect(out).toBe("Nothing was changed on the board for “Gym plan”.");
+    const both = presentBoardClaims(t, [upd("tT", "Taxes", "UP_NEXT"), upd("tG", "Gym plan", "BACKLOG")]);
+    expect(both).toBe(t);
+  });
+  test("turn view: unchanged replies keep their identity; changed ones get a new text", () => {
+    const a = { agentId: E, text: "Hello." };
+    const b = { agentId: E, text: "I marked it done." };
+    const out = presentBoardClaimsTurn([a, b], []);
+    expect(out[0]).toBe(a);
+    expect(out[1].text).not.toContain("I marked");
+  });
+  test("boardFactFrom: id/status from args, title from journey's echo; non-board tools -> undefined", () => {
+    expect(boardFactFrom("update_task", { task_id: "t1", status: "DONE" }, [{ id: "t1", title: "Shoes", status: "DONE" }])).toEqual({
+      taskId: "t1",
+      title: "Shoes",
+      status: "DONE",
+      tags: undefined,
+    });
+    expect(boardFactFrom("tavily_web_search", { q: "x" })).toBe(undefined);
+  });
+});
+
+describe("F6 wiring (source assertions)", () => {
+  test("AC-F6-10: presentedReplies composes the board presenter over the Nexus presenter (one presenter, same call sites)", () => {
+    const fn = between("const presentedReplies = (", "// Lightweight handoff contract");
+    expect(fn).toContain("presentBoardClaimsTurn(");
+    expect(fn).toContain("presentNexusWriteTurn(list, turnNexusWriteUses)");
+    expect(fn).toContain("internal: !!data.internal");
+  });
+  test("the 1:1 stream presents against the streaming agent's own calls too (in-flight buffers)", () => {
+    expect(HF).toContain("inFlightToolUses.push(toolUses);");
+    const fn = between("const presentedReplies = (", "// Lightweight handoff contract");
+    expect(fn).toContain("turnToolUsesForClaims(),");
+    expect(HF).toContain("for (const buf of inFlightToolUses) for (const u of buf) if (!byId.has(u.id)) byId.set(u.id, u);");
+  });
+  test("both journey dispatchers record the board fact (success and deferral)", () => {
+    expect((HF.match(/boardFactFrom\(c\.name, /g) ?? []).length).toBe(2);
+    expect((HF.match(/boardFactFrom\(def\.name, /g) ?? []).length).toBe(2);
+  });
+  test("no exit point bypasses presentedReplies (finalResult, chunk saves)", () => {
+    expect(HF).toContain("replies: presentedReplies(),");
+    expect(HF).toContain("saveTurnChunk(turnId, presentedReplies(), null, true, finalResult())");
   });
 });
