@@ -78,3 +78,14 @@
   (all Android screenshots, last 10-30 12:42Z) must therefore have come from a browser on the phone
   (Chrome), not the APK. If the owner's 11-04 attempt was from the Huddle APK (or the Journey Voice APK,
   same template), that alone explains "stopped working". NOT yet confirmed which surface the owner used.
+
+## Step 7 -- LIVE SWA, desktop Chromium 1000x680 (observation)
+- verify-uat.yml run 41769321748 (job 126375047241), ref claude_attachment-fix @ 9eb7683, checks_file =
+  attachment-checks.mjs. uat-shots commit 5ffab30. **8/8 pass:** button present, enabled, topmost at its
+  centre, click opens the native file chooser, Test-attach-uat.txt uploads to the deployed
+  uploadChatAttachmentFn and shows as a staged chip (artifact art-c6be40d9-fff9-4f5e-872b-5c724d6261b8),
+  deleteArtifactFn http 200, no console errors, no failed requests.
+- Screenshot 01-attachment-staged.png: chip "Test-attach-uat.txt" visible in the composer of Daily huddle.
+- Chip was removed without sending (no turn, no board write).
+- Conclusion (observation): the deployed web app's paperclip -> picker -> upload chain WORKS in a real
+  Chromium browser today. The break is surface-specific.
