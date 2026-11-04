@@ -181,6 +181,15 @@ export async function runApproachGate(opts: {
 
     if (verdict.verdict === "pass") {
       await approveApproach(opts.taskId, opts.email, opts.approach).catch(() => {});
+      // F3 (docs/qc-evidence/BUILD-handoff-lane-b.md, AC-F3-2): a LIVE-confirmed task starts the moment its
+      // approach is approved -- this gate is shared by the OpenAI and Lovable paths, so one hook covers both.
+      // A no-op without the server-written live marker; never awaited into the grade result.
+      try {
+        const { advanceLiveConfirmedTask } = await import("./autowork.server");
+        void advanceLiveConfirmedTask({ taskId: opts.taskId, email: opts.email }).catch(() => {});
+      } catch {
+        /* best-effort accelerator; the cadence pass still promotes it */
+      }
       return {
         gated: true,
         approved: true,

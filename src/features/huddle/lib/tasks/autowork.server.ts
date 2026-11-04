@@ -1079,3 +1079,177 @@ export async function runScheduledAutoWork(
   const remaining = Math.max(0, candidates.length - enqueued);
   return { ok: true, skipped: false, enqueued, promoted, blocked: blockedItems.length, remaining, confirmAsked: 0, runId };
 }
+
+// ================================================================================================================
+// F3 LIVE START (docs/qc-evidence/BUILD-handoff-lane-b.md; spec AC-F3-1..15). A task the owner confirms in a live
+// conversation -- the Confirm button, voice, or the agent recording a typed confirm in a NON-internal turn -- starts
+// NOW: the approach step runs in the same flow, and once the approach is approved THAT task (not "whatever the next
+// pass picks", CF-7) moves to DOING and gets its work turn. Owner Option A: this one task bypasses the per-agent DOING
+// cap and the REVIEW freeze; the background pass above keeps every cap for every other task (it never reads the
+// live marker, and an agent with a live-started DOING task has a full DOING slot as far as the pass is concerned).
+//
+// THE GATE IS NOT LOOSENED. liveStartDecision is FAIL-CLOSED on every input: no live marker -> no start; not
+// confirmed -> no start; approach not approved while the workflow is required -> no start; a requirement read that
+// throws or returns anything but an explicit `false` -> REQUIRED. Nothing here can put a task in DOING or IN_REVIEW
+// that the confirm + approach gate would not let through at the next pass anyway -- only the timing and the
+// per-agent caps differ.
+// ================================================================================================================
+
+export type LiveStartDecision = { start: true } | { start: false; reason: string; needsApproach?: boolean };
+
+/** Pure verdict (unit-tested + mutation-proved): may THIS live-confirmed task move to DOING now? */
+export function liveStartDecision(input: {
+  state: {
+    live_start_at?: string | null;
+    live_started_at?: string | null;
+    confirm_status?: string | null;
+    approach_status?: string | null;
+    clarify_status?: string | null;
+  } | null;
+  task: { status: string | null; tags: string[] | null; assigned_agent: string | null } | null;
+  /** isStructuredWorkflowRequired's verdict: only an explicit `false` counts as not required. */
+  required: boolean | null | undefined;
+  inReminderWindow?: boolean;
+}): LiveStartDecision {
+  const { state, task } = input;
+  if (!state?.live_start_at) return { start: false, reason: "no live confirmation" };
+  if (state.live_started_at) return { start: false, reason: "already started" };
+  if (state.confirm_status !== "confirmed") return { start: false, reason: "not confirmed" };
+  // Unassigned, done, blocked (getOpenAssignedTasks drops blocked rows) -> null task here.
+  if (!task || !task.assigned_agent || !AGENT_BY_ID[task.assigned_agent as AgentId]) {
+    return { start: false, reason: "not an open, assigned, unblocked task" };
+  }
+  const status = (task.status ?? "").toUpperCase();
+  if (status === "DOING" || status === "IN_REVIEW" || status === "DONE") return { start: false, reason: `already ${status}` };
+  const tags = (task.tags ?? []).map((t) => String(t).toLowerCase());
+  if (tags.includes("parking-lot")) return { start: false, reason: "parked" };
+  // REMIND mode: confirming IS the scheduling; the agent does no work on it (AC-F3-10).
+  if (tags.includes("reminder") || input.inReminderWindow) return { start: false, reason: "reminder task" };
+  if (state.clarify_status === "open") return { start: false, reason: "clarifying question open" };
+  const required = input.required !== false;
+  if (required && state.approach_status !== "approved") {
+    return {
+      start: false,
+      reason: `approach ${state.approach_status ?? "pending"}`,
+      needsApproach: (state.approach_status ?? "pending") === "pending",
+    };
+  }
+  return { start: true };
+}
+
+/**
+ * Move ONE live-confirmed task to DOING and enqueue its work turn, if liveStartDecision allows it. Writes only
+ * that task's status (AC-F3-8). Idempotent through the claimLiveStart CAS and a deterministic work-turn id.
+ * Never throws. `approachTurn`: when the only thing missing is the approach, enqueue the assignee's approach
+ * turn now (button / voice: no turn is running). The typed path passes false while its own turn may still call
+ * propose_approach, and calls again with true once that turn ends.
+ */
+export async function advanceLiveConfirmedTask(opts: {
+  caller?: Caller;
+  taskId: string;
+  email: string;
+  approachTurn?: boolean;
+  timeZone?: string;
+}): Promise<{ started: boolean; reason?: string; approachTurnEnqueued?: boolean }> {
+  const { taskId, email } = opts;
+  const caller: Caller = opts.caller?.entra_email || opts.caller?.entra_object_id ? opts.caller : { entra_email: email };
+  const tz = opts.timeZone ?? "America/New_York";
+  try {
+    const { getTaskEngagementState, getOpenAssignedTasks, claimLiveStart, releaseLiveStart } = await import(
+      "./tasks.server"
+    );
+    const state = await getTaskEngagementState(taskId);
+    if (!state?.live_start_at) return { started: false, reason: "no live confirmation" };
+    const task = (await getOpenAssignedTasks(email)).find((t) => t.id === taskId) ?? null;
+    let inReminderWindow = false;
+    try {
+      const { taskIdsInReminderWindow } = await import("./turns.server");
+      inReminderWindow = (await taskIdsInReminderWindow(email)).has(taskId);
+    } catch {
+      inReminderWindow = false;
+    }
+    let required = true;
+    if (task?.assigned_agent) {
+      try {
+        const { isStructuredWorkflowRequired } = await import("../identity/agent-workflow-config.server");
+        required = (await isStructuredWorkflowRequired(email, task.assigned_agent)) !== false;
+      } catch {
+        required = true; // fail closed
+      }
+    }
+    const verdict = liveStartDecision({ state, task, required, inReminderWindow });
+    if (!verdict.start) {
+      if (verdict.needsApproach && opts.approachTurn && task?.assigned_agent) {
+        // The approach step, now -- same directive and turn shape as the cadence re-drive, but not held to its
+        // 24h floor. Deterministic id per live confirmation, so a double tap / retry enqueues it once (AC-F3-11).
+        const { enqueueTurn } = await import("./turns.server");
+        const fresh = await enqueueTurn(
+          `live-approach-${taskId}-${new Date(state.live_start_at).getTime()}`,
+          `dm-${task.assigned_agent}`,
+          email,
+          turnPayload(task, approachRedriveDirective(task), tz, caller),
+        ).catch(() => false);
+        return { started: false, reason: verdict.reason, approachTurnEnqueued: !!fresh };
+      }
+      return { started: false, reason: verdict.reason };
+    }
+    const claimed = await claimLiveStart(taskId);
+    if (claimed === null) return { started: false, reason: "already started" };
+    let ok = false;
+    try {
+      const { invokeJourneyTool } = await import("../journey/proxy.functions");
+      const r = await invokeJourneyTool({
+        toolName: "update_task",
+        args: { task_id: taskId, status: "DOING" },
+        caller,
+        context: { source: "huddle" },
+      });
+      ok = !!r.ok;
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      await releaseLiveStart(taskId).catch(() => {});
+      return { started: false, reason: "DOING write failed" };
+    }
+    const { enqueueTurn } = await import("./turns.server");
+    await enqueueTurn(
+      `live-work-${taskId}-${claimed}`,
+      `dm-${task!.assigned_agent}`,
+      email,
+      turnPayload(task!, researchDirective(task!), tz, caller),
+    ).catch(() => false);
+    return { started: true };
+  } catch (err) {
+    return { started: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * THE one kick point for a live confirmation (AC-F3-9). Records the server-written live marker (only on a row that
+ * is already 'confirmed' -- markLiveConfirm's WHERE clause) and advances the task. Never throws.
+ */
+export async function kickLiveConfirm(opts: {
+  caller?: Caller;
+  taskId: string;
+  email: string;
+  via: "button" | "voice" | "typed";
+  approachTurn: boolean;
+  timeZone?: string;
+  /** true = record the marker, then advance in the background (the Confirm button must answer in <3s, AC-F3-15). */
+  background?: boolean;
+}): Promise<{ marked: boolean; started: boolean; reason?: string; approachTurnEnqueued?: boolean }> {
+  try {
+    const { markLiveConfirm } = await import("./tasks.server");
+    const marked = await markLiveConfirm(opts.taskId, opts.via);
+    if (!marked) return { marked: false, started: false, reason: "not confirmed" };
+    if (opts.background) {
+      void advanceLiveConfirmedTask(opts).catch(() => {});
+      return { marked: true, started: false, reason: "advancing in the background" };
+    }
+    const r = await advanceLiveConfirmedTask(opts);
+    return { marked: true, ...r };
+  } catch (err) {
+    return { marked: false, started: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}

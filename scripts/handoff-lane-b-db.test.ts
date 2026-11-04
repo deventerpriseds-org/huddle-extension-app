@@ -92,6 +92,33 @@ try {
   const due = (await T.getDueConfirmAsks(new Date(Date.now() + 2 * 3_600_000).toISOString())).map((r) => r.task_id);
   check("AC-F4-4 a future-armed autowork ask is NOT still due after the live ask", !due.includes("f4-armed"), JSON.stringify(due));
 
+  // ================================ F3 ==========================================================================
+  // markLiveConfirm: only a CONFIRMED row can carry the live marker (fail closed).
+  await task("f3-asked", "BACKLOG");
+  await T.proposeTaskDod("f3-asked", E, "Test- DoD");
+  check("AC-F3-6 markLiveConfirm refuses an 'asked' row", (await T.markLiveConfirm("f3-asked", "button")) === false);
+  check("AC-F3-6 markLiveConfirm refuses a task with no engagement row", (await T.markLiveConfirm("f3-none", "button")) === false);
+  s = (await T.getTaskEngagementStates(["f3-asked"])).get("f3-asked")!;
+  check("AC-F3-6 ...and the refused row has no live marker", s.live_start_at === null && s.live_started_at === null, JSON.stringify(s));
+  check("AC-F3-5 claimLiveStart refuses a row with no live marker", (await T.claimLiveStart("f3-asked")) === null);
+  await task("f3-live", "BACKLOG");
+  await T.proposeTaskDod("f3-live", E, "Test- DoD");
+  await T.confirmTaskIntent("f3-live", E, "Test- DoD");
+  check("F3 markLiveConfirm marks a confirmed row", (await T.markLiveConfirm("f3-live", "typed")) === true);
+  s = (await T.getTaskEngagementStates(["f3-live"])).get("f3-live")!;
+  check("F3 the marker + via are readable through ENGAGEMENT_COLS", !!s.live_start_at && s.live_start_via === "typed" && s.live_started_at === null, JSON.stringify(s));
+  const c1 = await T.claimLiveStart("f3-live");
+  const c2 = await T.claimLiveStart("f3-live");
+  check("AC-F3-11 claimLiveStart is a CAS: first wins, second gets null", typeof c1 === "number" && c2 === null, JSON.stringify({ c1, c2 }));
+  await T.releaseLiveStart("f3-live");
+  check("F3 a released claim (DOING write failed) can be claimed again", typeof (await T.claimLiveStart("f3-live")) === "number");
+  await T.releaseLiveStart("f3-live");
+  const race = await Promise.all([T.claimLiveStart("f3-live"), T.claimLiveStart("f3-live"), T.claimLiveStart("f3-live")]);
+  check("AC-F3-11 three concurrent claims -> exactly one winner", race.filter((x) => x !== null).length === 1, JSON.stringify(race));
+  await T.resetEngagementOnReassignment("f3-live");
+  s = (await T.getTaskEngagementStates(["f3-live"])).get("f3-live")!;
+  check("F3 a reassignment clears the live marker (the new assignee never got the owner's live go-ahead)", s.live_start_at === null && s.live_started_at === null && s.live_start_via === null, JSON.stringify(s));
+
 } catch (e) {
   failures++;
   console.log(`FAIL harness threw -- ${e instanceof Error ? e.stack : String(e)}`);
