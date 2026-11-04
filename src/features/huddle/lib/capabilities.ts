@@ -222,6 +222,10 @@ function deferralPatterns(name: string): RegExp[] {
     new RegExp(`\\b${n}(?:\\s+will|'ll|’ll)\\s+(?:reach\\s+out|follow\\s+up|be\\s+in\\s+touch|get\\s+back|pick\\s+(?:this|it)\\s+up|take\\s+it\\s+from\\s+here)`, "i"),
     new RegExp(`\\b(?:have|get|let)\\s+${n}\\s+(?:reach\\s+out|follow\\s+up|take\\s+(?:this|it|over))`, "i"),
     new RegExp(`\\b${n}(?:'s|’s)\\s+(?:area|lane|domain|wheelhouse)\\b`, "i"),
+    // #131 answer-first wording (lane-handoff.ts laneAnswerFirstDirective): "<Name> knows this area best —
+    // I'm looping them in". A sentence that names the teammate AND loops a pronoun in is a deferral.
+    new RegExp(`\\b${n}\\s+knows\\s+(?:this|that|the)?\\s*(?:area|stuff|lane|space|topic|subject)?\\s*best\\b`, "i"),
+    new RegExp(`\\b${n}\\b.*\\bloop(?:ing)?\\s+(?:them|him|her)\\s+in\\b|\\bloop(?:ing)?\\s+(?:them|him|her)\\s+in\\b.*\\b${n}\\b`, "i"),
   ];
 }
 

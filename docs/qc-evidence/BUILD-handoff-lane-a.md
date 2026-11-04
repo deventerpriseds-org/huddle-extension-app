@@ -7,13 +7,38 @@ WHY:           Seven live failures on 2026-10-30 (see AC-handoff-confirm-flow.md
 SUPERSEDES:    nothing
 SUPERSEDED-BY: nothing -- current
 EVIDENCE:      Spec: origin/claude_ac-handoff-confirm:docs/qc-evidence/AC-handoff-confirm-flow.md.
-               Tests: scripts/handoff-lane-a.test.ts (bun test). Branch: claude_handoff-lane-a off origin/main 9983343.
+               Tests: scripts/handoff-lane-a.test.ts (`npm run test:handoff-lane-a`). Branch: claude_handoff-lane-a,
+               REBASED 2026-11-04 onto origin/main d5c465e (was 9983343).
 -->
 
 # BUILD: hand-off Lane A (F1, F2, F6)
 
-Scope: F1, F2, F6 only. Lane B owns tasks.server.ts, autowork.server.ts, create-task-core, confirm-ask.functions.ts
-and the isPlainConfirmation region; none of those are edited here.
+Scope: F1, F2, F6 only. Lane B owns tasks.server.ts, autowork.server.ts, turns.server.ts, create-task-core,
+confirm-ask.functions.ts and the confirm-intent Block A region of huddle.functions.ts; none of those are edited here.
+
+## Step 0 (2026-11-04, resumed after two container restarts): rebase onto main d5c465e
+
+- Read first: #131 c0e8c40 (BUILD-plan-and-answer-first: PLANNING_SYSTEM_HINT, focus_on only on explicit
+  start / priority-check reply, 1:1 answer-first via `lane-handoff.ts`), #132 4a4fbff (status answers), #133
+  1ddd9ec (BUILD-context-and-confirm: `isPlainConfirmation` removed, Block A read-only, stream context,
+  reminder tools).
+- The local `claude_handoff-lane-a` ref is held by a dead agent's worktree, so the rebase ran on this worktree's
+  branch and was pushed as `HEAD:claude_handoff-lane-a` (`--force-with-lease=claude_handoff-lane-a:9ce6b83`):
+  9ce6b83 -> b531918.
+- One conflict, the import block of huddle.functions.ts: kept BOTH #131's `lane-handoff` import and Lane A's
+  `handoff-followup` import. The laneDirective region auto-merged: Lane A's `doItNowHere` branch sits first and
+  #131's `laneAnswerFirstDirective` is the else branch (main's behaviour kept for every non-"now" ask).
+- Nothing Lane A needed was fully covered by #131/#133, so nothing was dropped. Overlaps, and how they were
+  reconciled:
+  - #131 made the 1:1 agent ANSWER an out-of-lane question first and still says the owner will follow up. The
+    owner's follow-up now receives the addressed agent's reply (`addressedReply`) and is told not to repeat,
+    re-answer or paraphrase it (F1: no duplicate work). `stripTeammateDeferral` also strips #131's own wording
+    ("<Name> knows this area best — I'm looping them in") when the runtime decided not to hand off.
+  - #133 removed the pre-model "ok" confirm; Lane A never touched it (Lane B / F4 territory).
+  - `test:plan-and-answer-first` W4 pinned the old 3-argument `deliverOwnerFollowup(ownerId, winner.name,
+    data.text)` literal. Lane A adds arguments, so W4 now matches the call's prefix; removing the call still
+    fails it.
+- After the rebase: `tsc --noEmit` rc=0, Lane A suite 41/0 (pre-change), pushed.
 
 ## F1: skip the hand-off when handled or "now"
 
@@ -41,5 +66,11 @@ Code:
 | F1-11 | one classifier | source assertion |
 | F1-12 | no new await on the reply path (all new decisions synchronous) | code read; latency is live-only |
 | S-U1..S-U14 | all rows pass | urgency spelling-table tests |
+| F1 x #131 | follow-up carries A's reply + "do not repeat" clause; #131 wording stripped on no-hand-off | 7 tests in "F1 x #131" block |
+
+Group 1 test run (2026-11-04): `test:handoff-lane-a` 48/0; `tsc` rc=0; plan-and-answer-first 35/0,
+context-and-confirm ALL PASS, reminder-tools 83/0, status-answers 23/0, inbox-read 68/0, router 39/0, ask-shape,
+ownership-judge, assign-on-create, override-gate, green-light, turn-identity, board-delete ALL PASS, cross-app
+92/0, voice-tools 36/0, priority-check 43/0, nexus-write 115/0, nexus-tools 190/0, mode 22/22.
 
 Mutations: see the table at the bottom.

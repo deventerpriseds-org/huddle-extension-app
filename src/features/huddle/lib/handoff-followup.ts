@@ -3,7 +3,9 @@
 // WHY:        AC-handoff-confirm-flow.md F1-3 / F2-5: a "now" hand-off must start the work, and an ordinary
 //             hand-off must carry a real task + Confirm buttons. The old inline directive said "ask them to
 //             confirm before you act ... do not perform the work yet" with no task, so no Confirm row could
-//             ever render (CF-2).
+//             ever render (CF-2). Since #131 (answer-first in a 1:1) the addressed agent often ANSWERS the
+//             question before naming the owner, so the owner is also told what was already said and must
+//             not repeat it (no duplicate work).
 // SUPERSEDES: the inline directive string in deliverOwnerFollowup (huddle.functions.ts).  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   docs/qc-evidence/BUILD-handoff-lane-a.md; scripts/handoff-lane-a.test.ts.
 
@@ -15,6 +17,20 @@ export interface FollowupDirectiveInput {
   /** The user's ask, already whitespace-collapsed and bounded by the caller. */
   ask: string;
   mode: FollowupMode;
+  /** What the addressed agent already told the user this turn (#131 answer-first). Optional. */
+  addressedReply?: string;
+}
+
+/** The longest slice of the addressed agent's reply quoted to the owner (keeps the directive small). */
+export const ADDRESSED_REPLY_MAX = 400;
+
+function alreadySaidClause(fromName: string, addressedReply: string | undefined): string {
+  const said = String(addressedReply ?? "").replace(/\s+/g, " ").trim().slice(0, ADDRESSED_REPLY_MAX);
+  if (!said) return "";
+  return (
+    ` ${fromName} already replied to the user in that 1:1: "${said}". Do NOT repeat, re-answer or ` +
+    `paraphrase what ${fromName} already said; build on it and cover only the part that needs your lane.`
+  );
 }
 
 /**
@@ -28,7 +44,8 @@ export function buildFollowupDirective(input: FollowupDirectiveInput): string {
     `You are ${ownerName}. ${fromName} just tapped you and passed something your way: the user, ` +
     `in their separate 1:1 with ${fromName}, asked — "${ask}". You are now replying in YOUR OWN ` +
     `1:1 channel with the user; you did NOT join ${fromName}'s conversation. Do not restate ${fromName} ` +
-    `verbatim, and do not address anyone by an at-sign handle.`;
+    `verbatim, and do not address anyone by an at-sign handle.` +
+    alreadySaidClause(fromName, input.addressedReply);
   if (mode === "now") {
     return (
       framing +

@@ -1967,6 +1967,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     fromName: string,
     ask: string,
     mode: FollowupMode = "confirm",
+    // #131 answer-first: what the addressed agent already told the user this turn, so the owner does not
+    // repeat or re-answer it (F1: no duplicate work). Optional; absent = the pre-#131 directive.
+    addressedReply?: string,
   ): Promise<void> {
     try {
       const owner = AGENT_BY_ID[ownerId];
@@ -1990,7 +1993,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // agent's conversation. (Delivered as the turn's user-text; the client renders only the reply.)
       // Built in handoff-followup.ts (pure, tested): "now" starts the work (F1-3); "confirm" carries the
       // hand-off framing plus the confirm ask.
-      const directive = buildFollowupDirective({ ownerName: owner.name, fromName, ask: cleanAsk, mode });
+      const directive = buildFollowupDirective({
+        ownerName: owner.name,
+        fromName,
+        ask: cleanAsk,
+        mode,
+        addressedReply,
+      });
       // Enqueue a REAL durable turn in the owner's DM. It rides the proven path: the runner produces
       // the owner's reply, persists it, and fires the away-notification (send_push → Android bridge) —
       // exactly like any other reply. Idempotent id so a retry can't double-post.
@@ -7080,10 +7089,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // F1-3: a tool-gated hand-off of a "now" ask starts the work in the owner's turn (the "now" is the
       // owner's live go-ahead); every other hand-off carries a task + Confirm buttons (F2).
       const followupMode: "now" | "confirm" = classifyAsk(data.text).urgency === "now" ? "now" : "confirm";
+      // #131 answer-first: the addressed agent may already have ANSWERED in the reply pushed just above.
+      // Captured synchronously (the LLM owner resolution below is async) and handed to the owner, whose
+      // directive says not to repeat it -- the follow-up must never duplicate work A just did.
+      const addressedReply =
+        replies.length > 0 && replies[replies.length - 1].agentId === nextId
+          ? replies[replies.length - 1].text
+          : "";
       const deliverIfOwner = (ownerId: AgentId | null) => {
         if (ownerId && ownerId !== nextId && !followupDelivered.has(ownerId)) {
           followupDelivered.add(ownerId);
-          void deliverOwnerFollowup(ownerId, winner.name, data.text, followupMode);
+          void deliverOwnerFollowup(ownerId, winner.name, data.text, followupMode, addressedReply);
         }
       };
       // F1 (AC-F1-1/F1-2): the SEMANTIC lane hand-off is skipped when the addressed agent already did the

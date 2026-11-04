@@ -147,7 +147,7 @@ describe("F1 wiring in huddle.functions.ts (source assertions)", () => {
   });
   test("AC-F1-3: a tool-gated hand-off of a now ask is delivered in 'now' mode", () => {
     expect(block).toContain(`classifyAsk(data.text).urgency === "now" ? "now" : "confirm"`);
-    expect(block).toContain("deliverOwnerFollowup(ownerId, winner.name, data.text, followupMode)");
+    expect(block).toContain("deliverOwnerFollowup(ownerId, winner.name, data.text, followupMode, addressedReply)");
   });
   test("AC-F1-2: a now ask replaces the defer-to-teammate directive with a do-it-now directive", () => {
     const pre = between("let laneDirective = \"\";", "const isInterjector = interjectorSet.has(nextId);");
@@ -167,5 +167,41 @@ describe("F1-3 follow-up directive (now mode)", () => {
     expect(d).toContain("YOUR OWN");
     expect(d).toMatch(/passed|tapped/);
     expect(d).not.toContain("@");
+  });
+});
+
+// ── F1 x #131 reconciliation: answer-first + the owner's follow-up must not duplicate A's work ───────
+describe("F1 x #131: the owner follow-up is told what the addressed agent already said", () => {
+  const said = "A Roth IRA is funded with after-tax money, so withdrawals in retirement are tax-free.";
+  test("confirm mode quotes A's reply and forbids repeating it", () => {
+    const d = buildFollowupDirective({ ownerName: "Finn Reid", fromName: "Iris", ask: "roth or traditional?", mode: "confirm", addressedReply: said });
+    expect(d).toContain(said);
+    expect(d).toContain("Do NOT repeat, re-answer or paraphrase what Iris already said");
+  });
+  test("now mode carries the same clause", () => {
+    const d = buildFollowupDirective({ ownerName: "Terry Locke", fromName: "Iris", ask: "groom now", mode: "now", addressedReply: said });
+    expect(d).toContain("Do NOT repeat, re-answer or paraphrase");
+  });
+  test("no addressed reply -> no clause (pre-#131 directive unchanged)", () => {
+    const d = buildFollowupDirective({ ownerName: "Finn Reid", fromName: "Iris", ask: "x", mode: "confirm" });
+    expect(d).not.toContain("already replied");
+  });
+  test("the quoted reply is bounded", () => {
+    const d = buildFollowupDirective({ ownerName: "Finn Reid", fromName: "Iris", ask: "x", mode: "confirm", addressedReply: "y".repeat(5000) });
+    expect(d.length).toBeLessThan(2500);
+  });
+  test("wiring: the follow-up block hands A's own reply to deliverOwnerFollowup", () => {
+    const block = between("// 1:1 owner follow-up (AC-4)", "// The frozen anti-repetition anchor");
+    expect(block).toContain("replies[replies.length - 1].agentId === nextId");
+    expect(block).toContain("deliverOwnerFollowup(ownerId, winner.name, data.text, followupMode, addressedReply)");
+    expect(HF).toContain("addressedReply,\n      });");
+  });
+  test("#131 answer-first wording is stripped when no hand-off happens (F1-4)", () => {
+    const t = "A Roth is after-tax. Finn knows this area best — I'm looping them in if you want to dig deeper.";
+    expect(stripTeammateDeferral(t, "iris-chase")).toBe("A Roth is after-tax.");
+  });
+  test("#131: looping a pronoun in with no teammate named is NOT stripped", () => {
+    const t = "Done. I'm looping them in on the thread you mentioned.";
+    expect(stripTeammateDeferral(t, "iris-chase")).toBe(t);
   });
 });

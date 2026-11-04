@@ -61,7 +61,8 @@
     "test:turn-push": "bun scripts/turn-push.test.ts",
     "test:inbox-read": "bun scripts/inbox-read.test.ts",
     "test:context-and-confirm": "bun scripts/context-and-confirm.test.ts",
-    "test:reminder-tools": "bun scripts/reminder-tools.test.ts"
+    "test:reminder-tools": "bun scripts/reminder-tools.test.ts",
+    "test:handoff-lane-a": "bun test scripts/handoff-lane-a.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
