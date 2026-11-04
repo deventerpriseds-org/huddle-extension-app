@@ -99,3 +99,23 @@ Shape (extends, no new promoter, no second confirm writer):
 | AC-F3-14 | DONE | "AC-F3-14 an owner override starts a live task" (source) |
 | AC-F3-15 | DONE: the button awaits one UPDATE; advance runs in the background | design; "AC-F3-1 a button confirm ..." waits 20ms for the background advance |
 | AC-F3-16 | OUT OF LANE (honesty presenter is Lane A's) | -- |
+
+## Mutation proofs (scripts/mutate.sh, anchors from files, committed tree; 2026-11-04)
+
+| # | File | Defect reinstated | Named test | Verdict |
+|---|---|---|---|---|
+| m1 | autowork.server.ts | `liveStartDecision` ignores the live marker | AC-F3-5 no live marker -> never starts (background caps) | FIRED |
+| m2 | autowork.server.ts | approach check removed | AC-F3-6(i) live marker + approach pending -> no DOING | FIRED |
+| m3 | autowork.server.ts | confirm check removed | AC-F3-6(iii) live marker + confirm_status asked -> no DOING | FIRED |
+| m4 | autowork.server.ts | `required = input.required === true` (fail open) | AC-F3-6(ii) requirement unknown (undefined/null) counts as REQUIRED | FIRED |
+| m5 | autowork.server.ts | requirement-read throw -> not required | AC-F3-6(ii) a requirement read that THROWS counts as required: no DOING | FIRED |
+| m6 | huddle.functions.ts | `if (data.internal) return;` removed | AC-F3-5 an INTERNAL turn's confirm_task_intent never records a live confirmation | FIRED |
+| m7 | tasks.server.ts | `markLiveConfirm` drops `confirm_status='confirmed'` | AC-F3-6 markLiveConfirm refuses an 'asked' row (DB) | FIRED |
+| m8 | tasks.server.ts | `claimLiveStart` drops `live_started_at IS NULL` | AC-F3-11 claimLiveStart is a CAS (DB) | FIRED |
+| m9 | confirm-ask.functions.ts | REMIND confirm also kicks | AC-F3-10 a REMIND confirm starts no work | FIRED |
+| m10 | tasks.server.ts | proposal downgrades a confirmed row | F4 a proposal on a CONFIRMED row never downgrades it (DB) | FIRED |
+| m11 | tasks.server.ts | proposal does not stamp `confirm_last_sent_at` | AC-F4-3 a live propose_task_intent ... outranks an older autowork ask (confirm-reask-db) | FIRED |
+| m12 | tasks.server.ts | proposal leaves a future `confirm_ask_at` armed | AC-F4-4 a future-armed autowork ask is NOT still due (DB) | FIRED |
+| m13 | autowork.server.ts | live start writes UP_NEXT instead of DOING | AC-F3-8 ONLY that task's status was written | FIRED |
+
+Each run: mutate.sh asserted the restore against HEAD and re-ran the named test green.
