@@ -60,3 +60,15 @@ Branch: `claude_plan-and-answer-first` off origin/main `32f50e4`. Not merged, no
   the meta-task guard still present).
 - Note: `find_open_slots` named in PLANNING_SYSTEM_HINT ("if you have it") is NOT a Huddle tool in src; it is
   conditional wording, so it is left as is and not asserted by P12.
+
+## Step 4 — mutation proofs (`mutate.sh`, test cmd `bun scripts/plan-and-answer-first.test.ts`)
+
+| # | file | defect reinstated | named test | outcome |
+|---|---|---|---|---|
+| M1 | tasks/tools.ts | old "work on or focus on — a list" trigger back in FOCUS_SYSTEM_HINT | P4 | FIRED, restored, tree clean |
+| M2 | lane-handoff.ts | outOfLaneSceneLine returns the group line for a 1:1 | A3 | FIRED, restored, tree clean |
+| M3 | huddle.functions.ts | Lovable backend drops PLANNING_SYSTEM_HINT | P13 | FIRED, restored, tree clean |
+| M4 | lane-handoff.ts | "Do NOT answer it yourself" back in the 1:1 directive | A7 | FIRED, restored, tree clean |
+| M5 | tasks/tools.ts | focus_on description "whenever the user lists…" trigger back | P5 | FIRED, restored, tree clean |
+| M6 | tasks/tools.ts | planning hint says start them with focus_on | P10 | FIRED, restored, tree clean |
+| M7 | lane-handoff.ts | 1:1 directive says @mention the owner | A10 | FIRED, restored, tree clean |
