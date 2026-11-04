@@ -702,6 +702,73 @@ export async function getFiredRemindersSince(huddleId: string, sinceMs: number):
   return res.rows.map(mapReminder);
 }
 
+// ---- Owner-scoped reminder management (list / cancel / move agent tools) -------------------------
+// ADDITIVE. These back the list_reminders / cancel_reminder / move_reminder tools (reminders.ts). Every
+// query is scoped to the OWNER'S email exactly the way schedule_reminder stores it, so an agent can
+// never see or change another user's reminder. The firing path (claimDueReminders / cancelReminder) is
+// untouched; the mutations below only ever act on a row that is still `pending`, so they cannot
+// un-fire a reminder or resurrect a cancelled one, and they race safely with the per-minute drain
+// (the drain's claim and these UPDATEs both require status='pending').
+
+export interface OwnedReminderRecord extends ReminderRecord {
+  status: string;
+}
+
+/**
+ * The owner's reminders, soonest first. `statuses` defaults to pending only. `sinceDueMs` bounds how
+ * far back non-pending rows are read (used to say "that one is already cancelled" honestly).
+ */
+export async function listRemindersForOwner(
+  userEmail: string,
+  opts: { statuses?: string[]; sinceDueMs?: number; limit?: number } = {},
+): Promise<OwnedReminderRecord[]> {
+  await ensureBootstrapped();
+  const statuses = opts.statuses?.length ? opts.statuses : ["pending"];
+  const res = await getPool().query(
+    `SELECT id, user_email, huddle_id, agent_id, text, kind, task_id, status,
+        (EXTRACT(EPOCH FROM due_at) * 1000)::bigint AS due_ms,
+        (EXTRACT(EPOCH FROM fired_at) * 1000)::bigint AS fired_ms
+       FROM chat.reminders
+      WHERE lower(coalesce(user_email, '')) = lower($1)
+        AND status = ANY($2::text[])
+        AND due_at >= to_timestamp($3 / 1000.0)
+      ORDER BY due_at ASC
+      LIMIT $4`,
+    [userEmail, statuses, Math.max(0, opts.sinceDueMs ?? 0), Math.min(200, Math.max(1, opts.limit ?? 50))],
+  );
+  return res.rows.map((r) => ({ ...mapReminder(r), status: String(r.status ?? "pending") }));
+}
+
+/**
+ * Cancel ONE of the owner's reminders, only if it is still pending. Returns true when THIS call
+ * changed it, false when nothing changed (already cancelled/fired, or not the owner's). Idempotent.
+ */
+export async function cancelOwnedReminder(id: string, userEmail: string): Promise<boolean> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `UPDATE chat.reminders SET status = 'cancelled'
+      WHERE id = $1 AND lower(coalesce(user_email, '')) = lower($2) AND status = 'pending'
+      RETURNING id`,
+    [id, userEmail],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * Move ONE of the owner's still-pending reminders to a new fire time. Returns true when the row was
+ * updated, false when nothing matched (fired/cancelled meanwhile, or not the owner's).
+ */
+export async function moveOwnedReminder(id: string, userEmail: string, dueAtMs: number): Promise<boolean> {
+  await ensureBootstrapped();
+  const res = await getPool().query(
+    `UPDATE chat.reminders SET due_at = to_timestamp($3 / 1000.0)
+      WHERE id = $1 AND lower(coalesce(user_email, '')) = lower($2) AND status = 'pending'
+      RETURNING id`,
+    [id, userEmail, dueAtMs],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
 /**
  * Heartbeat cadence, and the staleness window it implies.
  *

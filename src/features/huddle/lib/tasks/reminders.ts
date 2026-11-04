@@ -284,3 +284,565 @@ export async function fireDueReminders(max = 25): Promise<number> {
   );
   return due.length;
 }
+
+// =================================================================================================
+// LIST / CANCEL / MOVE — ADDITIVE management tools over the SAME store (chat.reminders).
+//
+// Before these, `schedule_reminder` was the only reminder tool, so "cancel the 2pm reminder" or "push
+// that alarm to 4" could not be done by any agent. Nothing above this line is changed by them: they
+// reuse schedule_reminder's owner resolution (resolveTaskEmail ?? entra_email) and its time zone (the
+// turn's timeZone, the one `at_time` is interpreted in), and only ever act on a still-PENDING row of
+// the caller's own, so a fired reminder cannot be un-fired and a cancelled one cannot come back.
+//
+// The ambiguity rule is structural, not a prompt: when more than one reminder matches the
+// description, the mutating tools return the CANDIDATES and change nothing, so the agent has to ask.
+// =================================================================================================
+
+const SELECTOR_PROPS = {
+  reminder_id: {
+    type: "string",
+    description: "The reminder's id, from list_reminders (or from schedule_reminder's result). Most precise; use it whenever you have it.",
+  },
+  about: {
+    type: "string",
+    description: "Words from what the reminder says, e.g. 'dentist' or 'drink water'. Matches reminders whose text contains ALL of these words.",
+  },
+  currently_at: {
+    type: "string",
+    description: "The time it is CURRENTLY set for, as local HH:MM (24-hour), e.g. '14:00' for 'the 2pm reminder'.",
+  },
+  on_date: {
+    type: "string",
+    description: "The local date it is currently set for, YYYY-MM-DD. Only needed to tell apart two reminders at the same time on different days.",
+  },
+  kind: {
+    type: "string",
+    enum: ["reminder", "alarm"],
+    description: "Only when the user said which: 'alarm' or 'reminder'.",
+  },
+} as const;
+
+export const LIST_REMINDERS_TOOL = {
+  type: "function",
+  name: "list_reminders",
+  description:
+    "List the user's UPCOMING reminders and alarms (the ones set with schedule_reminder that have not gone off yet), soonest first, with each one's id, text, kind and time in the user's time zone. Call it for 'what reminders do I have', 'what alarms are set', or before cancelling/moving one when you are not sure which the user means. Read-only.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      about: SELECTOR_PROPS.about,
+      kind: SELECTOR_PROPS.kind,
+      limit: { type: "number", description: "Max to return (default 20)." },
+    },
+    required: [],
+  },
+  strict: false,
+} as const;
+
+export const CANCEL_REMINDER_TOOL = {
+  type: "function",
+  name: "cancel_reminder",
+  description:
+    "Cancel ONE of the user's upcoming reminders or alarms so it never goes off — e.g. 'cancel the 2pm reminder', 'turn off my dentist alarm'. Identify it by reminder_id (best, from list_reminders) or by about / currently_at / on_date / kind. If more than one matches, NOTHING is cancelled and the candidates come back: ask the user which one, never guess. If none matches, say so plainly. Only tell the user it is cancelled AFTER this returns cancelled:true.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: { ...SELECTOR_PROPS },
+    required: [],
+  },
+  strict: false,
+} as const;
+
+export const MOVE_REMINDER_TOOL = {
+  type: "function",
+  name: "move_reminder",
+  description:
+    "Change WHEN one of the user's EXISTING upcoming reminders or alarms goes off — e.g. 'push that alarm to 4', 'move my dentist reminder to tomorrow at 9', 'snooze the 2pm reminder by 30 minutes'. Use this, NOT schedule_reminder, to reschedule one that already exists (schedule_reminder would leave the old one AND add a second). Identify it by reminder_id or about / currently_at / on_date / kind, and give the new time as to_time (+ optional to_date), shift_minutes, or delay_minutes. If more than one matches, NOTHING is moved and the candidates come back: ask the user which one, never guess. Only confirm the new time AFTER this returns moved:true.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ...SELECTOR_PROPS,
+      to_time: {
+        type: "string",
+        description: "New local time HH:MM (24-hour), e.g. '16:00' for 'to 4pm'. Without to_date it keeps the reminder's current day (or the next day if that time has already passed).",
+      },
+      to_date: { type: "string", description: "New local date YYYY-MM-DD, used with to_time." },
+      shift_minutes: {
+        type: "number",
+        description: "Move it this many minutes later (negative = earlier) than its CURRENT time, e.g. 30 for 'push it back half an hour'.",
+      },
+      delay_minutes: { type: "number", description: "Set it to go off this many minutes from NOW." },
+    },
+    required: [],
+  },
+  strict: false,
+} as const;
+
+/** One owned reminder row as the management tools see it (the store's shape, decoupled for tests). */
+export interface ManagedReminder {
+  id: string;
+  text: string;
+  kind: string;
+  due_ms: number;
+  status: string;
+  task_id: string | null;
+}
+
+/** The store the dispatchers talk to. Production = turns.server.ts; tests inject a fake. */
+export interface ReminderManageStore {
+  list(email: string, opts?: { statuses?: string[]; sinceDueMs?: number; limit?: number }): Promise<ManagedReminder[]>;
+  cancel(id: string, email: string): Promise<boolean>;
+  move(id: string, email: string, dueAtMs: number): Promise<boolean>;
+}
+
+export interface ReminderManageDeps {
+  store?: ReminderManageStore;
+  /** Owner email resolver. Defaults to schedule_reminder's (resolveTaskEmail ?? entra_email). */
+  resolveEmail?: (caller: Caller | undefined) => Promise<string | null>;
+  /** Per-turn decision-rights ledger (huddle.functions claimAction). Mutating tools claim
+   *  `<tool>:<reminder id>` so two agents in one group turn cannot both cancel/move the same one. */
+  claim?: (key: string) => boolean;
+  nowMs?: number;
+}
+
+async function defaultResolveEmail(caller: Caller | undefined): Promise<string | null> {
+  try {
+    const { resolveTaskEmail } = await import("../journey/identity");
+    return (await resolveTaskEmail(caller as never)) ?? caller?.entra_email ?? null;
+  } catch {
+    return caller?.entra_email ?? null;
+  }
+}
+
+async function defaultStore(): Promise<ReminderManageStore> {
+  const t = await import("./turns.server");
+  return {
+    list: (email, opts) => t.listRemindersForOwner(email, opts),
+    cancel: (id, email) => t.cancelOwnedReminder(id, email),
+    move: (id, email, due) => t.moveOwnedReminder(id, email, due),
+  };
+}
+
+function localParts(ms: number, tz: string): { y: number; mo: number; d: number; hh: number; mm: number } {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const m: Record<string, string> = {};
+  for (const p of dtf.formatToParts(new Date(ms))) m[p.type] = p.value;
+  return { y: +m.year, mo: +m.month, d: +m.day, hh: +m.hour % 24, mm: +m.minute };
+}
+
+function safeTz(tz: string | undefined): string {
+  if (!tz) return "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return "UTC";
+  }
+}
+
+/** Local wall-clock (tz) → UTC ms. Two-pass so a DST boundary between guess and answer is handled. */
+export function zonedToUtcMs(y: number, mo: number, d: number, hh: number, mm: number, tz: string): number {
+  const wall = Date.UTC(y, mo - 1, d, hh, mm, 0);
+  let utc = wall - tzOffsetMs(tz, wall);
+  utc = wall - tzOffsetMs(tz, utc);
+  return utc;
+}
+
+/** "HH:MM" in tz. */
+export function localClock(ms: number, tz: string): string {
+  const p = localParts(ms, safeTz(tz));
+  return `${String(p.hh).padStart(2, "0")}:${String(p.mm).padStart(2, "0")}`;
+}
+
+/** "YYYY-MM-DD" in tz. */
+export function localDate(ms: number, tz: string): string {
+  const p = localParts(ms, safeTz(tz));
+  return `${p.y}-${String(p.mo).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`;
+}
+
+/** Human time in the owner's zone, e.g. "Tue, Nov 3, 2:00 PM". */
+export function formatReminderTime(ms: number, tz: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: safeTz(tz),
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(ms));
+}
+
+/** Parse a clock the model may send: "14:00", "2:00", "14", "2pm", "2:30 pm". Returns "HH:MM" or null. */
+export function parseClock(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const s = raw.trim().toLowerCase().replace(/\s+/g, "").replace(/\./g, "");
+  const m = s.match(/^(\d{1,2})(?::(\d{2}))?(am|pm)?$/);
+  if (!m) return null;
+  let hh = +m[1];
+  const mm = m[2] ? +m[2] : 0;
+  const ap = m[3];
+  if (mm > 59) return null;
+  if (ap) {
+    if (hh < 1 || hh > 12) return null;
+    if (ap === "pm" && hh !== 12) hh += 12;
+    if (ap === "am" && hh === 12) hh = 0;
+  } else if (hh > 23) return null;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+function parseIsoDate(raw: unknown): { y: number; mo: number; d: number } | null {
+  if (typeof raw !== "string") return null;
+  const m = raw.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = +m[1];
+  const mo = +m[2];
+  const d = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  return { y, mo, d };
+}
+
+const MATCH_STOPWORDS = new Set([
+  "the", "a", "an", "my", "to", "for", "about", "of", "at", "on", "in", "that", "this", "it", "me",
+  "remind", "reminder", "reminders", "alarm", "alarms", "set", "one",
+]);
+
+function tokens(s: string): string[] {
+  return (s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((t) => !MATCH_STOPWORDS.has(t));
+}
+
+/** The selector words that actually constrain a match (stopwords like "my reminder" do not). */
+export function aboutTokens(about: unknown): string[] {
+  return typeof about === "string" ? tokens(about) : [];
+}
+
+/** True when the args carry at least ONE real constraint. A mutation without one is refused. */
+export function hasSelector(args: Record<string, unknown>): boolean {
+  const id = typeof args.reminder_id === "string" ? args.reminder_id.trim() : "";
+  return (
+    !!id ||
+    aboutTokens(args.about).length > 0 ||
+    parseClock(args.currently_at) != null ||
+    parseIsoDate(args.on_date) != null ||
+    args.kind === "reminder" ||
+    args.kind === "alarm"
+  );
+}
+
+export type MatchOutcome =
+  | { kind: "none"; matches: ManagedReminder[] }
+  | { kind: "one"; matches: ManagedReminder[] }
+  | { kind: "many"; matches: ManagedReminder[] };
+
+/**
+ * Pure matcher. Every given constraint must hold (AND). reminder_id is exact. `about` needs EVERY
+ * meaningful word to appear (prefix match per word, so "dentist" finds "dentist's"). Times and dates
+ * compare in the OWNER's time zone. Never picks between several: >1 is reported as "many".
+ */
+export function matchReminders(rows: ManagedReminder[], args: Record<string, unknown>, timeZone: string): MatchOutcome {
+  const tz = safeTz(timeZone);
+  const id = typeof args.reminder_id === "string" ? args.reminder_id.trim() : "";
+  const want = aboutTokens(args.about);
+  const at = parseClock(args.currently_at);
+  const on = parseIsoDate(args.on_date);
+  const onStr = on ? `${on.y}-${String(on.mo).padStart(2, "0")}-${String(on.d).padStart(2, "0")}` : null;
+  const kind = args.kind === "reminder" || args.kind === "alarm" ? args.kind : null;
+
+  const hits = rows.filter((r) => {
+    if (id && r.id !== id) return false;
+    if (kind && r.kind !== kind) return false;
+    if (at && localClock(r.due_ms, tz) !== at) return false;
+    if (onStr && localDate(r.due_ms, tz) !== onStr) return false;
+    if (want.length) {
+      const have = tokens(r.text);
+      if (!want.every((w) => have.some((h) => h === w || h.startsWith(w)))) return false;
+    }
+    return true;
+  });
+  if (hits.length === 0) return { kind: "none", matches: [] };
+  if (hits.length === 1) return { kind: "one", matches: hits };
+  return { kind: "many", matches: hits };
+}
+
+/**
+ * Pure: the new fire time for move_reminder, from exactly one of shift_minutes / delay_minutes /
+ * to_time(+to_date). Must land in the future.
+ */
+export function resolveMoveDueMs(
+  currentDueMs: number,
+  args: Record<string, unknown>,
+  timeZone: string,
+  nowMs: number,
+): { dueMs: number } | { error: string; message: string } {
+  const tz = safeTz(timeZone);
+  const num = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : NaN);
+  const shift = num(args.shift_minutes);
+  const delay = num(args.delay_minutes);
+  const toTime = parseClock(args.to_time);
+  const toDate = parseIsoDate(args.to_date);
+  const given = [Number.isFinite(shift), Number.isFinite(delay), toTime != null || toDate != null].filter(Boolean).length;
+  if (given === 0) {
+    return { error: "missing_new_time", message: "Tell me the new time — e.g. to_time '16:00', shift_minutes 30, or delay_minutes 20." };
+  }
+  if (given > 1) {
+    return { error: "conflicting_new_time", message: "Give the new time ONE way: to_time (+to_date), shift_minutes, or delay_minutes." };
+  }
+  let due: number;
+  if (Number.isFinite(shift)) {
+    due = currentDueMs + Math.round(shift * 60_000);
+  } else if (Number.isFinite(delay)) {
+    if (delay <= 0) return { error: "time_in_past", message: "delay_minutes must be more than 0." };
+    due = nowMs + Math.round(delay * 60_000);
+  } else {
+    const cur = localParts(currentDueMs, tz);
+    const clock = toTime ?? `${String(cur.hh).padStart(2, "0")}:${String(cur.mm).padStart(2, "0")}`;
+    const [hh, mm] = clock.split(":").map(Number);
+    const day = toDate ?? { y: cur.y, mo: cur.mo, d: cur.d };
+    due = zonedToUtcMs(day.y, day.mo, day.d, hh, mm, tz);
+    // Only a time with no explicit date rolls forward; an explicit past date is an error below.
+    if (due <= nowMs && !toDate) {
+      const now = localParts(nowMs, tz);
+      due = zonedToUtcMs(now.y, now.mo, now.d, hh, mm, tz);
+      if (due <= nowMs) due = zonedToUtcMs(now.y, now.mo, now.d + 1, hh, mm, tz);
+    }
+  }
+  if (due <= nowMs) {
+    return { error: "time_in_past", message: "That new time has already passed — pick a time in the future." };
+  }
+  return { dueMs: due };
+}
+
+function describe(r: ManagedReminder, tz: string, nowMs: number) {
+  return {
+    id: r.id,
+    text: r.text,
+    kind: r.kind,
+    due_local: formatReminderTime(r.due_ms, tz),
+    due_at: new Date(r.due_ms).toISOString(),
+    in_minutes: Math.round((r.due_ms - nowMs) / 60_000),
+    task_linked: r.task_id != null,
+  };
+}
+
+const NO_OWNER = JSON.stringify({
+  error: "no_owner",
+  message: "I couldn't tell whose reminders these are, so I didn't read or change anything.",
+});
+const NO_SELECTOR = JSON.stringify({
+  error: "missing_selector",
+  message: "Say which reminder: give reminder_id (from list_reminders), or about / currently_at / on_date / kind.",
+});
+const RECENT_WINDOW_MS = 7 * 86_400_000;
+
+/** Find the owner's target among PENDING rows; when none, look at recent cancelled/fired ones so the
+ *  answer is honest ("already cancelled" / "already went off") instead of a bare "not found". */
+async function locate(
+  store: ReminderManageStore,
+  email: string,
+  args: Record<string, unknown>,
+  tz: string,
+  nowMs: number,
+): Promise<{ outcome: MatchOutcome; stale: ManagedReminder[] }> {
+  const pending = await store.list(email, { statuses: ["pending"], limit: 200 });
+  const outcome = matchReminders(pending, args, tz);
+  if (outcome.kind !== "none") return { outcome, stale: [] };
+  const recent = await store.list(email, {
+    statuses: ["cancelled", "fired"],
+    sinceDueMs: nowMs - RECENT_WINDOW_MS,
+    limit: 200,
+  });
+  return { outcome, stale: matchReminders(recent, args, tz).matches };
+}
+
+function staleAnswer(tool: "cancel" | "move", stale: ManagedReminder[], tz: string, nowMs: number): string {
+  const allCancelled = stale.every((r) => r.status === "cancelled");
+  if (tool === "cancel" && allCancelled) {
+    // Idempotent: asking to cancel what is already cancelled is a success that changed nothing.
+    return JSON.stringify({
+      ok: true,
+      cancelled: true,
+      changed: false,
+      already: "cancelled",
+      reminders: stale.map((r) => describe(r, tz, nowMs)),
+      message: "That reminder was already cancelled — nothing else to do.",
+    });
+  }
+  return JSON.stringify({
+    ok: false,
+    error: "not_pending",
+    changed: false,
+    reminders: stale.map((r) => ({ ...describe(r, tz, nowMs), status: r.status })),
+    message: allCancelled
+      ? "That reminder was cancelled, so there is nothing to move. Offer to set a new one with schedule_reminder."
+      : `That reminder has already gone off, so it can't be ${tool === "cancel" ? "cancelled" : "moved"}. Offer to set a new one if they want.`,
+  });
+}
+
+function ambiguous(matches: ManagedReminder[], tz: string, nowMs: number): string {
+  return JSON.stringify({
+    ok: false,
+    error: "ambiguous",
+    changed: false,
+    candidates: matches.map((m) => describe(m, tz, nowMs)),
+    message: `${matches.length} reminders match that, so I changed nothing. Ask the user which one they mean (list them by text and time), then call again with its reminder_id.`,
+  });
+}
+
+/** Re-read one id after a mutation that changed nothing, and say what it actually is now. */
+async function afterLostRace(
+  tool: "cancel" | "move",
+  store: ReminderManageStore,
+  email: string,
+  id: string,
+  tz: string,
+  nowMs: number,
+): Promise<string> {
+  const recent = await store.list(email, { statuses: ["cancelled", "fired"], sinceDueMs: nowMs - RECENT_WINDOW_MS, limit: 200 });
+  const now = recent.filter((r) => r.id === id);
+  if (now.length) return staleAnswer(tool, now, tz, nowMs);
+  return JSON.stringify({
+    ok: false,
+    error: `${tool}_failed`,
+    changed: false,
+    message: `I couldn't ${tool} it — it may have just changed. Check with list_reminders.`,
+  });
+}
+
+export async function dispatchListReminders(
+  caller: Caller | undefined,
+  args: Record<string, unknown>,
+  timeZone: string | undefined,
+  deps: ReminderManageDeps = {},
+): Promise<string> {
+  const tz = safeTz(timeZone);
+  const nowMs = deps.nowMs ?? Date.now();
+  const email = await (deps.resolveEmail ?? defaultResolveEmail)(caller);
+  if (!email) return NO_OWNER;
+  try {
+    const store = deps.store ?? (await defaultStore());
+    const rows = await store.list(email, { statuses: ["pending"], limit: 200 });
+    const filtered =
+      aboutTokens(args.about).length || args.kind === "alarm" || args.kind === "reminder"
+        ? matchReminders(rows, { about: args.about, kind: args.kind }, tz).matches
+        : rows;
+    const limRaw = typeof args.limit === "number" ? args.limit : Number(args.limit);
+    const limit = Number.isFinite(limRaw) && limRaw > 0 ? Math.min(100, Math.round(limRaw)) : 20;
+    const shown = filtered.slice(0, limit);
+    return JSON.stringify({
+      ok: true,
+      time_zone: tz,
+      count: filtered.length,
+      reminders: shown.map((r) => describe(r, tz, nowMs)),
+      ...(filtered.length > shown.length ? { truncated: true } : {}),
+      message: filtered.length === 0 ? "No upcoming reminders or alarms match." : `${filtered.length} upcoming.`,
+    });
+  } catch (err) {
+    return JSON.stringify({ error: "reminder_read_failed", message: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+export async function dispatchCancelReminder(
+  caller: Caller | undefined,
+  args: Record<string, unknown>,
+  timeZone: string | undefined,
+  deps: ReminderManageDeps = {},
+): Promise<string> {
+  const tz = safeTz(timeZone);
+  const nowMs = deps.nowMs ?? Date.now();
+  if (!hasSelector(args)) return NO_SELECTOR;
+  const email = await (deps.resolveEmail ?? defaultResolveEmail)(caller);
+  if (!email) return NO_OWNER;
+  try {
+    const store = deps.store ?? (await defaultStore());
+    const { outcome, stale } = await locate(store, email, args, tz, nowMs);
+    if (outcome.kind === "many") return ambiguous(outcome.matches, tz, nowMs);
+    if (outcome.kind === "none") {
+      if (stale.length) return staleAnswer("cancel", stale, tz, nowMs);
+      return JSON.stringify({
+        ok: false,
+        error: "no_match",
+        changed: false,
+        message: "No upcoming reminder or alarm matches that, so nothing was cancelled. Call list_reminders to see what is set.",
+      });
+    }
+    const target = outcome.matches[0];
+    if (deps.claim && !deps.claim(`cancel_reminder:${target.id}`)) {
+      return JSON.stringify({ ok: true, deduped: true, changed: false, message: "That reminder was already cancelled this turn." });
+    }
+    if (!(await store.cancel(target.id, email))) return afterLostRace("cancel", store, email, target.id, tz, nowMs);
+    return JSON.stringify({
+      ok: true,
+      cancelled: true,
+      changed: true,
+      reminder: describe(target, tz, nowMs),
+      time_zone: tz,
+      message: `Cancelled the ${target.kind} "${target.text}" that was set for ${formatReminderTime(target.due_ms, tz)}.`,
+    });
+  } catch (err) {
+    return JSON.stringify({ error: "reminder_write_failed", message: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+export async function dispatchMoveReminder(
+  caller: Caller | undefined,
+  args: Record<string, unknown>,
+  timeZone: string | undefined,
+  deps: ReminderManageDeps = {},
+): Promise<string> {
+  const tz = safeTz(timeZone);
+  const nowMs = deps.nowMs ?? Date.now();
+  if (!hasSelector(args)) return NO_SELECTOR;
+  const email = await (deps.resolveEmail ?? defaultResolveEmail)(caller);
+  if (!email) return NO_OWNER;
+  try {
+    const store = deps.store ?? (await defaultStore());
+    const { outcome, stale } = await locate(store, email, args, tz, nowMs);
+    if (outcome.kind === "many") return ambiguous(outcome.matches, tz, nowMs);
+    if (outcome.kind === "none") {
+      if (stale.length) return staleAnswer("move", stale, tz, nowMs);
+      return JSON.stringify({
+        ok: false,
+        error: "no_match",
+        changed: false,
+        message: "No upcoming reminder or alarm matches that, so nothing was moved. Call list_reminders to see what is set.",
+      });
+    }
+    const target = outcome.matches[0];
+    const next = resolveMoveDueMs(target.due_ms, args, tz, nowMs);
+    if ("error" in next) return JSON.stringify({ ok: false, changed: false, ...next });
+    if (Math.abs(next.dueMs - target.due_ms) < 60_000) {
+      // Idempotent: already at that time (e.g. a retry of a move that already landed).
+      return JSON.stringify({
+        ok: true,
+        moved: true,
+        changed: false,
+        reminder: describe(target, tz, nowMs),
+        message: `It's already set for ${formatReminderTime(target.due_ms, tz)}.`,
+      });
+    }
+    if (deps.claim && !deps.claim(`move_reminder:${target.id}`)) {
+      return JSON.stringify({ ok: true, deduped: true, changed: false, message: "That reminder was already moved this turn." });
+    }
+    if (!(await store.move(target.id, email, next.dueMs))) return afterLostRace("move", store, email, target.id, tz, nowMs);
+    return JSON.stringify({
+      ok: true,
+      moved: true,
+      changed: true,
+      reminder: describe({ ...target, due_ms: next.dueMs }, tz, nowMs),
+      previous_due_local: formatReminderTime(target.due_ms, tz),
+      time_zone: tz,
+      message: `Moved the ${target.kind} "${target.text}" from ${formatReminderTime(target.due_ms, tz)} to ${formatReminderTime(next.dueMs, tz)}.`,
+    });
+  } catch (err) {
+    return JSON.stringify({ error: "reminder_write_failed", message: err instanceof Error ? err.message : String(err) });
+  }
+}

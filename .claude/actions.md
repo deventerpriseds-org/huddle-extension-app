@@ -1,6 +1,14 @@
 # Action Tracker — huddle-extension-app
 Last updated: 2026-10-27
 
+## ACT:context-and-confirm — confirm after the agent reads; agent sees widgets/cards in the 1:1 stream (2026-11-04)
+Status: 🔨 implemented on `claude_context-and-confirm`, offline-verified, NOT merged / deployed / owner-confirmed.
+Evidence: `docs/qc-evidence/BUILD-context-and-confirm.md`; `npm run test:context-and-confirm` (45 PASS);
+tsc clean; priority-check 43/0, override-gate ALL PASS, turn-identity ALL PASS, cross-app 92/0.
+Mutation proofs 8/8 FIRED (m1-m8, table in the evidence file).
+Open owner decisions (NEEDS OWNER 👍 rows in the evidence file): system/reminder notices in the transcript;
+writing widget summaries into RAG memory.
+
 ## ACT:pr-triage-2026-09-21 — 4 open PRs, read-evidence triage
 
 **Asked (2026-09-21, owner):** "go ahead with the triage pass" (cross-repo request also covering
@@ -4845,6 +4853,8 @@ Owner: *"go until deployed. my bigger concern is you undoing or pivoting or regr
 - Queued (approved, not started): #3 #5 #6 #8 #10 #11 #12 #13 #15 + additive design items (DESIGN-new-capabilities-2026-11-03.md on claude_design-new-capabilities a7f6d1a).
 - Owner decisions open: #14 hold/build; background work skips recurring tasks (rec. yes); A-F (Google events, attached PDF/Word, ChatGPT import, overcapacity line, in-chat Delete card, real subtasks); G-I (mirror row after calendar edit, confirm card before agent calendar delete, shared token helper).
 - Status: NOTHING from this register deployed yet; nothing owner-confirmed.
+- **2026-11-04 owner decision — recurring tasks: "a is fine" → background work (auto-work) SKIPS every `recurring:*` occurrence** (same mechanism as the parking-lot exclusion). Recurring rules themselves are approved-not-built (design a).
+- 2026-11-04 deployed: #131 c0e8c40 (inbox read, planning contract + 1:1 answer-first, calendar exposure test), #132 4a4fbff (status answers), release-c (context+confirm, reminder tools). journey #85 (calendar edit/delete + task-tool user scoping) in CI. Attachment lane resumed (prod build unchanged since last good upload 10-30 → likely device/env, not code).
 
 ### ACT:plan-intent-map (2026-10-29) — APPROVED, NOT BUILT
 Owner: planning = short timed table, create missing tasks, start NOTHING; times only when asked ("if i tell it to add
@@ -4883,3 +4893,9 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [x] (implemented on branch, offline-verified) B: scheduled view returns every item by default; `total`/`truncated` say when a list was cut.
 - [x] Offline: 23/0, tsc 0, 4 regression suites green, 7/7 mutations FIRED.
 - [ ] Merge + deploy (caller), then owner confirms live ("anything blocking me?" names the blocked task; "what's on today" lists all items in ET). NOT yet confirmed.
+
+## ACT:reminder-tools — agents can LIST, CANCEL and MOVE the owner's reminders/alarms (2026-11-03/04)
+- [x] Additive tools `list_reminders` / `cancel_reminder` / `move_reminder` over `chat.reminders` (owner-scoped, owner time zone, pending-only mutations, ambiguity → candidates). Wired: OpenAI + Lovable text paths (claimAction on mutations) + voice NATIVE. Branch `claude_reminder-tools` commit cc3e742.
+- [x] Offline suite `npm run test:reminder-tools` (scripts/reminder-tools.test.ts). Evidence: docs/qc-evidence/BUILD-reminder-tools.md.
+- [x] Mutation proofs: 12/12 FIRED (mutate.sh). Owner 👍 rows written in the build log.
+- [ ] Owner 👍 on the NEEDS OWNER rows, then PR/merge/deploy, then live check (NOT done from this lane; branch only).
