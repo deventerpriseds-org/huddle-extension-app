@@ -4878,7 +4878,8 @@ Owner: *"Go on 3 and 4, I don't understand why voice can't trigger the same jobs
 
 ## ACT:duplicate-cleanup — remove existing duplicate tasks (owner "go on 3", 2026-10-28)
 - [x] Read journey `public.tasks` (canonical): 4 exact-duplicate groups + near-duplicates via pg_trgm ≥0.55. Presented grouped with a recommended keep per group.
-- [ ] Owner approves rows → DELETE from journey public.tasks only (mirror follows via trigger) → read back 0 remaining.
+- [x] Owner "yes all" (2026-11-04). 15 of the 19 rows still existed (4 already deleted elsewhere since 10-28). Deleted all 15 from journey `public.tasks` (RETURNING logged); mirror read-back 0 remaining for the first 14.
+- [x] Brakes group changed since presented: both copies were ezra DOING. Kept `794f2476` (owner-confirmed 10-30, approach approved), deleted `82fdd8db` (never confirmed, 0 artifacts).
 
 ## ACT:plan-and-answer-first — planning contract + answer-first in a 1:1 (owner-approved 2026-11-03)
 - [x] Planning contract: focus_on only on explicit start / priority-check reply; PLANNING_SYSTEM_HINT on both backends (branch `claude_plan-and-answer-first`, evidence `docs/qc-evidence/BUILD-plan-and-answer-first.md`).
