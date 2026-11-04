@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus, PauseCircle, FileText, AlertTriangle, Check, Trash2 } from "lucide-react";
+import { Flag, Clock, RefreshCw, Loader2, Users, Tag as TagIcon, MoreVertical, ChevronDown, ClipboardCheck, X, Plus, PauseCircle, FileText, AlertTriangle, Check, Trash2, ExternalLink } from "lucide-react";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { deleteBoardTask, getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
+import { buildJourneyTaskUrl, journeyAppBaseUrl } from "../lib/journey/journey-links";
 import {
   getEscalatedApproachTasksFn,
   overrideApproachFromButtonFn,
@@ -723,6 +724,9 @@ function BoardCard({
   // for review") shows up in the dropdown automatically — no per-status code here.
   const curColKey = columnKeyFor(task.status);
   const curCol = COLUMNS.find((c) => c.key === curColKey) ?? COLUMNS[0];
+  // The board row id IS journey's task uuid (tasks.journey_tasks is keyed on it), so this opens the
+  // canonical task in journey. null -> no link (journey URL switched off / unusable).
+  const journeyHref = buildJourneyTaskUrl(journeyAppBaseUrl(), task.id);
 
   return (
     <div
@@ -1001,6 +1005,25 @@ function BoardCard({
                 <Clock size={11} />
                 {new Date(task.due_date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
               </span>
+            )}
+            {journeyHref && (
+              // Plain anchor on purpose: in the Android Huddle app the bridge WebView hands a tapped link
+              // to an external host to the OS (ACTION_VIEW), so this opens journey there too. Propagation
+              // is stopped so a click/drag on the link never starts a card drag or reaches card handlers.
+              <a
+                data-testid="open-in-journey"
+                href={journeyHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                draggable={false}
+                onDragStart={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                title="Open this task in journey"
+                className="inline-flex items-center gap-1 rounded text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              >
+                <ExternalLink size={11} aria-hidden="true" />
+                Open in journey
+              </a>
             )}
             {agent && (
               <Tooltip>
