@@ -5917,9 +5917,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             description:
               "The user's schedule + tasks: their nightly-planned schedule (scheduled items for a day) plus their open tasks/backlog, ranked by priority, due dates, and staleness. Call it for ANY question about the user's schedule, calendar, agenda, day, meetings, tasks, backlog, priorities, or what's next. Use view 'scheduled' for 'what's on my schedule/calendar/day today'. (Only an explicit 'external/Outlook calendar' ask uses get_calendar_events instead.)",
             inputSchema: z.object({
-              view: z.enum(["priorities", "backlog", "up_next", "scheduled", "overdue"]).optional(),
+              view: z.enum(["priorities", "backlog", "up_next", "scheduled", "overdue", "blocked"]).optional(),
               category: z.string().optional(),
               limit: z.number().optional(),
+              // Mirrors PRIORITIZE_TOOL. Without it zod strips the key and this backend could never
+              // see a BLOCKED task (status-answers.test.ts L1 pins the parity).
+              include_blocked: z.boolean().optional(),
             }),
             execute: async (args) => {
               const ident = await (

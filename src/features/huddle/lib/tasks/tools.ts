@@ -23,9 +23,14 @@ export const PRIORITIZE_TOOL = {
     properties: {
       view: {
         type: "string",
-        enum: ["priorities", "backlog", "up_next", "scheduled", "overdue"],
+        enum: ["priorities", "backlog", "up_next", "scheduled", "overdue", "blocked"],
         description:
-          "Which slice to return (default 'priorities'). 'priorities' = ranked across all open tasks (what to focus on). 'backlog' = tasks not yet scheduled onto a day. 'up_next' = tasks explicitly marked up-next or on the priority lane. 'scheduled' = tasks already placed on a day/time. 'overdue' = past their due date. All slices are returned ranked by the same scoring.",
+          "Which slice to return (default 'priorities'). 'priorities' = ranked across all open tasks (what to focus on). 'backlog' = tasks not yet scheduled onto a day. 'up_next' = tasks explicitly marked up-next or on the priority lane. 'scheduled' = tasks already placed on a day/time (returns EVERY scheduled item unless you pass a limit). 'overdue' = past their due date. All slices are returned ranked by the same scoring. 'blocked' = ONLY the user's BLOCKED tasks, in the `blocked` array, with the blocker reason — use it for 'anything blocking me?', 'what's stuck?'.",
+      },
+      include_blocked: {
+        type: "boolean",
+        description:
+          "Set true for ANY blocker or status question ('anything blocking me?', 'what's stuck?', 'where do things stand?', 'status of my work'). BLOCKED tasks are never in the ranked list; with this set they come back separately in `blocked` (with `blocker_reason`) and `blocked_count`. Without it you CANNOT see blocked tasks, so never say 'no blockers' unless you set this and `blocked_count` is 0.",
       },
       category: {
         type: "string",
@@ -35,7 +40,7 @@ export const PRIORITIZE_TOOL = {
       limit: {
         type: "number",
         description:
-          "Max items to return (default 10, maximum 200). Pass a HIGH value (e.g. 200) whenever the user wants the COMPLETE set rather than a summary -- in particular before build_checklist, which should list everything that matches, not a sample.",
+          "Max items to return (default 10; view 'scheduled' defaults to every item, maximum 200). Pass a HIGH value (e.g. 200) whenever the user wants the COMPLETE set rather than a summary -- in particular before build_checklist, which should list everything that matches, not a sample.",
       },
     },
     required: [],
@@ -353,7 +358,7 @@ export async function dispatchScheduleWidget(
 
 
 export const PRIORITIZE_SYSTEM_HINT =
-  "For ANY question about the user's schedule, calendar, agenda, day, tasks, backlog, priorities, meetings, appointments, free/busy, or what to do next — including 'what's on my schedule/calendar/day today', 'what's on my plate', 'what's in my backlog', 'what's up next', 'what's overdue', 'what are my <area> priorities' — call the `schedule_and_priorities` tool and answer from its ranked results. It is the user's nightly-planned schedule + tasks, the source of truth. Use view 'scheduled' for 'what's on my schedule/calendar/day today'; otherwise pick the matching `view` (backlog / up_next / overdue / priorities) and the relevant `category`. Only an EXPLICIT 'external calendar' / 'Outlook calendar' request should use get_external_calendar_events instead. The start/due times it returns are ALREADY in the user's local timezone (each carries its zone abbreviation, e.g. '10:00 AM EDT') — state them exactly as given; do NOT convert or shift them. Never invent an ordering, and never tell the user their tasks/schedule aren't in your files or ask them to upload anything. If it returns an error, say you couldn't reach their schedule and offer to retry.";
+  "For ANY question about the user's schedule, calendar, agenda, day, tasks, backlog, priorities, meetings, appointments, free/busy, or what to do next — including 'what's on my schedule/calendar/day today', 'what's on my plate', 'what's in my backlog', 'what's up next', 'what's overdue', 'what are my <area> priorities' — call the `schedule_and_priorities` tool and answer from its ranked results. It is the user's nightly-planned schedule + tasks, the source of truth. Use view 'scheduled' for 'what's on my schedule/calendar/day today'; otherwise pick the matching `view` (backlog / up_next / overdue / priorities) and the relevant `category`. Only an EXPLICIT 'external calendar' / 'Outlook calendar' request should use get_external_calendar_events instead. The start/due times it returns are ALREADY in the user's local timezone (each carries its zone abbreviation, e.g. '10:00 AM EDT') — state them exactly as given; do NOT convert or shift them. For a schedule question, list EVERY item it returns for the day asked about — do not shorten the day to a few highlights — and if `truncated` is true, say the list is partial. BLOCKED tasks are never in the ranked list: for ANY blocker or status question ('anything blocking me?', 'what's stuck?', 'where do things stand?') pass `include_blocked: true` (or use view 'blocked') and name every task in `blocked` with its `blocker_reason`; only say there are no blockers when you did that and `blocked_count` is 0. Never invent an ordering, and never tell the user their tasks/schedule aren't in your files or ask them to upload anything. If it returns an error, say you couldn't reach their schedule and offer to retry.";
 
 /**
  * Execute a `prioritize` (schedule_and_priorities) tool call. Returns a JSON string (the model reads
@@ -377,14 +382,33 @@ export async function dispatchPrioritize(
   // whole set. The checklist is exactly that caller, and a cap it cannot opt out of made "give me a
   // checklist of X" quietly incomplete with nothing on screen saying so. Raising the ceiling changes
   // nothing for callers that omit `limit`.
-  const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(args.limit, 200) : 10;
-  const VIEWS = new Set(["priorities", "backlog", "up_next", "scheduled", "overdue"]);
+  const VIEWS = new Set(["priorities", "backlog", "up_next", "scheduled", "overdue", "blocked"]);
   const view = typeof args.view === "string" && VIEWS.has(args.view) ? args.view : "priorities";
+  // SCHEDULE ANSWERS ARE COMPLETE (owner-approved B, 2026-11-04). The default 10 is right for a prose
+  // "what's on my plate", and wrong for a schedule: the scheduled view spans EVERY day and rankTasks puts
+  // starred items first, so 8 starred future items filled 8 of 10 slots and "what's on today" showed 2 of
+  // 6 (reproduced offline on main 32f50e4, scripts/status-answers.test.ts B1). So the scheduled view
+  // defaults to the ceiling. An explicit `limit` is still honoured, and `total`/`truncated` below say
+  // when a list was cut. Ranking is unchanged: this only moves where the slice ends.
+  const LIMIT_CEILING = 200;
+  const limit =
+    typeof args.limit === "number" && args.limit > 0
+      ? Math.min(args.limit, LIMIT_CEILING)
+      : view === "scheduled"
+        ? LIMIT_CEILING
+        : 10;
+  // BLOCKER / STATUS QUESTIONS REACH BLOCKED TASKS (owner-approved A, 2026-11-04). Every read but the
+  // ceremony report dropped BLOCKED, so "anything blocking me?" could only ever answer "no blockers"
+  // (memory.md "Blocker DESYNC", 2026-08-06). Blocked tasks come back in a SEPARATE `blocked` array and
+  // never enter `ranked`, so priority ranking and the priority widget are untouched.
+  const wantBlocked = view === "blocked" || args.include_blocked === true;
 
   try {
-    const { getTasksForUser } = await import("./tasks.server");
+    const { getTasksForUser, getTaskBlockers } = await import("./tasks.server");
     const { rankTasks } = await import("./scoring");
-    const tasks = await getTasksForUser(userEmail, category);
+    // includeBlocked widens ONLY the read; rankTasks drops BLOCKED itself, so `ranked` is identical either
+    // way (status-answers.test.ts A5 pins that).
+    const tasks = await getTasksForUser(userEmail, category, wantBlocked ? { includeBlocked: true } : undefined);
     // View = a filter over the same open-task set; ranking stays single-sourced via rankTasks.
     const now = Date.now();
     const inView = tasks.filter((t) => {
@@ -397,6 +421,8 @@ export async function dispatchPrioritize(
           return !!t.is_scheduled;
         case "overdue":
           return !!t.due_date && new Date(t.due_date).getTime() < now;
+        case "blocked":
+          return false; // a pure blocker question: the answer is the `blocked` array, not a ranking
         default:
           return true; // "priorities" — all open tasks
       }
@@ -405,14 +431,46 @@ export async function dispatchPrioritize(
     // All three must exclude, or a deferred task leaks back into automation from whichever one was
     // missed — the exact failure the parking-lot rollout hit when it was applied in only one place.
     const { taskIdsInReminderWindow } = await import("./turns.server");
-    const ranked = rankTasks(inView, limit, await taskIdsInReminderWindow(userEmail));
+    // Rank the WHOLE view, then slice: the order is exactly rankTasks' order, and `total` is honest.
+    const all = rankTasks(inView, Number.POSITIVE_INFINITY, await taskIdsInReminderWindow(userEmail));
+    const ranked = all.slice(0, limit);
     const tz = timeZone || "UTC";
+    let blockedOut: Record<string, unknown> = {};
+    if (wantBlocked) {
+      // Same parking-lot rule as the ceremony report (getStandupTasks): a task the user set aside is not
+      // reported, blocked or not. A failed reason lookup degrades to reason=null, never to "no blockers".
+      const rows = tasks.filter((t) => t.status === "BLOCKED" && !(t.tags ?? []).includes("parking-lot"));
+      let reasons = new Map<string, { reason: string; agentId: string | null }>();
+      try {
+        reasons = await getTaskBlockers(userEmail);
+      } catch {
+        /* reasons are a bonus; the blocked rows themselves are the answer */
+      }
+      blockedOut = {
+        blocked_count: rows.length,
+        blocked: rows.map((t) => ({
+          id: t.id,
+          title: t.title,
+          category: t.category,
+          status: t.status,
+          assigned_agent: t.assigned_agent ?? null,
+          blocker_reason: reasons.get(t.id)?.reason ?? null,
+          due_date: formatInTz(t.due_date, tz),
+          start_time: formatInTz(t.start_time ?? null, tz),
+        })),
+      };
+    }
     return JSON.stringify({
       view,
       category: category ?? "all",
-      count: ranked.length,
+      count: view === "blocked" ? (blockedOut.blocked_count as number) : ranked.length,
+      // How many matched before the limit, and whether this list was cut. A schedule answer that is
+      // `truncated` must say so rather than present a partial day as the whole day.
+      total: all.length,
+      truncated: all.length > ranked.length,
       // Times below are ALREADY in this timezone (with the zone abbreviation) — read them as-is.
       timezone: tz,
+      ...blockedOut,
       ranked: ranked.map((r, i) => ({
         rank: i + 1,
         // The task's real id. REQUIRED, and its absence was a live bug: build_checklist's schema tells
