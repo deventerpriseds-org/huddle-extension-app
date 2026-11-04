@@ -4858,3 +4858,10 @@ Owner: *"Go on 3 and 4, I don't understand why voice can't trigger the same jobs
 ## ACT:duplicate-cleanup — remove existing duplicate tasks (owner "go on 3", 2026-10-28)
 - [x] Read journey `public.tasks` (canonical): 4 exact-duplicate groups + near-duplicates via pg_trgm ≥0.55. Presented grouped with a recommended keep per group.
 - [ ] Owner approves rows → DELETE from journey public.tasks only (mirror follows via trigger) → read back 0 remaining.
+
+## ACT:status-answers — blocker questions reach BLOCKED tasks; schedule answers in ET and complete (owner-approved A + B, 2026-11-04)
+Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `docs/qc-evidence/BUILD-status-answers.md`.
+- [x] Re-verified on main 32f50e4 (offline fixture `scripts/status-answers.test.ts`): UTC already fixed (times read "9:00 AM EST"); over-trim REPRODUCED 2 of 6; BLOCKED unreachable from `schedule_and_priorities`.
+- [ ] A: `include_blocked` / `view:"blocked"` on `schedule_and_priorities` → separate `blocked` array (+ reasons, explicit `blocked_count`); ranked list untouched.
+- [ ] B: scheduled view returns every item by default; `total`/`truncated` say when a list was cut.
+- [ ] Owner confirms live ("anything blocking me?" names the blocked task; "what's on today" lists all items in ET). NOT yet confirmed.
