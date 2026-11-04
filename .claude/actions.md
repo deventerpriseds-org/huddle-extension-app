@@ -4862,4 +4862,5 @@ Owner: *"Go on 3 and 4, I don't understand why voice can't trigger the same jobs
 ## ACT:reminder-tools — agents can LIST, CANCEL and MOVE the owner's reminders/alarms (2026-11-03/04)
 - [x] Additive tools `list_reminders` / `cancel_reminder` / `move_reminder` over `chat.reminders` (owner-scoped, owner time zone, pending-only mutations, ambiguity → candidates). Wired: OpenAI + Lovable text paths (claimAction on mutations) + voice NATIVE. Branch `claude_reminder-tools` commit cc3e742.
 - [x] Offline suite `npm run test:reminder-tools` (scripts/reminder-tools.test.ts). Evidence: docs/qc-evidence/BUILD-reminder-tools.md.
-- [ ] Mutation proofs, merge latest main, owner 👍 rows in the build log, then PR/merge (NOT done from this lane; branch only).
+- [x] Mutation proofs: 12/12 FIRED (mutate.sh). Owner 👍 rows written in the build log.
+- [ ] Owner 👍 on the NEEDS OWNER rows, then PR/merge/deploy, then live check (NOT done from this lane; branch only).
