@@ -4900,3 +4900,6 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [x] Offline suite `npm run test:reminder-tools` (scripts/reminder-tools.test.ts). Evidence: docs/qc-evidence/BUILD-reminder-tools.md.
 - [x] Mutation proofs: 12/12 FIRED (mutate.sh). Owner 👍 rows written in the build log.
 - [ ] Owner 👍 on the NEEDS OWNER rows, then PR/merge/deploy, then live check (NOT done from this lane; branch only).
+
+## ACT:pr-number-ambiguity — always write <repo>#<n> (2026-11-04)
+- [x] A Stop-hook review read eds-claude-skills#131 as huddle-extension-app#131. Ground truth: `84b262c` vs `c0e8c40`. Logged in `.claude/accuracy-log.md` (7b96d775) and memory.md. Guard: `<repo>#<n>` in every multi-repo reference.

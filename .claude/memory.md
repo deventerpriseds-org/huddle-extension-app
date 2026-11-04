@@ -140,6 +140,7 @@ index into a requirement list**.
 - Owner re-scope: whole lane, re-asks ride the EXISTING 45–90 min spacing chain (armConfirmAsksSpaced) + windows, no new day cap, no review pause; 24h per-item floor only. The heartbeat re-arms right after each send (armOnly pass) — re-arming only at 9/13/17 was a hidden 3/day/agent cap.
 - Memory architecture: owner chose (a) SOFT preference (2026-10-27) and "thought it was already this way" — it largely IS: runAgentTurn's laneBoost re-ranks shared memory by the agent's domains/themes (topic text, not agent name). Gaps: voice has no lane boost/Executive Profile; the owner's ChatGPT knowledge isn't ingested yet.
 - ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
+- Multi-repo PR numbers collide: huddle-extension-app#131 (`c0e8c40`, another session's release) vs eds-claude-skills#131 (`84b262c`, verify-work 0e). Always write `<repo>#<n>` (accuracy-log 2026-11-04).
 
 ## Change register 2026-11-03 — lanes in flight (NOT deployed, NOT owner-confirmed)
 Hard rule (#128): additive work ships; ANY change to existing behaviour needs a Today|Becomes|Why|Impact|Reversible row + owner 👍 first.
