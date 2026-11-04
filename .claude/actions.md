@@ -4903,3 +4903,7 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 
 ## ACT:pr-number-ambiguity — always write <repo>#<n> (2026-11-04)
 - [x] A Stop-hook review read eds-claude-skills#131 as huddle-extension-app#131. Ground truth: `84b262c` vs `c0e8c40`. Logged in `.claude/accuracy-log.md` (7b96d775) and memory.md. Guard: `<repo>#<n>` in every multi-repo reference.
+
+## ACT:task-pickup-fit — why agents pick up tasks they can't add value to (2026-11-04)
+- [x] Fact-find: live queue read (journey public.tasks + huddle-extension-app azure-pg-query run 41816077919, 26 rows). Every assigned task is confirm-asked; mode only shapes wording (workability.ts). Groom's `reminder` tag is over-applied to research ("when in doubt ADD", sticky) and missing on you-only/needs-data tasks.
+- [ ] Owner 👍 on the proposed changes (grooming tag rule, remind-mode helpful slice, needs-input rule). Nothing changed yet.
