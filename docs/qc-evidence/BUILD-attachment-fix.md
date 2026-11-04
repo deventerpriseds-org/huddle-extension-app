@@ -30,3 +30,19 @@
   has no DB). So in a DEV build the client chain button -> input -> upload -> error-toast is intact.
 - Interpretation: the break is NOT a dead click handler / overlay in the dev build. Remaining suspects:
   production build/runtime differences, server side in prod, or the surface the owner uses.
+
+## Step 3 -- ground truth: when did uploads last WORK? (observation, primary source = prod DB)
+- azure-pg-query.yml run 41762762471 (job 126354030921), eds-postgresql/RAG_AI_Agents:
+  - newest `artifacts.items WHERE folder='Uploads'`: **2026-10-30 12:42 UTC**, iris-chase, image/jpeg,
+    516931 B, "Screenshot_20261030_084003_Huddle chat..." (an Android screenshot).
+  - matching `chat.pending_turns` row with `payload ? 'attachments'`: 2026-10-30 12:42, dm-iris-chase,
+    status done, n=1.
+  - Uploads/day before that: 09-19, 09-15, 09-14 (3), 09-13 (2), 09-12 (3), 09-02, 08-28, 08-26 (3) ...
+    All recent uploads are phone screenshots ("Screenshot_YYYYMMDD_..._<app>.jpg").
+- deploy-swa.yml runs: the newest is **#476, run 40885633183, 9983343, 2026-10-29 13:50Z, success**. Nothing
+  has deployed since (the only later main commit is 32f50e4 #128, CLAUDE.md only, so paths-ignore keeps
+  it from triggering a deploy).
+- **Inference (high confidence, from those two facts):** the build serving prod today is the SAME build
+  that accepted an upload at 10-30 12:42Z. So the break is NOT a code regression in this repo's deployed
+  code. None of the listed suspect commits (#126 #125 #120 #115 #113 #114 #116 #124) can be the cause,
+  because all of them were live during the last success.
