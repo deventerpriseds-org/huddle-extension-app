@@ -33,6 +33,14 @@ for (const title of [
 for (const title of ["Research reminder apps for teams", "Build a reminders widget", "Reminders feature spec"])
   t(`noun use is not an ask: "${title}"`, !asksForReminder(title), `asksForReminder=true`);
 
+console.log("\n--- somewhere to GO -> an alarm is right (owner 2026-11-04) ---");
+for (const title of ["Go to church", "Go to the mall on Saturday", "Attend the open house", "Pick up dry cleaning", "Visit Grandma Sunday"])
+  t(`go-somewhere: "${title}" -> remind`, mode(title) === "remind", `got ${mode(title)}`);
+for (const title of ["Research mall hours", "Find a church near the new house", "Plan the trip to Atlanta"])
+  t(`still research, not an alarm: "${title}" -> produce`, mode(title) === "produce", `got ${mode(title)}`);
+t("remind hint proposes an ALARM before they need to leave", /ALARM/.test(modeProposalHint("remind")) && /before they need to leave/.test(modeProposalHint("remind")));
+t("go-somewhere gets the board chip", groomTags([], [], "Go to church Sunday").includes(REMINDER_TAG));
+
 console.log("\n--- a stale `reminder` tag no longer forces reminder-only (the live defect) ---");
 for (const title of [
   "Research AI-assisted SDLC practices",
@@ -50,7 +58,7 @@ for (const title of ["Subscribe to Aha! Product Management", "Start AI certifica
 console.log("\n--- regression: prior classifications unchanged ---");
 t("Research … -> produce", mode("Research Agentforce by Salesforce") === "produce");
 t("Reply to … -> assist", mode("Reply to DBA email") === "assist");
-t("Go to church -> assist", mode("Go to church") === "assist");
+t("Reply to … stays assist (not a place)", mode("Reply to the pastor") === "assist");
 t("LIFE category -> assist", mode("Ambiguous thing", { category: "LIFE" }) === "assist");
 t("no signal -> produce", mode("Ambiguous thing") === "produce");
 
