@@ -4853,6 +4853,8 @@ Owner: *"go until deployed. my bigger concern is you undoing or pivoting or regr
 - Queued (approved, not started): #3 #5 #6 #8 #10 #11 #12 #13 #15 + additive design items (DESIGN-new-capabilities-2026-11-03.md on claude_design-new-capabilities a7f6d1a).
 - Owner decisions open: #14 hold/build; background work skips recurring tasks (rec. yes); A-F (Google events, attached PDF/Word, ChatGPT import, overcapacity line, in-chat Delete card, real subtasks); G-I (mirror row after calendar edit, confirm card before agent calendar delete, shared token helper).
 - Status: NOTHING from this register deployed yet; nothing owner-confirmed.
+- **2026-11-04 owner decision — recurring tasks: "a is fine" → background work (auto-work) SKIPS every `recurring:*` occurrence** (same mechanism as the parking-lot exclusion). Recurring rules themselves are approved-not-built (design a).
+- 2026-11-04 deployed: #131 c0e8c40 (inbox read, planning contract + 1:1 answer-first, calendar exposure test), #132 4a4fbff (status answers), release-c (context+confirm, reminder tools). journey #85 (calendar edit/delete + task-tool user scoping) in CI. Attachment lane resumed (prod build unchanged since last good upload 10-30 → likely device/env, not code).
 
 ### ACT:plan-intent-map (2026-10-29) — APPROVED, NOT BUILT
 Owner: planning = short timed table, create missing tasks, start NOTHING; times only when asked ("if i tell it to add
