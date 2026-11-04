@@ -59,3 +59,22 @@
   `attachmentButton` only; throws if the filter does not find exactly one). Loads locally: `['attachmentButton']`.
 - Next: dispatch verify-uat.yml on claude_attachment-fix with checks_file=that module, desktop 1000x680,
   then phone 390x844 (sequential -- both force-push the uat-shots branch).
+
+## Step 6 -- Android bridge file-chooser path (observation, primary source = bridge source + history)
+- Cloned `deventerprisesds/android-bridge-template` (main 19d2309, pushed 2026-10-29 13:11Z).
+- The Huddle APK is config `configs/8596e6c2-.../bridge.config.json` (baseUrl = the live SWA). Last Huddle
+  APK build: v1.0.13, 2325a7a, 2026-10-29 13:04Z (alarm-only change; touches bridge.config.json only).
+- MainActivity.kt:112 `webView.webChromeClient = BridgeWebChromeClient(this)` -- the only chrome client.
+- `webview/BridgeWebChromeClient.kt` overrides onConsoleMessage, onPermissionRequest,
+  onGeolocationPermissionsShowPrompt. **It has NO `onShowFileChooser`.** File history: one commit,
+  00babcb 2026-06-17 "Initial commit". `grep -rn onShowFileChooser` over the whole app: 0 hits.
+- No bridge-side file-pick JS interface for chat either: `@JavascriptInterface` methods include
+  isBridgeApp/getFcmToken/openAlarmFilePicker (alarm sound only); Huddle's src has no AndroidBridge
+  file/upload call (only FCM token, HuddleView.tsx:1286-1292).
+- Android platform fact (WebChromeClient docs): the default onShowFileChooser returns false, which
+  cancels the `<input type=file>` request -- no picker, no error, nothing on screen.
+- **Inference (high confidence):** inside the Huddle Android APK the paperclip tap has NEVER been able to
+  open a picker -- this is by construction since 2026-06-17, not a regression. Every recorded upload
+  (all Android screenshots, last 10-30 12:42Z) must therefore have come from a browser on the phone
+  (Chrome), not the APK. If the owner's 11-04 attempt was from the Huddle APK (or the Journey Voice APK,
+  same template), that alone explains "stopped working". NOT yet confirmed which surface the owner used.
