@@ -4904,6 +4904,7 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 ## ACT:pr-number-ambiguity — always write <repo>#<n> (2026-11-04)
 - [x] A Stop-hook review read eds-claude-skills#131 as huddle-extension-app#131. Ground truth: `84b262c` vs `c0e8c40`. Logged in `.claude/accuracy-log.md` (7b96d775) and memory.md. Guard: `<repo>#<n>` in every multi-repo reference.
 
+<<<<<<< HEAD
 ## ACT:handoff-confirm-flow — 1:1 hand-off, Confirm buttons, confirm-starts-work, honesty, dedup (owner-approved 2026-10-31, session_014kkrf3BS7LaYkxC8HkdzMt)
 Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.pending_turns`). Seven breaks found; owner approved all fixes and Option A (a live confirm starts the work even past the agent's WIP cap).
 - [x] AC set (independent ac-writer): 85 ACs, F1–F8, spelling table. Branch `claude_ac-handoff-confirm` 58ae0ba, `docs/qc-evidence/AC-handoff-confirm-flow.md`.
@@ -4917,3 +4918,10 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
 - [x] Owner screenshot: Iris `focus_on` failed "task board isn't connected" at 11-03 22:59/23:03. Ground truth (`chat.pending_turns` payloads via azure-pg-query.yml run 41815988842): those were `dur-qa-paf-5f7a74-*` turns from `qa-plan-and-answer-first.mjs` (other session), journey deliberately OFF; every owner-sent turn had journey ON. The refusal was the #124 guard working as designed — not a regression.
 - [x] Cleanup (standing pre-authorization for provable test artifacts; plan stated in-turn before running): deleted 4 `chat.pending_turns` rows by `dur-qa-paf-%` / `Test- qa-paf-%` marker; rag_chunks had 0. Verified 0 remaining (run 41816128549).
 - [ ] Fix: `qa-plan-and-answer-first.mjs` targets the LIVE `dm-iris-chase` and only prints its cleanup SQL. Point it at a test huddle id and auto-clean by marker. Folded into the handoff PR.
+=======
+## ACT:task-pickup-fit — why agents pick up tasks they can't add value to (2026-11-04)
+- [x] Fact-find: live queue read (journey public.tasks + huddle-extension-app azure-pg-query run 41816077919, 26 rows). Every assigned task is confirm-asked; mode only shapes wording (workability.ts). Groom's `reminder` tag is over-applied to research ("when in doubt ADD", sticky) and missing on you-only/needs-data tasks.
+- [x] Owner 👍 2026-11-04 with refinement: reminders ONLY on an explicit "remind me to…"; grooming must not assign a task an agent can't finish; research is just done; user-last-click tasks get the legwork (link on the card, comparisons with reviews + forum feedback).
+- [x] Built on `claude_task-pickup-fit` (a9cbb05e): groom.ts NO_AGENT/groomOwner/groomTags, workability.ts asksForReminder + rewritten hints, work directive puts exact links on the card. test:mode 54/54, ownership-judge, lane-starvation 26, priority-lane, week-order, assign-on-create, ask-shape all pass. 6/6 mutations FIRED.
+- [ ] Merge + deploy, then live: strip stale reminder tags, reset the 7 reminder-only proposals so they get a real ask, re-groom, owner confirms the new check-ins.
+>>>>>>> origin/main
