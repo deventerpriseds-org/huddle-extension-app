@@ -106,7 +106,102 @@ async function voiceBarge({ page, check, screenshot }, { label, text }) {
   return reply;
 }
 
+// Composer paperclip (ACT-45), owner-reported 2026-11-04 "the attachment button has also stopped working"
+// (docs/qc-evidence/BUILD-attachment-fix.md). Drives the REAL button: click -> native file chooser ->
+// a small Test- file -> uploadChatAttachmentFn -> a staged chip. Then removes the chip WITHOUT sending
+// (no turn, no board write) and deletes the uploaded artifact via deleteArtifactFn so nothing is left in
+// the owner's Uploads. Server-fn ids are path-derived and stable (see upload-probe.mjs).
+const DELETE_ARTIFACT_FN = "db3e2540b2d8b35fdeef3e8dbfffad853fde9e8005df06c5b3dfb90f235086b2";
+async function deleteUploadedArtifact(origin, id) {
+  const { toJSONAsync } = await import("seroval");
+  const { defaultSerovalPlugins } = await import("@tanstack/router-core");
+  const body = JSON.stringify(
+    await toJSONAsync(
+      { data: { caller: { entra_email: process.env.HUDDLE_CALLER || "von.ellis@enterpriseds.io" }, id } },
+      { plugins: defaultSerovalPlugins },
+    ),
+  );
+  const r = await fetch(`${origin}/_serverFn/${DELETE_ARTIFACT_FN}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-tsr-serverFn": "true", accept: "application/json" },
+    body,
+  });
+  return r.status;
+}
+async function attachmentButton({ page, check, screenshot }) {
+  // A real huddle must be selected or the composer is not rendered (see standupCeremonyTiming's note).
+  const groupSection = page.locator("div.mb-2", { has: page.locator("span", { hasText: "Group huddles" }) });
+  const firstGroupHuddle = groupSection.locator("div.flex.flex-col > button").first();
+  if (await firstGroupHuddle.waitFor({ state: "visible", timeout: 8000 }).then(() => true).catch(() => false)) {
+    await firstGroupHuddle.click();
+    await page.waitForTimeout(300);
+  }
+  const btn = page.locator('button[aria-label="Attach a file"]').first();
+  const present = await btn.waitFor({ state: "visible", timeout: 8000 }).then(() => true).catch(() => false);
+  check("Attach button present in the composer", present);
+  if (!present) return;
+  check("Attach button is enabled", await btn.isEnabled());
+  // Nothing may sit on top of it (an overlay would swallow the tap with no error at all).
+  const onTop = await btn.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return !!top && (top === el || el.contains(top));
+  });
+  check("Attach button is the topmost element at its centre (not covered)", onTop);
+
+  // Capture the upload's artifact id from the server-fn response so it can be cleaned up.
+  let uploadedId = null;
+  const onResponse = async (r) => {
+    if (r.request().method() !== "POST" || !r.url().includes("/_serverFn/")) return;
+    const txt = await r.text().catch(() => "");
+    const m = txt.match(/"(art-[0-9a-f-]{36})"/);
+    if (m) uploadedId = m[1];
+  };
+  page.on("response", onResponse);
+
+  let chooserOpened = false;
+  try {
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser", { timeout: 8000 }), btn.click()]);
+    chooserOpened = true;
+    await chooser.setFiles({
+      name: "Test-attach-uat.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from(`Test attachment from verify-uat ${new Date().toISOString()}\n`),
+    });
+  } catch {
+    /* reported below */
+  }
+  check("Clicking Attach opens the native file chooser", chooserOpened);
+  if (!chooserOpened) {
+    page.off("response", onResponse);
+    return;
+  }
+  const chip = page.locator('button[aria-label="Remove Test-attach-uat.txt"]');
+  // Poll for the chip OR an error toast (a toast auto-dismisses in ~4s, so read it as soon as it shows).
+  let staged = false;
+  let toasts = [];
+  for (let i = 0; i < 60 && !staged && toasts.length === 0; i++) {
+    await page.waitForTimeout(500);
+    staged = (await chip.count()) > 0;
+    toasts = await page.locator("[data-sonner-toast]").allInnerTexts().catch(() => []);
+  }
+  check(
+    "Picked Test- file uploads and shows as a staged chip",
+    staged,
+    staged ? `artifact=${uploadedId ?? "id not captured"}` : `no chip staged; toasts=${JSON.stringify(toasts)}`,
+  );
+  await screenshot("attachment-staged");
+  page.off("response", onResponse);
+  // Unstage without sending, then remove the stored upload.
+  if (staged) await chip.click().catch(() => {});
+  if (uploadedId) {
+    const status = await deleteUploadedArtifact(new URL(page.url()).origin, uploadedId).catch((e) => String(e));
+    check("Test- upload cleaned up (deleteArtifactFn)", status === 200, `id=${uploadedId} http=${status}`);
+  }
+}
+
 export const checks = [
+  attachmentButton,
   async function panelCollapse({ page, check, screenshot }) {
     const sidebarBefore = await page.locator('aside:has-text("EDS workspace")').count();
     check("Sidebar visible by default on desktop", sidebarBefore === 1);
