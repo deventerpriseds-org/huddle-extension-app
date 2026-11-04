@@ -30,7 +30,7 @@ export const PRIORITIZE_TOOL = {
       category: {
         type: "string",
         description:
-          "Optional domain to scope to, e.g. LIFE, VENTURES, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION. Omit to span everything. Composes with any view (e.g. view='priorities', category='CAREER').",
+          "Optional domain to scope to, e.g. LIFE, VENTURES, JOB, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION (JOB = work for the user's employer; CAREER = getting their next role). Omit to span everything. Composes with any view (e.g. view='priorities', category='CAREER').",
       },
       limit: {
         type: "number",
@@ -76,7 +76,7 @@ export const CHECKLIST_TOOL = {
       category: {
         type: "string",
         description:
-          "Optional journey category to scope the sweep to (e.g. LIFE, VENTURES, CAREER). Composes with `match`.",
+          "Optional journey category to scope the sweep to (e.g. LIFE, VENTURES, JOB, CAREER; JOB = work for the user's employer; CAREER = getting their next role). Composes with `match`.",
       },
       task_ids: {
         type: "array",

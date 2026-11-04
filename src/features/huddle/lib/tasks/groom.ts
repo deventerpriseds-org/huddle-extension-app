@@ -19,7 +19,7 @@ export const GROOM_BACKLOG_TOOL = {
     properties: {
       category: {
         type: "string",
-        description: "Optional: only groom tasks in this lane (LIFE, VENTURES, CAREER, EDUCATION, PERSONAL). Omit to groom everything.",
+        description: "Optional: only groom tasks in this lane (LIFE, VENTURES, JOB, CAREER, EDUCATION, PERSONAL; JOB = work for the user's employer; CAREER = getting their next role). Omit to groom everything.",
       },
       limit: { type: "number", description: "Max tasks to groom this pass (default 40)." },
     },
