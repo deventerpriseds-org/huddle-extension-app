@@ -48,3 +48,15 @@ Branch: `claude_plan-and-answer-first` off origin/main `32f50e4`. Not merged, no
   capabilities still hand off per the capability rules.
 - `huddle.functions.ts`: scene uses `outOfLaneSceneLine(scope)`; laneDirective uses `laneAnswerFirstDirective`.
 - `npx tsc --noEmit -p .` → exit 0.
+
+## Step 3 — offline test (resumed lane, 2026-11-04)
+
+- Lane resumed after a container restart from `669a550`. Steps 0-2 were already pushed; steps 3+ are new.
+- NEW `scripts/plan-and-answer-first.test.ts` + `npm run test:plan-and-answer-first` → **35 passed, 0 failed**.
+  P1-P14 planning contract (focus trigger, tool description, planning hint content, the tools it names exist,
+  wired on BOTH backends, priority-check REPLY_LINE unchanged); A1-A13 answer-first (group line pinned to the
+  origin/main text byte for byte — confirmed present once in `git show origin/main:…huddle.functions.ts`);
+  W1-W6 source wiring (scene + laneDirective use the helpers; deliverOwnerFollowup, capabilityHandoffBlock and
+  the meta-task guard still present).
+- Note: `find_open_slots` named in PLANNING_SYSTEM_HINT ("if you have it") is NOT a Huddle tool in src; it is
+  conditional wording, so it is left as is and not asserted by P12.
