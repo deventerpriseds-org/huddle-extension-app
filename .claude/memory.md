@@ -3830,3 +3830,9 @@ here as fact three times before being checked.)
 - Live: every 5 min 7–22 ET; `chat.email_replies` ledger (owed→drafted→replied|dismissed); Iris's alert carries a card (Save to Drafts / Edit first / No reply needed, "N owed · M settled today").
 - **Every reply path must attach a widget, not just the normal one.** Amy's alert lost its card because Iris timed out after the tool call and `ensureNotSilentOnRealWork` / `hardReply` built a bare reply. Wire any reply-borne widget through one helper used by all three paths (`emailCardFor`).
 - **Durable turn `text` is `.max(4000)`** (huddle.functions.ts input schema) — an over-long directive fails the WHOLE turn as `status=error`. Cap any directive that embeds outside content.
+
+## Plan-and-answer-first — what is TRUE on branch `claude_plan-and-answer-first` (2026-11-04; NOT on main, NOT live)
+- focus_on trigger (FOCUS_SYSTEM_HINT + FOCUS_TOOL.description, tasks/tools.ts) = explicit start wording OR a reply to the scheduled priority check. "Plan/organize/lay out" is NOT a start.
+- PLANNING_SYSTEM_HINT (tasks/tools.ts) is appended right after FOCUS_SYSTEM_HINT on BOTH backends; voice has no system hint slot for it — it only sees the new FOCUS_TOOL.description.
+- Out-of-lane wording lives in `lib/lane-handoff.ts`: group line is the original verbatim; 1:1 answers first then names the owner (no @). deliverOwnerFollowup / capabilityHandoffBlock / meta-task guard untouched.
+- With journey disabled, a focus_on attempt is still recorded in result.toolUses ("focus_on -- journey disabled") — a harness can observe "was it called?" with zero board writes.

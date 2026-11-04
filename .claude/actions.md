@@ -4858,3 +4858,9 @@ Owner: *"Go on 3 and 4, I don't understand why voice can't trigger the same jobs
 ## ACT:duplicate-cleanup — remove existing duplicate tasks (owner "go on 3", 2026-10-28)
 - [x] Read journey `public.tasks` (canonical): 4 exact-duplicate groups + near-duplicates via pg_trgm ≥0.55. Presented grouped with a recommended keep per group.
 - [ ] Owner approves rows → DELETE from journey public.tasks only (mirror follows via trigger) → read back 0 remaining.
+
+## ACT:plan-and-answer-first — planning contract + answer-first in a 1:1 (owner-approved 2026-11-03)
+- [x] Planning contract: focus_on only on explicit start / priority-check reply; PLANNING_SYSTEM_HINT on both backends (branch `claude_plan-and-answer-first`, evidence `docs/qc-evidence/BUILD-plan-and-answer-first.md`).
+- [x] Answer-first in a 1:1 via `lib/lane-handoff.ts`; group wording byte-identical.
+- [x] Offline `npm run test:plan-and-answer-first` 35/35; 7/7 mutations FIRED (BUILD file step 4).
+- [ ] Live harness `qa-plan-and-answer-first.mjs` written, NOT run. Not merged, no PR, not deployed. NOT confirmed live.
