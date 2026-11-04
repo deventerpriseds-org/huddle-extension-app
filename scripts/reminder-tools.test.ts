@@ -144,6 +144,8 @@ console.log("owner scoping");
   const out = J(await dispatchCancelReminder({}, { about: "dentist" }, TZ, { store, resolveEmail: async () => null, nowMs: NOW }));
   t("no resolvable owner → no_owner", out.error, "no_owner");
   t("no owner → store never read", calls.list, 0);
+  const lo = J(await dispatchListReminders({}, {}, TZ, { store, resolveEmail: async () => null, nowMs: NOW }));
+  t("list with no owner → no_owner, store never read", `${lo.error}/${calls.list}`, "no_owner/0");
 }
 {
   const { store } = fakeStore(seed());
