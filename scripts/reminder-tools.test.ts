@@ -288,9 +288,8 @@ t("SQL: moveOwnedReminder is owner- AND pending-scoped", OWNER_PENDING.test(fnBo
 t("SQL: listRemindersForOwner is owner-scoped", /lower\(coalesce\(user_email, ''\)\) = lower\(\$1\)/.test(fnBody(turns, "listRemindersForOwner")), true);
 
 const hf = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
-const count = (s: string, needle: string) => s.split(needle).length - 1;
-t("text: cancel passes claimAction in BOTH paths", count(hf.replace(/\s+/g, " "), "dispatchCancelReminder(data.caller, ") >= 2 && /dispatchCancelReminder\([^)]*\{\s*claim: claimAction/.test(hf), true);
-t("text: move passes claimAction in BOTH paths", count(hf.replace(/\s+/g, " "), "dispatchMoveReminder(data.caller, ") >= 2 && /dispatchMoveReminder\([^)]*\{\s*claim: claimAction/.test(hf), true);
+t("text: cancel passes claimAction in BOTH paths", (hf.match(/dispatchCancelReminder\(data\.caller,[^)]*\{\s*claim: claimAction/g) ?? []).length, 2);
+t("text: move passes claimAction in BOTH paths", (hf.match(/dispatchMoveReminder\(data\.caller,[^)]*\{\s*claim: claimAction/g) ?? []).length, 2);
 t("text: OpenAI toolset offers all three", ["LIST_REMINDERS_TOOL,", "CANCEL_REMINDER_TOOL,", "MOVE_REMINDER_TOOL,"].every((n) => hf.includes(`          ${n}`)), true);
 t("text: Lovable path registers all three", ["lovableTools.list_reminders", "lovableTools.cancel_reminder", "lovableTools.move_reminder"].every((n) => hf.includes(n)), true);
 
