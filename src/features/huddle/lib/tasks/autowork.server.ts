@@ -63,7 +63,10 @@ function researchDirective(task: { id: string; title: string; category: string |
     `current, credible information — plan your searches, prioritize authoritative and leading sources in ` +
     `this area, and think it through. Then:\n` +
     `1) You MUST call create_artifact to SAVE your full findings as a document — detailed, with ` +
-    `your analysis, the sources you used, and a clear recommendation or concrete next steps. Choose the ` +
+    `your analysis, the sources you used, and a clear recommendation or concrete next steps. When the ` +
+    `last step is the user's own (subscribe, sign up, buy, enroll), the document carries the EXACT links ` +
+    `they need (sign-up, subscription, product or course pages) so they are on the card and the user only ` +
+    `does the last click; any comparison includes reviews and forum feedback. Choose the ` +
     `\`format\` that actually fits what you produced rather than defaulting blindly: 'md' for plain prose ` +
     `(still the right default), 'docx' when the user will send or print it, 'pptx' for a deck, and ` +
     `'mermaid'/'html'/'svg' when the finding is a diagram or a visual. Set task_id ` +
@@ -142,7 +145,7 @@ export function confirmIntentDirective(
   opts: { followUp?: boolean } = {},
 ): string {
   // Assist/produce router: shape the proposal so the user CONFIRMS a concrete assumed action rather than
-  // explaining from scratch, and so an assist task (e.g. "Go to church") proposes a reminder, not a
+  // explaining from scratch, and so an assist task (e.g. "Subscribe to Aha!") proposes the legwork (link, options) — not a
   // fabricated document. The mode hint also tells the agent to self-correct if the mode is wrong — the
   // user's confirmation is the final catch for a mis-classification.
   const mode = classifyTaskMode(task);
