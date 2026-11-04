@@ -87,3 +87,20 @@ Branch: `claude_plan-and-answer-first` off origin/main `32f50e4`. Not merged, no
 - Prints marker cleanup SQL for chat.pending_turns (`id`, `payload`) and public.rag_chunks (`text`) — column
   names read from turns.server.ts / rag/azure-pg.server.ts. Server-fn ids default to durable-harness's; refresh
   from the deployed build if they 404.
+
+## Step 6 — merge origin/main + final test run
+
+- `git fetch origin`; `git rev-list --left-right --count origin/main...HEAD` → `0 5`. origin/main is still
+  `32f50e4`, which this branch already contains; `git merge --no-edit origin/main` → "Already up to date."
+- `npx tsc --noEmit -p .` → exit 0.
+- test:router 39/0 · test:ask-shape 69 PASS/0 FAIL · test:ownership-judge 15/0 · test:assign-on-create 52/0 ·
+  test:cross-app 92/0 · test:voice-tools 36/0 · test:priority-check 43/0 · test:plan-and-answer-first 35/0. All rc=0.
+
+## NEEDS OWNER 👍 (not built)
+
+| Today | Becomes | Why | Impact | Reversible? |
+|---|---|---|---|---|
+| A VOICE 1:1 gets only the new `focus_on` tool description (so it no longer starts a planned list), but no planning-contract text: it is not told to read the calendar, answer as short `time · item · note` lines, or create missing items | Add the same planning contract to the voice call's instructions | A spoken "plan my day" would stop moving things to Doing (already true on this branch) but could still reply with a long monologue | Voice planning replies would get the same short shape as text; nothing else changes | Yes, one line |
+
+Not a behaviour item, noted only: PLANNING_SYSTEM_HINT says "`find_open_slots` if you have it"; no Huddle tool by
+that name exists in `src/`, so the clause is a no-op unless a journey proxy tool by that name is offered.
