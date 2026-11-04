@@ -6,7 +6,7 @@
 // the normal sync into Huddle's mirror. Gated to Terry (scrum master) at the call site.
 
 import { AGENTS, type AgentId } from "../../data/agents";
-import { REMINDER_TAG, alarmFits } from "./workability";
+import { REMINDER_TAG, alarmFits, isAgentWork } from "./workability";
 
 export const GROOM_BACKLOG_TOOL = {
   type: "function",
@@ -157,8 +157,9 @@ export function incumbentOwner(current: string | null | undefined, batchPick: st
  * "") for NO_AGENT, else the usual incumbent-first owner.
  */
 export const NO_AGENT = "none";
-export function groomOwner(current: string | null | undefined, batchPick: string): string {
-  if (batchPick === NO_AGENT) return "";
+export function groomOwner(current: string | null | undefined, batchPick: string, title = ""): string {
+  // A model "none" on research-type work is overruled: the task keeps its owner (isAgentWork).
+  if (batchPick === NO_AGENT) return isAgentWork(title) ? incumbentOwner(current, "") : "";
   return incumbentOwner(current, batchPick);
 }
 
@@ -348,7 +349,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     const byId = new Map(slice.map((t) => [t.id, t]));
     for (const a of assignments) {
       const t = byId.get(a.id);
-      if (t) a.assigned_agent = groomOwner(t.assigned_agent, a.assigned_agent);
+      if (t) a.assigned_agent = groomOwner(t.assigned_agent, a.assigned_agent, t.title ?? "");
     }
     try {
       const { resolveOwnerLLM } = await import("../routing");
