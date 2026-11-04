@@ -516,3 +516,12 @@ is **loop 4**.
 | Guard implied | In a multi-repo session always write `<repo>#<n>`, never a bare `#<n>` |
 
 | 2026-11-04 | "Nexus tools only read — a fix is yours" (told the owner) | `write_nexus_assignments` exists (`scripts/nexus-write-tool.test.ts`); grep of `nexus.server.ts` alone missed it | grep the whole `src/` + `scripts/` tool surface, not one file | capability-absent claim from a single-file grep | corrected to the owner in the same session; sweep tool names across `src/**` before saying "no tool" |
+
+## 2026-11-04 — "journey:{enabled:false} makes a live harness side-effect-free" (wrong)
+| | |
+|---|---|
+| Claim | qa-plan-and-answer-first.mjs with journey disabled on every agent can touch nothing the owner sees |
+| Ground truth | Two 1:1 out-of-lane cases fired `deliverOwnerFollowup`, which enqueued REAL durable turns in the owner's `dm-finn-reid` / `dm-cole-blake` (push path). The owner answered one ("Yes", u-1793767145766, 04:39Z) and got a real Roth/traditional IRA answer. Rows `followup-…-test-qa-paf-5f7a74-…` deleted 2026-11-04 (azure-pg-query run 41859177872, 0 left). |
+| Source that would have settled it | `huddle.functions.ts` deliverOwnerFollowup — it enqueues into another DM regardless of the journey toggle |
+| Root cause | journey toggle gates BOARD writes only; cross-DM follow-ups are a separate side-effect channel no harness flag covers |
+| Guard implied | A harness-only turn flag that suppresses deliverOwnerFollowup (and push), pinned by a test; until then no live 1:1 hand-off case runs against the owner's identity |
