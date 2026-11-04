@@ -59,6 +59,7 @@ import { TAVILY_WEB_SEARCH_TOOL, tavilySearch, type TavilySearchArgs } from "../
 // SINGLE SOURCE — the same calendar schemas the text turn engine uses (no voice-local copy).
 // get_calendar_events = alias → combined schedule; get_external_calendar_events = raw Outlook (Graph).
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "../calendar/tools";
+import { SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL, INBOX_READ_TOOL_NAMES } from "../email/inbox-read";
 // Direction 1 of the cross-app bridge. Present on voice from the FIRST commit, deliberately: this
 // file records nine native tools that exist on text and are silently absent when spoken, and the
 // drift is always one-directional. Adding it to one surface "for now" is how that list got to nine.
@@ -450,6 +451,9 @@ export async function buildRealtimeToolset(
             required: ["subject", "body"],
           },
       });
+      // INBOX READ (2026-11-03, additive): read-only search/read of the OWNER's own mailbox, same
+      // shared schemas + executor (runInboxReadTool) as both text paths. Never sends.
+      raw.push(SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL);
     }
   } catch {
     // Email is optional — voice still works without it.
@@ -542,6 +546,7 @@ export async function executeRealtimeTool(
     "tavily_web_search",
     "send_email",
     "create_email_draft",
+    ...INBOX_READ_TOOL_NAMES,
     "create_artifact",
     "list_artifacts",
     "create_huddle_task",
@@ -562,6 +567,10 @@ export async function executeRealtimeTool(
           }),
         ),
       );
+    }
+    if (INBOX_READ_TOOL_NAMES.has(name)) {
+      const { runInboxReadTool } = await import("../email/graph-email.server");
+      return done(JSON.stringify(await runInboxReadTool(name, args, ctx.caller, ctx.timeZone)));
     }
     if (name === "get_external_calendar_events") {
       const { resolveCalendarMailbox } = await import("../journey/identity");

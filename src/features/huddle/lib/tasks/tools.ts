@@ -449,7 +449,7 @@ export const FOCUS_TOOL = {
   type: "function",
   name: "focus_on",
   description:
-    "START the things the user says they want to work on — now. Pass each item; for each one the app finds the user's existing open task and starts it (moves it to Doing and puts it at the top of This Week), and if no such task exists it CREATES the task first and then starts it. Call this whenever the user lists what they want to work on / focus on / get done (including a reply to a priority check like 'the deck, interview prep, gym'), or says 'start X'. Pass the user's own wording as `title`; pass `task_id` only when a schedule_and_priorities result in this same turn gave you that task's id. Do NOT also call create_huddle_task for these — this tool already creates what is missing. Report what it says it started and created, nothing more.",
+    "START the things the user says they want to work on — now. Pass each item; for each one the app finds the user's existing open task and starts it (moves it to Doing and puts it at the top of This Week), and if no such task exists it CREATES the task first and then starts it. Call this ONLY when the user explicitly says to start or begin working on something now ('start X', 'begin working on X now', 'work on these now'), or when he replies to your scheduled priority check with what he wants to work on (e.g. 'the deck, interview prep, gym'). Do NOT call it when he asks you to PLAN, ORGANIZE or LAY OUT his day or a list — planning moves nothing to Doing. Pass the user's own wording as `title`; pass `task_id` only when a schedule_and_priorities result in this same turn gave you that task's id. Do NOT also call create_huddle_task for these — this tool already creates what is missing. Report what it says it started and created, nothing more.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -473,8 +473,22 @@ export const FOCUS_TOOL = {
   strict: false,
 } as const;
 
+// Owner-approved 2026-11-03 (docs/qc-evidence/BUILD-plan-and-answer-first.md). The trigger used to be
+// "what they want to work on or focus on — a list", so "plan my activities for the day" (2026-10-28)
+// moved every listed item to Doing. focus_on now fires ONLY on an explicit start, or on a reply to the
+// scheduled priority check (the owner's 2026-10-16 design — REPLY_LINE in priority-check.server.ts).
 export const FOCUS_SYSTEM_HINT =
-  "When the user tells you what they want to work on or focus on — a list, or 'start X' — including when they answer a priority check — call `focus_on` with those items. It starts the ones that already exist and creates-then-starts the ones that don't, in one step; do not create them separately first and do not ask for confirmation. Then say in one or two lines what it started and what it newly created.";
+  "Call `focus_on` ONLY when the user explicitly tells you to START something — 'start X', 'begin working on X now', 'work on these now' — or when he replies to your scheduled priority check (your earlier message listed his priorities and said he can reply with what he wants to work on) with the items he wants to work on. It starts the ones that already exist and creates-then-starts the ones that don't, in one step; do not create them separately first and do not ask for confirmation. Then say in one or two lines what it started and what it newly created. A request to PLAN, ORGANIZE or LAY OUT his day or a list is NOT a start: never call `focus_on` for it — follow the planning contract instead.";
+
+/** The planning contract (owner-approved 2026-11-03). Shared runtime layer, appended on both backends next
+ *  to FOCUS_SYSTEM_HINT — never baked into a per-agent snapshot. Semantic: the model judges intent; there is
+ *  no keyword forcing. Read tools only, plus create for missing items; times are saved only on request. */
+export const PLANNING_SYSTEM_HINT =
+  "PLANNING CONTRACT — when the user gives you things to PLAN, ORGANIZE or LAY OUT (e.g. 'plan my activities for the day: gym at 3pm, the vitamin shop, my papers'):" +
+  " (1) Read his fixed commitments first with your read-only tools — `schedule_and_priorities`, `get_calendar_events`, and `find_open_slots` if you have it — so the plan fits around what is already booked." +
+  " (2) Reply with a SHORT plan, one line per item in time order, each line `time · item · short note` (a few words), plain text, no essay, no preamble beyond one short line. This IS the list he asked for." +
+  " (3) Items that are not already on his board: create them as tasks with `create_huddle_tasks` (one call). Do NOT start anything: never call `focus_on` and never move a task to Doing while planning." +
+  " (4) Do NOT save the times onto tasks or his calendar unless he explicitly asks ('add the times', 'put it on my calendar'); only then use the existing schedule tools.";
 
 /** Execute `focus_on`. Returns JSON the model reads verbatim. */
 export async function dispatchFocusOn(

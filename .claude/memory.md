@@ -127,6 +127,12 @@ index into a requirement list**.
 - Memory architecture: owner chose (a) SOFT preference (2026-10-27) and "thought it was already this way" — it largely IS: runAgentTurn's laneBoost re-ranks shared memory by the agent's domains/themes (topic text, not agent name). Gaps: voice has no lane boost/Executive Profile; the owner's ChatGPT knowledge isn't ingested yet.
 - ACs: `.claude/AC-confirm-ask-rotation.md`. Tracker: ACT:confirm-ask-rotation.
 
+## Change register 2026-11-03 — lanes in flight (NOT deployed, NOT owner-confirmed)
+Hard rule (#128): additive work ships; ANY change to existing behaviour needs a Today|Becomes|Why|Impact|Reversible row + owner 👍 first.
+Owner verdicts: #1 short "ok" in 1:1 confirms last-asked task AFTER the agent reads it; widgets/buttons in the 1:1 stream must enter agent context; attachment button broken; #11 = @handle precedent; #14 on hold; rest approved.
+Done on branches (not merged): inbox read `claude_inbox-read` f9ecccd (12/12 mutations FIRED; needs Mail.Read); calendar edit/delete journey PR #84 + Huddle `claude_calendar-edit` d314dfb.
+Running: plan+answer-first, reminder tools, attachment fix, context+confirm, status answers, journey planner+scope. Lane rule: worktree isolation, progress file, push per step — container restarts kill lanes; recover from the pushed branch.
+
 ## One ownership judge + board Delete (2026-10-29, #124 squash 4cb2273 DEPLOYED, NOT owner-confirmed)
 `routing.ts resolveOwnerLLM` is THE ownership judge for: 1:1 hand-off, 1:1 task creation (task title; responder only
 on failure, 5s cap), produce tasks, weekly grooming (`framing:"assigned"`, current owner = default; every assignment
@@ -3830,3 +3836,9 @@ here as fact three times before being checked.)
 - Live: every 5 min 7–22 ET; `chat.email_replies` ledger (owed→drafted→replied|dismissed); Iris's alert carries a card (Save to Drafts / Edit first / No reply needed, "N owed · M settled today").
 - **Every reply path must attach a widget, not just the normal one.** Amy's alert lost its card because Iris timed out after the tool call and `ensureNotSilentOnRealWork` / `hardReply` built a bare reply. Wire any reply-borne widget through one helper used by all three paths (`emailCardFor`).
 - **Durable turn `text` is `.max(4000)`** (huddle.functions.ts input schema) — an over-long directive fails the WHOLE turn as `status=error`. Cap any directive that embeds outside content.
+
+## Plan-and-answer-first — what is TRUE on branch `claude_plan-and-answer-first` (2026-11-04; NOT on main, NOT live)
+- focus_on trigger (FOCUS_SYSTEM_HINT + FOCUS_TOOL.description, tasks/tools.ts) = explicit start wording OR a reply to the scheduled priority check. "Plan/organize/lay out" is NOT a start.
+- PLANNING_SYSTEM_HINT (tasks/tools.ts) is appended right after FOCUS_SYSTEM_HINT on BOTH backends; voice has no system hint slot for it — it only sees the new FOCUS_TOOL.description.
+- Out-of-lane wording lives in `lib/lane-handoff.ts`: group line is the original verbatim; 1:1 answers first then names the owner (no @). deliverOwnerFollowup / capabilityHandoffBlock / meta-task guard untouched.
+- With journey disabled, a focus_on attempt is still recorded in result.toolUses ("focus_on -- journey disabled") — a harness can observe "was it called?" with zero board writes.

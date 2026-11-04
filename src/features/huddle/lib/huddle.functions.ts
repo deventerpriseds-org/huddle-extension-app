@@ -33,6 +33,8 @@ import {
   type PromptDebug,
 } from "./fallbacks";
 import { buildRoster } from "./roster";
+// Pure -- out-of-lane wording: group unchanged, 1:1 answers first (owner-approved 2026-11-03).
+import { outOfLaneSceneLine, laneAnswerFirstDirective } from "./lane-handoff";
 // Pure (no server imports) -- the Nexus write tool's reply-honesty guard, run in reply assembly.
 import {
   presentNexusWriteTurn,
@@ -102,6 +104,7 @@ import {
   mimeForFilename,
 } from "./openai-builtin-tools";
 import { GET_CALENDAR_EVENTS_TOOL, GET_EXTERNAL_CALENDAR_EVENTS_TOOL } from "./calendar/tools";
+import { SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL, INBOX_READ_TOOL_NAMES } from "./email/inbox-read";
 import {
   DELEGATE_TO_SPECIALIST_TOOL,
   workerDirectory,
@@ -2484,8 +2487,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     if (data.scope !== "group" && !data.internal && turnIntent === "perform") {
       const owner = laneOwnerFor(data.text, nextId);
       if (owner && owner.id !== nextId) {
-        const o = AGENT_BY_ID[owner.id];
-        laneDirective = `\n\nThis request is squarely in ${o.name}'s lane (${o.role}: ${o.domains.slice(0, 3).join(", ")}), not yours. Do NOT answer it yourself or improvise in their lane — tell the user plainly, by NAME, that ${o.name} is better suited and that you'll loop them in (e.g. "That's really ${o.name}'s area — let me pass it to them"). Do NOT use an @handle: ${o.name} is not in this 1:1 (@ is for group rooms). The system brings ${o.name} in automatically — they'll follow up with you in their own channel. Keep it to one or two short sentences.`;
+        // Answer-first in a 1:1 (owner-approved 2026-11-03, lane-handoff.ts): a question the agent can
+        // reasonably answer is answered, then the owner is named; substantive lane work still hands off.
+        laneDirective = laneAnswerFirstDirective(AGENT_BY_ID[owner.id]);
       }
     }
     const isInterjector = interjectorSet.has(nextId);
@@ -2525,7 +2529,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 
     const scene = ` You are ${winner.name} in a ${
       data.scope === "group" ? "group huddle" : "1:1"
-    }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. If a question is outside your lane, keep it to one short line and @mention the right specialist by their handle — the mention IS the handoff, do not narrate it or say "I'll pass this to". Do not speak as anyone else. 1–3 short sentences unless asked for detail. Do NOT repeat a reply you already gave earlier in this conversation — your own past messages are in the history above; if you genuinely have nothing new since your last update, say that briefly (e.g. "same as before — nothing new on my end") instead of restating the same line word-for-word (that "broken record" repetition is a real failure to avoid).${
+    }. Reply naturally, as yourself, in-character — like you're talking in a room with real people. ${outOfLaneSceneLine(
+      data.scope === "group" ? "group" : "1:1",
+    )} Do not speak as anyone else. 1–3 short sentences unless asked for detail. Do NOT repeat a reply you already gave earlier in this conversation — your own past messages are in the history above; if you genuinely have nothing new since your last update, say that briefly (e.g. "same as before — nothing new on my end") instead of restating the same line word-for-word (that "broken record" repetition is a real failure to avoid).${
       priorInThisTurn && !ceremonyDirective
         ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
         : ""
@@ -3420,7 +3426,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const effectiveInstructions = overrideInstructions || snapshotInstructions;
         fromSnapshot = !overrideInstructions && !!snapshotInstructions;
         const webInstructions = agentBackend.webSearch ? "\n\n" + TAVILY_WEB_SEARCH_HINT : "";
-        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT } = await import(
+        const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT, PLANNING_SYSTEM_HINT } = await import(
           "./tasks/tools"
         );
         // Grooming is now gated on the data-driven capability (agents.ts), with the legacy
@@ -3491,6 +3497,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           WIDGET_SYSTEM_HINT +
           "\n\n" +
           FOCUS_SYSTEM_HINT +
+          // The planning contract (owner-approved 2026-11-03): plan/organize = a short timed list, missing
+          // items created, nothing started. Same shared slot on both backends; additive to the prompt.
+          "\n\n" +
+          PLANNING_SYSTEM_HINT +
           // Same slot and same rule as the hints above: the built-in tools are offered in
           // `mergedTools` below ONLY when builtInToolsAllowed, so the hint that says the capability
           // exists is added under exactly the same condition. Purely ADDITIVE — it takes nothing away
@@ -3708,6 +3718,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           });
           // Raw external Outlook/Microsoft calendar (Graph) — explicit-only, gated on Graph config.
           emailTools.push(GET_EXTERNAL_CALENDAR_EVENTS_TOOL);
+          // INBOX READ (2026-11-03, additive): read-only search/read of the OWNER's own mailbox.
+          // Same Graph gate as the calendar read; never sends (executor: runInboxReadTool).
+          emailTools.push(SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL);
         }
 
         const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
@@ -4728,6 +4741,46 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               recordToolUse(winner.id, "create_email_draft", "draft crashed", false, msg);
+              return JSON.stringify({ ok: false, error: msg });
+            }
+          }
+          if (INBOX_READ_TOOL_NAMES.has(c.name)) {
+            // INBOX READ (2026-11-03, additive): read-only, owner's own mailbox, one shared executor.
+            try {
+              const { runInboxReadTool } = await import("./email/graph-email.server");
+              const r = await runInboxReadTool(
+                c.name,
+                c.arguments as Record<string, unknown>,
+                data.caller,
+                data.timeZone,
+              );
+              const ok = r.ok === true;
+              recordToolUse(
+                winner.id,
+                c.name,
+                ok
+                  ? c.name === "search_email"
+                    ? `${String(r.count ?? 0)} message(s)`
+                    : "message read"
+                  : r.needsConsent
+                    ? "Mail.Read consent missing"
+                    : "inbox read failed",
+                ok,
+                ok ? undefined : String(r.error ?? "unknown"),
+              );
+              if (!ok) {
+                const ev = recordFallback(
+                  "tool",
+                  `${winner.name}: ${c.name} failed — ${String(r.error ?? "unknown")}`,
+                  `${c.name} failed`,
+                  winner.id,
+                );
+                perAgentFallbacks.push(ev.inline);
+              }
+              return JSON.stringify(r);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              recordToolUse(winner.id, c.name, "inbox read crashed", false, msg);
               return JSON.stringify({ ok: false, error: msg });
             }
           }
@@ -6301,6 +6354,46 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 return JSON.stringify(r);
               },
             });
+            // INBOX READ (2026-11-03, additive) - mirrors the OpenAI path: same schemas' descriptions,
+            // same shared executor, same Graph gate. Read-only; never sends.
+            const runLovableInboxRead = async (name: string, args: Record<string, unknown>) => {
+              const { runInboxReadTool } = await import("./email/graph-email.server");
+              const r = await runInboxReadTool(name, args, data.caller, data.timeZone);
+              const ok = r.ok === true;
+              recordToolUse(
+                winner.id,
+                name,
+                ok
+                  ? name === "search_email"
+                    ? `${String(r.count ?? 0)} message(s)`
+                    : "message read"
+                  : r.needsConsent
+                    ? "Mail.Read consent missing"
+                    : "inbox read failed",
+                ok,
+                ok ? undefined : String(r.error ?? "unknown"),
+              );
+              return JSON.stringify(r);
+            };
+            lovableTools.search_email = tool({
+              description: SEARCH_EMAIL_TOOL.description,
+              inputSchema: z.object({
+                query: z.string().optional(),
+                from: z.string().optional(),
+                since: z.string().optional(),
+                until: z.string().optional(),
+                unread_only: z.boolean().optional(),
+                top: z.number().optional(),
+              }),
+              execute: async (args) =>
+                runLovableInboxRead("search_email", args as Record<string, unknown>),
+            });
+            lovableTools.read_email = tool({
+              description: READ_EMAIL_TOOL.description,
+              inputSchema: z.object({ id: z.string(), max_chars: z.number().optional() }),
+              execute: async (args) =>
+                runLovableInboxRead("read_email", args as Record<string, unknown>),
+            });
           }
         }
 
@@ -6510,7 +6603,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         }
 
         {
-          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT } = await import(
+          const { PRIORITIZE_SYSTEM_HINT, CHECKLIST_SYSTEM_HINT, WIDGET_SYSTEM_HINT, FOCUS_SYSTEM_HINT, PLANNING_SYSTEM_HINT } = await import(
             "./tasks/tools"
           );
           usedInstructions =
@@ -6527,6 +6620,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             WIDGET_SYSTEM_HINT +
             "\n\n" +
             FOCUS_SYSTEM_HINT +
+            "\n\n" +
+            PLANNING_SYSTEM_HINT +
             groundingBlock(!!agentBackend.webSearch);
         }
 

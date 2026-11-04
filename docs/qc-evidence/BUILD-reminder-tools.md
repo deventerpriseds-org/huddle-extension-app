@@ -79,6 +79,11 @@ Mutation proofs, `mutate.sh` (anchors extracted from the real source and asserte
 
 All 12 restored; mutate.sh asserted each restore against HEAD and re-ran the named test green.
 
+**After merging `origin/main` c0e8c40 (#131, #129) into the branch (merge, not rebase):** conflicts only in
+`package.json` (two appended scripts, both kept) and `.claude/actions.md` (two appended ACT entries, both kept).
+Re-run: `test:reminder-tools` 83/0, `test:voice-tools` 36/0, `test:ask-shape` ALL PASS, `test:router` 39/0,
+`test:inbox-read` (new from main) 68/0, `tsc --noEmit` exit 0.
+
 Not covered offline (needs the live DB / a real turn): the SQL executing against `chat.reminders`, and a model actually choosing these tools. Status: **mechanism verified offline, NOT live-tested, NOT owner-confirmed.**
 
 ## NEEDS OWNER 👍
