@@ -504,3 +504,13 @@ is **loop 4**.
 | Source that would have settled it | The subagent transcript's last line (an unanswered `tool_use` with `--force`) + `ps` showing no git process |
 | Root cause | Brief prescribed an action that needs approval; the harness gives a background subagent no way to surface the prompt |
 | Guard implied | Verifier briefs: per-loop refs are always NEW, so push WITHOUT `--force`; on a stale subagent, read its last tool_use before assuming a slow command |
+
+## 2026-11-04 — A bare "PR #131" was read against the wrong repository
+
+| field | value |
+|---|---|
+| Claim | (by a Stop-hook reviewer) "PR #131 actually contains inbox read / planning contract…" |
+| Ground truth | Two repos each had a #131: eds-claude-skills #131 = `84b262c` verify-work 0e (what the session reported); huddle-extension-app #131 = `c0e8c40` another session's release |
+| Source that would have settled it | `git show --stat 84b262c` in eds-claude-skills vs `c0e8c40` in huddle |
+| Root cause | PR numbers are per-repo; a multi-repo session that writes "#131" alone is ambiguous to any reader |
+| Guard implied | In a multi-repo session always write `<repo>#<n>`, never a bare `#<n>` |
