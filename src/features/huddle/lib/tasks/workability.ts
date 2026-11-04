@@ -58,6 +58,17 @@ const PRODUCE_VERBS =
   /^\s*(research|find|compile|draft|write|design|build|develop|create|plan|outline|prepare|analy[sz]e|review|layout|architect|map|summar[iy][sz]e|explore|investigate|assemble|lock|transfer|migrate|configure|scope|spec|sketch)\b/i;
 
 /**
+ * Work an agent can always finish itself (research, find, compare, draft …), judged on the title's own
+ * verb. Grooming's "none" (nobody can finish it) is overruled for these: measured 2026-11-04, the first
+ * pass under the new rule unassigned "Research harness engineering best practices for Claude Code" and
+ * "Research authentic writing practices for Winston AI review". Owner: "Research is one of the things it
+ * should be able to just do as an ai llm strength."
+ */
+export function isAgentWork(title: string | null | undefined): boolean {
+  return PRODUCE_VERBS.test(title ?? "") || /^\s*compare\b/i.test(title ?? "");
+}
+
+/**
  * The board chip for a task that explicitly asks to be reminded. groom.ts groomTags DERIVES it from the
  * title on every pass (asksForReminder) — it is never taken from the model and never preserved, so a
  * stale tag from the old "agent can finish nothing" rule is stripped at the next grooming.

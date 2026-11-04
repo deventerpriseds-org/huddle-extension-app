@@ -40,7 +40,7 @@ check(
 check("grooming keeps the incumbent when the judge fails", /a\.assigned_agent = judged \?\? incumbent;/.test(groom), true);
 check(
   "every assignment starts at its incumbent BEFORE the judge (budget skip / load failure keep the current owner)",
-  /for \(const a of assignments\) \{\s*const t = byId\.get\(a\.id\);\s*if \(t\) a\.assigned_agent = groomOwner\(t\.assigned_agent, a\.assigned_agent\);\s*\}\s*try \{/.test(groom),
+  /for \(const a of assignments\) \{\s*const t = byId\.get\(a\.id\);\s*if \(t\) a\.assigned_agent = groomOwner\(t\.assigned_agent, a\.assigned_agent, t\.title \?\? ""\);\s*\}\s*try \{/.test(groom),
   true,
 );
 check("a 1:1-created task asks the judge on its own title", /resolveOwnerLLM\(title, winner\.id,/.test(turn), true);

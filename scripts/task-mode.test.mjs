@@ -84,6 +84,9 @@ t("none unassigns even with an incumbent", groomOwner("tess-sutton", NO_AGENT) =
 t("none on an unassigned task stays unassigned", groomOwner(null, NO_AGENT) === "");
 t("an incumbent still beats a batch pick", groomOwner("tess-sutton", "sam-trent") === "tess-sutton");
 t("an unassigned task takes the batch pick", groomOwner(null, "sam-trent") === "sam-trent");
+t("none on research keeps the owner (measured 2026-11-04)", groomOwner("iris-chase", NO_AGENT, "Research harness engineering best practices for Claude Code") === "iris-chase");
+t("none on 'Find …' keeps the owner", groomOwner("elle-rowan", NO_AGENT, "Find sample enterprise AI consultants") === "elle-rowan");
+t("none on a non-research task still unassigns", groomOwner("eli-vaughn", NO_AGENT, "Meditate") === "");
 
 console.log("\n--- grooming tags: reminder is derived from the title, never kept, never from the model ---");
 t("stale reminder tag stripped", !groomTags(["research"], [REMINDER_TAG], "Research AI-assisted SDLC practices").includes(REMINDER_TAG));
