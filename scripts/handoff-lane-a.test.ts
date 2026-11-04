@@ -15,7 +15,14 @@ import {
   stripTeammateDeferral,
 } from "../src/features/huddle/lib/capabilities.ts";
 import { agentPerformedWork, type ToolUseLike } from "../src/features/huddle/lib/tasks/board-claims.ts";
-import { buildFollowupDirective } from "../src/features/huddle/lib/handoff-followup.ts";
+import {
+  buildFollowupDirective,
+  buildHandoffConfirmRetry,
+  handoffRetryOutcome,
+  needsHandoffConfirmRetry,
+  proposedThisTurn,
+  HANDOFF_CONFIRM_UNAVAILABLE,
+} from "../src/features/huddle/lib/handoff-followup.ts";
 
 const HF = readFileSync(`${import.meta.dir}/../src/features/huddle/lib/huddle.functions.ts`, "utf8");
 const between = (a: string, b: string) => {
@@ -203,5 +210,110 @@ describe("F1 x #131: the owner follow-up is told what the addressed agent alread
   test("#131: looping a pronoun in with no teammate named is NOT stripped", () => {
     const t = "Done. I'm looping them in on the thread you mentioned.";
     expect(stripTeammateDeferral(t, "iris-chase")).toBe(t);
+  });
+});
+
+// ── F2: a hand-off carries a real task + Confirm buttons; a skipped proposal is retried, then flagged ───
+describe("F2 directive (AC-F2-1/F2-2/F2-5)", () => {
+  const d = buildFollowupDirective({
+    ownerName: "Finn Reid",
+    ownerId: "finn-reid",
+    fromName: "Tess",
+    ask: "build a monthly household budget spreadsheet",
+    mode: "confirm",
+  });
+  test("F2-5: hand-off framing kept (passed/tapped, YOUR OWN channel, no at-sign)", () => {
+    expect(d).toMatch(/passed|tapped/);
+    expect(d).toContain("YOUR OWN");
+    expect(d).not.toContain("@");
+  });
+  test("F2-1: creates ONE task through create_huddle_task, assigned to the owner, reusing an existing one", () => {
+    expect(d).toContain("call create_huddle_task");
+    expect(d).toContain('ownerId "finn-reid"');
+    expect(d).toContain("never create a second one");
+  });
+  test("F2-2: proposes with propose_task_intent on that task id, and asks for the Confirm tap", () => {
+    expect(d).toContain("propose_task_intent with that task's task_id");
+    expect(d).toContain("tap Confirm");
+    // the work itself waits for the confirm (there IS a task now, so this is no longer CF-2)
+    expect(d).toContain("Do not perform the work yet");
+  });
+  test("F2-8: a create that did not save must not be claimed", () => {
+    expect(d).toContain("do not claim it was added");
+  });
+  test("now mode does not create/propose (the 'now' is the go-ahead)", () => {
+    const n = buildFollowupDirective({ ownerName: "Terry Locke", ownerId: "terry-locke", fromName: "Iris", ask: "groom now", mode: "now" });
+    expect(n).not.toContain("propose_task_intent");
+  });
+});
+
+describe("F2-4 retry decision (never a silent, button-less hand-off)", () => {
+  const B = "finn-reid";
+  const H = { mode: "confirm" as const, fromName: "Tess", ownerId: B, ask: "budget" };
+  const propose = (agentId = B, ok = true, detail = JSON.stringify({ taskId: "t1", taskTitle: "Budget", proposedDod: "a sheet" })) =>
+    use(agentId, "propose_task_intent", 'Proposed DoD for "Budget"', ok, detail);
+  test("proposedThisTurn mirrors the confirmAsk derivation", () => {
+    expect(proposedThisTurn([propose()], B)).toBe(true);
+    expect(proposedThisTurn([propose(B, false)], B)).toBe(false);
+    expect(proposedThisTurn([propose("tess-sutton")], B)).toBe(false);
+    expect(proposedThisTurn([propose(B, true, "not json")], B)).toBe(false);
+    expect(proposedThisTurn([propose(B, true, JSON.stringify({ taskId: "t1" }))], B)).toBe(false);
+    expect(proposedThisTurn([], B)).toBe(false);
+  });
+  test("retry when a confirm hand-off reply has no proposal", () => {
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "reply", toolUses: [] })).toBe(true);
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "hardReply", toolUses: [] })).toBe(true);
+  });
+  test("no retry when the proposal is there", () => {
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "reply", toolUses: [propose()] })).toBe(false);
+  });
+  test("no retry outside a confirm hand-off (ordinary turns, now mode, non-internal, another agent, a timed-out skip)", () => {
+    expect(needsHandoffConfirmRetry({ handoff: undefined, internal: true, agentId: B, outcomeKind: "reply", toolUses: [] })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: { ...H, mode: "now" }, internal: true, agentId: B, outcomeKind: "reply", toolUses: [] })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: false, agentId: B, outcomeKind: "reply", toolUses: [] })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: "tess-sutton", outcomeKind: "reply", toolUses: [] })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "skip", toolUses: [] })).toBe(false);
+  });
+  test("outcome: keep the first reply, flag only when the retry also missed", () => {
+    expect(handoffRetryOutcome({ kind: "reply" }, { kind: "reply", proposed: true })).toEqual({ useOutcomeOf: "first", flagMissing: false });
+    expect(handoffRetryOutcome({ kind: "reply" }, { kind: "reply", proposed: false })).toEqual({ useOutcomeOf: "first", flagMissing: true });
+    expect(handoffRetryOutcome({ kind: "skip" }, { kind: "reply", proposed: true })).toEqual({ useOutcomeOf: "second", flagMissing: false });
+  });
+  test("the retry text carries the original directive and names both calls", () => {
+    const t = buildHandoffConfirmRetry("ORIGINAL");
+    expect(t.startsWith("ORIGINAL")).toBe(true);
+    expect(t).toContain("propose_task_intent");
+    expect(t).toContain("create_huddle_task");
+  });
+  test("the visible marker names the missing buttons", () => {
+    expect(HANDOFF_CONFIRM_UNAVAILABLE).toContain("confirm buttons unavailable");
+  });
+});
+
+describe("F2 wiring in huddle.functions.ts (source assertions)", () => {
+  test("Input declares `handoff` (zod strips undeclared keys on the durable re-parse)", () => {
+    const input = between("const Input = z.object({", "// A new-email alert turn");
+    expect(input).toContain("handoff: z");
+    expect(input).toContain('mode: z.enum(["now", "confirm"])');
+  });
+  test("the follow-up payload carries the hand-off marker and the owner id reaches the directive", () => {
+    const fn = between("async function deliverOwnerFollowup(", "const { enqueueTurn }");
+    expect(fn).toContain("handoff: { mode, fromName, ownerId, ask: cleanAsk }");
+    expect(fn).toContain("ownerId,\n        fromName,");
+  });
+  test("the primary (1:1) run goes through runHandoffAware", () => {
+    expect(HF).toContain("const r = await runHandoffAware(primaryId);");
+  });
+  test("runHandoffAware retries once, merges BOTH attempts' toolUses, and flags a still-missing proposal", () => {
+    const fn = between("const runHandoffAware = async", "// Serialize the exact mid-turn position");
+    expect((fn.match(/runBounded\(/g) ?? []).length).toBe(2);
+    expect(fn).toContain("buildHandoffConfirmRetry(data.text)");
+    expect(fn).toContain("toolUses: [...first.toolUses, ...second.toolUses]");
+    expect(fn).toContain("HANDOFF_CONFIRM_UNAVAILABLE");
+    expect(fn).toContain("perAgentFallbacks: [...outcome.perAgentFallbacks, HANDOFF_CONFIRM_UNAVAILABLE]");
+  });
+  test("create_huddle_task returns the canonical journey task id (so propose can chain)", () => {
+    const fn = between("async function createSuggestedTaskFromTool", "async function createBatchTasksFromTool");
+    expect(fn).toContain("task_id: (r.tasks ?? [])[0].id");
   });
 });

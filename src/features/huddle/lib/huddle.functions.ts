@@ -36,7 +36,15 @@ import { buildRoster } from "./roster";
 // Pure -- out-of-lane wording: group unchanged, 1:1 answers first (owner-approved 2026-11-03).
 import { outOfLaneSceneLine, laneAnswerFirstDirective } from "./lane-handoff";
 // Pure (no server imports) -- the 1:1 owner hand-off directive (F1-3 / F2).
-import { buildFollowupDirective, type FollowupMode } from "./handoff-followup";
+import {
+  buildFollowupDirective,
+  buildHandoffConfirmRetry,
+  handoffRetryOutcome,
+  needsHandoffConfirmRetry,
+  proposedThisTurn,
+  HANDOFF_CONFIRM_UNAVAILABLE,
+  type FollowupMode,
+} from "./handoff-followup";
 // Pure (no server imports) -- the Nexus write tool's reply-honesty guard, run in reply assembly.
 import {
   presentNexusWriteTurn,
@@ -255,6 +263,18 @@ const Input = z.object({
   // and lane-deferral machinery must NOT run on it: doing so mis-reads the directive as "a user ask in
   // the wrong lane" and spawns follow-ups that re-trigger follow-ups (the notification-barrage loop).
   internal: z.boolean().optional(),
+  // A 1:1 owner HAND-OFF turn (deliverOwnerFollowup, handoff-followup.ts HandoffMarker). Set only on that
+  // internal follow-up; it lets the owner's turn retry a skipped propose_task_intent once in-turn and flag
+  // a still-missing one (AC-F2-4) without guessing from the directive text. MUST be declared: the durable
+  // path re-parses the stored payload with this schema and zod strips undeclared keys.
+  handoff: z
+    .object({
+      mode: z.enum(["now", "confirm"]),
+      fromName: z.string().max(120),
+      ownerId: z.enum(AgentIds),
+      ask: z.string().max(300),
+    })
+    .optional(),
   // A new-email alert turn (inbound-email.server.ts): the email this turn is ABOUT, so the reply card
   // (Save to Drafts / Dismiss) is attached to the target agent's reply even if the model skips
   // propose_email_reply. Display-only; every button re-reads chat.email_replies by emailId.
@@ -1995,6 +2015,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // hand-off framing plus the confirm ask.
       const directive = buildFollowupDirective({
         ownerName: owner.name,
+        ownerId,
         fromName,
         ask: cleanAsk,
         mode,
@@ -2019,6 +2040,8 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         timeZone: data.timeZone,
         caller: data.caller,
         internal: true, // CRUCIAL: a follow-up must never spawn another follow-up (kills the loop)
+        // F2-4: marks this turn as a hand-off so the owner's turn can retry a skipped proposal once.
+        handoff: { mode, fromName, ownerId, ask: cleanAsk },
       };
       const { enqueueTurn } = await import("./tasks/turns.server");
       const fresh = await enqueueTurn(id, ownerHuddle, email, followupPayload);
@@ -3090,6 +3113,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             return {
               ok: true,
               task,
+              // The CANONICAL (journey) task id, additive (F2): `task.id` above is a client-side card id, so
+              // a model chaining propose_task_intent / confirm_task_intent needs this one. Absent when
+              // journey echoed no row.
+              ...((r.tasks ?? [])[0]?.id ? { task_id: (r.tasks ?? [])[0].id } : {}),
               boards: ["huddle", "journey"],
               outcome,
               // The assignment is a SEPARATE fact from the create and is reported as one. `assigned`
@@ -7237,6 +7264,65 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     ]);
   };
 
+  // F2-4 (AC-handoff-confirm-flow.md): a CONFIRM-mode hand-off turn (the owner answering in its own DM,
+  // payload `handoff`) must end with Confirm buttons, which render only from a successful
+  // propose_task_intent on that reply. If the model skipped it, re-run the owner ONCE in this turn with a
+  // pointed retry; if the proposal is still missing, the reply carries a visible fallback note. Never
+  // silent. Every other turn is exactly `runBounded` (the predicate is false without `data.handoff`).
+  const runHandoffAware = async (id: AgentId): Promise<AgentTurnResult> => {
+    const first = await runBounded(id, buildPrior());
+    if (
+      !needsHandoffConfirmRetry({
+        handoff: data.handoff,
+        internal: !!data.internal,
+        agentId: id,
+        outcomeKind: first.outcome.kind,
+        toolUses: first.toolUses,
+      })
+    ) {
+      return first;
+    }
+    const second = await runBounded(id, buildPrior(), buildHandoffConfirmRetry(data.text));
+    const pick = handoffRetryOutcome(first.outcome, {
+      kind: second.outcome.kind,
+      proposed: proposedThisTurn(second.toolUses, id),
+    });
+    let outcome = pick.useOutcomeOf === "first" ? first.outcome : second.outcome;
+    const fallbacksOut = [...first.fallbacks, ...second.fallbacks];
+    if (pick.flagMissing) {
+      fallbacksOut.push({
+        id: `fb-${Date.now()}-${id}-handoff-confirm`,
+        ts: Date.now(),
+        agentId: id,
+        subsystem: "tool",
+        reason: `${AGENT_BY_ID[id]?.name ?? id}: hand-off reply has no Confirm buttons — propose_task_intent was not recorded after one retry.`,
+        inline: HANDOFF_CONFIRM_UNAVAILABLE,
+      });
+      if (outcome.kind === "reply") {
+        outcome = { ...outcome, perAgentFallbacks: [...outcome.perAgentFallbacks, HANDOFF_CONFIRM_UNAVAILABLE] };
+      } else if (outcome.kind === "hardReply") {
+        outcome = {
+          ...outcome,
+          reply: {
+            ...outcome.reply,
+            fallbackNotes: [...(outcome.reply.fallbackNotes ?? []), HANDOFF_CONFIRM_UNAVAILABLE],
+          },
+        };
+      }
+    }
+    return {
+      fallbacks: fallbacksOut,
+      // BOTH attempts' tool calls: the first may have created the task, the retry proposed it — the
+      // confirmAsk derivation reads this merged list.
+      toolUses: [...first.toolUses, ...second.toolUses],
+      journeyTaskUpdates: [...first.journeyTaskUpdates, ...second.journeyTaskUpdates],
+      suggestedTasks: [...first.suggestedTasks, ...second.suggestedTasks],
+      reasoning: [...first.reasoning, ...second.reasoning],
+      prompts: [...first.prompts, ...second.prompts],
+      outcome,
+    };
+  };
+
   // Serialize the exact mid-turn position for a continuation chunk (Sets/Maps → arrays).
   const buildResumeState = (): TurnResumeState => ({
     decision: routed.decision,
@@ -7505,7 +7591,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     if (replies.length < replyCap) {
       const primaryId = shiftEligible();
       if (primaryId != null) {
-        const r = await runBounded(primaryId, buildPrior());
+        const r = await runHandoffAware(primaryId);
         mergeAgentResult(primaryId, r, [primaryId]);
         await streamChunk();
       }

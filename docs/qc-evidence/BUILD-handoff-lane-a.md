@@ -73,4 +73,43 @@ context-and-confirm ALL PASS, reminder-tools 83/0, status-answers 23/0, inbox-re
 ownership-judge, assign-on-create, override-gate, green-light, turn-identity, board-delete ALL PASS, cross-app
 92/0, voice-tools 36/0, priority-check 43/0, nexus-write 115/0, nexus-tools 190/0, mode 22/22.
 
+## F2: a hand-off carries a real task + Confirm buttons (2026-11-04)
+
+Code:
+- `handoff-followup.ts`: the CONFIRM-mode directive now tells the owner, in order, to (1) create ONE task for
+  the ask through `create_huddle_task` with `ownerId` = itself (the shared create path and its dedup: AC-F2-10,
+  no new write path; an existing open task with the title is reused), (2) call `propose_task_intent` on that
+  task id, (3) send one warm message stating the proposed DoD and asking for the Confirm tap. Hand-off framing
+  (tapped/passed, YOUR OWN channel, no at-sign) is kept (F2-5). "now" mode is unchanged (no create/propose).
+- `create_huddle_task` result gains `task_id` = the canonical journey id (additive). Before this the model only
+  saw the client card id `task-…`, so it could not chain `propose_task_intent` to the real row.
+- `Input.handoff` (zod-declared: mode, fromName, ownerId, ask) rides the follow-up payload, so the owner's turn
+  knows it is a hand-off without parsing the directive.
+- `runHandoffAware` (huddle.functions.ts, the 1:1/primary run): if a confirm hand-off reply has no usable
+  `propose_task_intent` (same test as the confirmAsk derivation, `proposedThisTurn`), re-run the owner ONCE in
+  the same turn with `buildHandoffConfirmRetry`; both attempts' toolUses are merged, so a create in attempt 1
+  and a propose in attempt 2 still render the buttons. Still missing -> a FallbackEvent + the visible note
+  `confirm buttons unavailable — the hand-off task was not proposed` on the reply (AC-F2-4: never silent).
+
+| AC | Status | Offline evidence |
+|---|---|---|
+| F2-1 | implemented via directive + shared create path; the task EXISTING is model behaviour, live-only | directive tests; `task_id` source assertion |
+| F2-2 | implemented: directive + retry make `confirmAsk` the expected outcome; live-only | retry decision tests; wiring assertions |
+| F2-3 | NOT Lane A: `proposeTaskDod` never sets `confirm_status='asked'` (CF-3) and lives in tasks.server.ts (Lane B) | n/a |
+| F2-4 | implemented (retry once in-turn, then flag) | `needsHandoffConfirmRetry` / `handoffRetryOutcome` / marker tests; `runHandoffAware` source assertions |
+| F2-5 | implemented | directive tests |
+| F2-6 | unchanged button server fns (confirm-ask.functions.ts, Lane B) | n/a |
+| F2-7 | unchanged: idempotent follow-up id; create dedup is the shared ledger + open-title snapshot | code read |
+| F2-8 | directive says never claim an unsaved create; F6 presenter withholds an unbacked "added to your board" | F6 tests |
+| F2-9 | live metric only | n/a |
+| F2-10 | no new journey write path (`create_huddle_task` reused) | code read |
+
+Known limit (recorded, not built): when `create_huddle_task` dedups against an EXISTING open task, it returns no
+id (`loadOpenTaskTitles` returns titles only, create-task-core.ts = Lane B). The directive tells the owner to find
+the id with its task tools; if it cannot, the retry runs and the reply is flagged rather than silent.
+Known cosmetic: during the retry the 1:1 stream may briefly show the retry's partial text; the persisted reply is
+the first attempt's.
+
+Group 2 test run: `test:handoff-lane-a` 65/0; `tsc` rc=0; every suite in the group 1 list re-run, all rc=0.
+
 Mutations: see the table at the bottom.
