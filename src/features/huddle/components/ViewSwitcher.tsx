@@ -13,7 +13,7 @@
 // SUPERSEDED-BY: nothing -- current
 // EVIDENCE:   docs/LANE-F-widget-ux-fixes.md (D-2, D-3)
 
-import { CalendarDays, FolderOpen, LayoutGrid, ListChecks, MessageSquare } from "lucide-react";
+import { CalendarDays, FolderOpen, LayoutGrid, ListChecks, MessageSquare, PenLine } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useHuddleStore, type View } from "../store";
 
@@ -25,6 +25,7 @@ const ENTRIES: { id: View; label: string; icon: typeof MessageSquare }[] = [
   { id: "priorities", label: "Priorities", icon: ListChecks },
   { id: "schedule", label: "Schedule", icon: CalendarDays },
   { id: "artifacts", label: "Files", icon: FolderOpen },
+  { id: "polish", label: "Polish", icon: PenLine },
 ];
 
 /**
@@ -80,7 +81,7 @@ export function ViewSwitcher({
       // floating over the composer or the last message.
       style={{ paddingBottom: "calc(0.25rem + env(safe-area-inset-bottom))" }}
     >
-      <div className="grid grid-cols-5 gap-0.5">
+      <div className="grid grid-cols-6 gap-0.5">
         {ENTRIES.map((v) => {
           const Icon = v.icon;
           return (

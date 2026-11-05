@@ -17,13 +17,15 @@ import {
   type ToolUseEvent,
 } from "./data/seed";
 import type { JourneyTask } from "./lib/journey/types";
+import type { PolishProfile } from "./lib/polish/polish-core";
 
 // The side-menu view registry. EXPORTED because HuddleView's header switcher and HuddleApp's mobile
 // switcher both type their props off it — before this was exported they each re-declared the literal
 // union by hand, so adding a view broke the typecheck in two places instead of none.
 // "priorities"/"schedule" are the two journey widgets as full-page views (they also render inline in
 // chat and docked in Iris's 1:1 — three surfaces, one component each).
-export type View = "huddle" | "board" | "artifacts" | "priorities" | "schedule";
+// "polish" = the Polish text-cleanup tool (components/PolishView.tsx), Huddle's first tool module.
+export type View = "huddle" | "board" | "artifacts" | "priorities" | "schedule" | "polish";
 export type ContextPanelTab = "queue" | "activity" | "memory" | "artifacts";
 
 // Pure client-device UI layout prefs (panel collapse, active side-panel tab) — deliberately NOT part
@@ -132,6 +134,13 @@ interface HuddleState {
   // counting across reloads/devices instead of being suppressed by a rolling per-load baseline.
   readBaselineAt: number;
   showDemoData: boolean;
+  // Polish tool: the user's OWN writing profiles (built-ins are seeded in code, lib/polish/polish-core.ts)
+  // and the last-picked profile id. Persisted in the synced workspace blob so a profile saved on the web
+  // is there on the phone.
+  polishProfiles: PolishProfile[];
+  polishProfileId: string;
+  setPolishProfiles: (p: PolishProfile[]) => void;
+  setPolishProfileId: (id: string) => void;
   // LIVE per-row checklist state, keyed by journey taskId — deliberately NOT stored on the message.
   // A checklist message carries a SNAPSHOT of server truth; either mapping site can re-deliver that
   // message at any time (a streamed partial, or the durable back-fill poll after a reload), and a
@@ -216,6 +225,8 @@ const PERSISTED_KEYS = [
   "journeyTasks",
   "lastReadAt",
   "readBaselineAt",
+  "polishProfiles",
+  "polishProfileId",
 ] as const;
 
 // First-use unread window: on activation, treat agent messages from the last ~24h in un-opened channels
@@ -236,6 +247,8 @@ function seedDefaults(): PersistedWorkspace {
     lastReadAt: {},
     readBaselineAt: Date.now() - UNREAD_LOOKBACK_MS,
     showDemoData: true,
+    polishProfiles: [],
+    polishProfileId: "work-email",
   };
 }
 
@@ -285,6 +298,10 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       lastReadAt: { ...s.lastReadAt, [s.activeHuddleId]: Date.now(), [id]: Date.now() },
     })),
   setView: (v) => set({ view: v }),
+  polishProfiles: [],
+  polishProfileId: "work-email",
+  setPolishProfiles: (p) => set({ polishProfiles: p }),
+  setPolishProfileId: (id) => set({ polishProfileId: id }),
   markHuddleRead: (huddleId) =>
     set((s) => ({ lastReadAt: { ...s.lastReadAt, [huddleId]: Date.now() } })),
   openArtifactById: (id) =>
@@ -595,6 +612,8 @@ export function getPersistablePayload(): PersistedWorkspace {
     journeyTasks: s.journeyTasks,
     lastReadAt: s.lastReadAt,
     readBaselineAt: s.readBaselineAt,
+    polishProfiles: s.polishProfiles,
+    polishProfileId: s.polishProfileId,
   };
 }
 
@@ -643,6 +662,11 @@ export function hydrateFromRemote(blob: Record<string, unknown> | null | undefin
     // Seed the baseline once (first activation, ~24h ago); persisted thereafter so it doesn't drift per-load.
     readBaselineAt: typeof p.readBaselineAt === "number" ? p.readBaselineAt : seed.readBaselineAt,
     showDemoData: typeof p.showDemoData === "boolean" ? p.showDemoData : seed.showDemoData,
+    // Backward-compatible: blobs written before Polish have neither key.
+    polishProfiles: Array.isArray(p.polishProfiles)
+      ? p.polishProfiles.filter((x) => x && typeof x.id === "string" && typeof x.name === "string")
+      : seed.polishProfiles,
+    polishProfileId: typeof p.polishProfileId === "string" ? p.polishProfileId : seed.polishProfileId,
   });
   workspaceHydrated = true;
 }
