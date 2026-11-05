@@ -24,7 +24,7 @@
 import { backlogSignature } from "./grooming.server";
 import { AGENT_BY_ID, type AgentId } from "../../data/agents";
 import type { BoardTaskRow } from "./tasks.server";
-import { classifyTaskMode, modeProposalHint } from "./workability";
+import { classifyTaskMode, modeProposalHint, isCoursework } from "./workability";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
@@ -91,7 +91,9 @@ export function researchDirective(
     `they need (sign-up, subscription, product or course pages) so they are on the card and the user only ` +
     `does the last click; any comparison includes reviews and forum feedback. Always include the relevant ` +
     `links you found, and for any product, service, tool or provider a short plain summary of what it is, ` +
-    `so the user learns something from the card itself. Choose the ` +
+    `so the user learns something from the card itself. If parts depend on facts only the user has ` +
+    `(company specifics, their own data), deliver what you could do with reasonable confidence under ` +
+    `"Here's what I was able to do", then "Here are my questions to fully satisfy what you may want". Choose the ` +
     `\`format\` that actually fits what you produced rather than defaulting blindly: 'md' for plain prose ` +
     `(still the right default), 'docx' when the user will send or print it, 'pptx' for a deck, and ` +
     `'mermaid'/'html'/'svg' when the finding is a diagram or a visual. Set task_id ` +
@@ -556,7 +558,8 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
         } catch {
           /* no reminder filter */
         }
-        const rows = allRows.filter((r) => r.assigned_agent && !inReminder.has(r.task_id));
+        // Coursework is never asked about, even while a stale assignee lingers until the next groom.
+        const rows = allRows.filter((r) => r.assigned_agent && !inReminder.has(r.task_id) && !isCoursework(r.title));
         if (!rows.length) continue;
 
         // Fire-time half of the spacing chain. If we cannot read when the user was last asked, we cannot prove
@@ -762,7 +765,7 @@ export async function runScheduledAutoWork(
   const { taskIdsInReminderWindow } = await import("./turns.server");
   const inReminderWindow = await taskIdsInReminderWindow(email);
   const assigned = (await getOpenAssignedTasks(email)).filter(
-    (t) => !(t.tags ?? []).includes("parking-lot") && !inReminderWindow.has(t.id),
+    (t) => !(t.tags ?? []).includes("parking-lot") && !inReminderWindow.has(t.id) && !isCoursework(t.title),
   );
   const signature = backlogSignature(assigned);
 
