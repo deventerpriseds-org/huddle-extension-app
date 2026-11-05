@@ -1,4 +1,4 @@
-PROGRESS: 6/7
+PROGRESS: 7/7
 
 # VERIFY wip-e2e-pickup-fit loop 1
 
@@ -98,3 +98,25 @@ Length measurements (same probe; 300-char titles, categories LIFE/VENTURES/null,
 
 - Worst `confirmIntentDirective` = 4,828 <= 16,000. Note directive-length.test.ts reports "worst 4483" because its long title classifies as produce only — the test under-measures the true worst by 345 chars (still far under the limit).
 - `researchDirective` with 20k-char DoD + 20k-char approach: 7,256 (300-char title); 8,956 with a 2,000-char title. Both <= 16,000 thanks to the 1,500/2,500 slices. Title is unbounded in the directive (appears 1x in research, 2x in confirm), so a pathological ~5,500+ char title would push confirm asks past 16,000 — titles that long are not expected; noted only.
+
+## C7 (#143) plan charter, verdict in code, suggestions on pass, every plan saved, review-gate unchanged — CONFIRMED with caveats
+
+- Charter: `APPROACH_REVIEWER_CHARTER` approach-gate.server.ts:39-47 ("It is a plan, not a deliverable ... A problem is BLOCKING only if ... misses a part of the Definition of Done, works on the wrong thing, ignores a constraint the user stated (budget, location, scope), or depends on access ... Everything else ... is a SUGGESTION"). Used as `system:` at :234.
+- Verdict in code: :231 `approachVerdict(await callOpenAIRouter(...schema APPROACH_VERDICT_SCHEMA {blocking[], suggestions[]} required, additionalProperties:false))`; `approachVerdict` :60-69 = pass iff `blocking` (trimmed, non-empty, array-only) is empty.
+- Suggestions on pass: :247-249 `foldIn` ("Fold these suggestions into the work (they do not block it): ...", first 4) appended to the pass note :266 only.
+- Every plan saved: :229-230 `recordProposedApproach(...)` BEFORE grading, on every graded submission (pass, revise, escalate, grader-error). tasks.server.ts:1377-1384 = `UPDATE tasks.task_engagement_state SET proposed_approach=$2 WHERE task_id=$1`. Submissions after approval return at :187-189 before the save, so the approved plan is not overwritten — this resolves C1 caveat (b).
+- review-gate.server.ts: `git diff --stat 3c7e7bcd^ origin/main -- review-gate.server.ts` is EMPTY; `git show ce22b461 --stat` does not list it; its last commit 769c5f93 predates #139. It still uses `WORKERS["assignment-reviewer"].charter` (:70-73).
+
+`approachVerdict` probe (`bun .../scratchpad/verdict.ts`):
+
+| reviewer output | verdict |
+|---|---|
+| `blocking: []` + suggestions | pass, suggestions kept |
+| `blocking: ["", "   ", "\n"]` / `[null, undefined]` | pass (blank dropped) |
+| `blocking: ["misses the $1,500 budget"]` | revise |
+| **`blocking: "misses the budget"` (string, not array)** | **pass** — real blocking item dropped |
+| `blocking` missing / raw `null` | pass |
+| `blocking: ["None"]` | revise (deficiency "None") |
+| `blocking: [{issue:"x"}]` | revise, deficiency "[object Object]" |
+
+Caveats: (a) malformed grader output fails OPEN to pass (non-array or missing `blocking`). The strict JSON schema should make that unreachable, but the code rule is not "pass iff no blocking item" for those shapes. (b) A model writing "None"/"N/A" as an item causes a false revise. (c) `recordProposedApproach` is an UPDATE only: if no engagement row exists yet, 0 rows change and the plan is NOT saved (no insert/upsert; `.catch(()=>{})` hides any error). In the gated flow a row normally exists from the confirm step, so this is an edge case.
