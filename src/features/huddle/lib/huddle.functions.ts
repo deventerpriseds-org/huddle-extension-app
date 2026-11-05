@@ -210,8 +210,22 @@ const AgentBackendInput = z.object({
   webSearch: z.boolean().optional(),
 });
 
+// What the USER can type stays capped at 4,000 characters (enforced at the two client entry points by
+// capUserText). Server-originated directives (`internal: true` — auto-work confirm asks, work turns) may be
+// longer: on 2026-11-05 the confirm-ask directive grew past 4,000 and EVERY check-in failed this schema
+// inside drainQueuedTurns ("String must contain at most 4000 character(s)", turn
+// autowork-confirm-883bc5dc-…), silently, from the moment it deployed.
+export const USER_TEXT_MAX = 4000;
+export const INTERNAL_TEXT_MAX = 16000;
+export function capUserText<T extends { text: string; internal?: boolean }>(d: T): T {
+  if (!d.internal && d.text.length > USER_TEXT_MAX) {
+    throw new Error(`String must contain at most ${USER_TEXT_MAX} character(s)`);
+  }
+  return d;
+}
+
 const Input = z.object({
-  text: z.string().min(1).max(4000),
+  text: z.string().min(1).max(INTERNAL_TEXT_MAX),
   huddleId: z.string(),
   scope: z.enum(["one-to-one", "group"]),
   members: z.array(z.enum(AgentIds)).min(1),
@@ -7530,7 +7544,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 }
 
 export const sendHuddleMessage = createServerFn({ method: "POST" })
-  .inputValidator((raw: unknown) => Input.parse(raw))
+  .inputValidator((raw: unknown) => capUserText(Input.parse(raw)))
   .handler(async ({ data }) => runHuddleTurn(data));
 
 // BARGE-IN: the user interjects during a live ceremony. Instead of a separate, uncoordinated turn,
@@ -8173,7 +8187,7 @@ export async function runDurableHuddleTurn(
 }
 
 export const enqueueHuddleTurn = createServerFn({ method: "POST" })
-  .inputValidator((raw: unknown) => EnqueueTurnInput.parse(raw))
+  .inputValidator((raw: unknown) => capUserText(EnqueueTurnInput.parse(raw)))
   .handler(async ({ data }) => runDurableHuddleTurn(data));
 
 /** The public VAPID key the browser needs to create a push subscription (null if push isn't set up). */
