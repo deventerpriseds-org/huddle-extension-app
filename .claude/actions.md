@@ -1,6 +1,14 @@
 # Action Tracker — huddle-extension-app
 Last updated: 2026-10-27
 
+## ACT:polish-tool — Polish text cleanup tool in Huddle (first tool module; Sidecar + Prompto later) (2026-11-05)
+- [x] Read the owner's design (claude.ai artifact 283e7883, "Refine" screens) and blended it into Huddle's Compass look.
+- [x] Interactive prototype for approval: https://claude.ai/artifact/7MJkFX17io8FHmVWwSZCAn (polishes real text via Claude in the preview).
+- [x] Built on branch claude/tender-bardeen-g2q5ey: PolishView + polish-core + polishTextFn (OpenAI, Fast=luna / Best=terra) + Rail/bottom-bar entry + synced profiles. 19/19 offline checks (npm run test:polish), tsc 0 errors, vite build OK, local render checked desktop + phone.
+- [x] Owner add (2026-11-05): "push draft" options. Send sheet: Copy text / Copy formatted (HTML clipboard), Email DRAFT in a chosen mailbox (createGraphDraft; HUDDLE_EMAIL_FROM list = dev@, von.ellis@), Word doc (renderMarkdownToDocx -> Files/Polish -> OneDrive mirror) + Download .docx. Google Drive: not connected (journey holds Google tokens; Phase 3) -> download covers it. 26/26 offline checks; real .docx verified (bullets as Word lists).
+- [ ] Owner approves the prototype -> merge to main (auto-deploys).
+- [ ] Owner confirms it works live on web + phone. NOT owner-confirmed.
+
 ## ACT:context-and-confirm — confirm after the agent reads; agent sees widgets/cards in the 1:1 stream (2026-11-04)
 Status: 🔨 implemented on `claude_context-and-confirm`, offline-verified, NOT merged / deployed / owner-confirmed.
 Evidence: `docs/qc-evidence/BUILD-context-and-confirm.md`; `npm run test:context-and-confirm` (45 PASS);

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MessageSquare, LayoutGrid, FolderOpen, Compass, Settings, ListChecks, CalendarDays } from "lucide-react";
+import { MessageSquare, LayoutGrid, FolderOpen, Compass, Settings, ListChecks, CalendarDays, PenLine } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useHuddleStore, type View } from "../store";
 import { SettingsSheet } from "./SettingsSheet";
@@ -16,13 +16,15 @@ import { SettingsSheet } from "./SettingsSheet";
 // This flag is the minimal de-highlight and nothing more: Memory still renders, and still opens the
 // huddle view on click. Whether it should instead get its own view or be removed is the owner's call,
 // asked separately — deliberately NOT decided here.
-const items: { id: string; label: string; icon: typeof MessageSquare; view: View; neverActive?: boolean }[] = [
+const items: { id: string; label: string; icon: typeof MessageSquare; view: View; neverActive?: boolean; toolStart?: boolean }[] = [
   { id: "huddle", label: "Huddles", icon: MessageSquare, view: "huddle" },
   { id: "board", label: "Board", icon: LayoutGrid, view: "board" },
   { id: "priorities", label: "Priorities", icon: ListChecks, view: "priorities" },
   { id: "schedule", label: "Schedule", icon: CalendarDays, view: "schedule" },
   { id: "artifacts", label: "Artifacts", icon: FolderOpen, view: "artifacts" },
   { id: "memory", label: "Memory", icon: Compass, view: "huddle", neverActive: true },
+  // Tools (Polish first; Sidecar and Prompto to follow) sit below a divider, after the workspace views.
+  { id: "polish", label: "Polish", icon: PenLine, view: "polish", toolStart: true },
 ];
 
 export function Rail() {
@@ -49,10 +51,12 @@ export function Rail() {
           const active = !it.neverActive && view === it.view;
           const Icon = it.icon;
           return (
+            <div key={it.id} className="flex flex-col items-center">
+            {it.toolStart && <span aria-hidden className="my-1.5 h-px w-6 bg-primary-foreground/20" />}
             <button
-              key={it.id}
               type="button"
               onClick={() => setView(it.view)}
+              aria-current={active ? "page" : undefined}
               className={cn(
                 "group relative flex size-10 items-center justify-center rounded-lg transition",
                 active
@@ -64,6 +68,7 @@ export function Rail() {
             >
               <Icon size={18} strokeWidth={1.8} />
             </button>
+            </div>
           );
         })}
       </div>

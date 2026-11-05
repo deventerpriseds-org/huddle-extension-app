@@ -135,7 +135,9 @@ export function useWorkspaceSync() {
         state.decisions === prev.decisions &&
         state.activeHuddleId === prev.activeHuddleId &&
         state.showDemoData === prev.showDemoData &&
-        state.journeyTasks === prev.journeyTasks
+        state.journeyTasks === prev.journeyTasks &&
+        state.polishProfiles === prev.polishProfiles &&
+        state.polishProfileId === prev.polishProfileId
       ) {
         return;
       }
