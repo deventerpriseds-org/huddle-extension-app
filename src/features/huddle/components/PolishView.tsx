@@ -20,7 +20,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Diff,
   PenLine,
+  Send,
   SlidersHorizontal,
   Sparkles,
   Square,
@@ -48,6 +50,7 @@ import {
   type PolishSettings,
 } from "../lib/polish/polish-core";
 import { polishTextFn } from "../lib/polish/polish.functions";
+import { PolishSendSheet } from "./PolishSendSheet";
 
 type Version = { text: string; label: string; edited?: boolean };
 type Sel = { start: number; end: number; text: string };
@@ -123,6 +126,7 @@ export function PolishView() {
   const [status, setStatus] = useState<{ msg: string; kind?: "ok" | "err" } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
 
   useEffect(() => lsSet("draft", draft), [draft]);
   useEffect(() => lsSet("versions", versions.slice(-20)), [versions]);
@@ -521,10 +525,14 @@ export function PolishView() {
               onClick={() => setShowChanges((s) => !s)}
               disabled={!cur || !!busy}
             >
-              Changes
+              <Diff size={14} className="md:hidden" aria-hidden />
+              <span className="sr-only md:not-sr-only">Changes</span>
             </ToolButton>
             <ToolButton onClick={copy} disabled={!cur || !!busy}>
-              <Copy size={14} /> Copy
+              <Copy size={14} aria-hidden /> <span className="sr-only md:not-sr-only">Copy</span>
+            </ToolButton>
+            <ToolButton onClick={() => setSendOpen(true)} disabled={!cur || !!busy}>
+              <Send size={14} aria-hidden /> <span className="sr-only md:not-sr-only">Send</span>
             </ToolButton>
           </div>
 
@@ -690,6 +698,14 @@ export function PolishView() {
       >
         {status?.msg ?? ""}
       </div>
+
+      <PolishSendSheet
+        open={sendOpen}
+        onOpenChange={setSendOpen}
+        text={cur?.text ?? ""}
+        caller={caller}
+        onCopy={copy}
+      />
 
       <WritingSettings
         open={sheetOpen}

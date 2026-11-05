@@ -13,6 +13,10 @@ import {
   settingsDiffer,
   settingsSummary,
   wordDiff,
+  splitSubject,
+  polishedToHtml,
+  polishedToMarkdown,
+  suggestFileName,
 } from "../src/features/huddle/lib/polish/polish-core";
 
 let fail = 0;
@@ -115,6 +119,32 @@ const email = BUILTIN_PROFILES[0];
   check(
     "diff marks a removal",
     parts.some((p) => p.kind === "del" && p.text.includes("hey")),
+  );
+}
+
+// 8. Send-to helpers.
+{
+  const t = "Subject: Go-live moved\n\nHi team,\n\n• Hold comms\n• Update runbook\n\nThanks";
+  const sp = splitSubject(t);
+  check(
+    "subject split",
+    sp.subject === "Go-live moved" && sp.body.startsWith("Hi team,"),
+    JSON.stringify(sp),
+  );
+  check("no subject -> empty", splitSubject("Hi there").subject === "");
+  const html = polishedToHtml(t);
+  check(
+    "html bullets -> ul/li",
+    html.includes("<ul><li>Hold comms</li><li>Update runbook</li></ul>"),
+    html,
+  );
+  check("html escapes", polishedToHtml("a < b & c").includes("a &lt; b &amp; c"));
+  check("markdown bullets", polishedToMarkdown("• one\n• two") === "- one\n- two");
+  check("file name from subject", suggestFileName(t) === "Go-live moved");
+  check(
+    "file name strips slashes",
+    !/[\\/:]/.test(suggestFileName("Q3/Q4: plan")),
+    suggestFileName("Q3/Q4: plan"),
   );
 }
 

@@ -395,3 +395,53 @@ export function wordCount(t: string): number {
   const s = t.trim();
   return s ? s.split(/\s+/).length : 0;
 }
+
+// ---------------------------------------------------------------- send-to helpers
+
+/** A first line "Subject: …" becomes the email subject / document title; the rest is the body. */
+export function splitSubject(text: string): { subject: string; body: string } {
+  const m = text.match(/^\s*subject:\s*(.+)\n?/i);
+  if (!m) return { subject: "", body: text.trim() };
+  return {
+    subject: m[1].trim(),
+    body: text
+      .slice(m[0].length)
+      .replace(/^\s*\n/, "")
+      .trim(),
+  };
+}
+
+/** Polished text → Markdown the docx renderer understands ("• " bullets become list items). */
+export function polishedToMarkdown(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => l.replace(/^\s*[•●▪◦]\s+/, "- "))
+    .join("\n");
+}
+
+const escHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** Polished text → simple HTML (paragraphs + bullet lists) for "Copy formatted" into Word / Outlook. */
+export function polishedToHtml(text: string): string {
+  const blocks = text.trim().split(/\n\s*\n/);
+  return blocks
+    .map((b) => {
+      const lines = b.split("\n");
+      const isList = (l: string) => /^\s*([•●▪◦]|-|\*|\d+[.)])\s+/.test(l);
+      if (lines.every(isList)) {
+        return `<ul>${lines.map((l) => `<li>${escHtml(l.replace(/^\s*([•●▪◦]|-|\*|\d+[.)])\s+/, ""))}</li>`).join("")}</ul>`;
+      }
+      return `<p>${lines.map(escHtml).join("<br>")}</p>`;
+    })
+    .join("");
+}
+
+/** A safe default file name from the subject or the first words. */
+export function suggestFileName(text: string): string {
+  const { subject, body } = splitSubject(text);
+  const base = (subject || body.split("\n")[0] || "Polished draft")
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .trim();
+  const words = base.split(/\s+/).slice(0, 8).join(" ");
+  return (words || "Polished draft").slice(0, 80);
+}
