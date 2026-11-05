@@ -28,10 +28,16 @@ t("the agent is told the work starts now, never that it needs authorizing",
   /The work is being started now/.test(gateSrc) && /never that they need/.test(gateSrc));
 
 console.log("\n--- coursework is never agent work ---");
-for (const title of ["📚 Research Paper", "📚 Checkpoint 2 - Details 1 of 2 (MGT-702)", "Obtain MGT-782 Module 3 materials"])
+for (const title of ["📚 Research Paper", "📚 Checkpoint 2 - Details 1 of 2 (MGT-702)", "Obtain MGT-782 Module 3 materials",
+  "Send MGT-782 and MGT-702 materials to the University", "MGT 702 seminar reading", "mgt-702 discussion post", "BUSAD-500 midterm", "MGT702 paper"])
   t(`coursework: "${title}"`, isCoursework(title));
-for (const title of ["Start AI certification course", "Research AI-assisted SDLC practices", "Find sample enterprise AI consultants and teaching videos", "Fix the SOC-2 report"])
+// Over-match negatives found by VERIFY-wip-e2e-pickup-fit-1 C4 — a bare code is not coursework.
+for (const title of ["Start AI certification course", "Research AI-assisted SDLC practices", "Find sample enterprise AI consultants and teaching videos", "Fix the SOC-2 report",
+  "Book UA-123 flight", "Complete DS-160 visa form", "Fix the ABC-123 bug", "Review PR-139 diff", "Close JIRA-101", "Read RFC-822", "Order SKU-500", "ISO-27001 checklist"])
   t(`not coursework: "${title}"`, !isCoursework(title), "matched");
+const aoc = readFileSync(`${SRC}/assign-on-create.ts`, "utf8");
+t("chat-created coursework is never assigned", /if \(params\.title && isCoursework\(params\.title\)\)/.test(aoc));
+t("the note depends on whether the start actually ran", /const kicked = await kickAutoWorkAfterApproval\(opts\.email\);/.test(gateSrc) && /kicked\s*\?/.test(gateSrc));
 t("grooming unassigns coursework whatever the model picked", groomOwner("elle-rowan", "elle-rowan", "📚 Research Paper") === "");
 t("auto-work candidates exclude coursework", /!inReminderWindow\.has\(t\.id\) && !isCoursework\(t\.title\)/.test(awSrc));
 t("confirm-asks exclude coursework", /!inReminder\.has\(r\.task_id\) && !isCoursework\(r\.title\)/.test(awSrc));

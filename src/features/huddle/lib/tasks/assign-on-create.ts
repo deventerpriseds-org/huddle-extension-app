@@ -130,7 +130,18 @@ export async function assignCreatedJourneyTasks(params: {
   agentId: string;
   caller: Record<string, unknown>;
   huddleId?: string;
+  /** The created task's title. The user's own coursework is never assigned to an agent (owner 2026-11-05). */
+  title?: string;
 }): Promise<AssignOutcome> {
+  const { isCoursework } = await import("./workability");
+  if (params.title && isCoursework(params.title)) {
+    return {
+      assigned: false,
+      agentId: null,
+      taskIds: [],
+      note: "not assigned: this is the user's own coursework, which agents never take on",
+    };
+  }
   const ids = params.taskIds.filter((id) => typeof id === "string" && id.trim()).slice(0, MAX_ASSIGN_UPDATES);
   if (!ids.length) {
     return {
