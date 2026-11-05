@@ -119,3 +119,26 @@ export const getEmailReplyCountsFn = createServerFn({ method: "POST" })
       return { ok: false as const, owed: 0, drafted: 0, settledToday: 0, settledTotal: 0 };
     }
   });
+
+/** Live status per emailId, for the owed-digest card: a row settled since the digest went out (replied
+ *  from Outlook, or dismissed on another card) shows as settled instead of offering a dead Dismiss.
+ *  Ownership-scoped; never throws. */
+export const getEmailReplyStatusesFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({ caller: Caller, emailIds: z.array(z.string().min(1).max(64)).max(50) })
+      .parse(raw),
+  )
+  .handler(async ({ data }) => {
+    try {
+      const owner = await resolveOwner(data.caller);
+      if (!owner) return { ok: false as const, statuses: {} as Record<string, string> };
+      const { getEmailReplyStatuses } = await import("./email-replies.server");
+      return {
+        ok: true as const,
+        statuses: (await getEmailReplyStatuses(data.emailIds, owner)) as Record<string, string>,
+      };
+    } catch {
+      return { ok: false as const, statuses: {} as Record<string, string> };
+    }
+  });

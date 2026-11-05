@@ -142,6 +142,7 @@ const JOB_ROWS: { key: JobTypeKey; idPrefix: string; jobType: string }[] = [
   { key: "scheduleBrief", idPrefix: "schedule-brief", jobType: "schedule-brief" },
   { key: "priorityCheck", idPrefix: "priority-check", jobType: "priority-check" },
   { key: "inboundEmail", idPrefix: "inbound-email", jobType: "inbound-email" },
+  { key: "owedDigest", idPrefix: "owed-digest", jobType: "owed-digest" },
 ];
 
 /** Reverse lookup: the `job_type` string stored on a row -> the JobTypeKey scheduling-config knows it
@@ -211,8 +212,9 @@ async function ensureGroomJobs(now: Date): Promise<void> {
   }
 }
 
-/** Self-POST base URL + shared token, mirroring kickNextChunk. */
-function selfBase(): string {
+/** Self-POST base URL + shared token, mirroring kickNextChunk. Exported for the owed-digest email's
+ *  "open Iris in Huddle" link -- one source of "where is this app". */
+export function selfBase(): string {
   const raw =
     (process.env.HUDDLE_APP_URL ?? "").trim() ||
     (process.env.WEBSITE_HOSTNAME ? `https://${process.env.WEBSITE_HOSTNAME}` : "");
@@ -267,6 +269,9 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
     // No force: a run with no new email from a person sends nothing, and each message is announced
     // once ever (its turn id), so overlapping fires and the 12h lookback never double-notify.
     await post("/api/public/run-inbound-email");
+  } else if (job.job_type === "owed-digest") {
+    // No force: a run with nothing owed sends NOTHING on either channel (buildOwedDigest returns null).
+    await post("/api/public/run-owed-digest");
   }
   // Future: else if (job.job_type === "ceremony") { ... POST run-ceremony ... }
 }

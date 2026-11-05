@@ -35,6 +35,7 @@ import {
   type Huddle,
   type HuddleMessage,
   type NavLink,
+  type OwedDigestCard,
   type ToolUseEvent,
 } from "../data/seed";
 // The widget payload contract is Lane B's (lib/tasks/widgets.server.ts). Type-only import — that
@@ -44,8 +45,10 @@ import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
 import {
   dismissEmailReplyFn,
   getEmailReplyCountsFn,
+  getEmailReplyStatusesFn,
   saveEmailReplyDraftFn,
 } from "../lib/email/email-replies.functions";
+import { ageLabel } from "../lib/email/owed-digest";
 import {
   enqueueHuddleTurn,
   getTurnUpdates,
@@ -883,6 +886,115 @@ function OverrideAskRow({ m }: { m: HuddleMessage }) {
 }
 
 /**
+ * The owed-correspondence digest card (lib/email/owed-digest.ts): every email he still owes, oldest
+ * first, with a Dismiss on each. Owner, 2026-11-05: "the ability to dismiss ones I've already settled
+ * or don't plan to". Same rule as EmailReplyRow: Dismiss sends ONLY emailId; the server re-reads
+ * chat.email_replies with an ownership check. On mount it re-reads each row's LIVE status, so a row
+ * he answered from Outlook (or dismissed on another card) since the digest went out shows as settled
+ * instead of offering a stale Dismiss.
+ */
+function OwedDigestList({ card }: { card: OwedDigestCard }) {
+  const { user } = useAuth();
+  const caller = user
+    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+    : undefined;
+  const [status, setStatus] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const ids = card.items.map((i) => i.emailId);
+  useEffect(() => {
+    if (!caller) return;
+    let alive = true;
+    getEmailReplyStatusesFn({ data: { caller, emailIds: ids } })
+      .then((r) => alive && r.ok && setStatus(r.statuses))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.username, ids.join(",")]);
+  async function dismiss(emailId: string) {
+    setBusy(emailId);
+    try {
+      const res = await dismissEmailReplyFn({ data: { caller, emailId } });
+      if (res.ok) setStatus((s) => ({ ...s, [emailId]: s[emailId] === "replied" ? "replied" : "dismissed" }));
+      else toast.error(res.error ?? "Couldn't dismiss that.");
+    } finally {
+      setBusy(null);
+    }
+  }
+  const now = Date.now();
+  const open = card.items.filter((i) => {
+    const st = status[i.emailId];
+    return !st || st === "owed" || st === "drafted";
+  }).length;
+  return (
+    <div className="mt-2 rounded-lg border p-2" data-testid="owed-digest-card">
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+        <Mail size={12} className="shrink-0" style={{ color: "var(--ai)" }} />
+        {open === 0 ? "All settled" : `${open} still owed`}
+        {card.total > card.items.length ? (
+          <span className="font-normal text-muted-foreground">· showing oldest {card.items.length} of {card.total}</span>
+        ) : null}
+      </div>
+      <ul className="mt-1.5 divide-y">
+        {card.items.map((i) => {
+          const st = status[i.emailId];
+          const settled = st === "replied" || st === "dismissed";
+          const age = ageLabel(i.receivedAt, now);
+          return (
+            <li
+              key={i.emailId}
+              className={cn("flex items-start gap-2 py-1.5 text-xs", settled && "opacity-60")}
+              data-testid="owed-digest-row"
+            >
+              <div className="min-w-0 flex-1">
+                <div className={cn("truncate", settled && "line-through")}>
+                  <span className="font-semibold">{i.fromName || i.fromAddress || "Unknown sender"}</span>
+                  {i.subject ? <span className="text-muted-foreground"> — “{i.subject}”</span> : null}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  {age ? `waiting ${age}` : null}
+                  {(st ?? (i.drafted ? "drafted" : "owed")) === "drafted" ? (
+                    <>
+                      {age ? " · " : ""}
+                      {i.draftWebLink ? (
+                        <a href={i.draftWebLink} target="_blank" rel="noreferrer" className="underline">
+                          draft saved — send it
+                        </a>
+                      ) : (
+                        "draft saved — send it from Outlook"
+                      )}
+                    </>
+                  ) : null}
+                </div>
+              </div>
+              {settled ? (
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  <Check size={11} className="mr-0.5 inline" />
+                  {st === "replied" ? "Replied" : "Dismissed"}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy === i.emailId}
+                  onClick={() => dismiss(i.emailId)}
+                  className={cn(CONFIRM_ASK_BTN, "shrink-0")}
+                  data-testid="owed-digest-dismiss"
+                >
+                  {busy === i.emailId ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}
+                  Dismiss
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-1 text-[11px] text-muted-foreground">Replying from Outlook clears a row on its own.</p>
+    </div>
+  );
+}
+
+/**
  * The new-email reply card: Save to Drafts / Edit first / Dismiss, plus the owed-vs-settled tally.
  *
  * Owner, 2026-10-15: "this should have a yes or no button rather than depending on text so that if i
@@ -1164,6 +1276,7 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
         {m.overrideAsk && <OverrideAskRow m={m} />}
         {m.emailReply && <EmailReplyRow m={m} />}
         {m.navLink && <NavLinkButton link={m.navLink} />}
+        {m.owedDigest && m.owedDigest.items.length > 0 && <OwedDigestList card={m.owedDigest} />}
       </div>
     </div>
   );
@@ -1373,6 +1486,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
           // crash — so a widget would decay into plain text after a reload with nothing to blame.
           priorities?: PrioritiesWidgetData;
           navLink?: NavLink;
+          owedDigest?: OwedDigestCard;
           schedule?: ScheduleWidgetData;
         }[]
       | undefined,
@@ -1442,6 +1556,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
         checklist: reply.checklist,
         priorities: reply.priorities,
         navLink: reply.navLink,
+        owedDigest: reply.owedDigest,
         schedule: reply.schedule,
       });
     });

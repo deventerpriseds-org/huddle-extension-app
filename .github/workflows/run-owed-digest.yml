@@ -1,0 +1,64 @@
+name: Run owed-replies reminder (manual/on-demand)
+
+# WHAT:       Fires one pass of the OWED-CORRESPONDENCE DIGEST on demand — if the owner still owes any
+#             email replies, Iris lists them in her 1:1 (Dismiss per row) and emails him the same list.
+#             If he owes nothing, nothing is sent on either channel.
+# WHY:        The scheduled path is the Huddle every-minute scheduler POSTing /api/public/run-owed-digest
+#             at the owedDigest hours (default 9 and 16 local); a session holds no JOURNEY_PROXY_TOKEN,
+#             so this is how the route is exercised live. Mirrors run-inbound-email.yml.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/actions.md ACT:owed-digest; src/features/huddle/lib/email/owed-digest*.ts
+#
+# dryRun:true counts and RETURNS — no turn, no push, no email. The response holds COUNTS only, never
+# names or subjects: THIS REPO IS PUBLIC and so are these logs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Board owner email (the scheduler targets the mirror's user_email)."
+        required: true
+        default: "dev@enterpriseds.io"
+      dryRun:
+        description: "true = return how many are owed, deliver nothing."
+        required: false
+        default: "true"
+      chat:
+        description: "false = skip the Iris 1:1 message this run."
+        required: false
+        default: "true"
+      sendEmail:
+        description: "false = skip the email this run."
+        required: false
+        default: "true"
+      timeZone:
+        description: "IANA time zone."
+        required: false
+        default: "America/New_York"
+
+jobs:
+  run-owed-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/public/run-owed-digest
+        env:
+          SECRET: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          BASE: https://icy-flower-0f415200f.7.azurestaticapps.net
+          EMAIL: ${{ inputs.email }}
+          DRY: ${{ inputs.dryRun }}
+          CHAT: ${{ inputs.chat }}
+          SEND: ${{ inputs.sendEmail }}
+          TZ_INPUT: ${{ inputs.timeZone }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "JOURNEY_PROXY_TOKEN secret not set"; exit 1; fi
+          BODY=$(jq -cn --arg e "$EMAIL" --arg tz "$TZ_INPUT" \
+            --argjson dry "$DRY" --argjson chat "$CHAT" --argjson send "$SEND" \
+            --arg r "manual-$(date -u +%Y%m%d%H%M%S)" \
+            '{caller:{entra_email:$e}, timeZone:$tz, dryRun:$dry, chat:$chat, email:$send, runId:$r}')
+          echo "Body: $BODY"
+          HTTP=$(curl -s -o /tmp/od.out -w "%{http_code}" -X POST \
+            -H "content-type: application/json" -H "x-webhook-secret: $SECRET" \
+            -d "$BODY" "$BASE/api/public/run-owed-digest")
+          echo "HTTP $HTTP"
+          echo "--- response ---"; jq . /tmp/od.out 2>/dev/null || cat /tmp/od.out; echo
+          if [ "$HTTP" != "200" ]; then echo "run-owed-digest failed"; exit 1; fi

@@ -200,6 +200,21 @@ export async function listOwedEmailReplies(ownerEmail: string): Promise<EmailRep
   return r.rows;
 }
 
+/** Current status of each id that belongs to `ownerEmail` (others are simply absent, so a guessed id
+ *  cannot probe). How the owed-digest card shows "already settled" on a row settled since it was sent. */
+export async function getEmailReplyStatuses(
+  ids: string[],
+  ownerEmail: string,
+): Promise<Record<string, EmailReplyStatus>> {
+  if (!ids.length) return {};
+  await ensureBootstrapped();
+  const r = await getPool().query<{ id: string; status: EmailReplyStatus }>(
+    `SELECT id, status FROM chat.email_replies WHERE owner_email = lower($2) AND id = ANY($1::text[])`,
+    [ids, ownerEmail],
+  );
+  return Object.fromEntries(r.rows.map((x) => [x.id, x.status]));
+}
+
 export interface EmailReplyCounts {
   owed: number;
   /** Of the owed, how many already have a draft saved (waiting on the owner to send). */

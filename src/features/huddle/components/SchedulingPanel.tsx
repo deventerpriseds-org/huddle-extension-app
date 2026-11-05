@@ -51,6 +51,13 @@ const JOB_LABELS: Record<JobTypeKey, { label: string; hint: string }> = {
       "that asks you something, with a suggested reply she can save to your Drafts when you say so. " +
       "Each email is only ever mentioned once; newsletters and no-reply senders are skipped.",
   },
+  owedDigest: {
+    label: "Owed replies reminder",
+    hint:
+      "At these hours Iris lists the emails you still owe a reply, in her 1:1 (with a Dismiss button on each) " +
+      "and in an email to yourself. Anything you answer from Outlook drops off on its own. " +
+      "Nothing is sent when you owe nothing.",
+  },
   reviewDigest: {
     label: "Review digest",
     hint: "Iris's nudge on what's waiting in Ready for review.",
@@ -71,6 +78,7 @@ const JOB_TYPE_KEYS: JobTypeKey[] = [
   "scheduleBrief",
   "priorityCheck",
   "inboundEmail",
+  "owedDigest",
   "reviewDigest",
   "reviewRecheck",
 ];
