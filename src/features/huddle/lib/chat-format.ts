@@ -22,6 +22,12 @@ const HEADING_RE = /^\s{0,3}#{1,6}\s+(?=[A-Z0-9])/;
 // A quote needs "> " (with the space), so ">50% done" stays text.
 const QUOTE_RE = /^\s{0,3}>\s/;
 
+/** The number an ordered-list line starts with ("0. x" -> 0, "12) x" -> 12). */
+function listNumber(line: string): number {
+  const n = parseInt(line.trim(), 10);
+  return Number.isNaN(n) ? 1 : n;
+}
+
 export function isListLine(line: string): boolean {
   return LIST_RE.test(line);
 }
@@ -84,7 +90,7 @@ export type Inline =
 
 /** Only http(s) ever becomes a link. Trailing sentence punctuation stays outside the URL. */
 const INLINE_RE =
-  /\*\*([^*\n]+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"’”*])/g;
+  /\*\*([^*\n]+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))*(?:[^\s<>().,;:!?'"’”*]|\([^\s<>()]*\)))/g;
 
 export function parseInline(s: string): Inline[] {
   const out: Inline[] = [];
@@ -119,7 +125,7 @@ export function shortUrlLabel(href: string, max = 40): string {
 export type Block =
   | { t: "p"; lines: Inline[][] }
   | { t: "ul"; items: Inline[][] }
-  | { t: "ol"; items: Inline[][]; start: number }
+  | { t: "ol"; items: Inline[][]; start: number; nums: number[] }
   | { t: "h"; v: Inline[] }
   | { t: "quote"; lines: Inline[][] };
 
@@ -149,10 +155,12 @@ export function parseChatBlocks(raw: string): Block[] {
         // An ordered list keeps the number the agent wrote ("3. third" after a note stays 3).
         cur =
           kind === "ol"
-            ? { t: "ol", items: [], start: parseInt(line.trim(), 10) || 1 }
+            ? { t: "ol", items: [], start: listNumber(line), nums: [] }
             : { t: "ul", items: [] };
       }
       (cur as { items: Inline[][] }).items.push(parseInline(line.replace(LIST_RE, "")));
+      // Every item keeps the number the agent wrote (a countdown 3, 2, 1 must not become 3, 4, 5).
+      if (cur.t === "ol") cur.nums.push(listNumber(line));
       continue;
     }
     if (QUOTE_RE.test(line)) {
@@ -196,7 +204,9 @@ export function noticeText(text: string): string | null {
     const inner = s.endsWith(")") ? s.slice(1, -1) : s.slice(1);
     return inner.charAt(0).toUpperCase() + inner.slice(1);
   }
-  if (/^\(fallback: [^)]*\) /.test(s)) return s; // every runtime "(fallback: …) …" reply
+  // Every runtime "(fallback: …) …" reply. The inline part can itself contain ")" (an error message
+  // like "gpt-4o (TPM): Limit"), so only the opening "(fallback: " is matched.
+  if (/^\(fallback: /.test(s)) return s;
   return null;
 }
 
@@ -219,24 +229,29 @@ export function stripRepeatedDraft(text: string, replyBody: string | undefined |
   if (!bodyParas.length) return text;
   const inBody = new Set(bodyParas);
   const paras = normalizeChatText(text).split(/\n\s*\n/);
-  let hits = 0;
+  // DISTINCT draft paragraphs found — a generic one ("Hi Sam,") repeated in the prose counts once.
+  const found = new Set<string>();
   const kept: string[] = [];
   for (const p of paras) {
-    const sq = squash(p.replace(/^suggested reply:\s*/i, ""));
+    const sq = squash(p.replace(SUGGESTED_LABEL_PREFIX, ""));
     if (sq && inBody.has(sq)) {
-      hits++;
+      found.add(sq);
       continue;
     }
     kept.push(p);
   }
-  // STRONG match only: EVERY paragraph of the draft must be in the prose. A partial match (say just
-  // "Hi Sam," and "Best, Von" around a paraphrased middle) is left alone, never half-stripped.
-  if (hits < bodyParas.length) return text;
+  // STRONG match only: EVERY distinct paragraph of the draft must be in the prose. A partial match
+  // (say just "Hi Sam," and "Best, Von" around a paraphrased middle) is left alone, never half-stripped.
+  if (found.size < inBody.size) return text;
   return kept
-    .filter((p) => !/^suggested reply:?$/i.test(p.trim()))
+    .filter((p) => !SUGGESTED_LABEL_ONLY.test(p.trim()))
     .join("\n\n")
     .trim();
 }
+
+/** "Suggested reply:" / "**Suggested reply:**" / "Suggested reply" as a label. */
+const SUGGESTED_LABEL_PREFIX = /^\**\s*suggested reply:?\s*\**:?\s*/i;
+const SUGGESTED_LABEL_ONLY = /^\**\s*suggested reply:?\s*\**:?$/i;
 
 // ---- code-built blocks (server) ----------------------------------------------------------------
 

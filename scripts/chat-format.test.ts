@@ -96,6 +96,23 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("V6 a PARTIAL draft match (greeting + sign-off only) leaves the prose untouched", stripRepeatedDraft(prose, card) === prose);
   check("V7 every runtime '(fallback: …)' reply is a notice", noticeText("(fallback: gateway) AI gateway is not configured yet.") !== null);
   check("V8 a bold copy of a section header is still cut", openerOnly("Hi.\n**On your task list:**\nA", "On your task list:\n• A") === "Hi.");
+  // verifier loop 2 (docs/qc-evidence/VERIFY-chat-format-2-CE.md)
+  const repeated = "Hi Sam,\n\nSam wants to meet.\n\nHi Sam,\n\nThursday works, happy to move it.\n\nBest,\nVon";
+  check("V10 a generic paragraph repeated in the prose does not fake a full match", stripRepeatedDraft(repeated, card) === repeated);
+  const boldLabel = `Sam wants to meet.\n\n**Suggested reply:**\n\n${card}`;
+  check("V11 a bold '**Suggested reply:**' label goes with the draft", stripRepeatedDraft(boldLabel, card) === "Sam wants to meet.", stripRepeatedDraft(boldLabel, card));
+  check("V12 a '(fallback: …)' reply whose error contains ')' is still a notice",
+    noticeText("(fallback: model call failed: 429 Rate limit for gpt-4o (TPM): Limit) couldn't reach the model — x") !== null);
+  check("V13 a full draft with a same-line label and trailing-space sign-off still strips",
+    stripRepeatedDraft("Sam wants to meet.\n\nSuggested reply: Hi Sam,\n\nThursday at 2 PM works for me (a placeholder, happy to move it).\n\nBest,  \nVon\n\nTap Save to Drafts.", card) === "Sam wants to meet.\n\nTap Save to Drafts.");
+  const cd = parseChatBlocks("3. a\n2. b\n1. c")[0] as { t: string; nums?: number[] };
+  check("V14 every numbered item keeps its own number (countdown stays 3, 2, 1)", JSON.stringify(cd.nums) === "[3,2,1]", cd);
+  const z0 = parseChatBlocks("0. zero\n1. one")[0] as { t: string; start?: number; nums?: number[] };
+  check("V15 a list starting at 0 starts at 0", z0.start === 0 && JSON.stringify(z0.nums) === "[0,1]", z0);
+  const wl = parseInline("see (https://en.wikipedia.org/wiki/Foo_(bar)) here").find((x) => x.t === "link") as { href: string } | undefined;
+  check("V16 a URL with balanced parentheses keeps them; the wrapping one stays outside", wl?.href === "https://en.wikipedia.org/wiki/Foo_(bar)", wl);
+  const ct = readFileSync("src/features/huddle/components/ChatText.tsx", "utf8");
+  check("V17 ChatText renders each <li> with its own value", /value=\{b\.t === "ol" \? b\.nums\[j\] : undefined\}/.test(ct));
   const hv = readFileSync("src/features/huddle/components/HuddleView.tsx", "utf8");
   check("V9 a notice keeps the message row (and its email card / nav button): no early return on notice",
     !/if \(notice\) \{\s*return/.test(hv) && /\{notice \? \(/.test(hv));

@@ -69,7 +69,7 @@ export function ChatText({ text }: { text: string }) {
               }
             >
               {b.items.map((it, j) => (
-                <li key={j} className="pl-0.5">
+                <li key={j} className="pl-0.5" value={b.t === "ol" ? b.nums[j] : undefined}>
                   <Inlines parts={it} />
                 </li>
               ))}
