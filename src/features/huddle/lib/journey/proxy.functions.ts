@@ -113,10 +113,25 @@ export function toResponsesTool(t: JourneyToolDefinition): JourneyResponsesTool 
  */
 export const UI_ONLY_JOURNEY_TOOLS = new Set(["delete_task"]);
 
+/**
+ * journey tools only Huddle's own SERVER code may run -- never a model, a voice executor, the debug fn
+ * or even a user click. `get_mail_access_token` returns a live Microsoft credential for the owner's
+ * mailbox (graph-email.server.ts `mailboxAccess`); a model reaching it by name (the voice executor
+ * forwards ANY non-native tool name) could echo that token into chat. Same chokepoint as above.
+ */
+export const SERVER_ONLY_JOURNEY_TOOLS = new Set(["get_mail_access_token"]);
+
 export async function invokeJourneyTool(
   req: JourneyToolInvocationRequest,
-  opts: { allowUiOnly?: boolean } = {},
+  opts: { allowUiOnly?: boolean; allowServerOnly?: boolean } = {},
 ): Promise<JourneyToolInvocationResponse> {
+  if (SERVER_ONLY_JOURNEY_TOOLS.has(req.toolName) && !opts.allowServerOnly) {
+    return {
+      ok: false,
+      output: JSON.stringify({ error: "not_allowed", message: `${req.toolName} is server-internal.` }),
+      error: `${req.toolName} is server-internal`,
+    };
+  }
   if (UI_ONLY_JOURNEY_TOOLS.has(req.toolName) && !opts.allowUiOnly) {
     return {
       ok: false,

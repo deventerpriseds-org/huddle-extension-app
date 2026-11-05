@@ -67,6 +67,8 @@ export const saveEmailReplyDraftFn = createServerFn({ method: "POST" })
         mailbox: row.mailbox,
         graphMessageId: row.graph_message_id,
         body,
+        // A non-EnterpriseDS mailbox (e.g. @trinnex.io) is reached with the owner's own sign-in.
+        owner: row.owner_email,
       });
       if (!r.ok) {
         console.error("[email-replies] save draft failed", r.error);

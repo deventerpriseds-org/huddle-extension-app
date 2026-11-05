@@ -1,5 +1,5 @@
 import { invokeJourneyTool } from "./proxy.functions";
-import { pickOutlookMailbox } from "./calendar-mailbox";
+import { pickOutlookMailboxes } from "./calendar-mailbox";
 
 // Resolve a Huddle Entra sign-in email (which may be an alias, e.g. von.ellis@) to the CANONICAL
 // journey identity (user_id + profile email, e.g. dev@) that the task-sync writes the mirror under.
@@ -138,11 +138,40 @@ export async function resolveTaskEmail(caller: Caller): Promise<string | undefin
   return resolved ? resolved.trim().toLowerCase() : undefined;
 }
 
-const calendarMailboxCache = new Map<string, { mailbox: string; at: number }>();
+const calendarMailboxCache = new Map<string, { mailboxes: string[]; at: number }>();
 const CALENDAR_MAILBOX_TTL_MS = 10 * 60_000;
 
 /**
- * The mailbox whose CALENDAR is the owner's — the ONE resolver every Graph calendar read uses.
+ * EVERY Outlook mailbox the owner connected in journey, main (EnterpriseDS) one first -- what the
+ * inbound watch, inbox search and the calendar read loop over so a second-tenant work mailbox
+ * (@trinnex.io, 2026-11-05) gets the same alerts, drafts and events. Falls back to [resolveTaskEmail]
+ * when journey is unreachable or nothing is connected, exactly as resolveCalendarMailbox always did.
+ */
+export async function resolveOutlookMailboxes(caller: Caller): Promise<string[]> {
+  const login = caller?.entra_email?.trim().toLowerCase() ?? "";
+  const hit = login ? calendarMailboxCache.get(login) : undefined;
+  if (hit && Date.now() - hit.at < CALENDAR_MAILBOX_TTL_MS) return hit.mailboxes;
+  try {
+    const r = await invokeJourneyTool({
+      toolName: "get_my_config",
+      args: { section: "calendar_connections" },
+      caller: caller ?? {},
+      context: { source: "huddle" },
+    });
+    const mailboxes = r.ok ? pickOutlookMailboxes(r.output) : [];
+    if (mailboxes.length) {
+      if (login) calendarMailboxCache.set(login, { mailboxes, at: Date.now() });
+      return mailboxes;
+    }
+  } catch {
+    /* journey unreachable -> fall back below */
+  }
+  const fallback = (await resolveTaskEmail(caller)) ?? caller?.entra_email ?? undefined;
+  return fallback ? [fallback] : [];
+}
+
+/**
+ * The mailbox whose CALENDAR is the owner's MAIN one — the first of resolveOutlookMailboxes.
  *
  * WHY not resolveTaskEmail: that is the email Huddle SCOPES DATA by (dev@enterpriseds.io), not
  * the account the owner's meetings live in. Measured 2026-10-15: journey's synced Haircut and Test
@@ -152,25 +181,7 @@ const CALENDAR_MAILBOX_TTL_MS = 10 * 60_000;
  * remains the fallback when journey is unreachable or no Outlook account is connected.
  */
 export async function resolveCalendarMailbox(caller: Caller): Promise<string | undefined> {
-  const login = caller?.entra_email?.trim().toLowerCase() ?? "";
-  const hit = login ? calendarMailboxCache.get(login) : undefined;
-  if (hit && Date.now() - hit.at < CALENDAR_MAILBOX_TTL_MS) return hit.mailbox;
-  try {
-    const r = await invokeJourneyTool({
-      toolName: "get_my_config",
-      args: { section: "calendar_connections" },
-      caller: caller ?? {},
-      context: { source: "huddle" },
-    });
-    const mailbox = r.ok ? pickOutlookMailbox(r.output) : undefined;
-    if (mailbox) {
-      if (login) calendarMailboxCache.set(login, { mailbox, at: Date.now() });
-      return mailbox;
-    }
-  } catch {
-    /* journey unreachable -> fall back below */
-  }
-  return (await resolveTaskEmail(caller)) ?? caller?.entra_email ?? undefined;
+  return (await resolveOutlookMailboxes(caller))[0];
 }
 
 /**

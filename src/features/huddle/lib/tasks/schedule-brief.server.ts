@@ -312,6 +312,9 @@ export async function meetingsForDate(
   tz: string,
   mailbox: string,
   toDate: string = forDate,
+  /** Other connected Outlook calendars (e.g. the @trinnex.io work account) and the identity to sign
+   *  in as for them. Their failures are logged, never fatal — the main mailbox decides `error`. */
+  more: { extraMailboxes?: string[]; owner?: string } = {},
 ): Promise<{ items: BriefItem[]; error?: string }> {
   const { getGraphCalendarEvents, graphEmailConfigured } =
     await import("../email/graph-email.server");
@@ -323,15 +326,24 @@ export async function meetingsForDate(
     // One Graph read covering forDate..toDate (inclusive) — a single day unless a range is asked for.
     const { startIso } = localDayBoundsUtc(forDate, tz);
     const { endIso } = localDayBoundsUtc(toDate, tz);
-    const r = await getGraphCalendarEvents({
-      mailbox,
-      startISO: startIso,
-      endISO: endIso,
-      timeZone: "UTC", // response rendered in UTC so graphUtcToIso can pin it unambiguously
-    });
+    const read = (mb: string) =>
+      getGraphCalendarEvents({
+        mailbox: mb,
+        startISO: startIso,
+        endISO: endIso,
+        timeZone: "UTC", // response rendered in UTC so graphUtcToIso can pin it unambiguously
+        owner: more.owner,
+      });
+    const r = await read(mailbox);
     if (!r.ok) return { items: [], error: r.error || "calendar read failed" };
+    const events = [...(r.events ?? [])];
+    for (const mb of more.extraMailboxes ?? []) {
+      const x = await read(mb);
+      if (x.ok) events.push(...(x.events ?? []));
+      else console.error("[schedule-brief] extra calendar read failed", x.error?.slice(0, 120));
+    }
     const items: BriefItem[] = [];
-    for (const e of r.events ?? []) {
+    for (const e of events) {
       // An event with no id cannot be keyed for an idempotent T-60, so it is still BRIEFED (the
       // user should see it) but the seeder skips it rather than minting a duplicate-prone key.
       items.push({
@@ -369,6 +381,9 @@ export async function buildScheduleBrief(opts: {
   edition?: BriefEdition;
   /** The OWNER's Graph mailbox (resolveTaskEmail(caller)). Required — see meetingsForDate. */
   mailbox: string;
+  /** Other connected Outlook calendars, and who to sign in as for them (see meetingsForDate). */
+  extraMailboxes?: string[];
+  owner?: string;
   /** The email the task mirror is keyed by. Omitted -> tasks are not read (legacy callers). */
   taskEmail?: string;
   /** A window message: narrow to what is still ahead in this window; no week lookahead. */
@@ -394,7 +409,10 @@ export async function buildScheduleBrief(opts: {
     items = items.concat(cls.items);
   }
 
-  const mtg = await meetingsForDate(forDate, tz, opts.mailbox);
+  const mtg = await meetingsForDate(forDate, tz, opts.mailbox, forDate, {
+    extraMailboxes: opts.extraMailboxes,
+    owner: opts.owner,
+  });
   if (mtg.error) errors.push(`meetings: ${mtg.error}`);
   items = items.concat(mtg.items);
 
@@ -449,7 +467,10 @@ export async function buildScheduleBrief(opts: {
       c.items.map((i) => ({ ...i, day: i.startIso ? localDate(Date.parse(i.startIso), tz) : undefined })),
     );
   }
-  const um = await meetingsForDate(from, tz, opts.mailbox, to);
+  const um = await meetingsForDate(from, tz, opts.mailbox, to, {
+    extraMailboxes: opts.extraMailboxes,
+    owner: opts.owner,
+  });
   if (um.error) upcomingErrors.push(`meetings: ${um.error}`);
   upcoming = upcoming.concat(um.items);
   upcoming.sort((a, b) => {

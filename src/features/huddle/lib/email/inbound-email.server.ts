@@ -76,10 +76,13 @@ export async function runInboundEmailWatch(
         : INBOUND_EMAIL_LOOKBACK_HOURS_DEFAULT;
     const since = new Date(nowMs - hours * 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
-    // The owner's Outlook mailbox — resolved EXACTLY as the schedule brief and the calendar tool do
-    // (journey's connected Microsoft account), never the data-scope login (dev@).
-    const { resolveCalendarMailbox } = await import("../journey/identity");
-    const mailbox = (await resolveCalendarMailbox(caller)) ?? caller.entra_email;
+    // EVERY connected Outlook mailbox, main (EnterpriseDS) first — a second-tenant work mailbox
+    // (@trinnex.io, 2026-11-05) gets the same alerts and drafts. The main one keeps the instant-alert
+    // subscription; the others ride this 5-minute check.
+    const { resolveOutlookMailboxes } = await import("../journey/identity");
+    const resolved = await resolveOutlookMailboxes(caller);
+    const mailboxes = resolved.length ? resolved : [caller.entra_email];
+    const mailbox = mailboxes[0];
     // The ledger's owner key — the same resolution the board and every button use.
     const { resolveTaskEmail } = await import("../journey/identity");
     const ownerEmail = (await resolveTaskEmail(caller)) ?? caller.entra_email;
@@ -100,8 +103,18 @@ export async function runInboundEmailWatch(
     }
 
     const { listInboxMessagesSince } = await import("./graph-email.server");
-    const read = await listInboxMessagesSince(mailbox, since);
-    if (!read.ok) {
+    const read = await listInboxMessagesSince(mailbox, since, 25, caller.entra_email);
+    const tagged: { m: import("./inbound-email").InboundMessage; mailbox: string }[] = read.ok
+      ? read.messages.map((m) => ({ m, mailbox }))
+      : [];
+    // Extra mailboxes never fail the run: one that is not approved yet or signed out is logged and
+    // skipped, so it cannot take the main mailbox's alerts down with it.
+    for (const extra of mailboxes.slice(1)) {
+      const r = await listInboxMessagesSince(extra, since, 25, caller.entra_email);
+      if (r.ok) tagged.push(...r.messages.map((m) => ({ m, mailbox: extra })));
+      else console.error("[inbound-email] extra mailbox read failed", r.error.slice(0, 160));
+    }
+    if (!read.ok && !tagged.length) {
       // The raw Graph text can echo the mailbox; log it server-side, return only the status code.
       console.error("[inbound-email] inbox read failed", read.error);
       const status = /\((\d{3})\)/.exec(read.error)?.[1];
@@ -115,8 +128,8 @@ export async function runInboundEmailWatch(
     }
 
     // Oldest first, so the owner hears about them in the order they arrived.
-    const msgs = [...read.messages].sort((a, b) =>
-      String(a.receivedDateTime ?? "").localeCompare(String(b.receivedDateTime ?? "")),
+    const msgs = [...tagged].sort((a, b) =>
+      String(a.m.receivedDateTime ?? "").localeCompare(String(b.m.receivedDateTime ?? "")),
     );
     const fmt = new Intl.DateTimeFormat("en-US", {
       timeZone: tz,
@@ -127,8 +140,8 @@ export async function runInboundEmailWatch(
     const decisions: NonNullable<InboundEmailRunResult["decisions"]> = [];
     let delivered = 0;
 
-    for (const m of msgs) {
-      const verdict = screenMessage(m, mode, mailbox);
+    for (const { m, mailbox: msgMailbox } of msgs) {
+      const verdict = screenMessage(m, mode, msgMailbox);
       const row: (typeof decisions)[number] = {
         received: m.receivedDateTime ?? null,
         fromDomain:
@@ -151,7 +164,7 @@ export async function runInboundEmailWatch(
       await ledger.recordOwedEmail({
         id: emailId,
         ownerEmail,
-        mailbox,
+        mailbox: msgMailbox,
         graphMessageId: m.id,
         conversationId: m.conversationId ?? null,
         fromAddress: m.fromAddress ?? null,
