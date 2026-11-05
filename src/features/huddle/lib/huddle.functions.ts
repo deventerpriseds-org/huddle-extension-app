@@ -291,9 +291,9 @@ const Input = z.object({
   // A CODE-BUILT block (the scheduled brief's / priority check's list) appended under the TARGET agent's
   // opening line — so the list layout is identical every run instead of re-invented by the model
   // (owner, 2026-11-05). See ensureAppendBlockDelivered.
-  // Capped like internal text (INTERNAL_TEXT_MAX), not tighter: a busy week (~6 meetings/day over the
-  // 6-day lookahead) measured 4,070 chars, and a payload over the cap fails the WHOLE durable turn.
-  appendBlock: z.string().max(12000).optional(),
+  // Capped exactly like internal text (INTERNAL_TEXT_MAX): a payload over the cap fails the WHOLE durable
+  // turn. The producers also bound their own sections (BLOCK_MAX_ITEMS), so a busy week stays well under.
+  appendBlock: z.string().max(INTERNAL_TEXT_MAX).optional(),
   // A live-ceremony BARGE-IN answered synchronously (the client's runBargeSequence, not the durable
   // ceremony queue). When set on a group turn, the responder the router picks gets the existing
   // bargeDirective() layered onto its scene — "the user just cut into a live stand-up, address them

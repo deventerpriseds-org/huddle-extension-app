@@ -33,6 +33,12 @@ const BRIEF_OWNER: AgentId = "iris-chase";
  *  "with deep link ... to each tab" -- the Priorities check already had its button; this is Schedule's.
  *  Attached by the turn runner from the payload (ensureNavLinkDelivered), whatever the model writes. */
 export const SCHEDULE_NAV_LINK = { view: "schedule" as const, label: "Open Schedule" };
+/** Most items any one section of the code-built brief lists; the rest become "…and N more". */
+export const BLOCK_MAX_ITEMS = 25;
+/** Longest single item line in the code-built brief (titles and locations are clipped past it). */
+export const BLOCK_ITEM_CHARS = 160;
+/** The code-built brief never exceeds this — well under the payload cap (INTERNAL_TEXT_MAX, 16000). */
+export const BLOCK_MAX_CHARS = 10000;
 
 /** The phone push title, so the 8pm brief no longer reads "Iris Chase replied" exactly like the 8pm
  *  priority check sent one second earlier (push log 2026-10-28T00:00:07Z/08Z). Not sticky: the brief
@@ -221,22 +227,33 @@ export function briefDeliveryPlan(
   // layout was a prose instruction the model re-read each run. Iris now writes ONE opening sentence and
   // the turn runner appends this block under it (payload.appendBlock -> ensureAppendBlockDelivered), so
   // the layout, the time format and the closing question are identical every day.
-  const block = [
-    bulletSection("Meetings and classes:", briefLines(brief, tz).map(spacedClock)),
-    bulletSection(
-      "On your task list:",
-      (brief.tasks ?? []).map((t) =>
-        spacedClock(`${clock(t.startIso, tz) ?? "any time"} — ${t.title}`),
-      ),
-    ),
-    w ? "" : bulletSection("Later this week:", weekItems(brief, tz)),
-    w
-      ? ""
-      : `Would you like to adjust anything ${brief.edition === "evening" ? "for tomorrow" : "today"}? ` +
-        `The "${SCHEDULE_NAV_LINK.label}" button below takes you to the Schedule tab.`,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  // BOUNDED, because a payload over the cap fails the whole turn (verifier loop 2: ~15 meetings/day
+  // over the 6-day lookahead measured 14,915 chars). Each item is clipped to BLOCK_ITEM_CHARS and each
+  // section lists at most `max` items; if the block is still over BLOCK_MAX_CHARS, `max` shrinks. The
+  // rest are named as "…and N more", and the Open Schedule button shows them all.
+  const seeAll = `— the "${SCHEDULE_NAV_LINK.label}" button below shows them all.`;
+  const clip = (x: string) =>
+    x.length > BLOCK_ITEM_CHARS ? `${x.slice(0, BLOCK_ITEM_CHARS - 1)}…` : x;
+  const meetings = briefLines(brief, tz).map((x) => clip(spacedClock(x)));
+  const tasks = (brief.tasks ?? []).map((t) =>
+    clip(spacedClock(`${clock(t.startIso, tz) ?? "any time"} — ${t.title}`)),
+  );
+  const weekList = w ? [] : weekItems(brief, tz).map(clip);
+  const ask = w
+    ? ""
+    : `Would you like to adjust anything ${brief.edition === "evening" ? "for tomorrow" : "today"}? ` +
+      `The "${SCHEDULE_NAV_LINK.label}" button below takes you to the Schedule tab.`;
+  const buildBlock = (max: number) =>
+    [
+      bulletSection("Meetings and classes:", meetings, max, seeAll),
+      bulletSection("On your task list:", tasks, max, seeAll),
+      bulletSection("Later this week:", weekList, max, seeAll),
+      ask,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  let block = buildBlock(BLOCK_MAX_ITEMS);
+  for (const max of [15, 8, 3]) if (block.length > BLOCK_MAX_CHARS) block = buildBlock(max);
   const noList =
     `Do NOT list the items, times, the rest of the week or a closing question — the app adds the full ` +
     `list under your sentence, one item per line. Plain text only, no markdown. `;

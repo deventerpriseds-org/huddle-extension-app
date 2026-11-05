@@ -6,6 +6,7 @@
 // EVIDENCE:   azure-pg-query run 42105101844.
 // Run: bun scripts/chat-format.test.ts   (npm run test:chat-format)
 import {
+  bulletSection,
   joinOpenerAndBlock,
   noticeText,
   normalizeChatText,
@@ -113,6 +114,12 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("V16 a URL with balanced parentheses keeps them; the wrapping one stays outside", wl?.href === "https://en.wikipedia.org/wiki/Foo_(bar)", wl);
   const ct = readFileSync("src/features/huddle/components/ChatText.tsx", "utf8");
   check("V17 ChatText renders each <li> with its own value", /value=\{b\.t === "ol" \? b\.nums\[j\] : undefined\}/.test(ct));
+  const blk2 = "Meetings and classes:\n• 9:00 AM — A\n\nWould you like to adjust anything today? The button below.";
+  for (const copy of ["**Meetings and classes**:", "### Meetings and classes:", "Meetings and classes", "**Meetings and classes:**"])
+    check(`V18 a copied header '${copy}' is cut`, openerOnly(`Hello Sir, one meeting.\n${copy}\n9:00 AM A`, blk2) === "Hello Sir, one meeting.", openerOnly(`Hello Sir, one meeting.\n${copy}\n9:00 AM A`, blk2));
+  check("V19 a copied closing question is cut", openerOnly("Hello Sir, one meeting.\n\nWould you like to adjust anything today?", blk2) === "Hello Sir, one meeting.");
+  check("V20 an ordinary opener is kept whole", openerOnly("Hello Sir, just a reminder that today you have one meeting.", blk2) === "Hello Sir, just a reminder that today you have one meeting.");
+  check("V21 bulletSection caps items with an '…and N more' line", bulletSection("T:", ["a", "b", "c"], 2, "see all.") === "T:\n• a\n• b\n…and 1 more see all.");
   const hv = readFileSync("src/features/huddle/components/HuddleView.tsx", "utf8");
   check("V9 a notice keeps the message row (and its email card / nav button): no early return on notice",
     !/if \(notice\) \{\s*return/.test(hv) && /\{notice \? \(/.test(hv));

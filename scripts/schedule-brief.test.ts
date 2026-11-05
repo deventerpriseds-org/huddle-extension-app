@@ -379,9 +379,16 @@ console.log("K. CODE-BUILT BLOCK FITS THE TURN (verifier loop 1, B1-a: 6 meeting
       busy.push(item({ sourceId: `b${d}-${h}`, title: `Quarterly planning sync with the platform engineering team ${h}`, kind: "meeting", startIso: `2026-10-${d}T${String(13 + h).padStart(2, "0")}:00:00Z`, endIso: `2026-10-${d}T${String(13 + h).padStart(2, "0")}:30:00Z`, day: `2026-10-${d}`, location: "Microsoft Teams Meeting" }));
   const big = briefDeliveryPlan(mk({ forDate: "2026-10-15", upcoming: busy }), TZ);
   const hf = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
-  const cap = Number(/appendBlock: z\.string\(\)\.max\((\d+)\)/.exec(hf)?.[1] ?? 0);
+  const cap = /appendBlock: z\.string\(\)\.max\(INTERNAL_TEXT_MAX\)/.test(hf) ? Number(/export const INTERNAL_TEXT_MAX = (\d+)/.exec(hf)?.[1] ?? 0) : 0;
   t("K1 an 8-meetings-a-day week is longer than the old 3,500 cap", (big.appendBlock ?? "").length > 3500, true);
   t("K2 and still fits the payload schema cap", (big.appendBlock ?? "").length <= cap, true);
+  const huge: BriefItem[] = [];
+  for (let d = 16; d <= 21; d++)
+    for (let h = 0; h < 30; h++)
+      huge.push(item({ sourceId: `h${d}-${h}`, title: "T".repeat(200), kind: "meeting", startIso: `2026-10-${d}T13:00:00Z`, endIso: `2026-10-${d}T13:30:00Z`, day: `2026-10-${d}`, location: "L".repeat(200) }));
+  const worst = briefDeliveryPlan(mk({ forDate: "2026-10-15", items: huge.slice(0, 40), tasks: huge.slice(0, 40).map((x, i) => ({ id: String(i), title: x.title, startIso: x.startIso })), upcoming: huge }), TZ);
+  t("K3 a pathological week (180 items, 200-char titles) stays under 10,000 chars and the cap", (worst.appendBlock ?? "").length <= 10000 && cap >= 16000, true);
+  t("K4 and says how many more the button shows", /…and \d+ more — the "Open Schedule" button below shows them all\./.test(worst.appendBlock ?? ""), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

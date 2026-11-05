@@ -261,18 +261,37 @@ const SUGGESTED_LABEL_ONLY = /^\**\s*suggested reply:?\s*\**:?$/i;
  * shown twice.
  */
 export function openerOnly(text: string, block = ""): string {
-  const headers = new Set(
-    block
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => /:$/.test(l) && !isListLine(l)),
-  );
+  const blockLines = block
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !isListLine(l));
+  // Section headers, compared without bold / "#" / the colon / case, so "**Meetings and classes**:",
+  // "### Meetings and classes:" and "Meetings and classes" all match "Meetings and classes:".
+  const headers = new Set(blockLines.filter((l) => /:$/.test(l)).map(headerKey));
+  // Any other block line (the closing question) — a model copy of it is cut too.
+  const others = blockLines.filter((l) => !/:$/.test(l)).map((l) => headerKey(l).slice(0, 30));
   const out: string[] = [];
   for (const line of normalizeChatText(text).split("\n")) {
-    if (isListLine(line) || headers.has(line.trim().replace(/^\*\*(.+)\*\*$/, "$1"))) break;
+    const k = headerKey(line);
+    if (
+      isListLine(line) ||
+      headers.has(k) ||
+      (k.length >= 20 && others.some((o) => o && k.startsWith(o)))
+    )
+      break;
     out.push(line);
   }
   return out.join("\n").trim();
+}
+
+function headerKey(line: string): string {
+  return line
+    .trim()
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/\*\*|__/g, "")
+    .replace(/:\s*$/, "")
+    .trim()
+    .toLowerCase();
 }
 
 /** The model's opener, a blank line, then the code-built block. Falls back to "Hello Sir," when the
@@ -291,9 +310,23 @@ export function spacedClock(s: string): string {
   );
 }
 
-/** A titled list: "Title:\n• a\n• b". Empty items -> "". */
-export function bulletSection(title: string, items: string[]): string {
+/**
+ * A titled list: "Title:\n• a\n• b". Empty items -> "". With `max`, only the first `max` items are
+ * listed and a plain "…and N more" line follows (plus `moreNote`), so a code-built block can never
+ * grow past the turn's size cap on a very busy week.
+ */
+export function bulletSection(
+  title: string,
+  items: string[],
+  max = Infinity,
+  moreNote = "",
+): string {
   const xs = items.map((x) => x.trim()).filter(Boolean);
   if (!xs.length) return "";
-  return `${title}\n${xs.map((x) => `• ${x}`).join("\n")}`;
+  const shown = xs.slice(0, max);
+  const rest = xs.length - shown.length;
+  return (
+    `${title}\n${shown.map((x) => `• ${x}`).join("\n")}` +
+    (rest > 0 ? `\n…and ${rest} more${moreNote ? ` ${moreNote}` : ""}` : "")
+  );
 }
