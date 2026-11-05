@@ -121,6 +121,13 @@ index into a requirement list**.
 - Job `owedDigest` (9/16 ET default, Settings-editable) → `runOwedDigest` (lib/email/owed-digest.server.ts): reconcile Sent Items, list `chat.email_replies` owed|drafted, `buildOwedDigest` returns NULL on zero → nothing on either channel. 1+ → Iris DM turn with payload `owedDigest` card (attached to target reply + `ensureOwedDigestDelivered` fallback) and a self-addressed HTML email via `sendGraphEmail` (entra address = auto self tier).
 - The card re-reads live status per row (`getEmailReplyStatusesFn`) so rows answered/dismissed since show as settled.
 - Coverage limit: the ledger only holds emails the inbound watch flagged ("from a person and asks something", since 2026-10-15). Older/unflagged correspondence is not in it.
+## Polish — text cleanup tool (2026-11-05, branch claude/tender-bardeen-g2q5ey, NOT merged, NOT deployed, NOT owner-confirmed)
+- New view `polish` (store View union). Rail entry under a divider ("tools" group); phone bottom bar is now 6 columns. Sidebar + ContextPanel are hidden ONLY on this view (`FULL_WIDTH_VIEWS` in HuddleApp.tsx); every other view unchanged.
+- Model call: `lib/polish/polish.functions.ts` `polishTextFn` — client sends a STRUCTURED request (polish/revise/span/merge) + settings; prompt is built server-side from `lib/polish/polish-core.ts`. Reuses OPENAI_API_KEY; Fast = gpt-5.6-luna low, Best = gpt-5.6-terra medium; 40s abort under the 45s ceiling. No streaming (SWA buffers responses).
+- Storage: user's own profiles + last profile ride the EXISTING synced workspace blob (`polishProfiles`/`polishProfileId` in PERSISTED_KEYS + the useWorkspaceSync change check). Draft + versions are per-device localStorage (`huddle:polish:*`). No new table.
+- Live mode = polish 1.5s after typing stops; never overwrites a hand-edited version (banner offers "Update, keep my edits" / "Replace from draft").
+- Prototype (approval artifact): https://claude.ai/artifact/7MJkFX17io8FHmVWwSZCAn
+- Send sheet (`PolishSendSheet.tsx`): email = DRAFT only (never sends) via createGraphDraft, mailbox list from HUDDLE_EMAIL_FROM; Word = renderMarkdownToDocx + createArtifact(folder "Polish", status approved) + mirrorArtifactToOneDrive (NON-fatal; download still returned). Google Drive NOT wired — journey holds Google tokens (artifacts Phase 3); the .docx download is the stopgap. Live Graph calls NOT exercised from the sandbox.
 
 ## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04, branch claude_context-and-confirm, NOT merged, NOT deployed, NOT owner-confirmed)
 - **Confirm-intent:** the pre-model `isPlainConfirmation` short-circuit is GONE. Block A of `runHuddleTurn` is

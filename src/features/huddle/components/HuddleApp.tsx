@@ -19,6 +19,7 @@ import { breadcrumbToolsFor, type ChecklistPayload, type NavLink, type OwedDiges
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
 import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
 import { PrioritiesView, ScheduleView } from "./JourneyWidgets";
+import { PolishView } from "./PolishView";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAppViewportHeight } from "../hooks/useAppViewportHeight";
 import { useAuth } from "@/hooks/useAuth";
@@ -45,7 +46,13 @@ const VIEWS: Record<View, React.ReactNode> = {
   artifacts: <ArtifactsView />,
   priorities: <PrioritiesView />,
   schedule: <ScheduleView />,
+  polish: <PolishView />,
 };
+
+/** Tool views take the whole width beside the Rail: a writing tool needs both panes more than it
+ *  needs the huddle list or the activity panel. Only these views are affected; every existing view
+ *  keeps the Sidebar and ContextPanel exactly as before. */
+const FULL_WIDTH_VIEWS: ReadonlySet<View> = new Set<View>(["polish"]);
 
 export function HuddleApp() {
   useWorkspaceSync();
@@ -362,7 +369,7 @@ export function HuddleApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
 
-  const activeTitle = active
+  const activeTitle = view === "polish" ? "Polish" : active
     ? active.kind === "group"
       ? active.name
       : AGENT_BY_ID[active.members[0]].name
@@ -382,7 +389,7 @@ export function HuddleApp() {
       <div className="app-hidden md:flex md:h-full">
         <Rail />
       </div>
-      {!sidebarCollapsed && (
+      {!sidebarCollapsed && !FULL_WIDTH_VIEWS.has(view) && (
         <div className="app-hidden md:flex md:h-full">
           <Sidebar />
         </div>
@@ -439,7 +446,7 @@ export function HuddleApp() {
 
 
       {/* Desktop context panel — collapses to a slim edge tab that re-expands it */}
-      <div className="app-hidden h-full md:flex">
+      <div className={FULL_WIDTH_VIEWS.has(view) ? "app-hidden" : "app-hidden h-full md:flex"}>
         {contextPanelCollapsed ? (
           <button
             type="button"

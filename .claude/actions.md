@@ -8,6 +8,13 @@ Last updated: 2026-10-27
 - **Live data at build time (Huddle PG, 2026-11-05):** 19 owed, 12 replied, 6 dismissed; oldest owed 2026-10-15. Owner's entra address is auto-tier for self-send (tiers map empty → source=entra → auto).
 - **Open question:** owner referenced "my business hours start email I received today". The Huddle 11am item was `schedule-brief-window-business_hours-2026-11-05` — a chat message + push, NO email (tools: tool_catalog only). No email sender for it found in Huddle or journey code. Need the email's sender/subject to match its format.
 - **Status:** implemented, mechanism verified offline; NOT merged/deployed at time of writing; NOT owner-confirmed.
+## ACT:polish-tool — Polish text cleanup tool in Huddle (first tool module; Sidecar + Prompto later) (2026-11-05)
+- [x] Read the owner's design (claude.ai artifact 283e7883, "Refine" screens) and blended it into Huddle's Compass look.
+- [x] Interactive prototype for approval: https://claude.ai/artifact/7MJkFX17io8FHmVWwSZCAn (polishes real text via Claude in the preview).
+- [x] Built on branch claude/tender-bardeen-g2q5ey: PolishView + polish-core + polishTextFn (OpenAI, Fast=luna / Best=terra) + Rail/bottom-bar entry + synced profiles. 19/19 offline checks (npm run test:polish), tsc 0 errors, vite build OK, local render checked desktop + phone.
+- [x] Owner add (2026-11-05): "push draft" options. Send sheet: Copy text / Copy formatted (HTML clipboard), Email DRAFT in a chosen mailbox (createGraphDraft; HUDDLE_EMAIL_FROM list = dev@, von.ellis@), Word doc (renderMarkdownToDocx -> Files/Polish -> OneDrive mirror) + Download .docx. Google Drive: not connected (journey holds Google tokens; Phase 3) -> download covers it. 26/26 offline checks; real .docx verified (bullets as Word lists).
+- [ ] Owner approves the prototype -> merge to main (auto-deploys).
+- [ ] Owner confirms it works live on web + phone. NOT owner-confirmed.
 
 ## ACT:context-and-confirm — confirm after the agent reads; agent sees widgets/cards in the 1:1 stream (2026-11-04)
 Status: 🔨 implemented on `claude_context-and-confirm`, offline-verified, NOT merged / deployed / owner-confirmed.
