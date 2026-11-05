@@ -1,4 +1,4 @@
-PROGRESS: 3/7
+PROGRESS: 4/7
 
 # VERIFY wip-e2e-pickup-fit loop 1
 
@@ -41,3 +41,30 @@ Observation: several suites assert on SOURCE TEXT (e.g. "the gate's verdict goes
 - Note (:261-266): "The work is being started now: it moves to Doing immediately unless you already have a task in Doing (one at a time), in which case it is next. Tell the user exactly that — never that they need to authorize the start ...".
 - CAVEAT (truthfulness): the note is emitted UNCONDITIONALLY — the boolean `kickAutoWorkAfterApproval` returns is discarded (:256). On a timeout/failure the agent still tells the user the work "is being started now", while it actually waits for the next scheduled pass. Also the 8s bound is a wait bound only: the pass keeps running after the race resolves (not cancelled), and the 8s is spent inside the agent's tool dispatch, i.e. inside the turn's chunk budget.
 - The grader-error fail-open path (:326) returns approved:true WITHOUT kicking — consistent with "never record an approval no grader produced".
+
+## C4 (#140) coursework never assigned / excluded from auto-work and confirm-asks — CONFIRMED as coded, with REAL FALSE POSITIVES
+
+Code:
+- `isCoursework` workability.ts:46-50: `t.startsWith("📚") || /\b[A-Z]{2,4}-\d{3}\b/.test(t)` (case-sensitive, 2-4 caps, hyphen, exactly 3 digits).
+- `groomOwner` groom.ts:160-162 returns "" first for coursework; sole call site groom.ts:356 passes `t.title`. The owner judge that runs after (:366-383) returns early on `!a.assigned_agent`, so it cannot re-assign the "".
+- Auto-work candidates: autowork.server.ts:768-770 filter `!isCoursework(t.title)` on `assigned` — upstream of lanes, promotion, DOING and arming.
+- Confirm-ask FIRE path: autowork.server.ts:563 filter `!isCoursework(r.title)` (covers asks armed before #140 too).
+
+Probe (`bun .../scratchpad/course.ts`, real functions):
+
+| title | isCoursework | correct? |
+|---|---|---|
+| 📚 Research Paper / "📚 Checkpoint 2 ... (MGT-702)" / "Obtain MGT-782 Module 3 materials" / "  📚 leading space" | true | yes |
+| SOC-2 audit prep | false | yes |
+| ISO-27001 checklist | false | yes |
+| COVID-19 booster / Buy Sony WH-1000XM5 / Research the F-150 | false | yes |
+| **Fix the ABC-123 bug** | **true** | FALSE POSITIVE |
+| **Review PR-139 diff** | **true** | FALSE POSITIVE |
+| **Book UA-123 flight to Denver** | **true** | FALSE POSITIVE (flight numbers) |
+| **Complete DS-160 visa form** | **true** | FALSE POSITIVE (US visa form) |
+| **Read RFC-822** / **Order SKU-500 replacement** / **Close JIRA-101** / **Look at HUD-204 ticket** | **true** | FALSE POSITIVES (ticket/issue/part ids) |
+| mgt-702 paper / MGT 702 paper / MGT702 paper / BUSAD-500 essay / "Finish (MGT-7020) draft" / "Read chapter 📚" | false | false NEGATIVES (would still be assigned) |
+
+`groomOwner("cole-blake","cole-blake","Fix the ABC-123 bug")` -> `""` — a real engineering/travel task is UNASSIGNED by the groom and silently dropped from auto-work and confirm-asks. Effect is quiet: no error, the card just stops getting worked.
+
+Other assignment path NOT covered (outside the claim's named function, reported for completeness): `assign-on-create.ts` (`pickCreatedTaskAssignee` / `assignCreatedJourneyTasks`) assigns a task created in a 1:1 to that agent with no coursework check. Such a task is still excluded from auto-work/asks by the two filters above and cleared at the next groom, so "never worked" holds; "never assigned" holds only for the groom path.
