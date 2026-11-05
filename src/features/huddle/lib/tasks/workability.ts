@@ -43,10 +43,20 @@ const EXPLICIT_REMINDER =
  * "Obtain MGT-782 Module 3 materials"). Owner, 2026-11-05: "coursework shouldn't be assigned to the agents.
  * the router should know that during grooming." Keyed on the Nexus 📚 marker or a course code like MGT-702.
  */
-const COURSE_CODE = /\b[A-Z]{2,4}-\d{3}\b/;
+// PRECISION OVER RECALL (VERIFY-wip-e2e-pickup-fit-2 C4 found 14 everyday titles a looser rule hid:
+// "Read the 2026 budget discussion", "Order 500 sheets of paper", "Fix bug (JIRA-101)", "Order SKU-500
+// materials"…). A false positive silently takes a real task off the agents; a false negative costs one
+// check-in the user can decline — so the rule is strict:
+//   1. the Nexus marker 📚 (how synced assignments arrive), or
+//   2. an UPPERCASE course code (3–5 letters, optional hyphen, 3 digits — "MGT-702", "MGT702") AND a
+//      clearly academic word. Generic words ("paper", "materials", "class", "exam", "discussion") and
+//      bare codes in brackets no longer count on their own.
+const COURSE_CODE = /\b[A-Z]{3,5}-?\d{3}\b/;
+const ACADEMIC_WORD =
+  /\b(module|seminar|syllabus|residency|lecture|checkpoint|university|course|assignment|homework|midterm|capstone|semester|professor)\b/i;
 export function isCoursework(title: string | null | undefined): boolean {
   const t = (title ?? "").trim();
-  return t.startsWith("📚") || COURSE_CODE.test(t);
+  return t.startsWith("📚") || (COURSE_CODE.test(t) && ACADEMIC_WORD.test(t));
 }
 
 export function asksForReminder(title: string | null | undefined): boolean {
