@@ -1,6 +1,14 @@
 # Action Tracker — huddle-extension-app
 Last updated: 2026-10-27
 
+## ACT:owed-digest — "who do I still owe a reply" reminder, chat + email, nothing when nothing is owed (2026-11-05)
+- **Ask (owner, verbatim):** "provide me a rich chat and email update on correspondances. if none are due i get nothing ... if 1+ i get a reminder/report on who I still owe correspondance with the ability to dismiss ones Ive already settled or dont plan to." + "this probably needs to lean on some of what we have done with huddle".
+- **Extends, no parallel system:** list = `chat.email_replies` owed|drafted (the existing ledger); Dismiss = existing `dismissEmailReplyFn`; auto-settle = existing `reconcileRepliedFromSentItems`; delivery = durable Iris DM turn + journey `send_push` (same as inbound-email / priority-check); email = existing self-send path (D4b). New: scheduler job `owedDigest` (default 9 and 16 ET, editable in Settings → Scheduling "Owed replies reminder"), route `/api/public/run-owed-digest`, workflow `run-owed-digest.yml`, card `OwedDigestList`, `getEmailReplyStatusesFn`.
+- **Evidence:** `bun scripts/owed-digest.test.ts` 39/39; mutation-proved via `mutate.sh`: empty-list guard FIRED, card-delivery fallback FIRED. Regression suites inbound-email 69/69, priority-check 43/43, email-self-send 73/73, router 39/39. `vite build` exit 0. Branch `claude/amazing-johnson-31kv3v`.
+- **Live data at build time (Huddle PG, 2026-11-05):** 19 owed, 12 replied, 6 dismissed; oldest owed 2026-10-15. Owner's entra address is auto-tier for self-send (tiers map empty → source=entra → auto).
+- **Open question:** owner referenced "my business hours start email I received today". The Huddle 11am item was `schedule-brief-window-business_hours-2026-11-05` — a chat message + push, NO email (tools: tool_catalog only). No email sender for it found in Huddle or journey code. Need the email's sender/subject to match its format.
+- **Status:** implemented, mechanism verified offline; NOT merged/deployed at time of writing; NOT owner-confirmed.
+
 ## ACT:context-and-confirm — confirm after the agent reads; agent sees widgets/cards in the 1:1 stream (2026-11-04)
 Status: 🔨 implemented on `claude_context-and-confirm`, offline-verified, NOT merged / deployed / owner-confirmed.
 Evidence: `docs/qc-evidence/BUILD-context-and-confirm.md`; `npm run test:context-and-confirm` (45 PASS);

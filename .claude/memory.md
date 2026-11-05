@@ -117,6 +117,11 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Owed-replies reminder (ACT:owed-digest, 2026-11-05 — NOT deployed at write time, NOT owner-confirmed)
+- Job `owedDigest` (9/16 ET default, Settings-editable) → `runOwedDigest` (lib/email/owed-digest.server.ts): reconcile Sent Items, list `chat.email_replies` owed|drafted, `buildOwedDigest` returns NULL on zero → nothing on either channel. 1+ → Iris DM turn with payload `owedDigest` card (attached to target reply + `ensureOwedDigestDelivered` fallback) and a self-addressed HTML email via `sendGraphEmail` (entra address = auto self tier).
+- The card re-reads live status per row (`getEmailReplyStatusesFn`) so rows answered/dismissed since show as settled.
+- Coverage limit: the ledger only holds emails the inbound watch flagged ("from a person and asks something", since 2026-10-15). Older/unflagged correspondence is not in it.
+
 ## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04, branch claude_context-and-confirm, NOT merged, NOT deployed, NOT owner-confirmed)
 - **Confirm-intent:** the pre-model `isPlainConfirmation` short-circuit is GONE. Block A of `runHuddleTurn` is
   READ-ONLY (looks up the last-asked pending confirm, also on chunk continuations). A typed "ok"/"great" is
