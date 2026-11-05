@@ -39,6 +39,7 @@
     "test:confirm-context": "bun scripts/confirm-ask-context.test.ts",
     "test:start-on-approval": "bun scripts/start-on-approval.test.ts",
     "test:directive-length": "bun scripts/directive-length.test.ts",
+    "test:approach-tuning": "bun scripts/approach-gate-tuning.test.ts",
     "test:widget-park": "bun scripts/widget-park.test.ts",
     "test:widget-live": "bun scripts/widget-live-refresh.test.ts",
     "test:widget-colors": "bun scripts/widget-colors.test.ts",
