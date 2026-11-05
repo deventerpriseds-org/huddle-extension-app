@@ -39,7 +39,7 @@ export const DEFAULT_COURSE_TZ = "America/New_York";
 type Row = Record<string, unknown>;
 
 /** The W1 credential: the org's UAT_BYPASS_TOKEN, the same secret Nexus's api-deploy.yml syncs. */
-function uatToken(): string {
+export function uatToken(): string {
   return (process.env.UAT_BYPASS_TOKEN ?? "").trim();
 }
 

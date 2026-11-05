@@ -117,13 +117,16 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
-## Polish — text cleanup tool (2026-11-05, branch claude/tender-bardeen-g2q5ey, NOT merged, NOT deployed, NOT owner-confirmed)
+## Polish — text cleanup tool (2026-11-05; #146 MERGED squash 08457bc, deploy-swa run 42110354027 SUCCESS; NOT owner-confirmed live)
+- ECOSYSTEM (owner chose Option A): contract `docs/polish/CONTRACT-polish-ecosystem.md`. Huddle side = PR #148 (OPEN, not deployed): `/api/public/polish` (turn-gate auth), engine moved to `lib/polish/polish.server.ts`, Send › Google Drive → Nexus `/api/polish/gdrive`. Nexus side = nexus-hub branch `claude_polish-ecosystem` (background agent; not merged).
+- Owner raised (2026-11-05): don't make apps depend on each other (Drive via Nexus, engine in Huddle). Proposed a neutral shared tools/connections service as the follow-up; awaiting decision.
+- Browser UAT: `.claude/skills/test-agent-serverfn/scripts/polish-checks.mjs` via verify-uat.yml (checks_file). LIVE RUN 42113529991 (390x844, deployed app): 7/7 PASS — real engine returned polished copy in 4s, Send sheet listed dev@ + von.ellis@, zero console/4xx errors. Still NOT owner-confirmed.
 - New view `polish` (store View union). Rail entry under a divider ("tools" group); phone bottom bar is now 6 columns. Sidebar + ContextPanel are hidden ONLY on this view (`FULL_WIDTH_VIEWS` in HuddleApp.tsx); every other view unchanged.
 - Model call: `lib/polish/polish.functions.ts` `polishTextFn` — client sends a STRUCTURED request (polish/revise/span/merge) + settings; prompt is built server-side from `lib/polish/polish-core.ts`. Reuses OPENAI_API_KEY; Fast = gpt-5.6-luna low, Best = gpt-5.6-terra medium; 40s abort under the 45s ceiling. No streaming (SWA buffers responses).
 - Storage: user's own profiles + last profile ride the EXISTING synced workspace blob (`polishProfiles`/`polishProfileId` in PERSISTED_KEYS + the useWorkspaceSync change check). Draft + versions are per-device localStorage (`huddle:polish:*`). No new table.
 - Live mode = polish 1.5s after typing stops; never overwrites a hand-edited version (banner offers "Update, keep my edits" / "Replace from draft").
 - Prototype (approval artifact): https://claude.ai/artifact/7MJkFX17io8FHmVWwSZCAn
-- Send sheet (`PolishSendSheet.tsx`): email = DRAFT only (never sends) via createGraphDraft, mailbox list from HUDDLE_EMAIL_FROM; Word = renderMarkdownToDocx + createArtifact(folder "Polish", status approved) + mirrorArtifactToOneDrive (NON-fatal; download still returned). Google Drive NOT wired — journey holds Google tokens (artifacts Phase 3); the .docx download is the stopgap. Live Graph calls NOT exercised from the sandbox.
+- Send sheet (`PolishSendSheet.tsx`): email = DRAFT only (never sends) via createGraphDraft, mailbox list from HUDDLE_EMAIL_FROM; Word = renderMarkdownToDocx + createArtifact(folder "Polish", status approved) + mirrorArtifactToOneDrive (NON-fatal; download still returned). Google Drive: PR #148 adds Save to Google Drive via Nexus /api/polish/gdrive (not deployed); until then the .docx download is the stopgap. Live Graph draft / OneDrive upload NOT exercised by any test yet.
 
 ## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04, branch claude_context-and-confirm, NOT merged, NOT deployed, NOT owner-confirmed)
 - **Confirm-intent:** the pre-model `isPlainConfirmation` short-circuit is GONE. Block A of `runHuddleTurn` is
