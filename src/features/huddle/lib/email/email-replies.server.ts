@@ -253,22 +253,44 @@ export async function getEmailReplyCounts(
   };
 }
 
-/** Settle every owed row the owner has since answered from Outlook (a Sent Items message in the same
- *  conversation, sent after the email arrived). Never throws; returns how many it settled. */
+/** Settle every owed row the owner has since answered from Outlook: he sent, after it arrived, a
+ *  message in the same conversation OR any message to its sender (reply-match.ts). ONE Sent Items read
+ *  per mailbox; if that read fails, falls back to the per-row conversation check. Never throws;
+ *  returns how many it settled. Owner 2026-11-05: "self clear by checking if i replied ... for sure". */
 export async function reconcileRepliedFromSentItems(ownerEmail: string): Promise<number> {
   let settled = 0;
   try {
     const owed = await listOwedEmailReplies(ownerEmail);
     if (!owed.length) return 0;
-    const { hasSentReplyInConversation } = await import("./graph-email.server");
-    for (const row of owed) {
-      if (!row.conversation_id) continue;
-      const replied = await hasSentReplyInConversation(
-        row.mailbox,
-        row.conversation_id,
-        row.received_at,
-      );
-      if (replied === true && (await settleEmailReply(row.id, "replied"))) settled++;
+    const { hasSentReplyInConversation, listSentSince } = await import("./graph-email.server");
+    const { answeredRowIds } = await import("./reply-match");
+    const byMailbox = new Map<string, EmailReplyRow[]>();
+    for (const r of owed) byMailbox.set(r.mailbox, [...(byMailbox.get(r.mailbox) ?? []), r]);
+    for (const [mailbox, rows] of byMailbox) {
+      const oldest = rows
+        .map((r) => (r.received_at ? Date.parse(r.received_at) : NaN))
+        .filter(Number.isFinite)
+        .sort((a, b) => a - b)[0];
+      const since = new Date(oldest ?? Date.now() - 30 * 86_400_000)
+        .toISOString()
+        .replace(/\.\d{3}Z$/, "Z");
+      const sent = await listSentSince(mailbox, since);
+      if (sent) {
+        for (const id of answeredRowIds(rows, sent)) {
+          if (await settleEmailReply(id, "replied")) settled++;
+        }
+        continue;
+      }
+      // Fallback: the old per-row conversation check.
+      for (const row of rows) {
+        if (!row.conversation_id) continue;
+        const replied = await hasSentReplyInConversation(
+          row.mailbox,
+          row.conversation_id,
+          row.received_at,
+        );
+        if (replied === true && (await settleEmailReply(row.id, "replied"))) settled++;
+      }
     }
   } catch (err) {
     console.error("[email-replies] reconcile failed", err instanceof Error ? err.message : err);
