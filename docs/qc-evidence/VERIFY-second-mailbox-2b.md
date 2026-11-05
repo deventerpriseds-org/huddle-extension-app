@@ -34,3 +34,28 @@ journey (origin/claude/cool-cannon-q4puke 7ad91547):
   huddle-proxy hits only comments plus drain-huddle-turns (which calls HUDDLE, outbound). So journey's
   model executors (tool-executor.ts, hybrid-assistant-api, twilio bridges) can only reach execute-tool,
   which refuses. Loop-1 REFUTATION is resolved.
+
+## BUDGET HIT 23:13 UTC (started 22:50). Remaining items below are recorded at the depth reached.
+
+## C4 -- token never logged / echoed / returned to a model: CONFIRMED for the paths read; huddle-proxy outer catch NOT REACHED
+- journey mail-access-token.ts:75 logs only `res.status` + the AADSTS code; returns the token only under `result`.
+- huddle-proxy/index.ts:203-208 returns the token to Huddle (the intended recipient); error branch returns only `r.error` (an enum).
+- Huddle graph-email.server.ts:248-267: on failure throws one of three fixed sentences built from the error CODE
+  (`parsed.error ?? r.error`), never `r.output`; the token is kept in `delegatedTokenCache` and used locally in Authorization headers.
+  The only console.* calls in the file (701, 740, 776, 1054) print Graph error text, not the token.
+- mailboxAccess is called directly by server code, not through the model tool-dispatch loop, so no tool-result trace captures it.
+- NOT REACHED: huddle-proxy's outer try/catch body; whether any Huddle caller rethrows Graph `res.text()` that could contain the token (not expected).
+
+## C5 -- only the caller's own connection; no write-back; resolveUserId resolves Huddle's identities: PARTIAL
+- CONFIRMED (observed): mail-access-token.ts selects calendar_connections `.eq("user_id", userId)` + `.eq("is_active", true)` +
+  exact match on provider_account_email, where userId = huddle-proxy `resolved.userId`. The only other DB call is the RPC
+  get_calendar_connection_tokens (migration 20250928050345:107), which reads tokens and INSERTs into oauth_token_audit -- it
+  does not touch calendar_connections. No `.update`/`.upsert` anywhere in the minter.
+- Huddle mailboxes come from resolveOutlookMailboxes(caller) (journey's list of the caller's connections), never from model args.
+- NOT REACHED: the live DB check that `dev@enterpriseds.io` resolves through profiles.email and `von.ellis@enterpriseds.io` through
+  user_email_aliases (code at huddle-proxy resolveUserId is alias-first, then profiles; the identity rows were not queried).
+- DEFECT (inferred, low): Huddle `delegatedTokenCache` (graph-email.server.ts:237/266) is keyed by MAILBOX only, not owner+mailbox.
+  If a second Huddle user's resolved mailbox list (or entra_email fallback) ever contains a mailbox cached for another user, they get
+  that user's token without journey's per-user check. Effectively single-user today.
+
+## Suites: NOT REACHED (journey npm test, huddle bun scripts/second-mailbox.test.ts not re-run in this lane).
