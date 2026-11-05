@@ -1,4 +1,4 @@
-PROGRESS: 1/7
+PROGRESS: 2/7
 
 # VERIFY wip-e2e-pickup-fit loop 1
 
@@ -26,3 +26,10 @@ Observation: several suites assert on SOURCE TEXT (e.g. "the gate's verdict goes
 - Call site :1103-1105: `agreed = { dod: eng?.confirmed_dod ?? task.definition_of_done ?? null, approach: eng?.proposed_approach ?? null }` from `engagementByTaskId` (= `getTaskEngagementStates(gateIds)`, :949; ENGAGEMENT_COLS tasks.server.ts:922-927 includes `confirmed_dod` and `proposed_approach`). Every research candidate is in gateIds (doingCandidates come from doingSlotCandidates / lanes, both in gateIds :842-844, :962-970).
 - Before #139 (`git show 3c7e7bcd^`): `researchDirective(task)` — title only; turnPayload still has `history: []`, so the brief is the only carrier of the user's specifics.
 - Caveats (observations, not refutations): (a) DoD silently truncated at 1,500 chars and approach at 2,500 (:66-67) — a long brief loses its tail with no marker; (b) the field used is `proposed_approach` = the LAST SUBMITTED plan, which equals the approved one only if nothing is submitted after approval (see C7).
+
+## C2 (#139) confirmIntentDirective names the task + real links + summary — CONFIRMED (as prompt text)
+
+- First ask (autowork.server.ts:187-192): "open with a brief, natural greeting that NAMES THE TASK in plain words in the first sentence ... — never "this" or "this task"".
+- Re-ask (:180-186): "circling back ... BY NAMING THE TASK in plain words (e.g. "Circling back on the Verva research —"), never "this one"".
+- Both (:199-203): "ALWAYS include ... the most relevant link(s) you can find right now with your web search ... and, for any product, service, tool or provider, a one-to-two sentence summary of what it is ... Only real links you actually found; never invent a URL."
+- Limitation: this is an instruction to a model, not a code check — nothing post-validates the agent's message for a "this" opener or a link. "Requires" holds at the prompt level only.
