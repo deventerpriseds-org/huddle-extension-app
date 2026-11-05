@@ -29,10 +29,13 @@ export function isAppKeyMailbox(mailbox: string, domains: string[] = appKeyDomai
 }
 
 /**
- * Pure: EVERY active connected MICROSOFT account, from journey's
- * `get_my_config {section:'calendar_connections'}` output -- lower-cased, de-duplicated, app-key
- * (EnterpriseDS) mailboxes first. journey returns these in NO fixed order (no ORDER BY), so the
- * ordering here is what keeps "the main mailbox" stable once a second-tenant account is connected.
+ * Pure: the mailboxes Huddle reads, from journey's `get_my_config {section:'calendar_connections'}`
+ * output -- lower-cased, de-duplicated: the MAIN mailbox (the first app-key / EnterpriseDS account,
+ * exactly what was read before 2026-11-05) followed by every connected NON-app-key account (e.g. the
+ * owner's @trinnex.io work mailbox). Further EnterpriseDS accounts are NOT added: the owner has two
+ * (Von.Ellis@ and Dev@) and merging Dev@ would raise new alerts and duplicate meetings nobody asked
+ * for (VERIFY-second-mailbox-1.md C1). journey returns rows in NO fixed order (no ORDER BY), so taking
+ * the app-key one first is also what keeps a newly connected outside account from becoming "main".
  */
 export function pickOutlookMailboxes(output: string | undefined, domains: string[] = appKeyDomains()): string[] {
   const out: string[] = [];
@@ -49,8 +52,8 @@ export function pickOutlookMailboxes(output: string | undefined, domains: string
   } catch {
     /* unparseable -> no answer; the caller falls back */
   }
-  // Stable partition: app-key mailboxes first, each group in journey's order.
-  return [...out.filter((m) => isAppKeyMailbox(m, domains)), ...out.filter((m) => !isAppKeyMailbox(m, domains))];
+  const main = out.filter((m) => isAppKeyMailbox(m, domains)).slice(0, 1);
+  return [...main, ...out.filter((m) => !isAppKeyMailbox(m, domains))];
 }
 
 /**

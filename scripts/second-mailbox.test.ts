@@ -30,11 +30,14 @@ console.log("A. PICKER — every connected Outlook account, EnterpriseDS first")
     { provider: "google", provider_account_email: "x@gmail.com", is_active: true },
   ]);
   t("A1 a Trinnex row listed FIRST does not become the main mailbox", pickOutlookMailbox(trinnexFirst), "von.ellis@enterpriseds.io");
-  t("A2 all Microsoft accounts, app-key first, journey order kept within each group", pickOutlookMailboxes(trinnexFirst), [
+  t("A2 main EnterpriseDS mailbox + outside mailboxes ONLY — a second EnterpriseDS account (Dev@) is not merged", pickOutlookMailboxes(trinnexFirst), [
     "von.ellis@enterpriseds.io",
-    "dev@enterpriseds.io",
     "von.ellis@trinnex.io",
   ]);
+  t("A8 today's real connections (two EnterpriseDS, no Trinnex) -> exactly ONE mailbox, as before", pickOutlookMailboxes(conns([
+    { provider: "office365", provider_account_email: "Von.Ellis@EnterpriseDS.io", is_active: true },
+    { provider: "outlook", provider_account_email: "Dev@EnterpriseDS.io", is_active: true },
+  ])), ["von.ellis@enterpriseds.io"]);
   t("A3 duplicates and inactive rows are dropped", pickOutlookMailboxes(conns([
     { provider: "office365", provider_account_email: "a@enterpriseds.io", is_active: true },
     { provider: "office365", provider_account_email: "A@EnterpriseDS.io", is_active: true },
