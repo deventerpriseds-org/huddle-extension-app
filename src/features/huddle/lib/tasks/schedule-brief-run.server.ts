@@ -39,6 +39,8 @@ export const BLOCK_MAX_ITEMS = 25;
 export const BLOCK_ITEM_CHARS = 160;
 /** The code-built brief never exceeds this — well under the payload cap (INTERNAL_TEXT_MAX, 16000). */
 export const BLOCK_MAX_CHARS = 10000;
+/** Most fact lines per list in the directive Iris is handed (it sums them up in one sentence). */
+export const FACT_MAX_ITEMS = 20;
 
 /** The phone push title, so the 8pm brief no longer reads "Iris Chase replied" exactly like the 8pm
  *  priority check sent one second earlier (push log 2026-10-28T00:00:07Z/08Z). Not sticky: the brief
@@ -165,6 +167,16 @@ export function weekItems(brief: ScheduleBrief, tz: string): string[] {
   return out;
 }
 
+/** Bound a list of fact lines for the directive: each clipped to BLOCK_ITEM_CHARS, at most
+ *  FACT_MAX_ITEMS, then "(and N more)". Keeps the directive well under INTERNAL_TEXT_MAX. */
+export function capFacts(lines: string[]): string[] {
+  const clipped = lines.map((x) =>
+    x.length > BLOCK_ITEM_CHARS ? `${x.slice(0, BLOCK_ITEM_CHARS - 1)}…` : x,
+  );
+  if (clipped.length <= FACT_MAX_ITEMS) return clipped;
+  return [...clipped.slice(0, FACT_MAX_ITEMS), `(and ${clipped.length - FACT_MAX_ITEMS} more)`];
+}
+
 export type BriefDeliveryKind = "items" | "read-error" | "nothing-scheduled";
 
 /**
@@ -195,12 +207,15 @@ export function briefDeliveryPlan(
       : `Today (${brief.forDate})`;
   // TASKS (owner: "i have tasks everyday and i do want a similar message"). Listed separately from
   // meetings/classes, and named after them, so neither is lost in the other.
+  // The FACTS handed to Iris are bounded too (verifier loop 3: the directive is the payload's `text`,
+  // capped at INTERNAL_TEXT_MAX; unbounded lists failed the whole turn at ~19 meetings/day, or at 5/day
+  // with Outlook's 255-char subjects + locations). Iris only needs them to sum up in one sentence.
   const taskLines = (brief.tasks ?? []).map(
     (t) => `${clock(t.startIso, tz) ?? "any time"} — ${t.title} (task)`,
   );
   const taskBlock =
     brief.tasks !== undefined
-      ? `\nTASKS:\n${taskLines.length ? taskLines.join("\n") : "(no tasks scheduled)"}`
+      ? `\nTASKS:\n${taskLines.length ? capFacts(taskLines).join("\n") : "(no tasks scheduled)"}`
       : brief.tasksError
         ? `\nTASKS: could not be read (${brief.tasksError}) — say so; do not claim there are none.`
         : "";
@@ -209,7 +224,7 @@ export function briefDeliveryPlan(
   // have x and y, and later in the week you have a tomorrow, b the next day etc etc?" The old
   // directive asked for "ONE short heads-up ... lead with the first thing", and the brief only ever
   // read ONE day, so there was no week to mention. Both are fixed here and in buildScheduleBrief.
-  const week = w ? [] : upcomingLines(brief, tz);
+  const week = w ? [] : capFacts(upcomingLines(brief, tz));
   const weekBlock = w
     ? ""
     : `LATER THIS WEEK:\n${week.length ? week.join("\n") : "(nothing scheduled)"}` +
@@ -305,7 +320,7 @@ export function briefDeliveryPlan(
     };
   }
 
-  const lines = briefLines(brief, tz);
+  const lines = capFacts(briefLines(brief, tz));
   return {
     kind: "items",
     directive:

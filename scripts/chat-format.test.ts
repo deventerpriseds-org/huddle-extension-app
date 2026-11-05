@@ -112,6 +112,9 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("V15 a list starting at 0 starts at 0", z0.start === 0 && JSON.stringify(z0.nums) === "[0,1]", z0);
   const wl = parseInline("see (https://en.wikipedia.org/wiki/Foo_(bar)) here").find((x) => x.t === "link") as { href: string } | undefined;
   check("V16 a URL with balanced parentheses keeps them; the wrapping one stays outside", wl?.href === "https://en.wikipedia.org/wiki/Foo_(bar)", wl);
+  const ml = parseInline("[docs](https://a.io/p_(q)) after").find((x) => x.t === "link") as { href: string } | undefined;
+  check("V22 a [label](url) link keeps balanced parentheses in its url", ml?.href === "https://a.io/p_(q)", ml);
+  check("V23 and no stray ')' is left behind", JSON.stringify(parseInline("[docs](https://a.io/p_(q)) after").at(-1)) === JSON.stringify({ t: "text", v: " after" }));
   const ct = readFileSync("src/features/huddle/components/ChatText.tsx", "utf8");
   check("V17 ChatText renders each <li> with its own value", /value=\{b\.t === "ol" \? b\.nums\[j\] : undefined\}/.test(ct));
   const blk2 = "Meetings and classes:\n• 9:00 AM — A\n\nWould you like to adjust anything today? The button below.";

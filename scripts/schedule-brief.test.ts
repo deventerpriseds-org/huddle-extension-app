@@ -388,6 +388,13 @@ console.log("K. CODE-BUILT BLOCK FITS THE TURN (verifier loop 1, B1-a: 6 meeting
       huge.push(item({ sourceId: `h${d}-${h}`, title: "T".repeat(200), kind: "meeting", startIso: `2026-10-${d}T13:00:00Z`, endIso: `2026-10-${d}T13:30:00Z`, day: `2026-10-${d}`, location: "L".repeat(200) }));
   const worst = briefDeliveryPlan(mk({ forDate: "2026-10-15", items: huge.slice(0, 40), tasks: huge.slice(0, 40).map((x, i) => ({ id: String(i), title: x.title, startIso: x.startIso })), upcoming: huge }), TZ);
   t("K3 a pathological week (180 items, 200-char titles) stays under 10,000 chars and the cap", (worst.appendBlock ?? "").length <= 10000 && cap >= 16000, true);
+  const outlookMax: BriefItem[] = [];
+  for (let d = 15; d <= 21; d++)
+    for (let h = 0; h < 40; h++)
+      outlookMax.push(item({ sourceId: `o${d}-${h}`, title: "S".repeat(255), kind: "meeting", startIso: `2026-10-${d}T13:00:00Z`, endIso: `2026-10-${d}T13:30:00Z`, day: `2026-10-${d}`, location: "L".repeat(255) }));
+  const om = briefDeliveryPlan(mk({ forDate: "2026-10-15", items: outlookMax.slice(0, 40), tasks: outlookMax.slice(0, 40).map((x, i) => ({ id: String(i), title: x.title, startIso: x.startIso })), upcoming: outlookMax.slice(40) }), TZ);
+  t("K5 the directive (payload text) also fits: 40/day with Outlook-max 255-char subject + location", om.directive.length <= 16000, true);
+  t("K5b and it says how many more facts there are", /\(and \d+ more\)/.test(om.directive), true);
   t("K4 and says how many more the button shows", /…and \d+ more — the "Open Schedule" button below shows them all\./.test(worst.appendBlock ?? ""), true);
 }
 
