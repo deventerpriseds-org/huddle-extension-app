@@ -62,8 +62,9 @@ function agentRole(id: string | null): string {
  * measured 2026-11-05: researchDirective carried the task title only. Exported for the offline test.
  */
 export function agreedBrief(agreed?: { dod?: string | null; approach?: string | null }): string {
-  const dod = agreed?.dod?.trim();
-  const approach = agreed?.approach?.trim();
+  // Capped so a very long plan cannot push the work turn past the internal message limit.
+  const dod = agreed?.dod?.trim().slice(0, 1500);
+  const approach = agreed?.approach?.trim().slice(0, 2500);
   if (!dod && !approach) return "";
   return (
     `WHAT THE USER CONFIRMED — this is your brief. Deliver exactly this, and use every specific they gave ` +
