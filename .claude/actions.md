@@ -4916,3 +4916,12 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [ ] Owner 👍 still open: coursework = support not submission (A); company-specific = ask for the facts first (C). B (use the tool) moot — owner chose unassign.
 - [ ] Verify Ezra's confirm after the owner replies ("confirmed, ZIP 21158"): confirm_status=confirmed with 21158 in confirmed_dod; work turn result uses it.
 - [ ] Owner confirms live: new check-ins propose real work / legwork / alarms for go-somewhere, not reminders for research. Open: Maximo + Trinnex tasks still assigned (model did not use "none"); 4 split coursework rows unassigned.
+
+## ACT:e2e-wip-uat — end-to-end UAT of confirm -> Doing -> research -> review (2026-11-05)
+- [x] Test task `883bc5dc` "Test-Research the top 3 home rowing machines" (Flex), tag uat-e2e, now PARKED (parking-lot) until the research fix lands.
+- [x] Step 1 check-in names the task + 3 real links + summaries; owner saw the phone push. FOUND + FIXED huddle-extension-app#141: directives > 4,000 chars failed every check-in since #139 (only the test turn was lost).
+- [x] Step 2 typed "Yes, confirmed. Budget is under $1,500." via qa-confirm-reply.yml (run 42091759205) -> confirmed, budget folded into DoD. (Pinned playwright@1.64.1: 1.65.0 ETARGET.)
+- [x] Step 3/4 FOUND + FIXED huddle-extension-app#143: plan grader used the finished-deliverable charter -> plans escalated. After: approved first try (rev 0).
+- [x] Step 5 huddle-extension-app#140 start-on-approval: Doing + research enqueued 18s after approval.
+- [ ] Step 6 BROKEN, pre-existing since >= 2026-10-31: every research run times out at the 30s CHUNK_BUDGET_MS, 6 chunks -> "done" empty; 16/16 finished runs empty, re-run every pass (brakes x6). Also duplicate concurrent research runs (9e4c395d x3). Needs owner decision on the fix shape.
+- [ ] Cleanup the test task + its turns/rag/engagement once step 6 is re-verified.
