@@ -1,0 +1,11 @@
+import { inboundEmailDirective as NEW, DIRECTIVE_MAX } from "../src/features/huddle/lib/email/inbound-email";
+import { inboundEmailDirective as OLD } from "./zz-old-inbound";
+const m = { id: "x", subject: "Meet?", fromName: "Sam Lee", fromAddress: "sam@acme.com", bodyText: "Can we meet Thursday?" };
+const P = (l: string, v: unknown) => console.log(l, JSON.stringify(v));
+P("no-card {} identical:", NEW(m, "Thu 9am") === OLD(m, "Thu 9am"));
+P("no-card owed identical:", NEW(m, "Thu 9am", { owed: 5, settledToday: 2 }) === OLD(m, "Thu 9am", { owed: 5, settledToday: 2 }));
+const c = NEW(m, "Thu 9am", { emailId: "e1", owed: 5, settledToday: 1 });
+console.log("---CARD---\n" + c.split("----- EMAIL")[0]);
+P("card mentions owed count number?", /\b5\b/.test(c.split("----- EMAIL")[0]));
+const long = { ...m, bodyText: "word ".repeat(2000) };
+P("long card len:", [NEW(long, "Thu", { emailId: "e1", owed: 9, settledToday: 9 }).length, DIRECTIVE_MAX]);
