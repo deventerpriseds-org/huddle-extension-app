@@ -96,3 +96,57 @@ Observed via: **U** = unit test on `parseChatBlocks` / `noticeText` / `stripRepe
 | G-5 | D is untouched: no change to long-research/artifact routing or `create_artifact` behaviour. The diff touches no file under `lib/artifacts/`, and no "move to document" logic is added. | git diff |
 | G-6 | The existing suites pass: `test:router`, `scripts/schedule-brief.test.ts`, `priority-check.test.ts`, `inbound-email.test.ts`, plus the new `chat-format.test.ts`. | run |
 | G-7 | Agent prompts are additive-only: any directive text that was removed (for example `PRIORITY_LAYOUT` and the old 3-step email order) is a replacement the owner approved under B/C. It must not be a silent removal of unrelated rules. List every removed directive line in the PR. | git diff review |
+
+## Spelling table (Tier 1: parses agent free text)
+
+Sources: **CM** = CommonMark 0.31.2 (§4.2 ATX headings, §4.5 fenced code, §5.1 block quotes, §5.2 list items, §6.2 emphasis, §6.3 links, §6.5 autolinks). **GFM** = GitHub Flavored Markdown spec (extended autolinks, task list items, tables). Models write in this dialect, so it is the documentation of "what an agent could plausibly produce". **GAP: neither spec was opened in this 12-minute pass.** Section numbers are cited from recall, and the red-team pre-pass must confirm each row against the spec text before turning it into a test.
+"Wrong answer would be": **FP** = a FALSE PASS (markup or a broken link shown to the owner as if the message were clean) and **FR** = a FALSE REFUSAL (real text mangled, re-shaped or hidden).
+
+| # | Input spelling (as the agent writes it) | Documented by | Expected rendering | Wrong answer would be |
+|---|---|---|---|---|
+| S-1 | `• a\n• b` | (house style: the directive asks for "• ") | `<ul>` with 2 items | FP |
+| S-2 | `- a\n- b` / `* a\n* b` | CM §5.2 bullet list marker `-` `*` | `<ul>` with 2 items | FP |
+| S-3 | `+ a\n+ b` | CM §5.2 (`+` is a bullet marker) | `<ul>` with 2 items | FP (H-10) |
+| S-4 | `• a\n\n• b\n\n• c` | CM §5.2 loose list | one `<ul>` of 3, tight spacing | FP |
+| S-5 | `1. a\n2. b` / `1) a\n2) b` | CM §5.2 ordered marker `.` `)` | `<ol>` 1, 2 | FP |
+| S-6 | `3. a\n2. b\n1. c` | CM §5.2 (only the start number is honoured in CM; here the owner's text wins) | markers read 3, 2, 1 | FR |
+| S-7 | `  - sub item` under `- item` | CM §5.2 nested list | nested `<ul>`, or flattened with the words intact (must be declared) | FR |
+| S-8 | `- [ ] buy milk` | GFM task list item | checkbox or literal `[ ]`, declared; the words are intact | FP |
+| S-9 | `**Up next**` / `**Up next:**` / `**Up next**:` | CM §6.2 strong emphasis | bold, no `*` visible | FP |
+| S-10 | `__Up next__` | CM §6.2 (`__` is strong) | bold, OR declared as literal. Note the code deliberately leaves it literal, to protect `__init__` | FP |
+| S-11 | `*note*` / `_note_` | CM §6.2 emphasis | italic or plain, no `*` / `_` visible | FP (H-3) |
+| S-12 | `_(fallback: x; y)_` (the runtime's own suffix, huddle.functions ~6874) | CM §6.2 | a muted note with no literal `_` | FP (H-2) |
+| S-13 | `***really***` | CM §6.2 | bold-italic or bold, no `*` visible | FP |
+| S-14 | `## Today` | CM §4.2 ATX heading | heading style, no `#` | FP |
+| S-15 | `## next steps` (lower-case) | CM §4.2 (case-insensitive) | heading style, no `#` | FP (H-14) |
+| S-16 | `# of tasks: 5` / `#1 priority` / `#hashtag` | CM §4.2: `#1`/`#hashtag` are NOT headings (no space). `# of` IS one per CM | **over-match negative:** stays text exactly as typed (the house rule overrides CM for `# of`) | FR |
+| S-17 | `> quoted line` | CM §5.1 block quote | quote style, no `>` | FP |
+| S-18 | `>50% done` / `5 > 3` | CM §5.1 (`>50%` IS a quote per CM; the house rule says no) | **over-match negative:** literal text, `>` kept | FR |
+| S-19 | `>` alone on a line inside a quote (`> a\n>\n> b`) | CM §5.1 | one quote of 2 paragraphs, no stray `>` | FP (H-13) |
+| S-20 | `` `npm run x` `` | CM §6.1 code span | monospace, no backticks | FP |
+| S-21 | ```` ```\n# Not a heading\n- not a list\n``` ```` | CM §4.5 fenced code | a preformatted block; its inner lines are NOT parsed as heading or list | FR (H-7) |
+| S-22 | `https://zoom.us/j/1?pwd=SECRET` | GFM extended autolink | link; label `zoom.us/j/1`; the full href is kept | FP |
+| S-23 | `See https://x.com/a.` / `(https://x.com/a)` / `https://x.com/a,` | GFM extended autolink (trailing punctuation excluded) | href is `https://x.com/a`, and the `.`, `)` or `,` stays as text | FR |
+| S-24 | `https://en.wikipedia.org/wiki/Foo_(bar)` | GFM extended autolink (balanced parens kept) | href includes `(bar)` | FR |
+| S-25 | `[wiki](https://en.wikipedia.org/wiki/Foo_(bar))` | CM §6.3 link destination (balanced parens) | href includes `(bar)`, and no stray `)` | FR (H-6) |
+| S-26 | `<https://x.com>` | CM §6.5 autolink | link, with no `<` `>` visible | FP |
+| S-27 | `**https://x.com/a**` | CM §6.2 + GFM autolink | bold AND clickable | FR (H-20) |
+| S-28 | `javascript:alert(1)` / `[x](javascript:alert(1))` / `data:text/html,…` | CM §6.3 (allowed by CM, unsafe) | **negative:** text, never `<a>` | FP (security) |
+| S-29 | `<b>hi</b>` / `<img src=x onerror=…>` | CM §6.6 raw HTML | **negative:** literal text, no element | FP (security) |
+| S-30 | `mailto:a@b.com` / `a@b.com` / `+1 (555) 010-0000` | GFM email autolink | text (or mailto link, declared); the words are intact | FR |
+| S-31 | `9:00 AM — Standup` / `7:00PM` / `7PM` / `7:00 p.m.` (code-built lists) | (house rule B-9) | one spelling, `7:00 PM` | FP |
+| S-32 | `2026. What a year` / `10. That's the deadline` mid-message | CM §5.2 (an ordered list item after a paragraph must start at 1 to interrupt it) | **over-match negative:** a sentence starting `10. ` after a paragraph is NOT a list | FR |
+| S-33 | `-5°F tonight` / `- 5 tasks left` | CM §5.2 (`-5` has no space so is not a list; `- 5` is one) | `-5°F` is literal text; `- 5 tasks` is a list | FR / FP |
+| S-34 | `✅ Done\n✅ Next\n⚠️ Blocked` | none (not Markdown) | three lines in one paragraph, emoji intact, no merge into one line | FR |
+| S-35 | `Hello Sir,\n\njust a reminder…` | (house rule: greeting re-join) | one paragraph `Hello Sir, just a reminder…` | FP |
+| S-36 | `Hi Sam,\n\nthanks for reaching out…` **inside an email DRAFT (`replyBody`)** | — | **negative:** the draft's paragraph break is kept in the quote box (an email greeting on its own line is correct for a letter) | FR (H-15) |
+| S-37 | `Best,  \nVon` (two-space hard break) / `Best,\\\nVon` | CM §6.7 hard line break | `Best,` and `Von` on two lines, no visible spaces or backslash | FP |
+| S-38 | `\r\n` throughout / lone `\r` | CM §2.1 line ending | identical to the `\n` version | FP |
+| S-39 | `| a | b |\n|---|---|\n| 1 | 2 |` | GFM tables | a table, OR declared as literal; no words lost | FP |
+| S-40 | `---` alone / `***` alone | CM §4.1 thematic break | divider, or declared literal | FP |
+| S-41 | `• item\n  continued on next line` | CM §5.2 continuation | one item containing both lines | FR |
+| S-42 | 16,000 chars, 400 bullets, 300-char URL | — | renders < 50 ms, wraps, no overflow | FP (perf) |
+| S-43 | `(couldn't respond — quota)` / `(couldn’t respond — …)` (curly apostrophe) | runtime hardReply ~6788 | grey notice | FP |
+| S-44 | `(couldn't respond - quota)` (hyphen) / `(couldn't respond – …)` (en dash) | runtime-only: the em-dash spelling | stays agent text; record it (the runtime only emits `—`) | — |
+| S-45 | `I couldn't respond earlier — sorry` / `(fallback plan: Zoom)` / `Fallback: use Zoom` | over-match negative | normal agent text, NOT a notice | FR |
+| S-46 | `Suggested reply:` / `**Suggested reply:**` / `Suggested reply` / `Here's a reply you could send:` | (C label) | the label is removed only when the full draft is removed; the last spelling is never stripped | FR |
