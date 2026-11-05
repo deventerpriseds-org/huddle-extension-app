@@ -23,14 +23,17 @@ t("limits read from source", USER_MAX === 4000 && INTERNAL_MAX >= 12000, `${USER
 t("Input.text allows the internal limit", /text: z\.string\(\)\.min\(1\)\.max\(INTERNAL_TEXT_MAX\)/.test(hf));
 t("sendHuddleMessage caps user text", /inputValidator\(\(raw: unknown\) => capUserText\(Input\.parse\(raw\)\)\)/.test(hf));
 t("enqueueHuddleTurn caps user text", /inputValidator\(\(raw: unknown\) => capUserText\(EnqueueTurnInput\.parse\(raw\)\)\)/.test(hf));
-t("capUserText exempts only internal turns", /if \(!d\.internal && d\.text\.length > USER_TEXT_MAX\)/.test(hf));
+t("capUserText never trusts the client-settable internal flag", /export function capUserText<T extends \{ text: string \}>\(d: T\): T \{\s*if \(d\.text\.length > USER_TEXT_MAX\)/.test(hf));
 t("auto-work turns are marked internal", /internal: true,/.test(aw));
 
 console.log("\n--- worst-case directive lengths fit ---");
 const id = "883bc5dc-8f6c-4ad0-9559-7ea630e00456";
 const longTitle = "Create Trinnex platform-to-product delivery playbook and quality and engineering maturity framework ".repeat(3);
+// Long titles in EVERY mode (produce / assist / remind) — the first version only ever measured produce.
+const longAssist = "Subscribe to " + "the enterprise product-management suite and its add-ons ".repeat(5);
+const longRemind = "Remind me to " + "renew the passport and the global-entry card before travel ".repeat(5);
 let worst = 0;
-for (const title of ["Subscribe to Aha! Product Management", "Remind me to renew the passport", "Test-Research the top 3 home rowing machines", longTitle])
+for (const title of ["Subscribe to Aha! Product Management", "Remind me to renew the passport", "Test-Research the top 3 home rowing machines", longTitle, longAssist, longRemind])
   for (const category of [null, "LIFE", "VENTURES"])
     for (const followUp of [false, true])
       worst = Math.max(worst, confirmIntentDirective({ id, title, assigned_agent: "flex-grimes", category }, { followUp }).length);

@@ -217,8 +217,12 @@ const AgentBackendInput = z.object({
 // autowork-confirm-883bc5dc-…), silently, from the moment it deployed.
 export const USER_TEXT_MAX = 4000;
 export const INTERNAL_TEXT_MAX = 16000;
-export function capUserText<T extends { text: string; internal?: boolean }>(d: T): T {
-  if (!d.internal && d.text.length > USER_TEXT_MAX) {
+// Applied ONLY at the two client entry points. It deliberately IGNORES `internal`: that field is
+// client-settable, so trusting it let a crafted request send 16,000 characters (VERIFY-wip-e2e-pickup-fit-1
+// C6). Server-originated directives never come through these entry points — they are enqueued server-side
+// and parsed by drainQueuedTurns, which applies only INTERNAL_TEXT_MAX.
+export function capUserText<T extends { text: string }>(d: T): T {
+  if (d.text.length > USER_TEXT_MAX) {
     throw new Error(`String must contain at most ${USER_TEXT_MAX} character(s)`);
   }
   return d;
@@ -1690,6 +1694,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
                     ])
                   : null;
               const a = await assignCreatedJourneyTasks({
+                title,
                 taskIds: (r.tasks ?? []).map((t) => t.id),
                 agentId: owner ?? agentId,
                 caller: (data.caller ?? {}) as Record<string, unknown>,
@@ -3040,6 +3045,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             });
             const assignment = assignee
               ? await assignCreatedJourneyTasks({
+                  title: task.title,
                   taskIds: (r.tasks ?? []).map((t) => t.id),
                   agentId: assignee,
                   caller: (data.caller ?? {}) as Record<string, unknown>,

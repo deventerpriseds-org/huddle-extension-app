@@ -62,8 +62,11 @@ export function approachVerdict(raw: { blocking?: unknown; suggestions?: unknown
   deficiencies: string[];
   suggestions: string[];
 } {
+  // A plain string is ONE item (VERIFY-wip-e2e-pickup-fit-1 C7: `blocking: "ignores the budget"` used to pass).
   const list = (v: unknown) =>
-    Array.isArray(v) ? v.map((x) => String(x ?? "").trim()).filter((x) => x.length > 0) : [];
+    (Array.isArray(v) ? v : typeof v === "string" ? [v] : [])
+      .map((x) => String(x ?? "").trim())
+      .filter((x) => x.length > 0);
   const blocking = list(raw?.blocking);
   return { verdict: blocking.length ? "revise" : "pass", deficiencies: blocking, suggestions: list(raw?.suggestions) };
 }
@@ -253,16 +256,20 @@ export async function runApproachGate(opts: {
       // Start the work NOW, not at the next 9/13/17 auto-work pass. Owner 2026-11-05, after a confirmed +
       // approved task sat in Up Next: "why would you as an agent follow my schedule instead of starting
       // things as soon as they are confirmed?"
-      await kickAutoWorkAfterApproval(opts.email);
+      const kicked = await kickAutoWorkAfterApproval(opts.email);
       return {
         gated: true,
         approved: true,
         escalated: false,
         note:
           (wasEscalated ? "re-graded after escalation — approach approved" : "approach approved") +
-          ". The work is being started now: it moves to Doing immediately unless you already have a task in " +
-          "Doing (one at a time), in which case it is next. Tell the user exactly that — never that they need " +
-          "to authorize the start or that it waits for a calendar block." +
+          (kicked
+            ? ". The work is being started now: it moves to Doing immediately unless you already have a task in " +
+              "Doing (one at a time), in which case it is next."
+            : ". Starting it right now didn't go through, so the next automatic pass (within a few hours) starts " +
+              "it — nothing else is needed from the user.") +
+          " Tell the user exactly that — never that they need to authorize the start or that it waits for a " +
+          "calendar block." +
           foldIn,
       };
     }
