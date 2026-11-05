@@ -525,3 +525,6 @@ is **loop 4**.
 | Source that would have settled it | `huddle.functions.ts` deliverOwnerFollowup — it enqueues into another DM regardless of the journey toggle |
 | Root cause | journey toggle gates BOARD writes only; cross-DM follow-ups are a separate side-effect channel no harness flag covers |
 | Guard implied | A harness-only turn flag that suppresses deliverOwnerFollowup (and push), pinned by a test; until then no live 1:1 hand-off case runs against the owner's identity |
+
+| 2026-11-05 | Typed `chat.pending_turns.attempts` and `artifacts.items.title` into live SQL | neither column exists (`artifacts.items` has `name`, not `title`) | `information_schema.columns` in the SAME query, before selecting | literal typed from memory into something not read this session | read `information_schema.columns` first in any query against a table not yet read this session |
+| 2026-11-05 | Read `net._http_response` going quiet as "pg_net/heartbeat outage" and told the owner | the DB clock showed only 2.5 min had passed; queue 0, cron ran at 18:46, worker present — responses lag | `SELECT now()` + `net.http_request_queue` + `cron.job_run_details` before declaring an outage | session clock assumed equal to DB clock; absence-of-log read as failure | check now() and the queue before calling anything down; retracted in the same turn |
