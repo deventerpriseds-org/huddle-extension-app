@@ -176,7 +176,9 @@ export async function runApproachGate(opts: {
   claim: (key: string) => boolean;
 }): Promise<ApproachGateResult> {
   const { isStructuredWorkflowRequired, getWorkflowCaps } = await import("../identity/agent-workflow-config.server");
-  const required = await isStructuredWorkflowRequired(opts.email, opts.agentId).catch(() => false);
+  // FAILS CLOSED (CLAUDE.md: the confirm-intent/DoD gate "MUST fail CLOSED"). A settings-read error used to
+  // read as "gate off" and approve the plan unseen (VERIFY-wip-e2e-pickup-fit-2, found outside the claims).
+  const required = await isStructuredWorkflowRequired(opts.email, opts.agentId).catch(() => true);
   if (!required) return { gated: false, approved: true, escalated: false, note: "" };
 
   const {
