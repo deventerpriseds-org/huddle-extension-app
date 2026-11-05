@@ -120,3 +120,23 @@ Length measurements (same probe; 300-char titles, categories LIFE/VENTURES/null,
 | `blocking: [{issue:"x"}]` | revise, deficiency "[object Object]" |
 
 Caveats: (a) malformed grader output fails OPEN to pass (non-array or missing `blocking`). The strict JSON schema should make that unreachable, but the code rule is not "pass iff no blocking item" for those shapes. (b) A model writing "None"/"N/A" as an item causes a false revise. (c) `recordProposedApproach` is an UPDATE only: if no engagement row exists yet, 0 rows change and the plan is NOT saved (no insert/upsert; `.catch(()=>{})` hides any error). In the gated flow a row normally exists from the confirm step, so this is an edge case.
+
+## Not re-checked (out of scope / not reachable)
+
+- Implementer-reported live evidence (task 883bc5dc confirmed with "budget under $1,500"; plan approved first try after #143; Doing + research enqueued 18s after approval): NOT re-queried, as instructed. Recorded as reported only.
+- Research step timing out at the 30s CHUNK_BUDGET_MS: pre-existing, out of scope. Related observation from C3: the up-to-8s approval kick runs inside the agent's own tool dispatch, so it spends part of that same chunk budget.
+- Regression baseline (live app golden path): not run — read-only brief, no deployed system touched.
+
+## Summary
+
+| # | claim | result |
+|---|---|---|
+| C1 | research directive carries confirmed DoD + approach | CONFIRMED (silent 1,500/2,500 truncation) |
+| C2 | confirm ask names the task, real links, short summary | CONFIRMED as prompt text (not enforced on output) |
+| C3 | approval kicks one bounded pass, never throws, note says starting now | CONFIRMED; note is sent even when the kick timed out or failed |
+| C4 | coursework never assigned by groom, excluded from auto-work and asks | CONFIRMED as coded; DEFECT: course-code regex false positives (ABC-123, PR-139, UA-123, DS-160, JIRA-101 ...) silently unassign real tasks; lowercase/spaced codes missed; assign-on-create not covered |
+| C5 | hybrid "Here's what I was able to do" / questions rule | CONFIRMED as prompt text |
+| C6 | user text capped at 4,000 at both client entry points | REFUTED IN PART: client-settable `internal: true` lifts the cap to 16,000 (bypass introduced by #141); everything else holds |
+| C7 | plan charter, verdict in code, suggestions on pass, every plan saved, review-gate unchanged | CONFIRMED; malformed grader output fails open to pass; save is UPDATE-only |
+
+VERDICT: REFUTED (C6)
