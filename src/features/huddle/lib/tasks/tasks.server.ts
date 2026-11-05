@@ -1373,6 +1373,16 @@ export async function incrementApproachRevisionCount(taskId: string, userEmail: 
 }
 
 /** The approach gate passed — lock in the approach and make the task eligible for real DOING work. */
+/** Store the latest submitted approach without changing its status (the gate records every submission). */
+export async function recordProposedApproach(taskId: string, userEmail: string, approach: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state SET proposed_approach = $2, updated_at = now() WHERE task_id = $1`,
+    [taskId, approach],
+  );
+  void userEmail;
+}
+
 export async function approveApproach(taskId: string, userEmail: string, approach: string): Promise<void> {
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");
