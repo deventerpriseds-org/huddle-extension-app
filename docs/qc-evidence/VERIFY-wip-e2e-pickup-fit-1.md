@@ -1,4 +1,4 @@
-PROGRESS: 4/7
+PROGRESS: 5/7
 
 # VERIFY wip-e2e-pickup-fit loop 1
 
@@ -68,3 +68,9 @@ Probe (`bun .../scratchpad/course.ts`, real functions):
 `groomOwner("cole-blake","cole-blake","Fix the ABC-123 bug")` -> `""` — a real engineering/travel task is UNASSIGNED by the groom and silently dropped from auto-work and confirm-asks. Effect is quiet: no error, the card just stops getting worked.
 
 Other assignment path NOT covered (outside the claim's named function, reported for completeness): `assign-on-create.ts` (`pickCreatedTaskAssignee` / `assignCreatedJourneyTasks`) assigns a task created in a 1:1 to that agent with no coursework check. Such a task is still excluded from auto-work/asks by the two filters above and cleared at the next groom, so "never worked" holds; "never assigned" holds only for the groom path.
+
+## C5 (#140) hybrid rule in hints and work directive — CONFIRMED (as prompt text)
+
+- Hints: `modeProposalHint` workability.ts:128-136 builds a shared `finishIt` block appended to ALL three modes (remind :148, assist :162, produce :171): "deliver it as "Here's what I was able to do", followed by "Here are my questions to fully satisfy what you may want" (short, specific questions). Only if you could not produce anything credible without those facts, ask for them first." `confirmIntentDirective` includes the hint (autowork.server.ts:198).
+- Work directive: `researchDirective` autowork.server.ts:95-97 — "deliver what you could do with reasonable confidence under "Here's what I was able to do", then "Here are my questions to fully satisfy what you may want"", and :110-113 "Only if you genuinely cannot advance this task on your own ... call flag_blocker".
+- start-on-approval.test.ts asserts these per mode (21/21). Same limitation as C2: model instruction, not enforced output.
