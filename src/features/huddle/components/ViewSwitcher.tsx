@@ -13,7 +13,9 @@
 // SUPERSEDED-BY: nothing -- current
 // EVIDENCE:   docs/LANE-F-widget-ux-fixes.md (D-2, D-3)
 
-import { CalendarDays, FolderOpen, LayoutGrid, ListChecks, MessageSquare, PenLine } from "lucide-react";
+import { useState } from "react";
+import { CalendarDays, FolderOpen, LayoutGrid, ListChecks, MessageSquare } from "lucide-react";
+import { APP_VIEWS, AppsIcon, AppsSheet } from "./AppsLauncher";
 import { cn } from "@/lib/utils";
 import { useHuddleStore, type View } from "../store";
 
@@ -25,7 +27,6 @@ const ENTRIES: { id: View; label: string; icon: typeof MessageSquare }[] = [
   { id: "priorities", label: "Priorities", icon: ListChecks },
   { id: "schedule", label: "Schedule", icon: CalendarDays },
   { id: "artifacts", label: "Files", icon: FolderOpen },
-  { id: "polish", label: "Polish", icon: PenLine },
 ];
 
 /**
@@ -46,6 +47,7 @@ export function ViewSwitcher({
   className?: string;
 }) {
   const view = useHuddleStore((s) => s.view);
+  const [appsOpen, setAppsOpen] = useState(false);
   const setView = useHuddleStore((s) => s.setView);
 
   if (variant === "inline") {
@@ -102,7 +104,22 @@ export function ViewSwitcher({
             </button>
           );
         })}
+        {/* Apps — Polish and the tools to come, in a bottom sheet (AppsLauncher.tsx). */}
+        <button
+          type="button"
+          onClick={() => setAppsOpen(true)}
+          aria-current={APP_VIEWS.has(view) ? "page" : undefined}
+          aria-haspopup="dialog"
+          className={cn(
+            "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-[10px] font-medium leading-none transition",
+            APP_VIEWS.has(view) ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <AppsIcon size={18} strokeWidth={1.8} aria-hidden />
+          <span className="w-full truncate text-center">Apps</span>
+        </button>
       </div>
+      <AppsSheet open={appsOpen} onOpenChange={setAppsOpen} />
     </nav>
   );
 }
