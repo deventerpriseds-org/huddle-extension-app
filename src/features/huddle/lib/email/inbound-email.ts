@@ -51,8 +51,149 @@ export type ScreenVerdict =
   | { keep: true; reason: string }
   | {
       keep: false;
-      reason: "self" | "automated-sender" | "bulk-header" | "other-folder" | "no-ask";
+      reason:
+        "self" | "automated-sender" | "bulk-header" | "other-folder" | "no-ask" | "category-off";
+      /** Set when reason is "category-off": which toggle screened it out. */
+      category?: EmailCategoryId;
     };
+
+/**
+ * KINDS OF AUTOMATED MAIL, each a user toggle (Settings -> Account -> "Email alerts").
+ * Owner, 2026-11-05: newsletters/invoices were landing on his owed list, "though i think they need
+ * toggles because the evite reminder was helpful because it was about a real person or appointment".
+ * Measured the same day (run-inbound-email.yml dry run, run 42110379642): Terra's relay
+ * (emailrelay.com), Evite (mailva.evite.com) and microsoft-noreply@ all passed as "from a person and
+ * asks something" — they carry no bulk headers, so only the sender says what they are.
+ *
+ * `defaultOn` and `domains` are SHIPPED DEFAULTS; the owner's own toggle and extra domains in
+ * identity.agent_workflow_config.email_alert_categories win. A category that is ON is kept even from a
+ * no-reply sender (that is the point of the toggle) but never when it carries bulk headers; OFF screens it out. `service` is the catch-all for
+ * any other automated sender, and OFF keeps the pre-toggle verdict ("automated-sender").
+ */
+export type EmailCategoryId = "events" | "community" | "bills" | "bookings" | "service";
+export interface EmailCategoryDef {
+  id: EmailCategoryId;
+  label: string;
+  hint: string;
+  defaultOn: boolean;
+  /** Sender domains (a subdomain matches: mailva.evite.com matches evite.com). */
+  domains: string[];
+}
+export const EMAIL_CATEGORIES: readonly EmailCategoryDef[] = [
+  {
+    id: "events",
+    label: "Events & invitations",
+    hint: "Evite, Paperless Post, Eventbrite and similar: invites, RSVPs and event reminders.",
+    defaultOn: true,
+    domains: [
+      "evite.com",
+      "paperlesspost.com",
+      "eventbrite.com",
+      "punchbowl.com",
+      "greenvelope.com",
+      "partiful.com",
+      "signupgenius.com",
+    ],
+  },
+  {
+    id: "community",
+    label: "Building & community notices",
+    hint: "Property-management and resident mail (parking, maintenance, inspections, events in the building).",
+    defaultOn: false,
+    domains: [
+      "emailrelay.com",
+      "clsliving.com",
+      "buildinglink.com",
+      "rentcafe.com",
+      "appfolio.com",
+    ],
+  },
+  {
+    id: "bills",
+    label: "Bills, invoices & renewals",
+    hint: "Invoices, receipts, payment and subscription-renewal notices from automated senders.",
+    defaultOn: false,
+    domains: [],
+  },
+  {
+    id: "bookings",
+    label: "Booking & order confirmations",
+    hint: "Reservation, booking, order and shipping confirmations.",
+    defaultOn: false,
+    domains: [],
+  },
+  {
+    id: "service",
+    label: "Other automated notices",
+    hint: "Everything else from a no-reply or system sender (account, security and service notices).",
+    defaultOn: false,
+    domains: [],
+  },
+];
+
+/** The owner's stored overrides: category id -> { on?, domains? }. Unknown ids are ignored. */
+export type EmailCategoryOverrides = Record<
+  string,
+  { on?: boolean; domains?: string[] } | undefined
+>;
+
+export interface EmailCategoryPolicy {
+  on: Record<EmailCategoryId, boolean>;
+  domains: Record<EmailCategoryId, string[]>;
+}
+
+/** Shipped defaults merged with the owner's overrides. Pure; never throws. */
+export function resolveEmailCategoryPolicy(
+  overrides?: EmailCategoryOverrides | null,
+): EmailCategoryPolicy {
+  const on = {} as Record<EmailCategoryId, boolean>;
+  const domains = {} as Record<EmailCategoryId, string[]>;
+  for (const c of EMAIL_CATEGORIES) {
+    const o = overrides?.[c.id];
+    on[c.id] = typeof o?.on === "boolean" ? o.on : c.defaultOn;
+    const extra = (o?.domains ?? [])
+      .map((d) => String(d).trim().toLowerCase().replace(/^@/, ""))
+      .filter(Boolean);
+    domains[c.id] = [...new Set([...c.domains, ...extra])];
+  }
+  return { on, domains };
+}
+
+const BILL_SUBJECT =
+  /\b(invoice|receipt|payment|statement|bill(ing)?|renew(al|ing|s)?|subscription|charged?|refund|order total)\b/i;
+const BOOKING_SUBJECT =
+  /\b(reservation|booking|booked|itinerary|confirmation|confirmed|order|shipped|shipping|delivery|tracking)\b/i;
+/** Role mailboxes that only ever send confirmations — automated, though not "no-reply". */
+const CONFIRMATION_LOCAL =
+  /^(confirmations?|reservations?|bookings?|orders?|order-update|shipping|tracking)$/i;
+
+function domainMatches(from: string, list: readonly string[]): boolean {
+  const d = (from.split("@")[1] ?? "").toLowerCase();
+  return !!d && list.some((x) => d === x || d.endsWith(`.${x}`));
+}
+
+/** Which kind of automated mail this is, or null for an ordinary sender (a person, as far as we can
+ *  tell). Domain lists first (they are the owner's explicit say), then automated-sender subjects. */
+export function categorizeMessage(
+  m: Pick<InboundMessage, "fromAddress" | "subject">,
+  policy: EmailCategoryPolicy = resolveEmailCategoryPolicy(),
+): EmailCategoryId | null {
+  const from = String(m.fromAddress ?? "")
+    .trim()
+    .toLowerCase();
+  if (!from) return null;
+  for (const c of EMAIL_CATEGORIES) if (domainMatches(from, policy.domains[c.id])) return c.id;
+  const local = (from.split("@")[0] ?? "").replace(/\+.*$/, "");
+  const automated = isAutomatedAddress(from) || CONFIRMATION_LOCAL.test(local);
+  if (!automated) return null;
+  const subject = String(m.subject ?? "");
+  if (CONFIRMATION_LOCAL.test(local) || BOOKING_SUBJECT.test(subject)) {
+    // "Payment confirmation" is a bill, not a booking.
+    return BILL_SUBJECT.test(subject) && !CONFIRMATION_LOCAL.test(local) ? "bills" : "bookings";
+  }
+  if (BILL_SUBJECT.test(subject)) return "bills";
+  return "service";
+}
 
 /** Local parts that are machines, not people. Matched against the WHOLE part before "@" (a +tag is
  *  stripped first), so `team.lead@`, `info.sarah@` or a domain containing "mail" are never caught.
@@ -61,6 +202,10 @@ export type ScreenVerdict =
  *  the no-reply family may carry a suffix (`noreply-billing@`, `no_reply.us@`). */
 const AUTOMATED_LOCAL =
   /^(?:(?:no[-_]?reply|do[-_]?not[-_]?reply|donotreply)(?:[-_.].*)?|notifications?|notify|mailer-daemon|mailer|postmaster|newsletters?|marketing|promo(?:tions)?|offers|deals|alerts?|billing|invoices?|receipts?|updates|bounces?)$/i;
+/** The no-reply family as a SEGMENT anywhere in the local part: `microsoft-noreply@`, `azure-noreply@`,
+ *  `billing.no-reply@`. Measured 2026-11-05: the anchored form above let both Microsoft senders through.
+ *  Segment-bounded, so a name that merely contains the letters (e.g. `snoreplyx`) is not caught. */
+const NOREPLY_SEGMENT = /(?:^|[-_.])(?:no[-_]?reply|do[-_]?not[-_]?reply|donotreply)(?:[-_.]|$)/i;
 
 /** Phrases that mean the sender wants something back from the owner. A "?" anywhere also counts. */
 const ASK =
@@ -94,7 +239,7 @@ export function isAutomatedAddress(address: string | null | undefined): boolean 
     .trim()
     .toLowerCase();
   const local = (a.split("@")[0] ?? "").replace(/\+.*$/, "");
-  return !local || AUTOMATED_LOCAL.test(local);
+  return !local || AUTOMATED_LOCAL.test(local) || NOREPLY_SEGMENT.test(local);
 }
 
 export function asksSomething(
@@ -113,6 +258,7 @@ export function screenMessage(
   m: InboundMessage,
   mode: InboundEmailMode,
   mailbox: string,
+  policy: EmailCategoryPolicy = resolveEmailCategoryPolicy(),
 ): ScreenVerdict {
   const from = String(m.fromAddress ?? "")
     .trim()
@@ -128,6 +274,18 @@ export function screenMessage(
     /^(bulk|list|junk)$/.test(String(m.precedence ?? "").toLowerCase()) ||
     (!!m.autoSubmitted && String(m.autoSubmitted).toLowerCase() !== "no");
   if (bulk) return { keep: false, reason: "bulk-header" };
+
+  // The owner's toggles decide every KIND of automated mail that is NOT marked bulk. Bulk (list /
+  // unsubscribe headers) stays screened out even when its category is ON, so turning Events on lets in
+  // Evite's reminders without letting in Evite's marketing. An ON category beats the no-reply and
+  // Outlook-"Other" rules below — that is the point of the toggle.
+  const category = categorizeMessage(m, policy);
+  if (category) {
+    if (policy.on[category]) return { keep: true, reason: `category:${category}` };
+    // "service" OFF is exactly the pre-toggle rule for a no-reply sender — keep its old reason.
+    if (category === "service") return { keep: false, reason: "automated-sender" };
+    return { keep: false, reason: "category-off", category };
+  }
   if (isAutomatedAddress(from)) return { keep: false, reason: "automated-sender" };
   if (String(m.inferenceClassification ?? "").toLowerCase() === "other") {
     return { keep: false, reason: "other-folder" };

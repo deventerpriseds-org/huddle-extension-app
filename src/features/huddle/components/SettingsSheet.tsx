@@ -37,6 +37,7 @@ import { MemoryDbPanel } from "./MemoryDbPanel";
 import { AccountSettingsPanel } from "./AccountSettingsPanel";
 import { ExecutiveProfilePanel } from "./ExecutiveProfilePanel";
 import { AgentWorkflowPanel } from "./AgentWorkflowPanel";
+import { EmailAlertCategoriesPanel } from "./EmailAlertCategoriesPanel";
 import { ArtifactMirroringPanel } from "./ArtifactMirroringPanel";
 import { SchedulingPanel } from "./SchedulingPanel";
 
@@ -155,6 +156,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
             <AccountSettingsPanel />
             <ExecutiveProfilePanel />
             <AgentWorkflowPanel />
+            <EmailAlertCategoriesPanel />
             <ArtifactMirroringPanel />
           </TabsContent>
 

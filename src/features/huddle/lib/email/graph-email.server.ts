@@ -443,6 +443,58 @@ export async function hasSentReplyInConversation(
   }
 }
 
+/**
+ * Every message the owner SENT at or after `sinceIso` (newest first, up to `maxPages` x 100), with just
+ * what reply-matching needs: when, which conversation, and to whom. One read settles every owed row
+ * (owed-digest / inbound-email reconcile) instead of one Graph call per row. Filter and orderby are on
+ * the SAME property (sentDateTime), which is the shape Graph accepts. null = Graph could not answer.
+ */
+export async function listSentSince(
+  mailbox: string,
+  sinceIso: string,
+  maxPages = 5,
+): Promise<import("./reply-match").SentLite[] | null> {
+  try {
+    const token = await getAppToken();
+    const qs =
+      `$filter=${encodeURIComponent(`sentDateTime ge ${sinceIso}`)}` +
+      `&$orderby=${encodeURIComponent("sentDateTime desc")}` +
+      `&$top=100&$select=${encodeURIComponent("sentDateTime,conversationId,toRecipients,ccRecipients")}`;
+    let url: string | undefined =
+      `${GRAPH}/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems/messages?${qs}`;
+    type R = { address?: string };
+    type Raw = {
+      sentDateTime?: string;
+      conversationId?: string;
+      toRecipients?: { emailAddress?: R }[];
+      ccRecipients?: { emailAddress?: R }[];
+    };
+    const out: import("./reply-match").SentLite[] = [];
+    for (let page = 0; url && page < maxPages; page++) {
+      const res: Response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) return null;
+      const j = (await res.json()) as { value?: Raw[]; "@odata.nextLink"?: string };
+      for (const m of j.value ?? []) {
+        out.push({
+          sentDateTime: m.sentDateTime ?? null,
+          conversationId: m.conversationId ?? null,
+          recipients: [...(m.toRecipients ?? []), ...(m.ccRecipients ?? [])]
+            .map((r) =>
+              String(r.emailAddress?.address ?? "")
+                .trim()
+                .toLowerCase(),
+            )
+            .filter(Boolean),
+        });
+      }
+      url = j["@odata.nextLink"];
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 /** A plain (unthreaded) draft in a mailbox resolved from the owner's identity — the reply fallback. */
 async function createPlainDraftInMailbox(
   mailbox: string,
@@ -934,7 +986,8 @@ export async function runInboxReadTool(
     } catch {
       mailbox = mailbox ?? caller?.entra_email;
     }
-    if (!mailbox) return { ok: false, error: "Could not resolve your mailbox, so no email was read." };
+    if (!mailbox)
+      return { ok: false, error: "Could not resolve your mailbox, so no email was read." };
     if (name === SEARCH_EMAIL_TOOL_NAME) {
       return { ...(await searchInboxMessages(mailbox, normalizeSearchArgs(args), timeZone)) };
     }
