@@ -31,3 +31,16 @@ Status: IN PROGRESS
 - inbound-email.server.ts now calls `screenMessage(m, mode, msgMailbox)`; self = `from === mailbox` only (inbound-email.ts:121).
 - Probe: mail FROM von.ellis@enterpriseds.io in the @trinnex.io inbox, mode=all -> `{"keep":true,"reason":"all mode"}`; same mail in the EDS inbox -> `{"keep":false,"reason":"self"}`.
 - So the owner's own mail sent between his two connected mailboxes (forward-to-self, CC himself) is announced back to him as inbound mail and recorded as owed; the self-filter does not consider the OTHER connected mailboxes (`mailboxes` is in scope at the call site).
+
+## C8.1 Graph paths valid under /me — CONFIRMED-OK (by reading code + Graph path forms; not run against Graph)
+- Every per-mailbox URL is `${base}/...` with base = `/users/{mb}` or `/me` (graph-email.server.ts:40 createReply, :65 PATCH draft, :338 & :408 mailFolders/inbox/messages, :493 mailFolders/sentitems/messages, :515 POST messages, :635 calendarView, :933 messages search, :979 messages/{id}). Each has a `/me/...` form in Graph v1.0 with the same suffix.
+- Delegated scope minted by journey: `Mail.ReadWrite Calendars.ReadWrite offline_access` (journey-voice supabase/functions/_shared/mail-access-token.ts:15-16) covers read, draft-create, createReply, PATCH draft, calendarView. Token is scoped to the CALLER's own connection (`.eq("user_id", userId)`, mail-access-token.ts:44-51).
+- Caveat (inferred): `$search` on /me/messages under a delegated token in another tenant is unverified live; not testable from here.
+
+## C8.7 anything else
+- DEFECT (low-medium, OBSERVED in code): `getOwnerCalendarEvents` doc says "The MAIN mailbox's result decides ok/error exactly as before", but graph-email.server.ts:704 returns `ok:true` when main FAILED and an extra mailbox returned events -> a main-calendar (app-key) outage is reported as a successful read containing only Trinnex events; the agent then tells the owner his day is clear on the EDS calendar. Same masking in search_email (:1056) and in the inbound watch (inbound-email.server.ts:117: when main fails and an extra succeeds, the main error is not even logged). schedule-brief keeps main-decides (its own diff). Inconsistent contract across readers.
+- Inferred, low: meetings invited to both addresses appear twice in merged calendar reads (no dedup by iCalUId) — the exact duplicate concern calendar-mailbox.ts cites for excluding Dev@.
+- Cosmetic: the JSDoc "Create a REAL draft in the mailbox's Drafts folder ..." (graph-email.server.ts ~207-213) now sits above `mailboxAccess`'s doc and is detached from `createGraphDraft`.
+- Suites re-run in this worktree at PR head 48c34655: second-mailbox "all passed" rc=0; inbound-email 69/0; mail-subscription 24/0; schedule-brief 76/0. ownership-judge and journey-calendar-edit-exposure NOT REACHED (budget); journey `npm test` NOT REACHED.
+
+Status: DONE (lane 2c)
