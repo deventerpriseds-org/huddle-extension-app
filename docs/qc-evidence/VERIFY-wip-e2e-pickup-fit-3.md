@@ -1,4 +1,4 @@
-PROGRESS: 6/7 (C4 + the fail-closed change pending)
+PROGRESS: 7/7
 
 # VERIFY — wip-e2e-pickup-fit — loop 3
 
