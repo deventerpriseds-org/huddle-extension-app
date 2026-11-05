@@ -6,7 +6,7 @@
 // the normal sync into Huddle's mirror. Gated to Terry (scrum master) at the call site.
 
 import { AGENTS, type AgentId } from "../../data/agents";
-import { REMINDER_TAG, alarmFits, isAgentWork } from "./workability";
+import { REMINDER_TAG, alarmFits, isAgentWork, isCoursework } from "./workability";
 
 export const GROOM_BACKLOG_TOOL = {
   type: "function",
@@ -158,6 +158,8 @@ export function incumbentOwner(current: string | null | undefined, batchPick: st
  */
 export const NO_AGENT = "none";
 export function groomOwner(current: string | null | undefined, batchPick: string, title = ""): string {
+  // The user's own coursework is never agent work, whatever the model picked (owner, 2026-11-05).
+  if (isCoursework(title)) return "";
   // A model "none" on research-type work is overruled: the task keeps its owner (isAgentWork).
   if (batchPick === NO_AGENT) return isAgentWork(title) ? incumbentOwner(current, "") : "";
   return incumbentOwner(current, batchPick);
@@ -263,7 +265,8 @@ Somewhere the user has to GO ("Go to church", "Go to the mall Saturday", an appo
 the agent sets an alarm before they need to leave and adds the hours, address or travel time.
 Set "assigned_agent":"none" when NO agent can finish anything real: a pure act with no place, time or
 legwork ("Meditate", "Clean the garage"); fixing a bug or a broken section in an app or system ("Fix the
-Nexus assignments section" — that is a code change for the user, not agent work); or work that depends on private files, systems or facts no
+Nexus assignments section" — that is a code change for the user, not agent work); the user's own
+coursework (anything marked 📚 or carrying a course code like MGT-702 — never assign it); or work that depends on private files, systems or facts no
 agent can reach (an internal company dataset nobody has been given, a system with no tool). Do not assign
 such a task just to have an owner — an unassigned task stays on the user's board and no agent pesters
 them about it.

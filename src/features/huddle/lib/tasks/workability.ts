@@ -38,6 +38,17 @@ const ASSIST_VERBS =
  */
 const EXPLICIT_REMINDER =
   /^\s*(remind\s+me\b|reminder\s*[:\-–—]|set\s+(a|an)\s+(reminder|alarm)\b)|\bremind\s+me\s+(to|about|of)\b/i;
+/**
+ * The user's own graded coursework ("📚 Research Paper", "📚 Checkpoint 2 - Details 1 of 2 (MGT-702)",
+ * "Obtain MGT-782 Module 3 materials"). Owner, 2026-11-05: "coursework shouldn't be assigned to the agents.
+ * the router should know that during grooming." Keyed on the Nexus 📚 marker or a course code like MGT-702.
+ */
+const COURSE_CODE = /\b[A-Z]{2,4}-\d{3}\b/;
+export function isCoursework(title: string | null | undefined): boolean {
+  const t = (title ?? "").trim();
+  return t.startsWith("📚") || COURSE_CODE.test(t);
+}
+
 export function asksForReminder(title: string | null | undefined): boolean {
   return EXPLICIT_REMINDER.test(title ?? "");
 }
@@ -118,9 +129,11 @@ export function modeProposalHint(mode: TaskMode): string {
     `Propose only what you can realistically FINISH yourself, end to end, with as little help from the ` +
     `user as possible. Never offer a reminder in place of doing the work. Any comparison of options ` +
     `(products, plans, courses, providers) always includes reviews and forum feedback, not just the ` +
-    `vendor's own pages. If one specific file or fact that only the user has is genuinely needed, name ` +
-    `exactly that one thing in a single line — do not promise an "evidence-based" or company-specific ` +
-    `result you have no source for.`;
+    `vendor's own pages. When the work depends on facts only the user has (company specifics, their own ` +
+    `data): if you can still produce something genuinely useful with reasonable confidence, do it and ` +
+    `deliver it as "Here's what I was able to do", followed by "Here are my questions to fully satisfy ` +
+    `what you may want" (short, specific questions). Only if you could not produce anything credible ` +
+    `without those facts, ask for them first. Never present guesses about their company as findings.`;
   if (mode === "remind") {
     return (
       `MODE — REMIND: the user explicitly asked to be reminded about this, or it is somewhere they need ` +
