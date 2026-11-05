@@ -17,6 +17,7 @@ import {
   stripRepeatedDraft,
 } from "../src/features/huddle/lib/chat-format";
 import { QUOTA_OUTAGE_INLINE } from "../src/features/huddle/lib/fallbacks";
+import { readFileSync } from "node:fs";
 
 let pass = 0;
 let fail = 0;
@@ -79,6 +80,25 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("A19 a heading line parses as h", parseChatBlocks("## Plan\nbody")[0].t === "h");
   check("A20 shortUrlLabel caps long paths", shortUrlLabel("https://example.com/" + "a".repeat(80)).length <= 40);
   check("A21 an empty message yields no blocks", parseChatBlocks("").length === 0);
+}
+
+// ---- verifier loop 1 (docs/qc-evidence/VERIFY-chat-format-1.md) -------------------------------
+{
+  const bs = parseChatBlocks("1. first\n2. second\n\nSome note\n\n3. third");
+  const second = bs[2] as { t: string; start?: number };
+  check("V1 an ordered list after a note keeps its number (3, not 1)", second.t === "ol" && second.start === 3, bs);
+  check("V2 '>50% done' is text, not a quote (meaning kept)", parseChatBlocks(">50% of tasks done")[0].t === "p");
+  check("V3 '# of tasks: 5' is text, not a heading", parseChatBlocks("# of tasks: 5")[0].t === "p");
+  check("V4 '__init__' keeps its underscores (no __bold__)", JSON.stringify(parseInline("call __init__ then")) === JSON.stringify([{ t: "text", v: "call __init__ then" }]));
+  check("V5 '> quoted' with a space is still a quote", parseChatBlocks("> quoted line")[0].t === "quote");
+  const card = "Hi Sam,\n\nThursday at 2 PM works for me (a placeholder, happy to move it).\n\nBest,\nVon";
+  const prose = "Sam Lee from Acme wants to meet this week.\n\nHi Sam,\n\nThursday at 2 PM works for me — happy to move it if needed.\n\nBest,\nVon\n\nTap Save to Drafts, or tell me what to change.";
+  check("V6 a PARTIAL draft match (greeting + sign-off only) leaves the prose untouched", stripRepeatedDraft(prose, card) === prose);
+  check("V7 every runtime '(fallback: …)' reply is a notice", noticeText("(fallback: gateway) AI gateway is not configured yet.") !== null);
+  check("V8 a bold copy of a section header is still cut", openerOnly("Hi.\n**On your task list:**\nA", "On your task list:\n• A") === "Hi.");
+  const hv = readFileSync("src/features/huddle/components/HuddleView.tsx", "utf8");
+  check("V9 a notice keeps the message row (and its email card / nav button): no early return on notice",
+    !/if \(notice\) \{\s*return/.test(hv) && /\{notice \? \(/.test(hv));
 }
 
 // ---- E: notices ----------------------------------------------------------------------------------

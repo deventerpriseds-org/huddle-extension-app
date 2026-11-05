@@ -61,6 +61,7 @@ export function ChatText({ text }: { text: string }) {
           return (
             <List
               key={i}
+              start={b.t === "ol" && b.start !== 1 ? b.start : undefined}
               className={
                 b.t === "ul"
                   ? "list-disc space-y-0.5 pl-5 marker:text-muted-foreground"

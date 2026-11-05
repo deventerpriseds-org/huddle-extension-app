@@ -1070,18 +1070,10 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
   }
   const agent = AGENT_BY_ID[m.author.agentId as AgentId] ?? AGENTS[0];
   // A reply the RUNTIME wrote because the model failed (quota outage / model unreachable) is a system
-  // notice, not the agent speaking (owner, 2026-11-05) — shown grey and named, like other system rows.
+  // notice, not the agent speaking (owner, 2026-11-05) — its TEXT is shown as a grey notice. The row
+  // itself stays, because the runtime deliberately attaches the email card / nav button / confirm row
+  // to failure replies (2026-10-15: Amy's alert lost its buttons when Iris timed out).
   const notice = noticeText(m.text);
-  if (notice) {
-    return (
-      <div
-        className="rounded-lg bg-muted/50 px-3 py-2 text-center text-xs text-muted-foreground"
-        data-testid="agent-notice"
-      >
-        <span className="font-medium">{agent.name}</span> · {notice}
-      </div>
-    );
-  }
   const isBriefing = m.isBriefing;
   // The reply card under an email alert shows the draft itself; drop the copy from the prose.
   const bodyText = m.emailReply?.replyBody
@@ -1127,7 +1119,16 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
               </button>
             </div>
           )}
-          <ChatText text={bodyText} />
+          {notice ? (
+            <div
+              className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
+              data-testid="agent-notice"
+            >
+              {notice}
+            </div>
+          ) : (
+            <ChatText text={bodyText} />
+          )}
         </div>
         {m.artifacts && m.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">

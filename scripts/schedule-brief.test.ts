@@ -371,5 +371,18 @@ console.log("J. ASK TO ADJUST + OPEN SCHEDULE BUTTON + PUSH TITLE (owner 2026-10
   t("J8 the payload carries the code-built list", /\.\.\.\(plan\.appendBlock \? \{ appendBlock: plan\.appendBlock \} : \{\}\)/.test(src), true);
 }
 
+console.log("K. CODE-BUILT BLOCK FITS THE TURN (verifier loop 1, B1-a: 6 meetings/day measured 4,070 chars > the old 3,500 cap -> the whole brief failed)");
+{
+  const busy: BriefItem[] = [];
+  for (let d = 16; d <= 21; d++)
+    for (let h = 0; h < 8; h++)
+      busy.push(item({ sourceId: `b${d}-${h}`, title: `Quarterly planning sync with the platform engineering team ${h}`, kind: "meeting", startIso: `2026-10-${d}T${String(13 + h).padStart(2, "0")}:00:00Z`, endIso: `2026-10-${d}T${String(13 + h).padStart(2, "0")}:30:00Z`, day: `2026-10-${d}`, location: "Microsoft Teams Meeting" }));
+  const big = briefDeliveryPlan(mk({ forDate: "2026-10-15", upcoming: busy }), TZ);
+  const hf = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+  const cap = Number(/appendBlock: z\.string\(\)\.max\((\d+)\)/.exec(hf)?.[1] ?? 0);
+  t("K1 an 8-meetings-a-day week is longer than the old 3,500 cap", (big.appendBlock ?? "").length > 3500, true);
+  t("K2 and still fits the payload schema cap", (big.appendBlock ?? "").length <= cap, true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

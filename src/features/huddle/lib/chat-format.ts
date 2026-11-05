@@ -17,8 +17,10 @@
 /** A list marker at the start of a line: "• ", "- ", "* ", "· ", "1. ", "1) ". "**bold" is NOT one. */
 const LIST_RE = /^\s*(?:[•·\-*]|\d{1,3}[.)])\s+/;
 const ORDERED_RE = /^\s*\d{1,3}[.)]\s+/;
-const HEADING_RE = /^\s{0,3}#{1,6}\s+/;
-const QUOTE_RE = /^\s{0,3}>\s?/;
+// A heading needs a capital or digit after it, so "# of tasks: 5" stays text.
+const HEADING_RE = /^\s{0,3}#{1,6}\s+(?=[A-Z0-9])/;
+// A quote needs "> " (with the space), so ">50% done" stays text.
+const QUOTE_RE = /^\s{0,3}>\s/;
 
 export function isListLine(line: string): boolean {
   return LIST_RE.test(line);
@@ -82,7 +84,7 @@ export type Inline =
 
 /** Only http(s) ever becomes a link. Trailing sentence punctuation stays outside the URL. */
 const INLINE_RE =
-  /\*\*([^*\n]+?)\*\*|__([^_\n]+?)__|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"’”*])/g;
+  /\*\*([^*\n]+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"’”*])/g;
 
 export function parseInline(s: string): Inline[] {
   const out: Inline[] = [];
@@ -90,10 +92,11 @@ export function parseInline(s: string): Inline[] {
   for (const m of s.matchAll(INLINE_RE)) {
     const at = m.index ?? 0;
     if (at > last) out.push({ t: "text", v: s.slice(last, at) });
-    if (m[1] != null || m[2] != null) out.push({ t: "bold", v: (m[1] ?? m[2]) as string });
-    else if (m[3] != null) out.push({ t: "code", v: m[3] });
-    else if (m[4] != null && m[5] != null) out.push({ t: "link", href: m[5], label: m[4] });
-    else if (m[6] != null) out.push({ t: "link", href: m[6], label: shortUrlLabel(m[6]) });
+    // "__x__" is deliberately NOT bold: it ate the underscores of names like __init__.
+    if (m[1] != null) out.push({ t: "bold", v: m[1] });
+    else if (m[2] != null) out.push({ t: "code", v: m[2] });
+    else if (m[3] != null && m[4] != null) out.push({ t: "link", href: m[4], label: m[3] });
+    else if (m[5] != null) out.push({ t: "link", href: m[5], label: shortUrlLabel(m[5]) });
     last = at + m[0].length;
   }
   if (last < s.length) out.push({ t: "text", v: s.slice(last) });
@@ -116,7 +119,7 @@ export function shortUrlLabel(href: string, max = 40): string {
 export type Block =
   | { t: "p"; lines: Inline[][] }
   | { t: "ul"; items: Inline[][] }
-  | { t: "ol"; items: Inline[][] }
+  | { t: "ol"; items: Inline[][]; start: number }
   | { t: "h"; v: Inline[] }
   | { t: "quote"; lines: Inline[][] };
 
@@ -143,7 +146,11 @@ export function parseChatBlocks(raw: string): Block[] {
       const kind = ORDERED_RE.test(line) ? "ol" : "ul";
       if (!cur || cur.t !== kind) {
         flush();
-        cur = { t: kind, items: [] };
+        // An ordered list keeps the number the agent wrote ("3. third" after a note stays 3).
+        cur =
+          kind === "ol"
+            ? { t: "ol", items: [], start: parseInt(line.trim(), 10) || 1 }
+            : { t: "ul", items: [] };
       }
       (cur as { items: Inline[][] }).items.push(parseInline(line.replace(LIST_RE, "")));
       continue;
@@ -189,7 +196,7 @@ export function noticeText(text: string): string | null {
     const inner = s.endsWith(")") ? s.slice(1, -1) : s.slice(1);
     return inner.charAt(0).toUpperCase() + inner.slice(1);
   }
-  if (/^\(fallback: [^)]*\) couldn['’]t reach the model/.test(s)) return s;
+  if (/^\(fallback: [^)]*\) /.test(s)) return s; // every runtime "(fallback: …) …" reply
   return null;
 }
 
@@ -200,8 +207,8 @@ const squash = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
 /**
  * When the reply card under a message already shows the draft (`replyBody`), drop the copy of that
  * draft from the message text (and its "Suggested reply:" label) so it is shown once, in the card.
- * Only paragraphs that appear in the draft are removed, and only when at least half the draft's
- * paragraphs were found — otherwise the text is returned unchanged (never strip on a weak match).
+ * Only paragraphs that appear in the draft are removed, and only when EVERY paragraph of the draft was
+ * found — otherwise the text is returned unchanged (never strip on a partial match).
  */
 export function stripRepeatedDraft(text: string, replyBody: string | undefined | null): string {
   if (!replyBody || !replyBody.trim()) return text;
@@ -222,7 +229,9 @@ export function stripRepeatedDraft(text: string, replyBody: string | undefined |
     }
     kept.push(p);
   }
-  if (hits === 0 || hits * 2 < bodyParas.length) return text;
+  // STRONG match only: EVERY paragraph of the draft must be in the prose. A partial match (say just
+  // "Hi Sam," and "Best, Von" around a paraphrased middle) is left alone, never half-stripped.
+  if (hits < bodyParas.length) return text;
   return kept
     .filter((p) => !/^suggested reply:?$/i.test(p.trim()))
     .join("\n\n")
@@ -245,7 +254,7 @@ export function openerOnly(text: string, block = ""): string {
   );
   const out: string[] = [];
   for (const line of normalizeChatText(text).split("\n")) {
-    if (isListLine(line) || headers.has(line.trim())) break;
+    if (isListLine(line) || headers.has(line.trim().replace(/^\*\*(.+)\*\*$/, "$1"))) break;
     out.push(line);
   }
   return out.join("\n").trim();

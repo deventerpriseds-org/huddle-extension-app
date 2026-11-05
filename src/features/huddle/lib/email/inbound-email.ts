@@ -206,7 +206,7 @@ export function inboundEmailDirective(
       `1. Who it is from (name and organisation if the address shows it), and what they want, in plain words.\n` +
       `2. One closing line.\n` +
       `Do NOT write the suggested reply in your message — the card under it shows the draft. Put the ` +
-      `suggested reply, ${replySpec}, ONLY in propose_email_reply's reply_body. Plain text, no markdown.\n`
+      `suggested reply ONLY in propose_email_reply's reply_body: ${replySpec} Plain text, no markdown.\n`
     : `Write, in this order:\n` +
       `1. One line: who it is from (name and organisation if the address shows it), and what they want, in plain words.\n` +
       `2. A suggested reply, ${replySpec}\n` +
