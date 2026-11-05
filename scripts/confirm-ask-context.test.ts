@@ -11,7 +11,7 @@
 import { readFileSync } from "node:fs";
 
 const SRC = `${import.meta.dir}/../src/features/huddle/lib/tasks`;
-const { agreedBrief, confirmIntentDirective } = await import(`${SRC}/autowork.server.ts`);
+const { agreedBrief, confirmIntentDirective, researchDirective } = await import(`${SRC}/autowork.server.ts`);
 const groomSrc = readFileSync(`${SRC}/groom.ts`, "utf8");
 const awSrc = readFileSync(`${SRC}/autowork.server.ts`, "utf8");
 
@@ -23,6 +23,9 @@ const brief = agreedBrief({ dod: "Compare 3–5 shops near ZIP 21158 with review
 t("confirmed DoD reaches the work turn", brief.includes("ZIP 21158"));
 t("approved approach reaches the work turn", brief.includes("Search Bel Air MD shops"));
 t("specifics must be used", /use every specific they gave/i.test(brief));
+const work = researchDirective({ id: "t9", title: "Research someone to install brakes", category: "LIFE", assigned_agent: "ezra-miles" },
+  { dod: "Compare shops near ZIP 21158", approach: null });
+t("the work directive itself opens with the confirmed brief", work.startsWith("WHAT THE USER CONFIRMED") && work.includes("ZIP 21158"));
 t("nothing confirmed -> no block", agreedBrief({}) === "" && agreedBrief() === "");
 t("the call site passes the engagement state's DoD + approach",
   /researchDirective\(task, agreed\)/.test(awSrc) && /eng\?\.confirmed_dod \?\? task\.definition_of_done/.test(awSrc) && /eng\?\.proposed_approach/.test(awSrc));

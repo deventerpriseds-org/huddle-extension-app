@@ -74,7 +74,7 @@ export function agreedBrief(agreed?: { dod?: string | null; approach?: string | 
   );
 }
 
-function researchDirective(
+export function researchDirective(
   task: { id: string; title: string; category: string | null; assigned_agent: string | null },
   agreed?: { dod?: string | null; approach?: string | null },
 ): string {
