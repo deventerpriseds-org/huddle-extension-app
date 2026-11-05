@@ -1,4 +1,4 @@
-PROGRESS: 5/7
+PROGRESS: 6/7
 
 # VERIFY wip-e2e-pickup-fit loop 1
 
@@ -74,3 +74,27 @@ Other assignment path NOT covered (outside the claim's named function, reported 
 - Hints: `modeProposalHint` workability.ts:128-136 builds a shared `finishIt` block appended to ALL three modes (remind :148, assist :162, produce :171): "deliver it as "Here's what I was able to do", followed by "Here are my questions to fully satisfy what you may want" (short, specific questions). Only if you could not produce anything credible without those facts, ask for them first." `confirmIntentDirective` includes the hint (autowork.server.ts:198).
 - Work directive: `researchDirective` autowork.server.ts:95-97 — "deliver what you could do with reasonable confidence under "Here's what I was able to do", then "Here are my questions to fully satisfy what you may want"", and :110-113 "Only if you genuinely cannot advance this task on your own ... call flag_blocker".
 - start-on-approval.test.ts asserts these per mode (21/21). Same limitation as C2: model instruction, not enforced output.
+
+## C6 (#141) user text capped at 4,000; internal up to 16,000 — REFUTED IN PART (client-controlled exemption)
+
+What holds:
+- huddle.functions.ts:220-226 `capUserText` throws when `!d.internal && d.text.length > 4000`; `Input.text` is now `.max(INTERNAL_TEXT_MAX)` = 16,000.
+- Both client entry points wrap it: `sendHuddleMessage` :7547 `capUserText(Input.parse(raw))`; `enqueueHuddleTurn` :8190 `capUserText(EnqueueTurnInput.parse(raw))` (EnqueueTurnInput = `Input.extend`, :7582).
+- Drain path :7960 `Input.parse(record.payload)` — now max 16,000, so internal directives >4,000 parse.
+- Every auto-work payload is internal: confirm ask :598-602, approach re-drive :1017-1021, research :1105 all go through `turnPayload` (`internal: true`, :149); blocked digest :715 `internal: true`.
+- Other parse sites swept (`grep Input.parse|Input.extend|inputValidator`): `bargeCeremony` uses its own `BargeInput` (text max 2000); voice `transcribe`/`tts` use their own local `Input`; the public cross-app route `run-agent-turn.ts` -> `buildTurnInput` (cross-app/turn-gate.ts:360-378) enforces its own `TEXT_MAX = 4000` and never sets `internal`. `ceremonies.server.ts:51` calls `runHuddleTurn` directly with server text (no parse; pre-existing). No other user-text entry point found.
+
+Probe (`bun .../scratchpad/len.ts`, real `capUserText` import): user 4001 -> REJECTED "String must contain at most 4000 character(s)"; user 4000 -> ACCEPTED; **`{ text: 15000 chars, internal: true }` -> ACCEPTED**.
+
+THE DEFECT: `internal` is a client-settable field of `Input` (:266 `internal: z.boolean().optional()`), and `capUserText` trusts it. Any POST to `sendHuddleMessage` / `enqueueHuddleTurn` that adds `"internal": true` sends up to 16,000 chars of user text. Before #141 this was impossible (schema max 4000 applied to everyone), so #141 introduced the bypass. The shipped UI never sets `internal` (no hit in components/hooks), so honest clients stay capped; a crafted request does not. Side effect of the same flag: it also switches off the 1:1 pass-along/deferral machinery for that turn (pre-existing). Severity: low (length/cost, authenticated caller), but the property "user text stays capped at 4,000 at both client entry points" is not true against a crafted request. Fix direction (not prescribed): the client entry points should ignore/strip `internal` from the raw body, since only server code enqueues internal turns.
+
+Length measurements (same probe; 300-char titles, categories LIFE/VENTURES/null, first ask + re-ask):
+
+| mode (classified) | first ask | re-ask |
+|---|---|---|
+| remind | 4,755 | 4,793 |
+| assist | 4,790 | **4,828** (worst) |
+| produce | 4,445 | 4,483 |
+
+- Worst `confirmIntentDirective` = 4,828 <= 16,000. Note directive-length.test.ts reports "worst 4483" because its long title classifies as produce only — the test under-measures the true worst by 345 chars (still far under the limit).
+- `researchDirective` with 20k-char DoD + 20k-char approach: 7,256 (300-char title); 8,956 with a 2,000-char title. Both <= 16,000 thanks to the 1,500/2,500 slices. Title is unbounded in the directive (appears 1x in research, 2x in confirm), so a pathological ~5,500+ char title would push confirm asks past 16,000 — titles that long are not expected; noted only.
