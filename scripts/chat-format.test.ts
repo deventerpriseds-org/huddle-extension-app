@@ -90,6 +90,7 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("E3 the model-unreachable hardReply is a notice", noticeText("(fallback: openai down) couldn't reach the model — timeout") !== null);
   check("E4 a normal reply is not a notice", noticeText(BOLD) === null);
   check("E5 a reply that merely mentions couldn't respond is not a notice", noticeText("I couldn't respond earlier — sorry.") === null);
+  check("E6 'couldn't respond — ' mid-sentence is not a notice", noticeText("Sorry, I couldn't respond — I was in a meeting.") === null);
 }
 
 // ---- C: repeated draft ---------------------------------------------------------------------------
@@ -99,6 +100,8 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("C2 the 'Suggested reply:' label goes with it", !/Suggested reply/.test(s), s);
   check("C3 the summary and the closing line stay", /^The Terra Team at Terra/.test(s) && /Save to Drafts/.test(s), s);
   check("C4 no card body -> text unchanged", stripRepeatedDraft(EMAIL, undefined) === EMAIL);
+  check("C6 a WEAK match (only the sign-off of a 3-paragraph draft) leaves the prose unchanged",
+    stripRepeatedDraft("Sure thing.\n\nBest,\nVon", EMAIL_BODY) === "Sure thing.\n\nBest,\nVon");
   check("C5 a draft that is NOT in the prose leaves it unchanged", stripRepeatedDraft(EMAIL, "Totally different reply.\n\nCheers,\nVon") === EMAIL);
 }
 
