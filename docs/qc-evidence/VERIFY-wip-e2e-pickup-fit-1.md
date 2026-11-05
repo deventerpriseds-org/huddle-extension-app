@@ -1,4 +1,4 @@
-PROGRESS: 2/7
+PROGRESS: 3/7
 
 # VERIFY wip-e2e-pickup-fit loop 1
 
@@ -33,3 +33,11 @@ Observation: several suites assert on SOURCE TEXT (e.g. "the gate's verdict goes
 - Re-ask (:180-186): "circling back ... BY NAMING THE TASK in plain words (e.g. "Circling back on the Verva research —"), never "this one"".
 - Both (:199-203): "ALWAYS include ... the most relevant link(s) you can find right now with your web search ... and, for any product, service, tool or provider, a one-to-two sentence summary of what it is ... Only real links you actually found; never invent a URL."
 - Limitation: this is an instruction to a model, not a code check — nothing post-validates the agent's message for a "this" opener or a link. "Requires" holds at the prompt level only.
+
+## C3 (#140) approval kicks one bounded auto-work pass, never throws, note says starting now — CONFIRMED with one defect-grade caveat
+
+- approach-gate.server.ts:251-256: on `verdict === "pass"`, `approveApproach(...)` is awaited, then `kickAutoWorkAfterApproval(opts.email)`; default `run` = `runScheduledAutoWork({ entra_email: email }, { force: true })` (:154-158). Ordering matters and is right: the row is `approved` before the pass reads `isReady` (autowork :955-960 requires `approach_status === "approved"`).
+- Bounded/never-throws, measured with my own probe (`bun .../scratchpad/kick.ts`, injecting `run`): resolve -> `true`; async reject -> `false`; SYNCHRONOUS throw -> `false`; slow run that rejects at 9s -> returns `false` at 8001 ms, and the late rejection produced NO unhandledRejection (process stayed clean to 9504 ms).
+- Note (:261-266): "The work is being started now: it moves to Doing immediately unless you already have a task in Doing (one at a time), in which case it is next. Tell the user exactly that — never that they need to authorize the start ...".
+- CAVEAT (truthfulness): the note is emitted UNCONDITIONALLY — the boolean `kickAutoWorkAfterApproval` returns is discarded (:256). On a timeout/failure the agent still tells the user the work "is being started now", while it actually waits for the next scheduled pass. Also the 8s bound is a wait bound only: the pass keeps running after the race resolves (not cancelled), and the 8s is spent inside the agent's tool dispatch, i.e. inside the turn's chunk budget.
+- The grader-error fail-open path (:326) returns approved:true WITHOUT kicking — consistent with "never record an approval no grader produced".
