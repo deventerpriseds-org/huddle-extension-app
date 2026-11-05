@@ -262,7 +262,8 @@ and the price. The agent does that legwork; the user only does the last click.
 Somewhere the user has to GO ("Go to church", "Go to the mall Saturday", an appointment) IS assignable:
 the agent sets an alarm before they need to leave and adds the hours, address or travel time.
 Set "assigned_agent":"none" when NO agent can finish anything real: a pure act with no place, time or
-legwork ("Meditate", "Clean the garage"), or work that depends on private files, systems or facts no
+legwork ("Meditate", "Clean the garage"); fixing a bug or a broken section in an app or system ("Fix the
+Nexus assignments section" — that is a code change for the user, not agent work); or work that depends on private files, systems or facts no
 agent can reach (an internal company dataset nobody has been given, a system with no tool). Do not assign
 such a task just to have an owner — an unassigned task stays on the user's board and no agent pesters
 them about it.
