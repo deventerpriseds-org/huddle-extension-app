@@ -1,4 +1,4 @@
-PROGRESS: 4/7
+PROGRESS: 7/7
 
 # VERIFY wip-e2e-pickup-fit -- loop 2
 
@@ -114,3 +114,27 @@ normal                         revise ["misses DoD item 2"], suggestions ["add s
 - The plain-string case is fixed. Empty, whitespace and nullish inputs pass, which is correct (nothing blocking).
 - Residual leniency: a bare number or object `blocking` passes. These shapes are unreachable on the live path because the call uses the strict JSON schema `APPROACH_VERDICT_SCHEMA` (L50-55, `blocking: array of string`), and `callOpenAIRouter` throws on any non-OK response rather than returning null (openai-responses.server.ts L24, L54). A grader error goes to the catch path (L309+), not to a null verdict. So this is not a live pass-through. Inference, medium confidence: I did not exercise a schema-violating model output.
 - `recordProposedApproach` (tasks.server.ts L1377-1386) is now `INSERT ... ON CONFLICT (task_id) DO UPDATE SET proposed_approach = EXCLUDED.proposed_approach, updated_at = now()`. The DDL (L148-163, L173-175, L285) requires only `task_id` (PK) and `user_email`. Every added column is nullable or has a default (`user_id TEXT` nullable), so the insert branch is valid SQL against the bootstrapped schema. Read only, not executed against a DB (no DB access, per the rules).
+
+## C1 -- researchDirective carries agreedBrief; the call site passes confirmed_dod / proposed_approach -- CONFIRMED (reduced depth)
+
+- autowork.server.ts L64 `agreedBrief`, L78-84 `researchDirective(...)` concatenates `agreedBrief(agreed)`. Call site L1103-1105: `agreed = { dod: eng?.confirmed_dod ?? task.definition_of_done ?? null, approach: eng?.proposed_approach ?? null }` -> `researchDirective(task, agreed)`.
+- Executed (/tmp/claude-0/v2/c15.ts): directive length 2971, contains both marker DoD and marker approach, DoD appears before the task title, `agreedBrief({dod:null, approach:"  "})` -> `""`.
+- Suite: confirm-ask-context "confirmed DoD reaches the work turn", "approved approach reaches the work turn", "the call site passes the engagement state's DoD + approach" all PASS.
+- Interaction with C7: `recordProposedApproach` now upserts, so `proposed_approach` is present for a plan that was graded before any row existed. That widens C1's input. The blast radius checks out.
+
+## C2 -- the confirm ask names the task, with links + a summary -- CONFIRMED (reduced depth)
+
+- `confirmIntentDirective` (autowork.server.ts L165). confirm-ask-context.test.ts 18/18: first ask and re-ask both PASS "names the task in plain words", "forbids \"this\" as the subject", "always includes real links", "summary of the product for knowledge".
+- Length interaction with C6: directive-length.test "confirm asks fit (worst 4814)". That is over USER_TEXT_MAX (4000) and under INTERNAL_TEXT_MAX (16000). It travels the server-side `enqueueTurn` -> drain path (`Input.parse`, 16000), not the capped client entry points (see C6).
+
+## C5 -- hybrid "Here's what I was able to do" / "Here are my questions..." -- CONFIRMED (reduced depth)
+
+- Present in autowork.server.ts L97 (work directive) and workability.ts L144 (mode hint). Executed researchDirective output contains both phrases (c15.ts `hybrid true true`). start-on-approval.test.ts "the work directive delivers the hybrid too" PASS (36/36).
+
+## Radius challenge -- summary
+
+- C6: I checked two entry points outside the brief, `bargeCeremony` (capped at 2000) and the public `/api/public/run-agent-turn` route (`buildTurnInput` caps at 4000 and drops `internal`). Neither is a bypass.
+- C4: the radius is right (groom.ts, autowork.server.ts x2, assign-on-create x2). The defect is in the matcher, so it reaches every consumer at once.
+- C3: found the fail-open `isStructuredWorkflowRequired(...).catch(() => false)` at approach-gate.server.ts L182. It is outside the claimed fix, but it sits in the gate the fix touches. Listed as an observation, not tested.
+
+VERDICT: REFUTED (C4)
