@@ -12,17 +12,23 @@ const DRAFT =
 
 export const checks = [
   async function polishOpens({ page, check, screenshot }) {
-    const btn = page.getByRole("button", { name: "Polish", exact: true });
-    const n = await btn.count();
+    // Polish lives behind the labelled Apps launcher (AppsLauncher.tsx): Rail on desktop, bottom bar on phone.
+    const apps = page.getByRole("button", { name: "Apps", exact: true });
+    const n = await apps.count();
     let clicked = false;
     for (let i = 0; i < n; i++) {
-      if (await btn.nth(i).isVisible()) {
-        await btn.nth(i).click();
+      if (await apps.nth(i).isVisible()) {
+        await apps.nth(i).click();
         clicked = true;
         break;
       }
     }
-    check("Polish entry visible in navigation", clicked, `buttons named Polish: ${n}`);
+    check("Apps launcher visible in navigation", clicked, `buttons named Apps: ${n}`);
+    await page.waitForTimeout(800);
+    await screenshot("apps-open");
+    const pick = page.getByRole("button", { name: /^Polish/ }).first();
+    check("Apps lists Polish", (await pick.count()) > 0);
+    if (await pick.count()) await pick.click();
     await page.waitForTimeout(1200);
     const draft = page.locator("#polish-draft");
     check("Polish view renders the Draft box", (await draft.count()) > 0);
