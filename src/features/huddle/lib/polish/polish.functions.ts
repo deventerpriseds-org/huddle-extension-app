@@ -1,56 +1,24 @@
-// WHAT:       polishTextFn — the one server call behind the Polish tool. Takes a structured request
-//             (polish a draft / revise / rewrite a selected span / merge hand edits) plus writing
-//             settings, builds the prompt SERVER-side from polish-core, calls OpenAI Responses, and
-//             returns the finished full text.
-// WHY:        Polish needs a model call; the client never sends raw prompt text, so this cannot be
-//             used as an open proxy to the model. Reuses Huddle's existing OPENAI_API_KEY and model
-//             ladder (gpt-5.6-luna = Fast, gpt-5.6-terra = Best) — no new secret, no new provider.
+// WHAT:       polishTextFn — the in-app door onto the Polish engine (lib/polish/polish.server.ts
+//             runPolish), plus the Send-sheet destinations. Takes a structured request (polish a draft /
+//             revise / rewrite a selected span / merge hand edits) plus writing settings; the prompt is
+//             built SERVER-side, so this is never an open proxy to the model.
+// WHY:        Polish needs a model call. Reuses Huddle's existing OPENAI_API_KEY and model ladder
+//             (gpt-5.6-luna = Fast, gpt-5.6-terra = Best) — no new secret, no new provider.
 // SUPERSEDES: nothing
 // SUPERSEDED-BY: nothing -- current
 // EVIDENCE:   scripts/polish-core.test.ts (prompt + splice rules)
 
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import {
-  applyResult,
-  buildPolishPrompt,
-  normalizeSettings,
-  type PolishRequest,
-} from "./polish-core";
+import { type PolishRequest } from "./polish-core";
+import { POLISH_MAX as MAX, PolishRequestSchema as Req } from "./polish-schema";
+import type { PolishResult } from "./polish.server";
+
+export type { PolishResult };
 
 const Caller = z
   .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
   .optional();
-const MAX = 40_000;
-
-const Req = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("polish"), draft: z.string().min(1).max(MAX) }),
-  z.object({
-    mode: z.literal("revise"),
-    text: z.string().min(1).max(MAX),
-    instruction: z.string().min(1).max(500),
-  }),
-  z.object({
-    mode: z.literal("span"),
-    text: z.string().min(1).max(MAX),
-    start: z.number().int().min(0),
-    end: z.number().int().min(0),
-    instruction: z.string().min(1).max(500),
-  }),
-  z.object({
-    mode: z.literal("merge"),
-    draft: z.string().min(1).max(MAX),
-    edited: z.string().min(1).max(MAX),
-  }),
-]);
-
-/** Fast / Best → a rung of the existing model ladder (lib/model-policy.ts LADDER). */
-const ENGINE_MODEL = {
-  fast: { model: "gpt-5.6-luna", effort: "low" },
-  best: { model: "gpt-5.6-terra", effort: "medium" },
-} as const;
-
-export type PolishResult = { ok: true; text: string; model: string } | { ok: false; error: string };
 
 export const polishTextFn = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) =>
@@ -65,63 +33,8 @@ export const polishTextFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }): Promise<PolishResult> => {
     if (!data.caller?.entra_email) return { ok: false, error: "Sign in to use Polish." };
-    const req = data.request as PolishRequest;
-    if (req.mode === "span" && !(req.start < req.end && req.end <= req.text.length)) {
-      return { ok: false, error: "That selection no longer matches the text. Select it again." };
-    }
-    const key = process.env.OPENAI_API_KEY;
-    if (!key)
-      return { ok: false, error: "Polish isn't configured on the server yet (missing model key)." };
-
-    const settings = normalizeSettings(data.settings);
-    const { system, input } = buildPolishPrompt(data.profileName, settings, req);
-    const { model, effort } = ENGINE_MODEL[settings.engine];
-
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 40_000); // stays under the ~45s hosting ceiling
-    try {
-      const res = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model, instructions: system, input, reasoning: { effort } }),
-        signal: ctl.signal,
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        console.error("[polish] OpenAI", res.status, body.slice(0, 300));
-        if (res.status === 429)
-          return { ok: false, error: "The model is busy or out of quota. Try again in a minute." };
-        return {
-          ok: false,
-          error: `The model returned an error (${res.status}). Your text is unchanged; try again.`,
-        };
-      }
-      const json = (await res.json()) as {
-        output_text?: string;
-        output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
-      };
-      const text =
-        json.output_text ??
-        (json.output ?? [])
-          .filter((o) => o.type === "message")
-          .flatMap((o) => o.content ?? [])
-          .filter((c) => c.type === "output_text")
-          .map((c) => c.text ?? "")
-          .join("");
-      if (!text.trim())
-        return { ok: false, error: "Nothing came back. Try again or simplify the instruction." };
-      return { ok: true, text: applyResult(req, text), model };
-    } catch (e) {
-      const aborted = (e as { name?: string })?.name === "AbortError";
-      return {
-        ok: false,
-        error: aborted
-          ? "That took too long. Try Fast, or polish a shorter piece."
-          : "Couldn't reach the model. Your text is unchanged; try again.",
-      };
-    } finally {
-      clearTimeout(timer);
-    }
+    const { runPolish } = await import("./polish.server");
+    return runPolish(data.profileName, data.settings, data.request as PolishRequest);
   });
 
 // ---------------------------------------------------------------- send-to destinations
@@ -271,6 +184,97 @@ export const polishWordDocFn = createServerFn({ method: "POST" })
         return {
           ok: false,
           error: e instanceof Error ? e.message : "Couldn't make the Word document.",
+        };
+      }
+    },
+  );
+
+// Google Drive goes through NEXUS, which already owns the owner's Google connection (drive.file
+// scope, nexus-hub api/src/lib/google.ts). Same call shape as nexus-write.server `nexusWriteFetch`:
+// X-UAT-Token + the server-held NEXUS_OWNER_ID — no new secret, no Google token held in Huddle.
+// Contract: docs/polish/CONTRACT-polish-ecosystem.md §3.
+export const polishGoogleDriveFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        caller: Caller,
+        name: z.string().min(1).max(120),
+        text: z.string().min(1).max(MAX),
+      })
+      .parse(raw),
+  )
+  .handler(
+    async ({
+      data,
+    }): Promise<{
+      ok: boolean;
+      webViewLink?: string;
+      needsReconnect?: boolean;
+      error?: string;
+    }> => {
+      const email = await callerEmail(data.caller);
+      if (!email) return { ok: false, error: "Sign in to save to Google Drive." };
+      const { nexusBase, nexusOwner } = await import("../nexus/nexus.server");
+      const { uatToken } = await import("../nexus/nexus-write.server");
+      const base = nexusBase();
+      const owner = nexusOwner();
+      const token = uatToken();
+      if (!base || !owner || !token)
+        return {
+          ok: false,
+          error: "Huddle isn't linked to Nexus yet, so Google Drive is unavailable.",
+        };
+      try {
+        const { polishedToMarkdown, splitSubject } = await import("./polish-core");
+        const { renderMarkdownToDocx, ensureExtension } =
+          await import("../artifacts/render.server");
+        const { subject } = splitSubject(data.text);
+        const { bytes } = await renderMarkdownToDocx(polishedToMarkdown(data.text), {
+          title: subject || data.name,
+        });
+        const url = new URL(`${base}/api/polish/gdrive`);
+        url.searchParams.set("owner", owner);
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 30_000);
+        try {
+          const res = await fetch(url.toString(), {
+            method: "POST",
+            signal: ctl.signal,
+            headers: { "Content-Type": "application/json", "X-UAT-Token": token },
+            body: JSON.stringify({
+              fileName: ensureExtension(data.name, "docx"),
+              docxBase64: Buffer.from(bytes).toString("base64"),
+            }),
+          });
+          const j = (await res.json().catch(() => null)) as {
+            ok?: boolean;
+            webViewLink?: string;
+            needsReconnect?: boolean;
+            error?: string;
+          } | null;
+          if (res.ok && j?.ok) return { ok: true, webViewLink: j.webViewLink };
+          if (j?.needsReconnect)
+            return {
+              ok: false,
+              needsReconnect: true,
+              error: "Reconnect Google in Nexus Settings to allow Drive.",
+            };
+          if (res.status === 404)
+            return {
+              ok: false,
+              error: "Nexus doesn't have Google Drive saving yet (update pending).",
+            };
+          return { ok: false, error: j?.error ?? `Nexus couldn't save to Drive (${res.status}).` };
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch (e) {
+        const aborted = (e as { name?: string })?.name === "AbortError";
+        return {
+          ok: false,
+          error: aborted
+            ? "Nexus took too long to answer. Try again."
+            : "Couldn't reach Nexus. Try again or download the .docx.",
         };
       }
     },

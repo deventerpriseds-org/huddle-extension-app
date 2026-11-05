@@ -148,5 +148,58 @@ const email = BUILTIN_PROFILES[0];
   );
 }
 
+// 9. Cross-app body (POST /api/public/polish): shapes accepted / refused, identity never accepted.
+{
+  const { PolishPublicBodySchema } =
+    await import("../src/features/huddle/lib/polish/polish-schema");
+  const { findCallerAssertedIdentity } =
+    await import("../src/features/huddle/lib/cross-app/turn-gate");
+  check("public: profiles ok", PolishPublicBodySchema.safeParse({ action: "profiles" }).success);
+  check(
+    "public: polish ok",
+    PolishPublicBodySchema.safeParse({
+      action: "polish",
+      profileId: "slack",
+      request: { mode: "polish", draft: "hi" },
+    }).success,
+  );
+  check(
+    "public: polish without request refused",
+    !PolishPublicBodySchema.safeParse({ action: "polish" }).success,
+  );
+  check(
+    "public: unknown action refused",
+    !PolishPublicBodySchema.safeParse({ action: "send_email" }).success,
+  );
+  check(
+    "public: asserted identity caught",
+    findCallerAssertedIdentity({
+      action: "polish",
+      caller: { entra_email: "x@y.z" },
+      request: { mode: "polish", draft: "hi" },
+    }) !== null,
+  );
+  check(
+    "public: legit body has no identity",
+    findCallerAssertedIdentity({
+      action: "polish",
+      profileId: "slack",
+      settings: { audience: "team" },
+      request: { mode: "span", text: "a b c", start: 0, end: 1, instruction: "x" },
+    }) === null,
+  );
+}
+
+// 10. The route authenticates BEFORE it reads the body, and keeps both identity guards.
+{
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(new URL("../src/routes/api/public/polish.ts", import.meta.url), "utf8");
+  const authAt = src.indexOf("authenticateCaller(request.headers)");
+  const readAt = src.indexOf("request.json()");
+  check("route: authenticates first", authAt > -1 && readAt > -1 && authAt < readAt, `${authAt} vs ${readAt}`);
+  check("route: refuses asserted identity", src.includes("findCallerAssertedIdentity(payload)"));
+  check("route: subject is server-held", src.includes("resolveActingSubject()"));
+}
+
 console.log(fail ? `\n${fail} FAILED` : "\nall passed");
 process.exit(fail ? 1 : 0);

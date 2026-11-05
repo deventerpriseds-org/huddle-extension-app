@@ -5,19 +5,29 @@
 //             or a word document in onedrive/google drive or a fast copy/paste block so i can drop it in."
 // SUPERSEDES: nothing
 // SUPERSEDED-BY: nothing -- current
+// Google Drive (added for the ecosystem, Option A) goes through Nexus: docs/polish/CONTRACT-polish-ecosystem.md §3.
 // EVIDENCE:   reuses createGraphDraft (graph-email.server) and createArtifact + mirrorArtifactToOneDrive
 //             (artifacts.server) via lib/polish/polish.functions.ts; helpers tested in scripts/polish-core.test.ts
 //
 // Nothing here SENDS email: it only creates a draft you open and send yourself.
 
 import { useEffect, useState } from "react";
-import { ClipboardCopy, Download, ExternalLink, FileText, Mail, Type } from "lucide-react";
+import {
+  ClipboardCopy,
+  Download,
+  ExternalLink,
+  FileText,
+  HardDrive,
+  Mail,
+  Type,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { polishedToHtml, splitSubject, suggestFileName } from "../lib/polish/polish-core";
 import {
   polishDestinationsFn,
   polishEmailDraftFn,
+  polishGoogleDriveFn,
   polishWordDocFn,
 } from "../lib/polish/polish.functions";
 
@@ -88,13 +98,18 @@ export function PolishSendSheet({
   const [subject, setSubject] = useState("");
   const [fileName, setFileName] = useState("");
   const [onedrive, setOnedrive] = useState<boolean>(() => lsGet(LS_OD) !== "0");
-  const [busy, setBusy] = useState<null | "mail" | "word">(null);
+  const [busy, setBusy] = useState<null | "mail" | "word" | "gdrive">(null);
   const [mailResult, setMailResult] = useState<{ ok: boolean; msg: string; link?: string } | null>(
     null,
   );
   const [wordResult, setWordResult] = useState<{ ok: boolean; msg: string; link?: string } | null>(
     null,
   );
+  const [gdriveResult, setGdriveResult] = useState<{
+    ok: boolean;
+    msg: string;
+    link?: string;
+  } | null>(null);
 
   // Prefill from the current text each time the sheet opens.
   useEffect(() => {
@@ -103,6 +118,7 @@ export function PolishSendSheet({
     setFileName(suggestFileName(text));
     setMailResult(null);
     setWordResult(null);
+    setGdriveResult(null);
   }, [open, text]);
 
   useEffect(() => {
@@ -199,6 +215,24 @@ export function PolishSendSheet({
       });
     } catch {
       setWordResult({ ok: false, msg: "Couldn't reach Huddle. Try again." });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveGdrive = async () => {
+    if (!caller || !fileName.trim()) return;
+    setBusy("gdrive");
+    setGdriveResult(null);
+    try {
+      const r = await polishGoogleDriveFn({ data: { caller, name: fileName.trim(), text } });
+      setGdriveResult(
+        r.ok
+          ? { ok: true, msg: "Saved to Google Drive › Polish.", link: r.webViewLink }
+          : { ok: false, msg: r.error ?? "Couldn't save to Google Drive." },
+      );
+    } catch {
+      setGdriveResult({ ok: false, msg: "Couldn't reach Huddle. Try again." });
     } finally {
       setBusy(null);
     }
@@ -319,10 +353,26 @@ export function PolishSendSheet({
               </button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Saved documents appear in Files under Polish. Google Drive isn't connected to Huddle
-              yet: download the .docx and drop it into Drive.
+              Saved documents appear in Files under Polish.
             </p>
             {wordResult && <Result {...wordResult} linkLabel="Open in OneDrive" />}
+          </Section>
+
+          <Section icon={<HardDrive size={15} />} title="Google Drive">
+            <button
+              type="button"
+              className={primaryBtn}
+              onClick={saveGdrive}
+              disabled={busy !== null || !fileName.trim()}
+            >
+              <HardDrive size={14} />{" "}
+              {busy === "gdrive" ? "Saving to Drive…" : "Save to Google Drive"}
+            </button>
+            <p className="text-xs text-muted-foreground">
+              Saved as a Word file in a Polish folder, through your Google connection in Nexus. Uses
+              the file name above.
+            </p>
+            {gdriveResult && <Result {...gdriveResult} linkLabel="Open in Drive" />}
           </Section>
         </div>
       </SheetContent>

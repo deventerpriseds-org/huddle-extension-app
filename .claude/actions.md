@@ -6,8 +6,10 @@ Last updated: 2026-10-27
 - [x] Interactive prototype for approval: https://claude.ai/artifact/7MJkFX17io8FHmVWwSZCAn (polishes real text via Claude in the preview).
 - [x] Built on branch claude/tender-bardeen-g2q5ey: PolishView + polish-core + polishTextFn (OpenAI, Fast=luna / Best=terra) + Rail/bottom-bar entry + synced profiles. 19/19 offline checks (npm run test:polish), tsc 0 errors, vite build OK, local render checked desktop + phone.
 - [x] Owner add (2026-11-05): "push draft" options. Send sheet: Copy text / Copy formatted (HTML clipboard), Email DRAFT in a chosen mailbox (createGraphDraft; HUDDLE_EMAIL_FROM list = dev@, von.ellis@), Word doc (renderMarkdownToDocx -> Files/Polish -> OneDrive mirror) + Download .docx. Google Drive: not connected (journey holds Google tokens; Phase 3) -> download covers it. 26/26 offline checks; real .docx verified (bullets as Word lists).
-- [ ] Owner approves the prototype -> merge to main (auto-deploys).
+- [x] Owner approved; merged #146 (squash 08457bc); deploy-swa run 42110354027 success.
 - [ ] Owner confirms it works live on web + phone. NOT owner-confirmed.
+- [ ] ECOSYSTEM (owner chose Option A 2026-11-05): contract docs/polish/CONTRACT-polish-ecosystem.md. Huddle side on claude/tender-bardeen-g2q5ey: /api/public/polish (turn-gate auth, server-held subject; route-order guard mutation-proved FIRED), shared engine lib/polish/polish.server.ts, Send › Save to Google Drive via Nexus /api/polish/gdrive. Nexus side: background agent on nexus-hub branch claude_polish-ecosystem. NOT merged, NOT deployed.
+- [ ] Owner question (2026-11-05): why route Drive through Nexus instead of a shared app-independent function? Answered: only because Nexus holds the Google token today; proposed a neutral shared connector service as the follow-up — awaiting owner's call.
 
 ## ACT:context-and-confirm — confirm after the agent reads; agent sees widgets/cards in the 1:1 stream (2026-11-04)
 Status: 🔨 implemented on `claude_context-and-confirm`, offline-verified, NOT merged / deployed / owner-confirmed.
