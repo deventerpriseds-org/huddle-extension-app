@@ -150,3 +150,45 @@ Sources: **CM** = CommonMark 0.31.2 (§4.2 ATX headings, §4.5 fenced code, §5.
 | S-44 | `(couldn't respond - quota)` (hyphen) / `(couldn't respond – …)` (en dash) | runtime-only: the em-dash spelling | stays agent text; record it (the runtime only emits `—`) | — |
 | S-45 | `I couldn't respond earlier — sorry` / `(fallback plan: Zoom)` / `Fallback: use Zoom` | over-match negative | normal agent text, NOT a notice | FR |
 | S-46 | `Suggested reply:` / `**Suggested reply:**` / `Suggested reply` / `Here's a reply you could send:` | (C label) | the label is removed only when the full draft is removed; the last spelling is never stripped | FR |
+
+## Hypotheses: where the current branch might FAIL (to test, not verdicts)
+
+Inferred from reading the regexes in `chat-format.ts` and the MessageRow diff. Nothing below was executed.
+
+| H | AC / row | Why I suspect it |
+|---|---|---|
+| H-1 | **E-1** | The notice renders INSIDE the agent row: `AgentAvatar` and `agent.name` still draw above it (HuddleView ~1071-1098). So the agent still appears to be speaking, and the style is a second notice look beside the existing `author.kind==="system"` branch (~1064). **Strongest suspect.** |
+| H-2 | E-5 / S-12 | Single `_…_` emphasis is not parsed (only `**` bold), so the runtime's own `_(fallback: …)_` suffix shows literal underscores. Neither `noticeText` (which needs a leading `(`) nor ChatText handles it. |
+| H-3 | S-11, S-13 | `*note*` and `***x***` are not parsed, so literal asterisks show. |
+| H-4 | B-4 | `openerOnly` cuts only at a list line or a header/closing-line copy, so a prose restatement of the items is kept and duplicates the code list. |
+| H-5 | A-14 | Blank-line-separated non-list lines stay separate `<p>` blocks with a `space-y-2` gap, which is the "line break between every line" look for prose. |
+| H-6 | S-25 | The Markdown link destination `[^\s)]+` stops at the first `)`, giving a truncated href and a stray `)`. |
+| H-7 | S-21 | There is no fenced-code support: a `# Capitalised` line inside a fence becomes a heading, and a `- x` line becomes a list. |
+| H-10 | S-3 | `LIST_RE` lacks `+`. |
+| H-13 | S-19 | `QUOTE_RE` needs `> ` with a space, and trailing-space trimming turns an empty quote line into a bare `>`, which stays literal and splits the quote. |
+| H-14 | S-15 | `HEADING_RE` needs a capital or digit after `#`, so `## next steps` shows `##`. |
+| H-15 | S-36 / C-5 | EmailReplyRow now shows `normalizeChatText(ask.replyBody)`. Its greeting re-join can fold `Hi Sam,\n\nthanks…` into one line in the DRAFT box, so the display no longer matches the saved draft. |
+| H-16 | B-6 | `ensureAppendBlockDelivered` is called only at the two terminal exits (~7557, ~7570). Any earlier `return` or throw in `runHuddleTurn` (deadline, hard error) was not checked and would drop the list. That breaks "no scenario or excuse for priority message not being produced". |
+| H-18 | B-5 | When the target reply is a real reply carrying the `_(fallback: …)_` suffix and no list, `openerOnly` keeps the whole text, so the suffix lands between the opener and the block. |
+| H-20 | S-27 | The bold match is consumed before the URL alternative, so a URL inside `**…**` renders bold but not clickable. |
+| H-21 | B-7 | With `targetAgentId` unset, `ensureAppendBlockDelivered` returns silently and the block is dropped with no log. |
+
+## Goal → AC coverage
+
+- "Chat is raw text, not rich" → A-3, A-4, A-5, A-6, A-7, S-9..S-27
+- "Some messages put line breaks between every line, inconsistent" → A-1, A-2, A-14, B-1, B-2, S-4, S-38
+- "Product level" → A-8 (nothing lost), A-9/A-10 (safe), A-12/A-13 (fast, no overflow), E-1
+- B "identical every day" → B-1, B-3, B-9, B-10
+- B, plus the standing guarantee that the priority message always goes out → B-5, B-6, B-7, B-8
+- C "draft once, in a quote box, short summary" → C-1..C-6
+- E "grey system notice, not the agent speaking" → E-1..E-4
+- "Hold on D" → G-5
+- Every AC traces to a goal. G-3, G-4 and G-7 trace to the house rules (data untouched, voice untouched, prompts additive-only).
+
+## Gaps / open questions for the owner
+
+1. **A-14:** should blank-line-separated *prose* lines also be tightened, or only lists? The request reads as both. The branch appears to tighten lists only.
+2. **E-1:** should a failed-reply notice keep the agent's name (for example "Iris — couldn't respond: quota") or be fully neutral? The request says "not as the agent speaking".
+3. **A-12:** there is no performance NFR. I propose < 50 ms parse for 16k chars, and no overflow at 375 px.
+4. Neither spec (CommonMark / GFM) was opened in this pass. The spelling-table citations are from recall and need confirming by the red-team before tests are written from them.
+5. Not read: voice/TTS input, the ceremony renderer, and the rest of `runHuddleTurn` for early exits (H-16).
