@@ -1376,11 +1376,13 @@ export async function incrementApproachRevisionCount(taskId: string, userEmail: 
 /** Store the latest submitted approach without changing its status (the gate records every submission). */
 export async function recordProposedApproach(taskId: string, userEmail: string, approach: string): Promise<void> {
   await ensureBootstrapped();
+  // Upsert: an UPDATE alone silently saved nothing when no row existed yet (VERIFY-wip-e2e-pickup-fit-1 C7).
   await getPool().query(
-    `UPDATE tasks.task_engagement_state SET proposed_approach = $2, updated_at = now() WHERE task_id = $1`,
-    [taskId, approach],
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, proposed_approach)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (task_id) DO UPDATE SET proposed_approach = EXCLUDED.proposed_approach, updated_at = now()`,
+    [taskId, userEmail.toLowerCase(), approach],
   );
-  void userEmail;
 }
 
 export async function approveApproach(taskId: string, userEmail: string, approach: string): Promise<void> {

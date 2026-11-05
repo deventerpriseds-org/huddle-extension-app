@@ -43,10 +43,20 @@ const EXPLICIT_REMINDER =
  * "Obtain MGT-782 Module 3 materials"). Owner, 2026-11-05: "coursework shouldn't be assigned to the agents.
  * the router should know that during grooming." Keyed on the Nexus 📚 marker or a course code like MGT-702.
  */
-const COURSE_CODE = /\b[A-Z]{2,4}-\d{3}\b/;
+// A bare code like "UA-123", "DS-160" or "ABC-123" is NOT enough (VERIFY-wip-e2e-pickup-fit-1 C4 found
+// "Book UA-123 flight", "Complete DS-160 visa form", "Fix the ABC-123 bug" all wrongly unassigned). A code
+// counts only when it is in brackets — how Nexus writes it, "(MGT-702)" — or next to a course word.
+const COURSE_CODE_SRC = "[A-Za-z]{2,5}[- ]?\\d{3,4}";
+const COURSE_CODE_IN_BRACKETS = new RegExp(`\\(\\s*${COURSE_CODE_SRC}[^)]*\\)`);
+const COURSE_WORDS =
+  "module|seminar|checkpoint|assignment|residency|research paper|paper|course|class|lecture|syllabus|discussion|quiz|exam|midterm|homework|materials|case study|capstone";
+const COURSE_CODE_NEAR_WORD = new RegExp(
+  `\\b${COURSE_CODE_SRC}\\b[^.]{0,40}\\b(${COURSE_WORDS})\\b|\\b(${COURSE_WORDS})\\b[^.]{0,40}\\b${COURSE_CODE_SRC}\\b`,
+  "i",
+);
 export function isCoursework(title: string | null | undefined): boolean {
   const t = (title ?? "").trim();
-  return t.startsWith("📚") || COURSE_CODE.test(t);
+  return t.startsWith("📚") || COURSE_CODE_IN_BRACKETS.test(t) || COURSE_CODE_NEAR_WORD.test(t);
 }
 
 export function asksForReminder(title: string | null | undefined): boolean {

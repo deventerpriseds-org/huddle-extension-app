@@ -19,7 +19,10 @@ t("no blocking -> pass", approachVerdict({ blocking: [], suggestions: ["add more
 t("suggestions never fail a plan", approachVerdict({ blocking: [], suggestions: ["a", "b", "c", "d", "e"] }).verdict === "pass");
 t("one blocking -> revise, and it is the deficiency", (() => { const v = approachVerdict({ blocking: ["ignores the $1,500 budget"], suggestions: [] }); return v.verdict === "revise" && v.deficiencies[0] === "ignores the $1,500 budget"; })());
 t("blank blocking entries do not count", approachVerdict({ blocking: ["", "   "], suggestions: [] }).verdict === "pass");
-t("malformed reviewer output -> pass, never a phantom block", approachVerdict(null).verdict === "pass" && approachVerdict({ blocking: "x" as unknown }).verdict === "pass");
+t("missing reviewer output -> pass, never a phantom block", approachVerdict(null).verdict === "pass" && approachVerdict({}).verdict === "pass");
+t("a plain-string blocking answer IS blocking", approachVerdict({ blocking: "ignores the $1,500 budget" as unknown }).verdict === "revise");
+const tsSrc = readFileSync(`${SRC}/tasks.server.ts`, "utf8");
+t("recordProposedApproach upserts (an UPDATE alone dropped the first plan)", /recordProposedApproach[\s\S]{0,400}INSERT INTO tasks\.task_engagement_state \(task_id, user_email, proposed_approach\)[\s\S]{0,200}ON CONFLICT \(task_id\) DO UPDATE/.test(tsSrc));
 
 console.log("\n--- the plan is graded as a plan ---");
 t("plan charter says a plan has no findings yet, and that is fine", /it will not contain findings, evidence or final answers yet, and that is never a problem/.test(APPROACH_REVIEWER_CHARTER));
