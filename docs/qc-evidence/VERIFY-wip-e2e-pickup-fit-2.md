@@ -1,4 +1,4 @@
-PROGRESS: 2/7
+PROGRESS: 4/7
 
 # VERIFY wip-e2e-pickup-fit -- loop 2
 
@@ -72,3 +72,45 @@ Interpretation. The four loop-1 spellings are fixed, but the same over-match com
 1. `COURSE_CODE_SRC` allows a space between letters and digits, so any 2-5 letter word followed by a year or quantity ("the 2026", "for 2026", "Order 500", "room 101") counts as a course code.
 2. Common words in `COURSE_WORDS` (`paper`, `materials`, `discussion`, `class`, `exam`, `course`) appear in ordinary non-school titles. Also, any bracketed letters+digits counts with no course word at all.
 The year class is the most likely to happen in practice, because a word followed by a year is common in task titles. I am not proposing a fix here, only reporting what I observed.
+
+## C3 -- the approval note depends on kickAutoWorkAfterApproval's boolean, and the kick never throws -- CONFIRMED
+
+Source (tasks/approach-gate.server.ts, origin/main 30d29be0):
+- L157-169: `kickAutoWorkAfterApproval(email, run?)` races `run().then(() => true)` against an 8s timer that resolves `false`, all inside try/catch returning `false`.
+- L259: `const kicked = await kickAutoWorkAfterApproval(opts.email);` -- L266-271: `kicked ?` -> "The work is being started now: it moves to Doing immediately unless you already have a task in Doing (one at a time), in which case it is next." `:` -> "Starting it right now didn't go through, so the next automatic pass (within a few hours) starts it -- nothing else is needed from the user." Both branches are followed by the "never that they need to authorize the start" line and the fold-in.
+
+Executed (/tmp/claude-0/v2/c37.ts, the real exported function with injected `run`):
+```
+kick resolves  -> true
+kick rejects   -> false
+kick sync throw-> false
+kick hangs     -> false 8002ms
+kick late reject-> false 8002ms
+no unhandled rejection after late reject; total 17004 ms
+```
+`start-on-approval.test.ts` 36/36 also covers the two note branches.
+
+Observations, not refutations:
+- (a) On the timeout path the run is not cancelled. If it finishes after 8s, the task does start within seconds, but the note has already told the user it waits for the next pass. Wrong in the safe direction.
+- (b) The 8s timer is never cleared, so every successful kick holds a timer for 8s. Harmless.
+- (c) Outside this claim but in the same function: L182 `isStructuredWorkflowRequired(...).catch(() => false)` makes the gate fail OPEN on a config-read error. CLAUDE.md says this gate MUST fail closed, and the resolver itself returns true on error. Whether it matters depends on whether the resolver can still throw, which I did not test.
+
+## C7 -- approachVerdict treats a plain-string `blocking` as one item; recordProposedApproach upserts -- CONFIRMED
+
+Executed `approachVerdict` (/tmp/claude-0/v2/c37.ts):
+```
+plain string                   revise ["ignores the budget"]
+empty string                   pass   []
+whitespace                     pass   []
+array of non-strings [1,{a:1},null,undefined,true] -> revise ["1","[object Object]","true"]
+array of only null/undefined   pass   []
+array with blank strings       pass   []
+null blocking                  pass   []
+undefined raw / null raw       pass   []
+number blocking (3)            pass   []
+object blocking ({reason:"x"}) pass   []
+normal                         revise ["misses DoD item 2"], suggestions ["add sources"] (string suggestions also accepted)
+```
+- The plain-string case is fixed. Empty, whitespace and nullish inputs pass, which is correct (nothing blocking).
+- Residual leniency: a bare number or object `blocking` passes. These shapes are unreachable on the live path because the call uses the strict JSON schema `APPROACH_VERDICT_SCHEMA` (L50-55, `blocking: array of string`), and `callOpenAIRouter` throws on any non-OK response rather than returning null (openai-responses.server.ts L24, L54). A grader error goes to the catch path (L309+), not to a null verdict. So this is not a live pass-through. Inference, medium confidence: I did not exercise a schema-violating model output.
+- `recordProposedApproach` (tasks.server.ts L1377-1386) is now `INSERT ... ON CONFLICT (task_id) DO UPDATE SET proposed_approach = EXCLUDED.proposed_approach, updated_at = now()`. The DDL (L148-163, L173-175, L285) requires only `task_id` (PK) and `user_email`. Every added column is nullable or has a default (`user_id TEXT` nullable), so the insert branch is valid SQL against the bootstrapped schema. Read only, not executed against a DB (no DB access, per the rules).
