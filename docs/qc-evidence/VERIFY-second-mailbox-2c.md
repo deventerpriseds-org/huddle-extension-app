@@ -19,3 +19,15 @@ Status: IN PROGRESS
 
 ## C8.5 remaining getAppToken() uses — CONFIRMED-OK except C8.3
 - Observed: getAppToken callers = graph-email.server.ts:233 (mailboxAccess app-key branch), :284 createGraphDraft and :814 sendGraphEmail (both gated to the env allow-list `emailFromOptions()`, not user mailboxes), mail-subscription.server.ts:108 (C8.3), artifacts/onedrive.server.ts:47 (mailbox = data-scope email, not an Outlook connection; untouched by PR).
+
+## C8.6 delegated-token cache keyed only by mailbox — DEFECT (medium; OBSERVED by running the real module)
+- Code: graph-email.server.ts `delegatedTokenCache = new Map<string,...>()` keyed by `mb` (lower-cased mailbox); the cache hit (`if (hit && hit.until > Date.now()) return ...`) runs BEFORE the `if (!owner?.trim()) throw` refusal.
+- Probe (bun, real `mailboxAccess`, only `journey/proxy.functions` mocked to return `TOKEN-FOR-<caller>`):
+  `A: TOKEN-FOR-ownerA@enterpriseds.io | B: TOKEN-FOR-ownerA@enterpriseds.io | no-owner: TOKEN-FOR-ownerA@enterpriseds.io | journey calls: 1`
+  -> owner B is served owner A's credential; a call with NO owner is served a token instead of being refused (violates the function's own doc: "without it a non-app-key mailbox is refused rather than guessed").
+- Reachability (inferred): needs a second journey user whose connections (or a ledger row's `mailbox`) name the same outside address within the token TTL, in the same server instance. Effectively single-user today, so impact is latent; it is still an authorization bypass in the credential path. Also: a disconnect/revocation in journey is ignored for up to ~58 min (TTL - 120 s).
+
+## C8.4 screenMessage self-filter with per-message mailbox — DEFECT (low; OBSERVED)
+- inbound-email.server.ts now calls `screenMessage(m, mode, msgMailbox)`; self = `from === mailbox` only (inbound-email.ts:121).
+- Probe: mail FROM von.ellis@enterpriseds.io in the @trinnex.io inbox, mode=all -> `{"keep":true,"reason":"all mode"}`; same mail in the EDS inbox -> `{"keep":false,"reason":"self"}`.
+- So the owner's own mail sent between his two connected mailboxes (forward-to-self, CC himself) is announced back to him as inbound mail and recorded as owed; the self-filter does not consider the OTHER connected mailboxes (`mailboxes` is in scope at the call site).
