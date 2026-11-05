@@ -68,7 +68,7 @@ for (const m of ["produce", "assist", "remind"]) {
   t(`${m}: never a reminder in place of work`, /never offer a reminder in place of doing the work/i.test(h));
   t(`${m}: comparisons include reviews and forum feedback`, /reviews and forum feedback/i.test(h));
   t(`${m}: finish end to end, minimal user help`, /end to end/i.test(h) && /as little help/i.test(h));
-  t(`${m}: no unsourced company-specific promise`, /no source for/i.test(h));
+  t(`${m}: no guesses about their company presented as findings`, /Never present guesses about their company as findings/.test(h));
 }
 const assist = modeProposalHint("assist");
 t("assist: puts the exact link on the card", /link/i.test(assist) && /on the card/i.test(assist));

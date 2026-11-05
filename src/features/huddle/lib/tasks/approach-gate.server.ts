@@ -100,6 +100,25 @@ export interface ApproachGateResult {
  * keyed on (taskId, approach_revision_count) so a second concurrent dispatch in the same turn can't
  * double-grade or double-increment the counter (mirrors runReviewGate exactly).
  */
+/**
+ * Run one auto-work pass for this user right after an approach is approved, so a confirmed + approved task
+ * moves to Doing and its work turn is enqueued immediately. Bounded (8s) and never throws: the approval is
+ * already saved, and the scheduled 9/13/17 pass remains the fallback if this one is slow or fails.
+ * `run` is injectable for the offline test.
+ */
+export async function kickAutoWorkAfterApproval(
+  email: string,
+  run: () => Promise<unknown> = async () =>
+    (await import("./autowork.server")).runScheduledAutoWork({ entra_email: email }, { force: true }),
+): Promise<boolean> {
+  try {
+    const done = await Promise.race([run().then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 8_000))]);
+    return done;
+  } catch {
+    return false;
+  }
+}
+
 export async function runApproachGate(opts: {
   taskId: string;
   agentId: string;
@@ -181,11 +200,19 @@ export async function runApproachGate(opts: {
 
     if (verdict.verdict === "pass") {
       await approveApproach(opts.taskId, opts.email, opts.approach).catch(() => {});
+      // Start the work NOW, not at the next 9/13/17 auto-work pass. Owner 2026-11-05, after a confirmed +
+      // approved task sat in Up Next: "why would you as an agent follow my schedule instead of starting
+      // things as soon as they are confirmed?"
+      await kickAutoWorkAfterApproval(opts.email);
       return {
         gated: true,
         approved: true,
         escalated: false,
-        note: wasEscalated ? "re-graded after escalation — approach approved" : "approach approved",
+        note:
+          (wasEscalated ? "re-graded after escalation — approach approved" : "approach approved") +
+          ". The work is being started now: it moves to Doing immediately unless you already have a task in " +
+          "Doing (one at a time), in which case it is next. Tell the user exactly that — never that they need " +
+          "to authorize the start or that it waits for a calendar block.",
       };
     }
     // A failed RE-grade goes straight back to escalated rather than into the revise loop. The task is
