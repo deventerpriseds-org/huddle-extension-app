@@ -124,11 +124,26 @@ export async function runInboundEmailWatch(
       hour: "numeric",
       minute: "2-digit",
     });
+    // The owner's "Email alerts" toggles (Settings -> Account). A read failure falls back to the
+    // shipped defaults — this is a noise filter, not a safety gate, so the defaults are the safe side.
+    const { resolveEmailCategoryPolicy } = await import("./inbound-email");
+    let policy = resolveEmailCategoryPolicy();
+    try {
+      const { getAgentWorkflowConfig } = await import("../identity/agent-workflow-config.server");
+      policy = resolveEmailCategoryPolicy(
+        (await getAgentWorkflowConfig(ownerEmail)).email_alert_categories,
+      );
+    } catch (err) {
+      console.error(
+        "[inbound-email] category policy read failed; using defaults",
+        err instanceof Error ? err.message : err,
+      );
+    }
     const decisions: NonNullable<InboundEmailRunResult["decisions"]> = [];
     let delivered = 0;
 
     for (const m of msgs) {
-      const verdict = screenMessage(m, mode, mailbox);
+      const verdict = screenMessage(m, mode, mailbox, policy);
       const row: (typeof decisions)[number] = {
         received: m.receivedDateTime ?? null,
         fromDomain:

@@ -80,7 +80,8 @@ export type JobTypeKey =
   /** The inbound email watch: Iris tells the owner about new email from a real person that asks
    *  something of him, with a suggested reply she can save to his Drafts. Asked 2026-10-15 after she
    *  stayed silent on Amy Corriveau's (Trinnex) email. Hourly through the waking day by default. */
-  | "inboundEmail";
+  | "inboundEmail"
+  | "owedDigest";
 
 export const DEFAULT_TZ = "America/New_York";
 
@@ -107,6 +108,11 @@ export const SCHEDULING_DEFAULTS: Record<JobTypeKey, JobCadence> = {
     hours: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
     everyMinutes: 5,
   },
+  // Owed-correspondence digest: 9am and 4pm, every day. Owner 2026-11-05: "if none are due i get
+  // nothing ... if 1+ i get a reminder/report on who I still owe". A DEFAULT chosen on his behalf --
+  // changeable in Settings -> Scheduling ("Owed replies reminder"), no deploy needed. 4pm leaves time
+  // to answer before the end of the working day; a run with nothing owed sends nothing.
+  owedDigest: { tz: DEFAULT_TZ, hours: [9, 16] },
 };
 
 /** Minutes before a session to fire its own reminder. The user's ask was 60 ("iris should have a

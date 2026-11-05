@@ -21,6 +21,7 @@ import { Route as ApiPublicRunScheduleBriefRouteImport } from './routes/api/publ
 import { Route as ApiPublicRunReviewRecheckRouteImport } from './routes/api/public/run-review-recheck'
 import { Route as ApiPublicRunReviewDigestRouteImport } from './routes/api/public/run-review-digest'
 import { Route as ApiPublicRunPriorityCheckRouteImport } from './routes/api/public/run-priority-check'
+import { Route as ApiPublicRunOwedDigestRouteImport } from './routes/api/public/run-owed-digest'
 import { Route as ApiPublicRunInboundEmailRouteImport } from './routes/api/public/run-inbound-email'
 import { Route as ApiPublicRunGroomingRouteImport } from './routes/api/public/run-grooming'
 import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
@@ -92,6 +93,11 @@ const ApiPublicRunPriorityCheckRoute =
     path: '/api/public/run-priority-check',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicRunOwedDigestRoute = ApiPublicRunOwedDigestRouteImport.update({
+  id: '/api/public/run-owed-digest',
+  path: '/api/public/run-owed-digest',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicRunInboundEmailRoute =
   ApiPublicRunInboundEmailRouteImport.update({
     id: '/api/public/run-inbound-email',
@@ -141,6 +147,7 @@ export interface FileRoutesByFullPath {
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
   '/api/public/run-inbound-email': typeof ApiPublicRunInboundEmailRoute
+  '/api/public/run-owed-digest': typeof ApiPublicRunOwedDigestRoute
   '/api/public/run-priority-check': typeof ApiPublicRunPriorityCheckRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
@@ -161,6 +168,7 @@ export interface FileRoutesByTo {
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
   '/api/public/run-inbound-email': typeof ApiPublicRunInboundEmailRoute
+  '/api/public/run-owed-digest': typeof ApiPublicRunOwedDigestRoute
   '/api/public/run-priority-check': typeof ApiPublicRunPriorityCheckRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
@@ -183,6 +191,7 @@ export interface FileRoutesById {
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
   '/api/public/run-grooming': typeof ApiPublicRunGroomingRoute
   '/api/public/run-inbound-email': typeof ApiPublicRunInboundEmailRoute
+  '/api/public/run-owed-digest': typeof ApiPublicRunOwedDigestRoute
   '/api/public/run-priority-check': typeof ApiPublicRunPriorityCheckRoute
   '/api/public/run-review-digest': typeof ApiPublicRunReviewDigestRoute
   '/api/public/run-review-recheck': typeof ApiPublicRunReviewRecheckRoute
@@ -205,6 +214,7 @@ export interface FileRouteTypes {
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
     | '/api/public/run-inbound-email'
+    | '/api/public/run-owed-digest'
     | '/api/public/run-priority-check'
     | '/api/public/run-review-digest'
     | '/api/public/run-review-recheck'
@@ -225,6 +235,7 @@ export interface FileRouteTypes {
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
     | '/api/public/run-inbound-email'
+    | '/api/public/run-owed-digest'
     | '/api/public/run-priority-check'
     | '/api/public/run-review-digest'
     | '/api/public/run-review-recheck'
@@ -246,6 +257,7 @@ export interface FileRouteTypes {
     | '/api/public/run-ceremony'
     | '/api/public/run-grooming'
     | '/api/public/run-inbound-email'
+    | '/api/public/run-owed-digest'
     | '/api/public/run-priority-check'
     | '/api/public/run-review-digest'
     | '/api/public/run-review-recheck'
@@ -267,6 +279,7 @@ export interface RootRouteChildren {
   ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
   ApiPublicRunGroomingRoute: typeof ApiPublicRunGroomingRoute
   ApiPublicRunInboundEmailRoute: typeof ApiPublicRunInboundEmailRoute
+  ApiPublicRunOwedDigestRoute: typeof ApiPublicRunOwedDigestRoute
   ApiPublicRunPriorityCheckRoute: typeof ApiPublicRunPriorityCheckRoute
   ApiPublicRunReviewDigestRoute: typeof ApiPublicRunReviewDigestRoute
   ApiPublicRunReviewRecheckRoute: typeof ApiPublicRunReviewRecheckRoute
@@ -363,6 +376,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicRunPriorityCheckRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/run-owed-digest': {
+      id: '/api/public/run-owed-digest'
+      path: '/api/public/run-owed-digest'
+      fullPath: '/api/public/run-owed-digest'
+      preLoaderRoute: typeof ApiPublicRunOwedDigestRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/run-inbound-email': {
       id: '/api/public/run-inbound-email'
       path: '/api/public/run-inbound-email'
@@ -438,6 +458,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,
   ApiPublicRunGroomingRoute: ApiPublicRunGroomingRoute,
   ApiPublicRunInboundEmailRoute: ApiPublicRunInboundEmailRoute,
+  ApiPublicRunOwedDigestRoute: ApiPublicRunOwedDigestRoute,
   ApiPublicRunPriorityCheckRoute: ApiPublicRunPriorityCheckRoute,
   ApiPublicRunReviewDigestRoute: ApiPublicRunReviewDigestRoute,
   ApiPublicRunReviewRecheckRoute: ApiPublicRunReviewRecheckRoute,

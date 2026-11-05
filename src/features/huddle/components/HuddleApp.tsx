@@ -14,7 +14,7 @@ import { FallbackBanner } from "./FallbackBanner";
 import { isWorkspaceHydrated, setDeepLinkTarget, useHuddleStore, useVisibleHuddles, type View } from "../store";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { AGENT_BY_ID, type AgentId } from "../data/agents";
-import { breadcrumbToolsFor, type ChecklistPayload, type NavLink, type ToolUseEvent } from "../data/seed";
+import { breadcrumbToolsFor, type ChecklistPayload, type NavLink, type OwedDigestCard, type ToolUseEvent } from "../data/seed";
 // Lane B's widget payload contract. Type-only import (that module is dependency-free).
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
 import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
@@ -211,6 +211,7 @@ export function HuddleApp() {
           // an undeclared field is dropped silently, so a back-filled widget would arrive as text.
           priorities?: PrioritiesWidgetData;
           navLink?: NavLink;
+          owedDigest?: OwedDigestCard;
           schedule?: ScheduleWidgetData;
         }[];
         toolUses?: ToolUseEvent[];
@@ -255,6 +256,7 @@ export function HuddleApp() {
             checklist: reply.checklist,
             priorities: reply.priorities,
             navLink: reply.navLink,
+            owedDigest: reply.owedDigest,
             schedule: reply.schedule,
             toolUses: t.toolUses ? breadcrumbToolsFor(reply.agentId, t.toolUses) : undefined,
           });

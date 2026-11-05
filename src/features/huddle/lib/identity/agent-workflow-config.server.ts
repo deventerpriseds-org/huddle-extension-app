@@ -59,6 +59,10 @@ ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS email_send_a
 -- sign-in primary) => auto, anything else => on-request. An address in NEITHER is a third party. The
 -- map is an OVERRIDE layer, so the common case needs no row in it at all.
 ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS email_self_tiers JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- Owner 2026-11-05: which KINDS of automated mail Iris tells him about (and so can count as owed) --
+-- events, community notices, bills, bookings, service notices. {category: {on, domains[]}}; a
+-- category absent here takes its shipped default from inbound-email.ts EMAIL_CATEGORIES.
+ALTER TABLE identity.agent_workflow_config ADD COLUMN IF NOT EXISTS email_alert_categories JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- OpenAI BUILT-IN tools (code_interpreter + image_generation) — what lets an agent produce a real
 -- .docx/.pptx/.xlsx/.csv/.png instead of only markdown. Same default+per-agent-override shape as the
@@ -115,6 +119,8 @@ export interface AgentWorkflowConfig {
   email_send_agent_overrides: Record<string, boolean>;
   /** D4b per-address self-send policy: address -> 'auto' | 'on-request' | 'excluded'. */
   email_self_tiers: Record<string, string>;
+  /** Which kinds of automated mail Iris alerts on: category id -> { on?, domains? } (inbound-email.ts). */
+  email_alert_categories: Record<string, { on?: boolean; domains?: string[] }>;
   /** Agents may use OpenAI's built-in code_interpreter + image_generation — i.e. may produce real
    *  .docx/.pptx/.xlsx/.png files rather than only markdown. Defaults to TRUE (cost gate, not a
    *  safety gate — see the column comment in BOOTSTRAP_SQL). */
@@ -139,6 +145,7 @@ const DEFAULT_CONFIG: AgentWorkflowConfig = {
   email_send_enabled: false,
   email_send_agent_overrides: {},
   email_self_tiers: {},
+  email_alert_categories: {},
   // ON by default: a user with no config row must be able to produce real documents, because the
   // alternative is the agent telling them it can only write markdown. Cost gate, not a safety gate.
   builtin_tools_enabled: true,
@@ -160,19 +167,20 @@ export async function getAgentWorkflowConfig(email: string): Promise<AgentWorkfl
     email_send_enabled: boolean;
     email_send_agent_overrides: Record<string, boolean>;
     email_self_tiers: Record<string, string>;
+    email_alert_categories: Record<string, { on?: boolean; domains?: string[] }>;
     builtin_tools_enabled: boolean;
     builtin_tools_agent_overrides: Record<string, boolean>;
   }>(
     userId
       ? `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides,
-                 email_send_enabled, email_send_agent_overrides, email_self_tiers,
+                 email_send_enabled, email_send_agent_overrides, email_self_tiers, email_alert_categories,
                  builtin_tools_enabled, builtin_tools_agent_overrides
            FROM identity.agent_workflow_config
           WHERE user_id = $1 OR (user_id IS NULL AND lower(email) = ANY($2))
           ORDER BY (user_id IS NOT NULL) DESC, updated_at DESC
           LIMIT 1`
       : `SELECT default_required, agent_overrides, default_caps, agent_cap_overrides,
-                 email_send_enabled, email_send_agent_overrides, email_self_tiers,
+                 email_send_enabled, email_send_agent_overrides, email_self_tiers, email_alert_categories,
                  builtin_tools_enabled, builtin_tools_agent_overrides
            FROM identity.agent_workflow_config WHERE lower(email) = lower($1) LIMIT 1`,
     userId ? [userId, emails] : [email],
@@ -186,6 +194,7 @@ export async function getAgentWorkflowConfig(email: string): Promise<AgentWorkfl
     email_send_enabled: r.rows[0].email_send_enabled === true,
     email_send_agent_overrides: r.rows[0].email_send_agent_overrides ?? {},
     email_self_tiers: r.rows[0].email_self_tiers ?? {},
+    email_alert_categories: r.rows[0].email_alert_categories ?? {},
     // `!== false` (not `=== true`) so a row that predates the column — where the driver hands back
     // null/undefined rather than the column default — keeps the ON default instead of silently
     // disabling real-document output for the one user who has a config row.
@@ -212,6 +221,7 @@ export async function setAgentWorkflowConfig(
     email_send_agent_overrides:
       patch.email_send_agent_overrides ?? current.email_send_agent_overrides,
     email_self_tiers: patch.email_self_tiers ?? current.email_self_tiers,
+    email_alert_categories: patch.email_alert_categories ?? current.email_alert_categories,
     builtin_tools_enabled: patch.builtin_tools_enabled ?? current.builtin_tools_enabled,
     builtin_tools_agent_overrides:
       patch.builtin_tools_agent_overrides ?? current.builtin_tools_agent_overrides,
@@ -222,8 +232,8 @@ export async function setAgentWorkflowConfig(
     `INSERT INTO identity.agent_workflow_config
        (email, default_required, agent_overrides, default_caps, agent_cap_overrides, user_id,
         email_send_enabled, email_send_agent_overrides, email_self_tiers,
-        builtin_tools_enabled, builtin_tools_agent_overrides, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+        builtin_tools_enabled, builtin_tools_agent_overrides, email_alert_categories, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
      ON CONFLICT (email) DO UPDATE SET
        default_required=EXCLUDED.default_required, agent_overrides=EXCLUDED.agent_overrides,
        default_caps=EXCLUDED.default_caps, agent_cap_overrides=EXCLUDED.agent_cap_overrides,
@@ -232,6 +242,7 @@ export async function setAgentWorkflowConfig(
        email_self_tiers=EXCLUDED.email_self_tiers,
        builtin_tools_enabled=EXCLUDED.builtin_tools_enabled,
        builtin_tools_agent_overrides=EXCLUDED.builtin_tools_agent_overrides,
+       email_alert_categories=EXCLUDED.email_alert_categories,
        user_id=COALESCE(EXCLUDED.user_id, identity.agent_workflow_config.user_id), updated_at=now()`,
     [
       email,
@@ -245,6 +256,7 @@ export async function setAgentWorkflowConfig(
       JSON.stringify(next.email_self_tiers),
       next.builtin_tools_enabled,
       JSON.stringify(next.builtin_tools_agent_overrides),
+      JSON.stringify(next.email_alert_categories),
     ],
   );
   return next;
@@ -274,7 +286,10 @@ export async function getWorkflowCaps(email: string, agentId: string): Promise<W
  * unconfirmed work into review is not — so when in doubt, require the confirm. The error is logged
  * (previously swallowed), so a recurring config failure is visible instead of silently permissive.
  */
-export async function isStructuredWorkflowRequired(email: string, agentId: string): Promise<boolean> {
+export async function isStructuredWorkflowRequired(
+  email: string,
+  agentId: string,
+): Promise<boolean> {
   try {
     const cfg = await getAgentWorkflowConfig(email);
     const override = cfg.agent_overrides[agentId];

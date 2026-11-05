@@ -5,9 +5,13 @@ import type { AgentWorkflowConfig } from "./agent-workflow-config.server";
 // Client-callable server fns for the "required vs discretionary" WIP toggle (Settings → Account).
 // Mirrors user-context.functions.ts's caller-resolution pattern exactly.
 
-const Caller = z.object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() }).optional();
+const Caller = z
+  .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
+  .optional();
 
-async function callerEmail(caller: { entra_object_id?: string; entra_email?: string } | undefined): Promise<string | null> {
+async function callerEmail(
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+): Promise<string | null> {
   if (!caller?.entra_email) return null;
   const { resolveTaskEmail } = await import("../journey/identity");
   return (await resolveTaskEmail(caller)) ?? caller.entra_email;
@@ -31,6 +35,16 @@ const ConfigInput = z.object({
   // one — same table, same server fn, same per-agent override shape as the caps above.
   builtin_tools_enabled: z.boolean().optional(),
   builtin_tools_agent_overrides: z.record(z.string(), z.boolean()).optional(),
+  // Which kinds of automated mail Iris alerts on (inbound-email.ts EMAIL_CATEGORIES). Same surface.
+  email_alert_categories: z
+    .record(
+      z.string().max(32),
+      z.object({
+        on: z.boolean().optional(),
+        domains: z.array(z.string().min(1).max(253)).max(100).optional(),
+      }),
+    )
+    .optional(),
 });
 
 export const getMyWorkflowConfigFn = createServerFn({ method: "POST" })

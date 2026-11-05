@@ -3,7 +3,7 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
-import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
+import type { ChecklistPayload, HuddleMessage, NavLink, OwedDigestCard, SuggestedTaskDraft, TaskLane } from "../data/seed";
 // The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
 // and the reply DTOs are shared with the client bundle.
@@ -285,6 +285,27 @@ const Input = z.object({
     .object({
       view: z.enum(["priorities", "schedule", "board", "artifacts"]),
       label: z.string().min(1).max(60),
+    })
+    .optional(),
+  // The owed-correspondence digest (lib/email/owed-digest.server.ts): the still-owed emails as a list
+  // card with Dismiss per row, attached to the TARGET agent's reply from the payload -- like navLink --
+  // so it is there whatever the model does. Display-only; Dismiss re-reads chat.email_replies by id.
+  owedDigest: z
+    .object({
+      total: z.number().int().min(0).max(100_000),
+      items: z
+        .array(
+          z.object({
+            emailId: z.string().max(64),
+            fromName: z.string().max(300),
+            fromAddress: z.string().max(320),
+            subject: z.string().max(500),
+            receivedAt: z.string().max(64).nullable(),
+            drafted: z.boolean(),
+            draftWebLink: z.string().max(2000).optional(),
+          }),
+        )
+        .max(50),
     })
     .optional(),
   // A live-ceremony BARGE-IN answered synchronously (the client's runBargeSequence, not the durable
@@ -640,6 +661,7 @@ type TurnResumeState = {
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
     navLink?: NavLink;
+    owedDigest?: OwedDigestCard;
     schedule?: ScheduleWidgetData;
   }[];
   journeyTaskUpdates: import("./journey/types").JourneyTask[];
@@ -898,6 +920,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
     navLink?: NavLink;
+    owedDigest?: OwedDigestCard;
     schedule?: ScheduleWidgetData;
   };
 
@@ -7026,6 +7049,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       priorities: replyPriorities,
       schedule: replySchedule,
       navLink: data.navLink && nextId === data.targetAgentId ? data.navLink : undefined,
+      owedDigest: data.owedDigest && nextId === data.targetAgentId ? data.owedDigest : undefined,
     });
     spoken.add(nextId);
 
@@ -7269,6 +7293,26 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       agentId: target,
       text: `Hello Sir, I couldn't finish writing this one up just now — the "${link.label}" button below takes you straight there.`,
       navLink: link,
+    });
+  };
+
+  // Same guarantee for the owed-correspondence digest card: a scheduled digest whose model reply timed
+  // out or came back empty must still put the list (and its Dismiss buttons) in front of the owner.
+  const ensureOwedDigestDelivered = () => {
+    const card = data.owedDigest;
+    const target = data.targetAgentId;
+    if (!card || !target || card.items.length === 0) return;
+    const i = replies.findIndex((r) => r.agentId === target);
+    if (i >= 0) {
+      if (!replies[i].owedDigest) replies[i] = { ...replies[i], owedDigest: card };
+      return;
+    }
+    replies.push({
+      agentId: target,
+      text:
+        `Hello Sir, you still owe ${card.total} email ${card.total === 1 ? "reply" : "replies"} — they're listed ` +
+        `below. Tap Dismiss on any you've already handled or don't plan to answer.`,
+      owedDigest: card,
     });
   };
 
@@ -7532,6 +7576,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     }
     ensureNotSilentOnRealWork();
     ensureNavLinkDelivered();
+    ensureOwedDigestDelivered();
     await ensureProduceOfferDelivered();
     try {
       await turnStore.saveTurnChunk(turnId, presentedReplies(), null, true, finalResult());
@@ -7544,6 +7589,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 
   ensureNotSilentOnRealWork();
   ensureNavLinkDelivered();
+  ensureOwedDigestDelivered();
   await ensureProduceOfferDelivered();
   persistResearchedMemory();
   return finalResult();
@@ -8229,6 +8275,7 @@ type TurnUpdateDTO = {
     checklist?: ChecklistPayload;
     priorities?: PrioritiesWidgetData;
     navLink?: NavLink;
+    owedDigest?: OwedDigestCard;
     schedule?: ScheduleWidgetData;
   }[];
   result: HuddleTurnResult | null;
@@ -8273,6 +8320,7 @@ export const getTurnUpdates = createServerFn({ method: "POST" })
           checklist?: ChecklistPayload;
           priorities?: PrioritiesWidgetData;
           navLink?: NavLink;
+    owedDigest?: OwedDigestCard;
           schedule?: ScheduleWidgetData;
         }[],
         result: (t.result ?? null) as HuddleTurnResult | null,
@@ -8343,6 +8391,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         checklist?: ChecklistPayload;
         priorities?: PrioritiesWidgetData;
         navLink?: NavLink;
+    owedDigest?: OwedDigestCard;
         schedule?: ScheduleWidgetData;
       }[];
       // Tool-use breadcrumbs for away/cross-device turns — the client filters per agent + drops tool_catalog.
@@ -8384,6 +8433,7 @@ export const getAllTurnUpdates = createServerFn({ method: "POST" })
         checklist?: ChecklistPayload;
         priorities?: PrioritiesWidgetData;
         navLink?: NavLink;
+    owedDigest?: OwedDigestCard;
         schedule?: ScheduleWidgetData;
       }[],
       toolUses: ((t.result as { toolUses?: unknown } | null)?.toolUses ?? undefined) as

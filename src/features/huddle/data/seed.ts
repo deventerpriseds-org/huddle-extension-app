@@ -7,6 +7,25 @@ import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
 /** A button under an agent message that switches the app to one of its tabs (owner, 2026-10-16:
  *  "she can do so with a button that deep links to the priority tab in the app instead of embedded
  *  priority widget"). Only views the app actually has; the renderer ignores anything else. */
+/** One still-owed email on the owed-correspondence digest card (lib/email/owed-digest.ts). Display
+ *  only: Dismiss sends ONLY emailId and the server re-reads chat.email_replies, ownership-checked. */
+export interface OwedDigestItem {
+  emailId: string;
+  fromName: string;
+  fromAddress: string;
+  subject: string;
+  receivedAt: string | null;
+  /** A reply draft is saved in Outlook but not sent yet -- still owed. */
+  drafted: boolean;
+  draftWebLink?: string;
+}
+
+/** The owed-correspondence digest card under Iris's reminder. `total` may exceed items.length. */
+export interface OwedDigestCard {
+  items: OwedDigestItem[];
+  total: number;
+}
+
 export interface NavLink {
   view: "priorities" | "schedule" | "board" | "artifacts";
   label: string;
@@ -93,6 +112,8 @@ export interface HuddleMessage {
   schedule?: ScheduleWidgetData;
   // A tab-switch button under this message (see NavLink). Absent on every other message → no button.
   navLink?: NavLink;
+  // The owed-correspondence digest list (Dismiss per row). Absent on every other message.
+  owedDigest?: OwedDigestCard;
 }
 
 export interface ChecklistRow {
