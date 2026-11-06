@@ -4941,3 +4941,10 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [x] Independent verification wip-e2e-pickup-fit: loop 1 REFUTED C6 (+caveats C3/C4/C7) -> fixed #144; loop 2 REFUTED C4 (+gate fail-open) -> fixed #145; loop 3 VERDICT: CONFIRMED (C1-C7 + fail-closed). Evidence docs/qc-evidence/VERIFY-wip-e2e-pickup-fit-{1,2,3}.md.
 - [ ] Row (parallel lane, not blocking): isCoursework is a title regex — loop 3 measured recall 16->7 of 25 realistic coursework titles and 26/26 constructed adversarial false positives; the owner's real examples are all caught. Better signal is data (Nexus 📚 sync / the real course list; agents.ts:226-283 keeps a separate coursework word list). File: src/features/huddle/lib/tasks/workability.ts.
 - [ ] Row: approach-gate.server.ts ~335 — a grader-call error on a FRESH approach still returns approved:true for that turn (documented, pre-existing).
+
+## ACT:chat-format — clean, consistent chat message layout (owner-approved A, B, C, E; D held, 2026-11-05)
+- [x] Diagnosis: Iris's 29 messages 11-03..05 (azure-pg-query run 42105101844). Same brief spaced two ways; raw `**bold**`; four "N more" phrasings; draft + tally in prose; quota error as Iris. Cause: HuddleView rendered `{m.text}` raw + layout delegated to the model.
+- [x] A renderer (`lib/chat-format.ts`, `components/ChatText.tsx`); B code-built brief/priority lists (`appendBlock`); C draft only in the card; E failure replies as grey notices. Commits aad39f4, 0a38101; 5 guards mutation-FIRED.
+- [ ] Independent verifier (docs/qc-evidence/VERIFY-chat-format-1.md) -> merge -> deploy -> owner confirms on his phone/browser.
+- [ ] D (long research -> document + short summary) HELD: owner will judge after using the cleaned-up layout.
+- [ ] Watch: with a reply card, a model that skips propose_email_reply now leaves NO draft in the prose (card says "No suggested reply yet — tap Edit first").

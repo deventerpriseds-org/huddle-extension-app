@@ -54,6 +54,8 @@ import {
 } from "../lib/huddle.functions";
 import { uploadChatAttachmentFn } from "../lib/artifacts/attachments.functions";
 import { userTurnTs } from "../lib/turn-identity";
+import { noticeText, stripRepeatedDraft } from "../lib/chat-format";
+import { ChatText } from "./ChatText";
 import {
   anchoredScrollTop,
   createFollowState,
@@ -969,10 +971,10 @@ function EmailReplyRow({ m }: { m: HuddleMessage }) {
           Iris's prose having arrived (2026-10-15: her reply timed out and only the card survived). */}
       {ask.replyBody ? (
         <blockquote
-          className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap border-l-2 pl-2 text-xs text-muted-foreground"
+          className="mt-1.5 max-h-60 overflow-y-auto whitespace-pre-wrap border-l-2 pl-3 text-[13px] leading-relaxed text-foreground"
           data-testid="email-reply-body"
         >
-          {ask.replyBody}
+          {ask.replyBody /* exactly what Save puts in Drafts — never reformatted */}
         </blockquote>
       ) : (
         <p className="mt-1.5 text-[11px] text-muted-foreground">
@@ -1067,7 +1069,16 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
     );
   }
   const agent = AGENT_BY_ID[m.author.agentId as AgentId] ?? AGENTS[0];
+  // A reply the RUNTIME wrote because the model failed (quota outage / model unreachable) is a system
+  // notice, not the agent speaking (owner, 2026-11-05) — its TEXT is shown as a grey notice. The row
+  // itself stays, because the runtime deliberately attaches the email card / nav button / confirm row
+  // to failure replies (2026-10-15: Amy's alert lost its buttons when Iris timed out).
+  const notice = noticeText(m.text);
   const isBriefing = m.isBriefing;
+  // The reply card under an email alert shows the draft itself; drop the copy from the prose.
+  const bodyText = m.emailReply?.replyBody
+    ? stripRepeatedDraft(m.text, m.emailReply.replyBody)
+    : m.text;
   return (
     <div className="flex gap-3">
       <AgentAvatar agent={agent} size="md" />
@@ -1087,7 +1098,7 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
         </div>
         <div
           className={cn(
-            "mt-1 whitespace-pre-wrap text-[14px] leading-relaxed text-foreground",
+            "mt-1 text-[14px] leading-relaxed text-foreground",
             isBriefing && "rounded-xl border border-hairline bg-surface p-4 shadow-soft",
           )}
         >
@@ -1108,7 +1119,16 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
               </button>
             </div>
           )}
-          {m.text}
+          {notice ? (
+            <div
+              className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
+              data-testid="agent-notice"
+            >
+              {notice}
+            </div>
+          ) : (
+            <ChatText text={bodyText} />
+          )}
         </div>
         {m.artifacts && m.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">

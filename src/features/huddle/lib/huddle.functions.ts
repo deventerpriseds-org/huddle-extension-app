@@ -3,6 +3,7 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
+import { joinOpenerAndBlock } from "./chat-format";
 import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
 // The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
@@ -287,6 +288,12 @@ const Input = z.object({
       label: z.string().min(1).max(60),
     })
     .optional(),
+  // A CODE-BUILT block (the scheduled brief's / priority check's list) appended under the TARGET agent's
+  // opening line — so the list layout is identical every run instead of re-invented by the model
+  // (owner, 2026-11-05). See ensureAppendBlockDelivered.
+  // Capped exactly like internal text (INTERNAL_TEXT_MAX): a payload over the cap fails the WHOLE durable
+  // turn. The producers also bound their own sections (BLOCK_MAX_ITEMS), so a busy week stays well under.
+  appendBlock: z.string().max(INTERNAL_TEXT_MAX).optional(),
   // A live-ceremony BARGE-IN answered synchronously (the client's runBargeSequence, not the durable
   // ceremony queue). When set on a group turn, the responder the router picks gets the existing
   // bargeDirective() layered onto its scene — "the user just cut into a live stand-up, address them
@@ -7272,6 +7279,23 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     });
   };
 
+  // A turn whose payload carries an appendBlock (the scheduled brief / priority check) ends with that
+  // code-built list under the target agent's opening line. The model is told to write ONLY the opener;
+  // joinOpenerAndBlock keeps just its text before any list it wrote anyway, so nothing shows twice. If
+  // the model produced nothing (timeout, quota notice), the block still goes out under "Hello Sir,".
+  const ensureAppendBlockDelivered = () => {
+    const block = data.appendBlock?.trim();
+    const target = data.targetAgentId;
+    if (!block || !target) return;
+    const i = replies.findIndex((r) => r.agentId === target);
+    if (i >= 0) {
+      if (replies[i].text.includes(block)) return;
+      replies[i] = { ...replies[i], text: joinOpenerAndBlock(replies[i].text, block) };
+      return;
+    }
+    replies.push({ agentId: target, text: joinOpenerAndBlock("", block) });
+  };
+
   // A deliverable answered now (the deep-1:1 hybrid) ends with the produce offer. Recorded as a pending
   // offer ONLY when the line actually landed on a reply, so an offer the user never saw can never be
   // "accepted" by their next message.
@@ -7531,6 +7555,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       return { ...finalResult(), partial: true };
     }
     ensureNotSilentOnRealWork();
+    ensureAppendBlockDelivered();
     ensureNavLinkDelivered();
     await ensureProduceOfferDelivered();
     try {
@@ -7543,6 +7568,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   }
 
   ensureNotSilentOnRealWork();
+  ensureAppendBlockDelivered();
   ensureNavLinkDelivered();
   await ensureProduceOfferDelivered();
   persistResearchedMemory();

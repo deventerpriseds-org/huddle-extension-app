@@ -22,6 +22,7 @@
 import type { AgentId } from "../../data/agents";
 import type { WidgetTaskRow } from "./widgets.server";
 import type { BriefEdition } from "./schedule-brief.server";
+import { bulletSection } from "../chat-format";
 
 /** Iris owns this. Her message carries an "Open Priorities" button (PRIORITY_CHECK_NAV_LINK). */
 export const PRIORITY_CHECK_OWNER: AgentId = "iris-chase";
@@ -94,7 +95,6 @@ const REPLY_LINE = `He can also just reply to you with what he wants to work on 
 /** The chat shows Iris's text as-is (whitespace-pre-wrap, no markdown), so line breaks are the layout
  *  and markdown symbols would show literally. */
 const PLAIN_TEXT_RULE = `Use plain text only: real line breaks for layout, "• " for list items, no ** or # or other markdown.`;
-const PRIORITY_LAYOUT = `- first line: "Hello Sir, here are your top priorities:"`;
 export function priorityCheckDirective(s: PriorityCheckSummary): string {
   // EMPTY BAND STILL SENDS (owner, 2026-10-15: "...and to confirm prioritization ahead of scheduling
   // the next day's build"). The 8pm run on 2026-10-15 found 0 priorities and sent NOTHING, so the
@@ -131,17 +131,37 @@ export function priorityCheckDirective(s: PriorityCheckSummary): string {
     `SCHEDULED PRIORITY CHECK (${s.edition}). The owner has ${s.count} open priorit${s.count === 1 ? "y" : "ies"}` +
     `${flags.length ? ` — ${flags.join(", ")}` : ""}. ${when}${named ? ` ${named}` : ""}\n\n` +
     `${BUTTON_LINE} ${REPLY_LINE}\n\n` +
-    `Write it starting "Hello Sir," in your own voice, laid out as SEPARATE SHORT LINES (owner, ` +
-    `2026-10-28: one long paragraph reads "smashed together"), in this order:\n` +
-    `${PRIORITY_LAYOUT}\n` +
-    `- the top priorities above, ONE PER LINE, each line starting "• "` +
-    `${more > 0 ? `, then a line saying there are ${more} more` : ""}\n` +
-    `${flags.length ? "- a blank line, then ONE short line with the flagged counts above\n" : ""}` +
-    `- a blank line, then ONE short line asking whether these are still right, saying he can confirm, ` +
-    `reorder or fix anything stale with the button below, or just reply with what he wants to work on.\n` +
+    `Write exactly ONE short line in your own voice, starting "Hello Sir," that introduces his top ` +
+    `priorities (for example "Hello Sir, here are your top priorities:"). Do NOT list the priorities, the ` +
+    `counts or the closing question — the app adds them under your line, one per line. ` +
     `${PLAIN_TEXT_RULE} ` +
     `Do NOT call any tool, do not list anything beyond the names given, and do not invent anything not stated here.`
   );
+}
+
+/**
+ * THE LIST IS BUILT HERE, NOT BY THE MODEL (owner, 2026-11-05: the 8pm/6am checks said "…and 7 more",
+ * "• 5 more", "There are 5 more." and "5 more" on four runs). Iris writes one opening line; the turn
+ * runner appends this under it (payload.appendBlock). Undefined for an empty band, which stays a
+ * short model-written message.
+ */
+export function priorityAppendBlock(s: PriorityCheckSummary): string | undefined {
+  if (s.count === 0) return undefined;
+  const top = (s.top ?? []).slice(0, PRIORITY_CHECK_NAMED);
+  const more = s.count - top.length;
+  const list = bulletSection("", top).replace(/^\n/, "");
+  const flags: string[] = [];
+  if (s.overdue) flags.push(`${s.overdue} past due`);
+  if (s.blocked) flags.push(`${s.blocked} blocked`);
+  if (s.unscheduled) flags.push(`${s.unscheduled} not yet scheduled`);
+  const total =
+    `${s.count} open priorit${s.count === 1 ? "y" : "ies"}` +
+    `${more > 0 ? ` (${more} more not shown)` : ""}` +
+    `${flags.length ? `: ${flags.join(", ")}` : ""}.`;
+  const ask =
+    `Are these still right? Confirm, reorder or fix anything stale with the "${PRIORITY_CHECK_NAV_LINK.label}" ` +
+    `button below, or just reply with what you want to work on.`;
+  return [list, total, ask].filter(Boolean).join("\n\n");
 }
 
 /** Idempotency: one push per edition per local day. A retry or overlapping tick re-uses the id, so
@@ -163,6 +183,8 @@ export interface PriorityCheckResult {
   skipped?: "empty";
   turnId?: string;
   directive?: string;
+  /** On a dryRun, the code-built list appended under Iris's opening line. */
+  appendBlock?: string;
   error?: string;
 }
 
@@ -191,10 +213,11 @@ export async function runPriorityCheck(
     const band = buildPrioritiesBand(rows, tz, nowMs, order);
     const summary = summarizeBand(band, edition, todayKey, (iso) => localDateKey(iso, tz));
     const directive = priorityCheckDirective(summary);
+    const appendBlock = priorityAppendBlock(summary);
     const turnId = priorityCheckTurnId(edition, todayKey, opts.runId);
     const base: PriorityCheckResult = { ok: true, edition, todayKey, summary, turnId };
 
-    if (opts.dryRun) return { ...base, delivered: false, directive };
+    if (opts.dryRun) return { ...base, delivered: false, directive, appendBlock };
     // An EMPTY band is still sent (see priorityCheckDirective): "nothing prioritised" is exactly the
     // thing the owner needs to hear before the planner runs. It used to return skipped:"empty" here.
 
@@ -216,6 +239,8 @@ export async function runPriorityCheck(
       internal: true,
       // The "Open Priorities" button, attached to Iris's reply by the turn runner (not by the model).
       navLink: PRIORITY_CHECK_NAV_LINK,
+      // The list under Iris's opening line, built in code (priorityAppendBlock).
+      ...(appendBlock ? { appendBlock } : {}),
       pushStyle: priorityCheckPush(edition),
     };
     const { enqueueTurn } = await import("./turns.server");

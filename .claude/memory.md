@@ -117,6 +117,11 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Chat message layout: rendered lists/bold/links + code-built brief lists (2026-11-05, branch claude/vibrant-allen-p52snq, NOT merged, NOT deployed, NOT owner-confirmed)
+- Agent bubbles render via `ChatText` (`lib/chat-format.ts` = the ONE set of layout rules: normalize whitespace, parse blocks, `noticeText`, `stripRepeatedDraft`, `joinOpenerAndBlock`). User bubbles unchanged.
+- Scheduled brief + priority check: the list is CODE-BUILT (`briefDeliveryPlan(...).appendBlock`, `priorityAppendBlock`) and attached by `ensureAppendBlockDelivered` at BOTH turn endings, before `ensureNavLinkDelivered`. The model writes one opener only. Do not move layout back into prompt prose — that is what made the same brief come out spaced two different ways.
+- Email alerts with a card: draft lives only in the card. D (research -> artifact) HELD by owner.
+
 ## Polish — text cleanup tool (2026-11-05; #146 MERGED squash 08457bc, deploy-swa run 42110354027 SUCCESS; NOT owner-confirmed live)
 - ECOSYSTEM (owner chose Option A): contract `docs/polish/CONTRACT-polish-ecosystem.md`. LIVE since 2026-11-05: huddle #148 (8986387) + nexus-hub #176 (2560f21) merged + deployed; live UAT Nexus /polish 3/3 (run 42128580189) and Huddle 7/7 (run 42128584455). Huddle `/api/public/polish` (turn-gate auth); Huddle Send › Google Drive → Nexus `/api/polish/gdrive`; Nexus /polish → Huddle engine. Untested live: email draft, OneDrive, Drive save, docx download. NOT owner-confirmed.
 - Owner (2026-11-05): apps must not depend on each other. Approved incremental: fastest path first (done), THEN a shared tools/connections service. Hosting choice pending (recommended: new `eds-tools` Azure Functions service holding the Polish engine + Google/Microsoft connections).
