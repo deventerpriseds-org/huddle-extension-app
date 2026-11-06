@@ -54,7 +54,7 @@ import {
 } from "../lib/huddle.functions";
 import { uploadChatAttachmentFn } from "../lib/artifacts/attachments.functions";
 import { userTurnTs } from "../lib/turn-identity";
-import { normalizeChatText, noticeText, stripRepeatedDraft } from "../lib/chat-format";
+import { noticeText, stripRepeatedDraft } from "../lib/chat-format";
 import { ChatText } from "./ChatText";
 import {
   anchoredScrollTop,
@@ -974,7 +974,7 @@ function EmailReplyRow({ m }: { m: HuddleMessage }) {
           className="mt-1.5 max-h-60 overflow-y-auto whitespace-pre-wrap border-l-2 pl-3 text-[13px] leading-relaxed text-foreground"
           data-testid="email-reply-body"
         >
-          {normalizeChatText(ask.replyBody)}
+          {ask.replyBody /* exactly what Save puts in Drafts — never reformatted */}
         </blockquote>
       ) : (
         <p className="mt-1.5 text-[11px] text-muted-foreground">

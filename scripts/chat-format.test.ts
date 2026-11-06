@@ -115,6 +115,27 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   const ml = parseInline("[docs](https://a.io/p_(q)) after").find((x) => x.t === "link") as { href: string } | undefined;
   check("V22 a [label](url) link keeps balanced parentheses in its url", ml?.href === "https://a.io/p_(q)", ml);
   check("V23 and no stray ')' is left behind", JSON.stringify(parseInline("[docs](https://a.io/p_(q)) after").at(-1)) === JSON.stringify({ t: "text", v: " after" }));
+  // independent ACs (docs/qc-evidence/AC-chat-format.md)
+  const em = (x: string) => parseInline(x).filter((p) => p.t === "em").map((p) => (p as { v: string }).v);
+  check("AC-S12 *note* and _note_ are italic", JSON.stringify(em("a *note* and _this_ here")) === '["note","this"]', em("a *note* and _this_ here"));
+  check("AC-S12b the runtime's _(fallback: …)_ suffix is italic, not literal underscores", JSON.stringify(em("Done. _(fallback: router keyword)_")) === '["(fallback: router keyword)"]');
+  for (const neg of ["2*3*4 = 24", "a_b_c snake_case", "call __init__ now", "5 * 3 = 15", "file_name_v2.txt"])
+    check(`AC-S12n '${neg}' has no italics`, em(neg).length === 0, em(neg));
+  check("AC-S3 '+ item' is a bullet", parseChatBlocks("+ one\n+ two")[0].t === "ul");
+  check("AC-S14 a lower-case '## today' is still a heading", parseChatBlocks("## today\nbody")[0].t === "h");
+  check("AC-S19 an empty '>' line stays inside the quote", parseChatBlocks("> a\n>\n> b").length === 1);
+  const fenced = parseChatBlocks("Run:\n```\n# not a heading\n- not a list\n```\nDone.");
+  check("AC-S21 a code fence is shown as-is, not read as heading/list", fenced.map((b) => b.t).join(",") === "p,pre,p" && (fenced[1] as { text: string }).text === "# not a heading\n- not a list", fenced);
+  const big = ("• item with **bold** and https://a.io/x_(y) link\n\n").repeat(320).slice(0, 16000);
+  const t0 = performance.now();
+  parseChatBlocks(big);
+  const ms = performance.now() - t0;
+  check(`AC-A12 a 16,000-char message parses in under 50 ms (${ms.toFixed(1)} ms)`, ms < 50);
+  const hv2 = readFileSync("src/features/huddle/components/HuddleView.tsx", "utf8");
+  check("AC-C5 the card shows the saved draft exactly (no reformatting)", /\{ask\.replyBody \/\* exactly what Save puts in Drafts/.test(hv2) && !/normalizeChatText\(ask\.replyBody\)/.test(hv2));
+  const cfSrc = readFileSync("src/features/huddle/lib/chat-format.ts", "utf8");
+  check("AC-COMPAT no regex lookbehind (SyntaxError on iOS Safari < 16.4)", !/\(\?<[!=]/.test(cfSrc));
+  check("AC-S12c text around italics is kept", JSON.stringify(parseInline("(see *this*)")) === JSON.stringify([{ t: "text", v: "(see" }, { t: "text", v: " " }, { t: "em", v: "this" }, { t: "text", v: ")" }]) || parseInline("(see *this*)").map((p) => ("v" in p ? p.v : "")).join("") === "(see this)", parseInline("(see *this*)"));
   const ct = readFileSync("src/features/huddle/components/ChatText.tsx", "utf8");
   check("V17 ChatText renders each <li> with its own value", /value=\{b\.t === "ol" \? b\.nums\[j\] : undefined\}/.test(ct));
   const blk2 = "Meetings and classes:\n• 9:00 AM — A\n\nWould you like to adjust anything today? The button below.";

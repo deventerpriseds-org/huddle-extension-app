@@ -19,6 +19,12 @@ function Inlines({ parts }: { parts: Inline[] }) {
               {p.v}
             </strong>
           );
+        if (p.t === "em")
+          return (
+            <em key={i} className="italic">
+              {p.v}
+            </em>
+          );
         if (p.t === "code")
           return (
             <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[12.5px]">
@@ -50,6 +56,15 @@ export function ChatText({ text }: { text: string }) {
   return (
     <div className="space-y-2 break-words" data-testid="chat-text">
       {blocks.map((b, i) => {
+        if (b.t === "pre")
+          return (
+            <pre
+              key={i}
+              className="overflow-x-auto whitespace-pre rounded-md bg-muted px-3 py-2 font-mono text-[12.5px]"
+            >
+              {b.text}
+            </pre>
+          );
         if (b.t === "h")
           return (
             <p key={i} className="font-semibold">

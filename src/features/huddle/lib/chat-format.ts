@@ -15,12 +15,14 @@
 // turn runner (joinOpenerAndBlock), so the client and the server agree on what a list line is.
 
 /** A list marker at the start of a line: "• ", "- ", "* ", "· ", "1. ", "1) ". "**bold" is NOT one. */
-const LIST_RE = /^\s*(?:[•·\-*]|\d{1,3}[.)])\s+/;
+const LIST_RE = /^\s*(?:[•·\-*+]|\d{1,3}[.)])\s+/;
 const ORDERED_RE = /^\s*\d{1,3}[.)]\s+/;
 // A heading needs a capital or digit after it, so "# of tasks: 5" stays text.
-const HEADING_RE = /^\s{0,3}#{1,6}\s+(?=[A-Z0-9])/;
+// "## any heading"; a single "#" only before a capital or digit, so "# of tasks: 5" stays text.
+const HEADING_RE = /^\s{0,3}(?:#{2,6}\s+|#\s+(?=[A-Z0-9]))/;
 // A quote needs "> " (with the space), so ">50% done" stays text.
-const QUOTE_RE = /^\s{0,3}>\s/;
+// "> text", or a bare ">" (an empty quote line) — but not ">50%".
+const QUOTE_RE = /^\s{0,3}>(?:\s|$)/;
 
 /** The number an ordered-list line starts with ("0. x" -> 0, "12) x" -> 12). */
 function listNumber(line: string): number {
@@ -85,12 +87,13 @@ function isGreeting(line: string): boolean {
 export type Inline =
   | { t: "text"; v: string }
   | { t: "bold"; v: string }
+  | { t: "em"; v: string }
   | { t: "code"; v: string }
   | { t: "link"; href: string; label: string };
 
 /** Only http(s) ever becomes a link. Trailing sentence punctuation stays outside the URL. */
 const INLINE_RE =
-  /\*\*([^*\n]+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))*(?:[^\s<>().,;:!?'"’”*]|\([^\s<>()]*\)))/g;
+  /\*\*([^*\n]+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))*(?:[^\s<>().,;:!?'"’”*]|\([^\s<>()]*\)))|(^|[^\w*])\*([^\s*](?:[^*\n]*?[^\s*])?)\*(?![\w*])|(^|[^\w_])_([^\s_](?:[^_\n]*?[^\s_])?)_(?![\w_])/g;
 
 export function parseInline(s: string): Inline[] {
   const out: Inline[] = [];
@@ -103,6 +106,15 @@ export function parseInline(s: string): Inline[] {
     else if (m[2] != null) out.push({ t: "code", v: m[2] });
     else if (m[3] != null && m[4] != null) out.push({ t: "link", href: m[4], label: m[3] });
     else if (m[5] != null) out.push({ t: "link", href: m[5], label: shortUrlLabel(m[5]) });
+    // *italic* / _italic_: only when the markers hug a word on both sides, so "2*3*4", "a_b_c",
+    // "__init__" and "* not a list" are left alone.
+    // (No lookbehind: it is a SyntaxError on iOS Safari < 16.4 and would break the whole chat module.
+    // The character before the marker is captured instead and kept as text.)
+    else if (m[7] != null || m[9] != null) {
+      const lead = (m[6] ?? m[8] ?? "") as string;
+      if (lead) out.push({ t: "text", v: lead });
+      out.push({ t: "em", v: (m[7] ?? m[9]) as string });
+    }
     last = at + m[0].length;
   }
   if (last < s.length) out.push({ t: "text", v: s.slice(last) });
@@ -127,7 +139,8 @@ export type Block =
   | { t: "ul"; items: Inline[][] }
   | { t: "ol"; items: Inline[][]; start: number; nums: number[] }
   | { t: "h"; v: Inline[] }
-  | { t: "quote"; lines: Inline[][] };
+  | { t: "quote"; lines: Inline[][] }
+  | { t: "pre"; text: string };
 
 /** Normalize, then split into blocks. A blank line always ends a block. */
 export function parseChatBlocks(raw: string): Block[] {
@@ -138,7 +151,23 @@ export function parseChatBlocks(raw: string): Block[] {
     if (cur) blocks.push(cur);
     cur = null;
   };
+  let fence: string[] | null = null;
   for (const line of lines) {
+    // A ``` fence is shown as-is (monospace); nothing inside it is read as a list or heading.
+    if (/^\s*```/.test(line)) {
+      if (fence) {
+        blocks.push({ t: "pre", text: fence.join("\n") });
+        fence = null;
+      } else {
+        flush();
+        fence = [];
+      }
+      continue;
+    }
+    if (fence) {
+      fence.push(line);
+      continue;
+    }
     if (line.trim() === "") {
       flush();
       continue;
@@ -188,6 +217,7 @@ export function parseChatBlocks(raw: string): Block[] {
     cur.lines.push(parseInline(line));
   }
   flush();
+  if (fence) blocks.push({ t: "pre", text: fence.join("\n") });
   return blocks;
 }
 
