@@ -1,0 +1,42 @@
+{
+  "results": [
+    {
+      "name": "Apps launcher visible in navigation",
+      "pass": true,
+      "detail": "buttons named Apps: 1"
+    },
+    {
+      "name": "Apps lists Polish",
+      "pass": true
+    },
+    {
+      "name": "Polish view renders the Draft box",
+      "pass": true
+    },
+    {
+      "name": "Polish returns finished copy from the live engine",
+      "pass": true,
+      "detail": "status=\"Polished with Work email.\" text=\"Subject: UAT Status and Ownership Confirmation Hi team, The vendor has pushed the go-live date to the 18th because their test environment was not ready. Please confirm who owns each item by Thursda\" (4s)"
+    },
+    {
+      "name": "Send sheet shows Copy / Email draft / Word document",
+      "pass": true
+    },
+    {
+      "name": "Email draft lists at least one account",
+      "pass": true,
+      "detail": "accounts=[\"dev@enterpriseds.io\",\"von.ellis@enterpriseds.io\"]"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
