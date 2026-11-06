@@ -195,6 +195,17 @@ export function briefDeliveryPlan(
   brief: ScheduleBrief,
   tz: string,
 ): { kind: BriefDeliveryKind; directive: string; appendBlock?: string } {
+  // Source error strings go into the directive verbatim; clip them so a long upstream message can
+  // never push the payload past INTERNAL_TEXT_MAX (verifier loop 4: 5,000-char errors -> 22,279).
+  const clipErr = (e: string) => (e.length > 200 ? `${e.slice(0, 199)}…` : e);
+  brief = {
+    ...brief,
+    errors: brief.errors.map(clipErr),
+    ...(brief.tasksError ? { tasksError: clipErr(brief.tasksError) } : {}),
+    ...(brief.upcomingErrors
+      ? { upcomingErrors: brief.upcomingErrors.slice(0, 5).map(clipErr) }
+      : {}),
+  };
   // A WINDOW message (owner, 2026-10-15: "...and for each window as they pop up") covers only what
   // is still ahead in that window; the day/evening editions cover the whole day.
   const w = brief.window;
