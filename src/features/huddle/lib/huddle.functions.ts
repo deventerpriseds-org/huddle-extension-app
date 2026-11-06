@@ -4798,11 +4798,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const endDay = endRaw.slice(0, 10);
               const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
               const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
-              const mailbox =
-                (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
-                data.caller?.entra_email;
-              const { getGraphCalendarEvents } = await import("./email/graph-email.server");
-              const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+              // Every connected Outlook calendar (main + e.g. the @trinnex.io work account), merged.
+              const { getOwnerCalendarEvents } = await import("./email/graph-email.server");
+              const r = await getOwnerCalendarEvents({ caller: data.caller, startISO, endISO, timeZone: tz });
               recordToolUse(
                 winner.id,
                 "get_external_calendar_events",
@@ -6354,11 +6352,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const endDay = endRaw.slice(0, 10);
                 const startISO = startRaw.length > 10 ? startRaw : `${startDay}T00:00:00`;
                 const endISO = endRaw.length > 10 ? endRaw : `${endDay}T23:59:59`;
-                const mailbox =
-                  (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
-                  data.caller?.entra_email;
-                const { getGraphCalendarEvents } = await import("./email/graph-email.server");
-                const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+                // Every connected Outlook calendar (main + e.g. the @trinnex.io work account), merged.
+                const { getOwnerCalendarEvents } = await import("./email/graph-email.server");
+                const r = await getOwnerCalendarEvents({ caller: data.caller, startISO, endISO, timeZone: tz });
                 recordToolUse(
                   winner.id,
                   "get_external_calendar_events",

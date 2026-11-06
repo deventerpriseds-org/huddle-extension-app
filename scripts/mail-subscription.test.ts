@@ -124,8 +124,8 @@ check(
 check("R3 route honours alert hours", route.includes("withinAlertHours(cadence.hours, cadence.tz"));
 const watch = readFileSync("src/features/huddle/lib/email/inbound-email.server.ts", "utf8");
 check(
-  "R4 the 5-minute check keeps the subscription alive (non-dry runs)",
-  /if \(!opts\.dryRun\) \{\s*const \{ ensureMailSubscription \}/.test(watch),
+  "R4 the 5-minute check keeps the subscription alive (non-dry runs, EnterpriseDS main mailbox only — the app key cannot subscribe an outside mailbox)",
+  /if \(!opts\.dryRun && isAppKeyMailbox\(mailbox\)\) \{\s*const \{ ensureMailSubscription \}/.test(watch),
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);

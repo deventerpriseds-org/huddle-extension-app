@@ -329,11 +329,15 @@ export async function runScheduleBrief(
   // EXACTLY the way the working `get_external_calendar_events` agent tool does, so the brief and the
   // tool can never read two different calendars again.
   let mailbox = caller.entra_email;
+  let extraMailboxes: string[] = [];
   try {
-    // resolveCalendarMailbox = journey's connected Outlook account (Von.Ellis@), not the data-scope
-    // email (dev@) -- reading dev@ found 0 meetings with no error on 2026-10-15.
-    const { resolveCalendarMailbox } = await import("../journey/identity");
-    mailbox = (await resolveCalendarMailbox(caller)) ?? caller.entra_email;
+    // resolveOutlookMailboxes = journey's connected Outlook accounts (Von.Ellis@ first), not the
+    // data-scope email (dev@) -- reading dev@ found 0 meetings with no error on 2026-10-15. Extra
+    // connected calendars (the @trinnex.io work account, 2026-11-05) are briefed too.
+    const { resolveOutlookMailboxes } = await import("../journey/identity");
+    const all = await resolveOutlookMailboxes(caller);
+    mailbox = all[0] ?? caller.entra_email;
+    extraMailboxes = all.slice(1);
   } catch {
     /* identity lookup is best-effort — fall back to the login rather than to the sending mailbox */
   }
@@ -345,6 +349,8 @@ export async function runScheduleBrief(
       cadence: { tz },
       edition: opts.window ? "morning" : opts.edition, // a window is always TODAY
       mailbox,
+      extraMailboxes,
+      owner: caller.entra_email,
       // The task mirror is keyed by the login email; getScheduledTasksBetween widens to every alias.
       taskEmail: caller.entra_email,
       window: opts.window,

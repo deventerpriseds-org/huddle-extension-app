@@ -205,6 +205,84 @@ export interface DraftEmailResult {
 }
 
 /**
+ * How to reach ONE mailbox: the token and the Graph base URL every per-mailbox call uses.
+ *  - an EnterpriseDS mailbox (isAppKeyMailbox) -> Huddle's app-only key + /users/{mailbox}, exactly as
+ *    every caller did before 2026-11-05;
+ *  - any other mailbox (the owner's @trinnex.io work account, another company's tenant) -> a
+ *    short-lived DELEGATED token journey mints from the owner's own "Connect Outlook" sign-in
+ *    (journey execute-tool `get_mail_access_token`, service-role only) + /me. `owner` is an identity
+ *    huddle-proxy can resolve to the journey user (the caller's login or the ledger's owner_email);
+ *    without it a non-app-key mailbox is refused rather than guessed.
+ * Throws with a plain reason on failure; every caller already catches into { ok:false }.
+ */
+/**
+ * An EXTRA (outside) mailbox never gets to hold up the main one: every extra-mailbox call is raced
+ * against this limit and treated as a failure when it loses. Without it a Trinnex call that HANGS
+ * (rather than errors) delayed the main inbox's alerts and the calendar/search replies behind it
+ * (VERIFY-second-mailbox-2a.md defect 1). The losing call is abandoned, never awaited.
+ */
+export const EXTRA_MAILBOX_TIMEOUT_MS = 8_000;
+export function withExtraMailboxTimeout<T>(
+  call: Promise<T>,
+  onTimeout: T,
+  ms: number = EXTRA_MAILBOX_TIMEOUT_MS,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(onTimeout), ms);
+  });
+  return Promise.race([call.catch(() => onTimeout), limit]).finally(() => clearTimeout(timer));
+}
+
+const delegatedTokenCache = new Map<string, { token: string; until: number }>();
+export async function mailboxAccess(
+  mailbox: string,
+  owner?: string,
+): Promise<{ token: string; base: string; delegated: boolean }> {
+  const mb = mailbox.trim().toLowerCase();
+  const { isAppKeyMailbox } = await import("../journey/calendar-mailbox");
+  if (isAppKeyMailbox(mb)) {
+    return { token: await getAppToken(), base: `${GRAPH}/users/${encodeURIComponent(mailbox.trim())}`, delegated: false };
+  }
+  if (!owner?.trim()) throw new Error("This mailbox is outside EnterpriseDS and no owner was given to sign in as.");
+  // Keyed by OWNER + mailbox: a token journey minted for one user's connection must never serve
+  // another user's request for the same address (VERIFY-second-mailbox-2b.md defect 1).
+  const cacheKey = `${owner.trim().toLowerCase()}|${mb}`;
+  const hit = delegatedTokenCache.get(cacheKey);
+  if (hit && hit.until > Date.now()) return { token: hit.token, base: `${GRAPH}/me`, delegated: true };
+  const { invokeJourneyTool } = await import("../journey/proxy.functions");
+  const r = await invokeJourneyTool(
+    {
+      toolName: "get_mail_access_token",
+      args: { account_email: mb },
+      caller: { entra_email: owner.trim() },
+      context: { source: "huddle" },
+    },
+    { allowServerOnly: true },
+  );
+  let parsed: { access_token?: string; expires_in?: number; error?: string } = {};
+  try {
+    parsed = JSON.parse(r.output || "{}");
+  } catch {
+    /* fall through to the error below */
+  }
+  if (!r.ok || !parsed.access_token) {
+    // Never echo the output: on success it IS the credential. The error code alone says what to do.
+    const why = parsed.error ?? r.error ?? "unknown";
+    throw new Error(
+      why === "consent_required"
+        ? "Mailbox access is waiting on the employer's admin approval for this app."
+        : why === "account_not_connected"
+          ? "That mailbox is not connected in TaskOS (Settings -> Calendar -> Connect Outlook)."
+          : `Could not get access to that mailbox (${why}).`,
+    );
+  }
+  const ttl = Math.max(60, Number(parsed.expires_in) || 3600) - 120; // renew two minutes early
+  delegatedTokenCache.set(cacheKey, { token: parsed.access_token, until: Date.now() + ttl * 1000 });
+  return { token: parsed.access_token, base: `${GRAPH}/me`, delegated: true };
+}
+
+/**
  * Create a REAL draft in the mailbox's Drafts folder via Graph POST
  * /users/{from}/messages (unlike sendGraphEmail, which sends immediately). Returns
  * the created message's id and webLink so the caller can prove the draft exists.
@@ -264,11 +342,12 @@ export async function listInboxMessagesSince(
   mailbox: string,
   sinceIso: string,
   top = 25,
+  owner?: string,
 ): Promise<
   { ok: true; messages: import("./inbound-email").InboundMessage[] } | { ok: false; error: string }
 > {
   try {
-    const token = await getAppToken();
+    const { token, base } = await mailboxAccess(mailbox, owner);
     // Built by hand like calendarView's: URLSearchParams would write "%24filter" and "+" for spaces.
     const qs =
       `$filter=${encodeURIComponent(`receivedDateTime ge ${sinceIso}`)}` +
@@ -278,7 +357,7 @@ export async function listInboxMessagesSince(
         "id,subject,receivedDateTime,bodyPreview,body,from,inferenceClassification,internetMessageHeaders,conversationId",
       )}`;
     const res = await fetch(
-      `${GRAPH}/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?${qs}`,
+      `${base}/mailFolders/inbox/messages?${qs}`,
       { headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' } },
     );
     if (!res.ok) {
@@ -332,19 +411,28 @@ export async function listInboxMessagesSince(
  * Drafting only: nothing is sent. Falls back to { ok:false } when no message from that sender is found,
  * and the tool caller then drafts a fresh message instead.
  */
-export async function createReplyDraftInMailbox(input: {
-  mailbox: string;
-  replyTo: string;
-  body: string;
-  subjectHint?: string;
-}): Promise<DraftEmailResult> {
-  const mailbox = input.mailbox.trim();
-  const sender = input.replyTo.trim().toLowerCase();
-  if (!mailbox || !sender) return { ok: false, error: "mailbox and reply_to are required" };
+type ReplyOriginal =
+  | {
+      ok: true;
+      mailbox: string;
+      base: string;
+      token: string;
+      original: { id: string; subject?: string; receivedDateTime?: string };
+      /** The subject the model named matched this message (a stronger signal than recency). */
+      hintMatch: boolean;
+    }
+  | { ok: false; mailbox: string; error: string };
+
+/** Find, in ONE mailbox, the Inbox message from `sender` a reply should thread onto. */
+async function findReplyOriginal(
+  mailbox: string,
+  sender: string,
+  subjectHint: string | undefined,
+  owner: string | undefined,
+): Promise<ReplyOriginal> {
   try {
-    const token = await getAppToken();
+    const { token, base } = await mailboxAccess(mailbox, owner);
     const auth = { Authorization: `Bearer ${token}` };
-    const base = `${GRAPH}/users/${encodeURIComponent(mailbox)}`;
     const qs =
       `$filter=${encodeURIComponent(`from/emailAddress/address eq '${sender.replace(/'/g, "''")}'`)}` +
       `&$top=10&$select=${encodeURIComponent("id,subject,receivedDateTime")}`;
@@ -352,7 +440,7 @@ export async function createReplyDraftInMailbox(input: {
     if (!find.ok) {
       return {
         ok: false,
-        from: mailbox,
+        mailbox,
         error: `Graph find-original failed (${find.status}): ${(await find.text()).slice(0, 200)}`,
       };
     }
@@ -366,22 +454,57 @@ export async function createReplyDraftInMailbox(input: {
       String(b.receivedDateTime ?? "").localeCompare(String(a.receivedDateTime ?? "")),
     );
     // Prefer the message whose subject the model named; else the newest from that sender.
-    const hint = String(input.subjectHint ?? "")
+    const hint = String(subjectHint ?? "")
       .replace(/^\s*(re|fw|fwd)\s*:\s*/i, "")
       .trim()
       .toLowerCase();
-    const original =
-      (hint &&
-        hits.find((h) =>
+    const byHint = hint
+      ? hits.find((h) =>
           String(h.subject ?? "")
             .toLowerCase()
             .includes(hint),
-        )) ||
-      hits[0];
-    if (!original)
-      return { ok: false, from: mailbox, error: `No Inbox message from ${sender} to reply to.` };
+        )
+      : undefined;
+    const original = byHint || hits[0];
+    if (!original) return { ok: false, mailbox, error: `No Inbox message from ${sender} to reply to.` };
+    return { ok: true, mailbox, base, token, original, hintMatch: !!byHint };
+  } catch (err) {
+    return { ok: false, mailbox, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
-    const r = await createFormattedReplyDraft(base, token, original.id, input.body ?? "");
+/**
+ * Pure: across mailboxes, the original a reply belongs to — a subject match beats recency, then the
+ * newest message wins. So a sender who wrote to BOTH addresses gets the reply in the mailbox that
+ * actually holds the email being answered, not whichever mailbox was searched first
+ * (VERIFY-second-mailbox-2a.md defect 2).
+ */
+export function pickReplyOriginal<T extends { ok: boolean; hintMatch?: boolean; original?: { receivedDateTime?: string } }>(
+  found: T[],
+): T | undefined {
+  const ok = found.filter((f) => f.ok);
+  ok.sort(
+    (a, b) =>
+      Number(!!b.hintMatch) - Number(!!a.hintMatch) ||
+      String(b.original?.receivedDateTime ?? "").localeCompare(String(a.original?.receivedDateTime ?? "")),
+  );
+  return ok[0];
+}
+
+export async function createReplyDraftInMailbox(input: {
+  mailbox: string;
+  replyTo: string;
+  body: string;
+  subjectHint?: string;
+  owner?: string;
+}): Promise<DraftEmailResult> {
+  const mailbox = input.mailbox.trim();
+  const sender = input.replyTo.trim().toLowerCase();
+  if (!mailbox || !sender) return { ok: false, error: "mailbox and reply_to are required" };
+  const f = await findReplyOriginal(mailbox, sender, input.subjectHint, input.owner);
+  if (!f.ok) return { ok: false, from: mailbox, error: f.error };
+  try {
+    const r = await createFormattedReplyDraft(f.base, f.token, f.original.id, input.body ?? "");
     if (!r.ok) return { ok: false, from: mailbox, error: r.error };
     return { ok: true, from: mailbox, id: r.id, webLink: r.webLink };
   } catch (err) {
@@ -398,12 +521,13 @@ export async function createReplyDraftForMessage(input: {
   mailbox: string;
   graphMessageId: string;
   body: string;
+  owner?: string;
 }): Promise<DraftEmailResult> {
   const mailbox = input.mailbox.trim();
   try {
-    const token = await getAppToken();
+    const { token, base } = await mailboxAccess(mailbox, input.owner);
     const r = await createFormattedReplyDraft(
-      `${GRAPH}/users/${encodeURIComponent(mailbox)}`,
+      base,
       token,
       input.graphMessageId,
       input.body ?? "",
@@ -424,14 +548,15 @@ export async function hasSentReplyInConversation(
   mailbox: string,
   conversationId: string,
   afterIso: string | null,
+  owner?: string,
 ): Promise<boolean | null> {
   try {
-    const token = await getAppToken();
+    const { token, base } = await mailboxAccess(mailbox, owner);
     const qs =
       `$filter=${encodeURIComponent(`conversationId eq '${conversationId.replace(/'/g, "''")}'`)}` +
       `&$top=10&$select=${encodeURIComponent("sentDateTime")}`;
     const res = await fetch(
-      `${GRAPH}/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems/messages?${qs}`,
+      `${base}/mailFolders/sentitems/messages?${qs}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) return null;
@@ -447,12 +572,13 @@ export async function hasSentReplyInConversation(
 async function createPlainDraftInMailbox(
   mailbox: string,
   input: SendEmailInput,
+  owner?: string,
 ): Promise<DraftEmailResult> {
   const subject = String(input.subject ?? "").trim();
   if (!subject) return { ok: false, from: mailbox, error: "A subject is required." };
   try {
-    const token = await getAppToken();
-    const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/messages`, {
+    const { token, base } = await mailboxAccess(mailbox, owner);
+    const res = await fetch(`${base}/messages`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -488,25 +614,44 @@ export async function createDraftForTool(
 ): Promise<DraftEmailResult & { reply?: boolean; replyFallback?: string }> {
   const replyTo = String(input.replyTo ?? "").trim();
   if (replyTo) {
-    let mailbox: string | undefined;
+    let mailboxes: string[] = [];
     try {
-      const { resolveCalendarMailbox } = await import("../journey/identity");
-      mailbox = await resolveCalendarMailbox(caller);
+      const { resolveOutlookMailboxes } = await import("../journey/identity");
+      mailboxes = await resolveOutlookMailboxes(caller);
     } catch {
-      mailbox = caller?.entra_email;
+      mailboxes = caller?.entra_email ? [caller.entra_email] : [];
     }
-    if (mailbox) {
-      const r = await createReplyDraftInMailbox({
-        mailbox,
-        replyTo,
-        body: String(input.body ?? ""),
-        subjectHint: String(input.subject ?? ""),
-      });
-      if (r.ok) return { ...r, reply: true };
-      // No original to thread onto: still a draft in the OWNER's mailbox (as the tool promises),
+    const owner = caller?.entra_email;
+    if (mailboxes.length) {
+      // The reply goes in the mailbox the original ARRIVED in: look in EVERY connected mailbox
+      // (an outside one under the time limit), then pick by subject match, then recency.
+      const sender = replyTo.toLowerCase();
+      const hint = String(input.subject ?? "");
+      const [mainMb, ...extraMbs] = mailboxes;
+      const found: ReplyOriginal[] = [await findReplyOriginal(mainMb, sender, hint, owner)];
+      for (const mb of extraMbs) {
+        found.push(
+          await withExtraMailboxTimeout(findReplyOriginal(mb, sender, hint, owner), {
+            ok: false,
+            mailbox: mb,
+            error: "timed out",
+          }),
+        );
+      }
+      const best = pickReplyOriginal(found);
+      const firstError = found.map((f) => (f.ok ? undefined : f.error)).find(Boolean);
+      if (best && best.ok) {
+        const r = await createFormattedReplyDraft(best.base, best.token, best.original.id, String(input.body ?? ""));
+        if (r.ok) return { ok: true, from: best.mailbox, id: r.id, webLink: r.webLink, reply: true };
+      }
+      // No original to thread onto: still a draft in the OWNER's main mailbox (as the tool promises),
       // never the default sending mailbox, and say why.
-      const plain = await createPlainDraftInMailbox(mailbox, { ...input, to: input.to || replyTo });
-      return { ...plain, reply: false, replyFallback: r.error };
+      const plain = await createPlainDraftInMailbox(
+        mailboxes[0],
+        { ...input, to: input.to || replyTo },
+        owner,
+      );
+      return { ...plain, reply: false, replyFallback: firstError };
     }
   }
   return createGraphDraft(input);
@@ -547,11 +692,12 @@ export async function getGraphCalendarEvents(input: {
   endISO: string;
   timeZone?: string;
   top?: number;
+  owner?: string;
 }): Promise<CalendarReadResult> {
   const mailbox = (input.mailbox ?? "").trim() || defaultFrom();
   const top = Math.min(Math.max(input.top ?? 50, 1), 100);
   try {
-    const token = await getAppToken();
+    const { token, base } = await mailboxAccess(mailbox, input.owner);
     // Build the query string by hand so the OData $-params stay literal (URLSearchParams
     // would percent-encode "$select" to "%24select").
     const qs =
@@ -560,7 +706,7 @@ export async function getGraphCalendarEvents(input: {
       `&$select=${encodeURIComponent("id,subject,start,end,location,isAllDay,organizer")}` +
       `&$orderby=${encodeURIComponent("start/dateTime")}` +
       `&$top=${top}`;
-    const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/calendarView?${qs}`, {
+    const res = await fetch(`${base}/calendarView?${qs}`, {
       headers: {
         Authorization: `Bearer ${token}`,
         Prefer: `outlook.timezone="${input.timeZone ?? "UTC"}"`,
@@ -601,6 +747,42 @@ export async function getGraphCalendarEvents(input: {
   } catch (err) {
     return { ok: false, mailbox, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * The owner's events across EVERY connected Outlook calendar (main EnterpriseDS one + e.g. the
+ * @trinnex.io work account), merged and time-sorted -- what every calendar reader calls. The MAIN
+ * mailbox's result decides ok/error exactly as before; an extra mailbox that fails (not approved yet,
+ * signed out) is logged and skipped so it can never take the main calendar down with it.
+ */
+export async function getOwnerCalendarEvents(input: {
+  caller: { entra_object_id?: string; entra_email?: string } | undefined;
+  startISO: string;
+  endISO: string;
+  timeZone?: string;
+  top?: number;
+}): Promise<CalendarReadResult> {
+  const { resolveOutlookMailboxes } = await import("../journey/identity");
+  const mailboxes = await resolveOutlookMailboxes(input.caller).catch(() => [] as string[]);
+  const owner = input.caller?.entra_email;
+  const [main, ...extra] = mailboxes.length ? mailboxes : [input.caller?.entra_email ?? ""];
+  const first = await getGraphCalendarEvents({ ...input, mailbox: main, owner });
+  if (!extra.length) return first;
+  const events = [...(first.events ?? [])];
+  for (const mb of extra) {
+    const r = await withExtraMailboxTimeout(getGraphCalendarEvents({ ...input, mailbox: mb, owner }), {
+      ok: false,
+      mailbox: mb,
+      error: "timed out",
+    });
+    if (r.ok) events.push(...(r.events ?? []));
+    else console.error("[calendar] extra mailbox read failed", r.error?.slice(0, 120));
+  }
+  // The MAIN mailbox decides ok/error exactly as before: a failed main read must never be reported
+  // as an empty-but-ok calendar just because an extra mailbox answered (VERIFY-second-mailbox-2c #2).
+  if (!first.ok) return first;
+  events.sort((a, b) => String(a.start ?? "").localeCompare(String(b.start ?? "")));
+  return { ok: true, mailbox: first.mailbox, events };
 }
 
 /**
@@ -821,14 +1003,15 @@ export async function searchInboxMessages(
   mailbox: string,
   args: SearchEmailArgs,
   timeZone: string,
+  owner?: string,
 ): Promise<
   | { ok: true; mode: "search" | "filter"; count: number; messages: InboxSearchHit[] }
   | InboxReadFailure
 > {
   try {
     const built = buildInboxSearchQuery(args);
-    const token = await getAppToken();
-    const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/messages?${built.qs}`, {
+    const { token, base } = await mailboxAccess(mailbox, owner);
+    const res = await fetch(`${base}/messages?${built.qs}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -864,16 +1047,17 @@ export async function readInboxMessage(
   id: string,
   timeZone: string,
   maxChars?: number,
+  owner?: string,
 ): Promise<{ ok: true; message: InboxReadMessage } | InboxReadFailure> {
   const msgId = String(id ?? "").trim();
   if (!msgId) return { ok: false, error: "read_email needs the message id from search_email." };
   try {
-    const token = await getAppToken();
+    const { token, base } = await mailboxAccess(mailbox, owner);
     const select = encodeURIComponent(
       "id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,hasAttachments,webLink,body",
     );
     const res = await fetch(
-      `${GRAPH}/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(msgId)}?$select=${select}`,
+      `${base}/messages/${encodeURIComponent(msgId)}?$select=${select}`,
       {
         method: "GET",
         headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' },
@@ -925,28 +1109,54 @@ export async function runInboxReadTool(
     if (name !== SEARCH_EMAIL_TOOL_NAME && name !== READ_EMAIL_TOOL_NAME) {
       return { ok: false, error: `not an inbox read tool: ${name}` };
     }
-    let mailbox: string | undefined;
+    let mailboxes: string[] = [];
     let timeZone = browserTimeZone || "UTC";
     try {
-      const { resolveCalendarMailbox, resolveTimeZone } = await import("../journey/identity");
-      mailbox = (await resolveCalendarMailbox(caller)) ?? caller?.entra_email;
+      const { resolveOutlookMailboxes, resolveTimeZone } = await import("../journey/identity");
+      mailboxes = await resolveOutlookMailboxes(caller);
       timeZone = await resolveTimeZone(caller, browserTimeZone);
     } catch {
-      mailbox = mailbox ?? caller?.entra_email;
+      /* fall back below */
     }
-    if (!mailbox) return { ok: false, error: "Could not resolve your mailbox, so no email was read." };
+    if (!mailboxes.length && caller?.entra_email) mailboxes = [caller.entra_email];
+    if (!mailboxes.length) return { ok: false, error: "Could not resolve your mailbox, so no email was read." };
+    const owner = caller?.entra_email;
     if (name === SEARCH_EMAIL_TOOL_NAME) {
-      return { ...(await searchInboxMessages(mailbox, normalizeSearchArgs(args), timeZone)) };
+      // Every connected mailbox, merged newest-first. The MAIN mailbox decides failure as before; an
+      // extra one that fails (approval pending, signed out) is skipped, never fatal.
+      const searchArgs = normalizeSearchArgs(args);
+      const [main, ...extra] = mailboxes;
+      const first = await searchInboxMessages(main, searchArgs, timeZone, owner);
+      if (!extra.length) return { ...first };
+      const messages = first.ok ? [...first.messages] : [];
+      for (const mb of extra) {
+        const r = await withExtraMailboxTimeout(searchInboxMessages(mb, searchArgs, timeZone, owner), {
+          ok: false as const,
+          error: "timed out",
+        });
+        if (r.ok) messages.push(...r.messages);
+        else console.error("[inbox-read] extra mailbox search failed", r.error?.slice(0, 120));
+      }
+      // The MAIN mailbox decides ok/error exactly as before (VERIFY-second-mailbox-2c #2).
+      if (!first.ok) return { ...first };
+      messages.sort((a, b) => String(b.receivedUtc ?? "").localeCompare(String(a.receivedUtc ?? "")));
+      return { ok: true, mode: first.mode, count: messages.length, messages };
     }
     const maxChars = Number(args?.max_chars ?? args?.maxChars);
-    return {
-      ...(await readInboxMessage(
-        mailbox,
+    // A message id belongs to ONE mailbox; try each, main first, and return the first that has it.
+    let firstFail: Record<string, unknown> | undefined;
+    for (const mb of mailboxes) {
+      const r = await readInboxMessage(
+        mb,
         String(args?.id ?? ""),
         timeZone,
         Number.isFinite(maxChars) ? maxChars : undefined,
-      )),
-    };
+        owner,
+      );
+      if (r.ok) return { ...r };
+      firstFail = firstFail ?? { ...r };
+    }
+    return firstFail ?? { ok: false, error: "That email was not found." };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

@@ -573,16 +573,15 @@ export async function executeRealtimeTool(
       return done(JSON.stringify(await runInboxReadTool(name, args, ctx.caller, ctx.timeZone)));
     }
     if (name === "get_external_calendar_events") {
-      const { resolveCalendarMailbox } = await import("../journey/identity");
-      const mailbox = (await resolveCalendarMailbox(ctx.caller)) ?? ctx.caller?.entra_email;
       const tz = ctx.timeZone || "UTC";
       const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
       const startRaw = typeof args.start === "string" && args.start.trim() ? args.start.trim() : todayStr;
       const endRaw = typeof args.end === "string" && args.end.trim() ? args.end.trim() : startRaw;
       const startISO = startRaw.length > 10 ? startRaw : `${startRaw.slice(0, 10)}T00:00:00`;
       const endISO = endRaw.length > 10 ? endRaw : `${endRaw.slice(0, 10)}T23:59:59`;
-      const { getGraphCalendarEvents } = await import("../email/graph-email.server");
-      const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+      // Every connected Outlook calendar (main + e.g. the @trinnex.io work account), merged.
+      const { getOwnerCalendarEvents } = await import("../email/graph-email.server");
+      const r = await getOwnerCalendarEvents({ caller: ctx.caller, startISO, endISO, timeZone: tz });
       return done(JSON.stringify(r));
     }
     if (name === "focus_on") {

@@ -3888,3 +3888,6 @@ here as fact three times before being checked.)
   (reproduced offline on main 32f50e4): default limit 10 + scheduled view spans all days + starred items sort first.
 - Times were ALREADY localized on main (formatInTz + resolveJourneyIdentity tz). Edge: no profile + no browser zone → UTC.
 - Guard: `npm run test:status-answers` (23 checks, 7 mutations FIRED). Evidence: docs/qc-evidence/BUILD-status-answers.md.
+
+### 2026-11-05 — second-mailbox (trinnex.io) request: facts
+- Huddle mail = app-only Graph, EnterpriseDS tenant only; ONE mailbox per owner. journey Outlook connect = `/common` delegated, calendar scopes only. `get_my_config` calendar_connections is UNORDERED — never connect a non-EnterpriseDS Outlook account before Huddle's picker handles multiple accounts, or von.ellis@ alerts can break. Status: awaiting owner tenant-consent test + go-ahead.
