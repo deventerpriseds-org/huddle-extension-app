@@ -205,13 +205,6 @@ export interface DraftEmailResult {
 }
 
 /**
- * Create a REAL draft in the mailbox's Drafts folder via Graph POST
- * /users/{from}/messages (unlike sendGraphEmail, which sends immediately). Returns
- * the created message's id and webLink so the caller can prove the draft exists.
- * Recipients are optional for a draft. Requires the Graph app to hold Mail.ReadWrite
- * application permission (a 403 here means that consent is missing).
- */
-/**
  * How to reach ONE mailbox: the token and the Graph base URL every per-mailbox call uses.
  *  - an EnterpriseDS mailbox (isAppKeyMailbox) -> Huddle's app-only key + /users/{mailbox}, exactly as
  *    every caller did before 2026-11-05;
@@ -222,6 +215,25 @@ export interface DraftEmailResult {
  *    without it a non-app-key mailbox is refused rather than guessed.
  * Throws with a plain reason on failure; every caller already catches into { ok:false }.
  */
+/**
+ * An EXTRA (outside) mailbox never gets to hold up the main one: every extra-mailbox call is raced
+ * against this limit and treated as a failure when it loses. Without it a Trinnex call that HANGS
+ * (rather than errors) delayed the main inbox's alerts and the calendar/search replies behind it
+ * (VERIFY-second-mailbox-2a.md defect 1). The losing call is abandoned, never awaited.
+ */
+export const EXTRA_MAILBOX_TIMEOUT_MS = 8_000;
+export function withExtraMailboxTimeout<T>(
+  call: Promise<T>,
+  onTimeout: T,
+  ms: number = EXTRA_MAILBOX_TIMEOUT_MS,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(onTimeout), ms);
+  });
+  return Promise.race([call.catch(() => onTimeout), limit]).finally(() => clearTimeout(timer));
+}
+
 const delegatedTokenCache = new Map<string, { token: string; until: number }>();
 export async function mailboxAccess(
   mailbox: string,
@@ -232,9 +244,12 @@ export async function mailboxAccess(
   if (isAppKeyMailbox(mb)) {
     return { token: await getAppToken(), base: `${GRAPH}/users/${encodeURIComponent(mailbox.trim())}`, delegated: false };
   }
-  const hit = delegatedTokenCache.get(mb);
-  if (hit && hit.until > Date.now()) return { token: hit.token, base: `${GRAPH}/me`, delegated: true };
   if (!owner?.trim()) throw new Error("This mailbox is outside EnterpriseDS and no owner was given to sign in as.");
+  // Keyed by OWNER + mailbox: a token journey minted for one user's connection must never serve
+  // another user's request for the same address (VERIFY-second-mailbox-2b.md defect 1).
+  const cacheKey = `${owner.trim().toLowerCase()}|${mb}`;
+  const hit = delegatedTokenCache.get(cacheKey);
+  if (hit && hit.until > Date.now()) return { token: hit.token, base: `${GRAPH}/me`, delegated: true };
   const { invokeJourneyTool } = await import("../journey/proxy.functions");
   const r = await invokeJourneyTool(
     {
@@ -263,10 +278,17 @@ export async function mailboxAccess(
     );
   }
   const ttl = Math.max(60, Number(parsed.expires_in) || 3600) - 120; // renew two minutes early
-  delegatedTokenCache.set(mb, { token: parsed.access_token, until: Date.now() + ttl * 1000 });
+  delegatedTokenCache.set(cacheKey, { token: parsed.access_token, until: Date.now() + ttl * 1000 });
   return { token: parsed.access_token, base: `${GRAPH}/me`, delegated: true };
 }
 
+/**
+ * Create a REAL draft in the mailbox's Drafts folder via Graph POST
+ * /users/{from}/messages (unlike sendGraphEmail, which sends immediately). Returns
+ * the created message's id and webLink so the caller can prove the draft exists.
+ * Recipients are optional for a draft. Requires the Graph app to hold Mail.ReadWrite
+ * application permission (a 403 here means that consent is missing).
+ */
 export async function createGraphDraft(input: SendEmailInput): Promise<DraftEmailResult> {
   const options = emailFromOptions();
   const requested = (input.from ?? "").trim();
@@ -389,18 +411,27 @@ export async function listInboxMessagesSince(
  * Drafting only: nothing is sent. Falls back to { ok:false } when no message from that sender is found,
  * and the tool caller then drafts a fresh message instead.
  */
-export async function createReplyDraftInMailbox(input: {
-  mailbox: string;
-  replyTo: string;
-  body: string;
-  subjectHint?: string;
-  owner?: string;
-}): Promise<DraftEmailResult> {
-  const mailbox = input.mailbox.trim();
-  const sender = input.replyTo.trim().toLowerCase();
-  if (!mailbox || !sender) return { ok: false, error: "mailbox and reply_to are required" };
+type ReplyOriginal =
+  | {
+      ok: true;
+      mailbox: string;
+      base: string;
+      token: string;
+      original: { id: string; subject?: string; receivedDateTime?: string };
+      /** The subject the model named matched this message (a stronger signal than recency). */
+      hintMatch: boolean;
+    }
+  | { ok: false; mailbox: string; error: string };
+
+/** Find, in ONE mailbox, the Inbox message from `sender` a reply should thread onto. */
+async function findReplyOriginal(
+  mailbox: string,
+  sender: string,
+  subjectHint: string | undefined,
+  owner: string | undefined,
+): Promise<ReplyOriginal> {
   try {
-    const { token, base } = await mailboxAccess(mailbox, input.owner);
+    const { token, base } = await mailboxAccess(mailbox, owner);
     const auth = { Authorization: `Bearer ${token}` };
     const qs =
       `$filter=${encodeURIComponent(`from/emailAddress/address eq '${sender.replace(/'/g, "''")}'`)}` +
@@ -409,7 +440,7 @@ export async function createReplyDraftInMailbox(input: {
     if (!find.ok) {
       return {
         ok: false,
-        from: mailbox,
+        mailbox,
         error: `Graph find-original failed (${find.status}): ${(await find.text()).slice(0, 200)}`,
       };
     }
@@ -423,22 +454,57 @@ export async function createReplyDraftInMailbox(input: {
       String(b.receivedDateTime ?? "").localeCompare(String(a.receivedDateTime ?? "")),
     );
     // Prefer the message whose subject the model named; else the newest from that sender.
-    const hint = String(input.subjectHint ?? "")
+    const hint = String(subjectHint ?? "")
       .replace(/^\s*(re|fw|fwd)\s*:\s*/i, "")
       .trim()
       .toLowerCase();
-    const original =
-      (hint &&
-        hits.find((h) =>
+    const byHint = hint
+      ? hits.find((h) =>
           String(h.subject ?? "")
             .toLowerCase()
             .includes(hint),
-        )) ||
-      hits[0];
-    if (!original)
-      return { ok: false, from: mailbox, error: `No Inbox message from ${sender} to reply to.` };
+        )
+      : undefined;
+    const original = byHint || hits[0];
+    if (!original) return { ok: false, mailbox, error: `No Inbox message from ${sender} to reply to.` };
+    return { ok: true, mailbox, base, token, original, hintMatch: !!byHint };
+  } catch (err) {
+    return { ok: false, mailbox, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
-    const r = await createFormattedReplyDraft(base, token, original.id, input.body ?? "");
+/**
+ * Pure: across mailboxes, the original a reply belongs to — a subject match beats recency, then the
+ * newest message wins. So a sender who wrote to BOTH addresses gets the reply in the mailbox that
+ * actually holds the email being answered, not whichever mailbox was searched first
+ * (VERIFY-second-mailbox-2a.md defect 2).
+ */
+export function pickReplyOriginal<T extends { ok: boolean; hintMatch?: boolean; original?: { receivedDateTime?: string } }>(
+  found: T[],
+): T | undefined {
+  const ok = found.filter((f) => f.ok);
+  ok.sort(
+    (a, b) =>
+      Number(!!b.hintMatch) - Number(!!a.hintMatch) ||
+      String(b.original?.receivedDateTime ?? "").localeCompare(String(a.original?.receivedDateTime ?? "")),
+  );
+  return ok[0];
+}
+
+export async function createReplyDraftInMailbox(input: {
+  mailbox: string;
+  replyTo: string;
+  body: string;
+  subjectHint?: string;
+  owner?: string;
+}): Promise<DraftEmailResult> {
+  const mailbox = input.mailbox.trim();
+  const sender = input.replyTo.trim().toLowerCase();
+  if (!mailbox || !sender) return { ok: false, error: "mailbox and reply_to are required" };
+  const f = await findReplyOriginal(mailbox, sender, input.subjectHint, input.owner);
+  if (!f.ok) return { ok: false, from: mailbox, error: f.error };
+  try {
+    const r = await createFormattedReplyDraft(f.base, f.token, f.original.id, input.body ?? "");
     if (!r.ok) return { ok: false, from: mailbox, error: r.error };
     return { ok: true, from: mailbox, id: r.id, webLink: r.webLink };
   } catch (err) {
@@ -557,18 +623,26 @@ export async function createDraftForTool(
     }
     const owner = caller?.entra_email;
     if (mailboxes.length) {
-      // The reply goes in the mailbox the original ARRIVED in: try each connected mailbox, main first.
-      let firstError: string | undefined;
-      for (const mailbox of mailboxes) {
-        const r = await createReplyDraftInMailbox({
-          mailbox,
-          replyTo,
-          body: String(input.body ?? ""),
-          subjectHint: String(input.subject ?? ""),
-          owner,
-        });
-        if (r.ok) return { ...r, reply: true };
-        firstError = firstError ?? r.error;
+      // The reply goes in the mailbox the original ARRIVED in: look in EVERY connected mailbox
+      // (an outside one under the time limit), then pick by subject match, then recency.
+      const sender = replyTo.toLowerCase();
+      const hint = String(input.subject ?? "");
+      const [mainMb, ...extraMbs] = mailboxes;
+      const found: ReplyOriginal[] = [await findReplyOriginal(mainMb, sender, hint, owner)];
+      for (const mb of extraMbs) {
+        found.push(
+          await withExtraMailboxTimeout(findReplyOriginal(mb, sender, hint, owner), {
+            ok: false,
+            mailbox: mb,
+            error: "timed out",
+          }),
+        );
+      }
+      const best = pickReplyOriginal(found);
+      const firstError = found.map((f) => (f.ok ? undefined : f.error)).find(Boolean);
+      if (best && best.ok) {
+        const r = await createFormattedReplyDraft(best.base, best.token, best.original.id, String(input.body ?? ""));
+        if (r.ok) return { ok: true, from: best.mailbox, id: r.id, webLink: r.webLink, reply: true };
       }
       // No original to thread onto: still a draft in the OWNER's main mailbox (as the tool promises),
       // never the default sending mailbox, and say why.
@@ -696,12 +770,19 @@ export async function getOwnerCalendarEvents(input: {
   if (!extra.length) return first;
   const events = [...(first.events ?? [])];
   for (const mb of extra) {
-    const r = await getGraphCalendarEvents({ ...input, mailbox: mb, owner });
+    const r = await withExtraMailboxTimeout(getGraphCalendarEvents({ ...input, mailbox: mb, owner }), {
+      ok: false,
+      mailbox: mb,
+      error: "timed out",
+    });
     if (r.ok) events.push(...(r.events ?? []));
     else console.error("[calendar] extra mailbox read failed", r.error?.slice(0, 120));
   }
+  // The MAIN mailbox decides ok/error exactly as before: a failed main read must never be reported
+  // as an empty-but-ok calendar just because an extra mailbox answered (VERIFY-second-mailbox-2c #2).
+  if (!first.ok) return first;
   events.sort((a, b) => String(a.start ?? "").localeCompare(String(b.start ?? "")));
-  return first.ok || events.length ? { ok: true, mailbox: first.mailbox, events } : first;
+  return { ok: true, mailbox: first.mailbox, events };
 }
 
 /**
@@ -1049,13 +1130,17 @@ export async function runInboxReadTool(
       if (!extra.length) return { ...first };
       const messages = first.ok ? [...first.messages] : [];
       for (const mb of extra) {
-        const r = await searchInboxMessages(mb, searchArgs, timeZone, owner);
+        const r = await withExtraMailboxTimeout(searchInboxMessages(mb, searchArgs, timeZone, owner), {
+          ok: false as const,
+          error: "timed out",
+        });
         if (r.ok) messages.push(...r.messages);
         else console.error("[inbox-read] extra mailbox search failed", r.error?.slice(0, 120));
       }
-      if (!first.ok && !messages.length) return { ...first };
+      // The MAIN mailbox decides ok/error exactly as before (VERIFY-second-mailbox-2c #2).
+      if (!first.ok) return { ...first };
       messages.sort((a, b) => String(b.receivedUtc ?? "").localeCompare(String(a.receivedUtc ?? "")));
-      return { ok: true, mode: first.ok ? first.mode : "search", count: messages.length, messages };
+      return { ok: true, mode: first.mode, count: messages.length, messages };
     }
     const maxChars = Number(args?.max_chars ?? args?.maxChars);
     // A message id belongs to ONE mailbox; try each, main first, and return the first that has it.

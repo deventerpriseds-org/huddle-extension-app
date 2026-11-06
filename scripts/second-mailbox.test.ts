@@ -132,6 +132,83 @@ console.log("C. mailboxAccess — the right key and URL per mailbox");
   t("C7 a malformed reply is an error that never echoes journey's output", [!!threw, threw.includes("LEAK-ME")], [true, false]);
 }
 
+const { withExtraMailboxTimeout, pickReplyOriginal, getOwnerCalendarEvents } = await import(
+  "../src/features/huddle/lib/email/graph-email.server"
+);
+
+console.log("D. EXTRA-MAILBOX TIME LIMIT — a hanging outside mailbox cannot hold up the main one");
+{
+  const t0 = Date.now();
+  const hung = await withExtraMailboxTimeout(new Promise<string>(() => {}), "timed out", 50);
+  t("D1 a call that never settles resolves to the fallback at the limit", [hung, Date.now() - t0 < 1000], ["timed out", true]);
+  t("D2 a call that rejects resolves to the fallback", await withExtraMailboxTimeout(Promise.reject(new Error("x")), "fb", 50), "fb");
+  t("D3 a fast call returns its own value", await withExtraMailboxTimeout(Promise.resolve("ok"), "fb", 50), "ok");
+}
+
+console.log("E. REPLY ORIGINAL — the mailbox that holds the email being answered wins");
+{
+  const f = (mailbox: string, received: string, hintMatch = false) => ({ ok: true, mailbox, hintMatch, original: { receivedDateTime: received } });
+  t("E1 newest wins when no subject was named", pickReplyOriginal([f("main", "2026-11-01T10:00:00Z"), f("trinnex", "2026-11-05T10:00:00Z")])?.mailbox, "trinnex");
+  t("E2 a subject match beats a newer message elsewhere", pickReplyOriginal([f("main", "2026-11-05T10:00:00Z"), f("trinnex", "2026-11-01T10:00:00Z", true)])?.mailbox, "trinnex");
+  t("E3 failed lookups are never chosen", pickReplyOriginal([{ ok: false, mailbox: "main" }, f("trinnex", "2026-11-01T10:00:00Z")])?.mailbox, "trinnex");
+}
+
+console.log("F. TOKEN CACHE — keyed by owner AND mailbox");
+{
+  let n = 0;
+  journeyReply = undefined as unknown;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("https://journey.test")) {
+      n++;
+      const who = JSON.parse(String(init?.body ?? "{}")).caller?.entra_email;
+      return new Response(JSON.stringify({ ok: true, output: JSON.stringify({ access_token: `TOKEN-FOR-${who}`, expires_in: 3600 }) }), { status: 200 });
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+  const a = await mailboxAccess("shared@trinnex.io", "ownerA@enterpriseds.io");
+  const b = await mailboxAccess("shared@trinnex.io", "ownerB@enterpriseds.io");
+  t("F1 a second owner gets their OWN token, minted by journey", [a.token, b.token, n], [
+    "TOKEN-FOR-ownerA@enterpriseds.io",
+    "TOKEN-FOR-ownerB@enterpriseds.io",
+    2,
+  ]);
+  let threw = "";
+  try {
+    await mailboxAccess("shared@trinnex.io");
+  } catch (e) {
+    threw = (e as Error).message;
+  }
+  t("F2 no owner is refused even with a warm cache", /no owner/.test(threw), true);
+  globalThis.fetch = realFetch;
+}
+
+console.log("G. MAIN MAILBOX DECIDES — a failed main read is never reported as ok");
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("https://journey.test")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (body.toolName === "get_my_config")
+        return new Response(JSON.stringify({ ok: true, output: conns([
+          { provider: "office365", provider_account_email: "main@enterpriseds.io", is_active: true },
+          { provider: "office365", provider_account_email: "g@trinnex.io", is_active: true },
+        ]) }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, output: JSON.stringify({ access_token: "D", expires_in: 3600 }) }), { status: 200 });
+    }
+    if (url.includes("login.microsoftonline.com")) return new Response(JSON.stringify({ access_token: "APP-AT" }), { status: 200 });
+    if (url.includes("/users/main%40enterpriseds.io/calendarView")) return new Response("boom", { status: 500 });
+    if (url.includes("/me/calendarView"))
+      return new Response(JSON.stringify({ value: [{ id: "x", subject: "Trinnex standup", start: { dateTime: "2026-11-06T14:00:00" } }] }), { status: 200 });
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+  const r = await getOwnerCalendarEvents({ caller: { entra_email: "g-test@enterpriseds.io" }, startISO: "2026-11-06T00:00:00", endISO: "2026-11-06T23:59:59" });
+  t("G1 main calendar fails, Trinnex answers -> NOT ok (never a falsely clear calendar)", r.ok, false);
+  globalThis.fetch = realFetch;
+}
+
 if (fail) {
   console.log(`\n${fail} FAILED`);
   process.exit(1);

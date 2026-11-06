@@ -92,7 +92,10 @@ export async function runInboundEmailWatch(
     // Keep the instant-alert subscription alive (created/renewed here, so no new cron). Never throws,
     // and never blocks this run: the 5-minute check is the backstop for whatever it misses.
     let subscription: InboundEmailRunResult["subscription"];
-    if (!opts.dryRun) {
+    // Instant-alert subscriptions use Huddle's app key, so only an EnterpriseDS mailbox gets one;
+    // an outside main mailbox (only Trinnex connected) rides this 5-minute check instead.
+    const { isAppKeyMailbox } = await import("../journey/calendar-mailbox");
+    if (!opts.dryRun && isAppKeyMailbox(mailbox)) {
       const { ensureMailSubscription } = await import("./mail-subscription.server");
       subscription = await ensureMailSubscription({
         ownerEmail,
@@ -102,7 +105,7 @@ export async function runInboundEmailWatch(
       });
     }
 
-    const { listInboxMessagesSince } = await import("./graph-email.server");
+    const { listInboxMessagesSince, withExtraMailboxTimeout } = await import("./graph-email.server");
     const read = await listInboxMessagesSince(mailbox, since, 25, caller.entra_email);
     const tagged: { m: import("./inbound-email").InboundMessage; mailbox: string }[] = read.ok
       ? read.messages.map((m) => ({ m, mailbox }))
@@ -110,9 +113,16 @@ export async function runInboundEmailWatch(
     // Extra mailboxes never fail the run: one that is not approved yet or signed out is logged and
     // skipped, so it cannot take the main mailbox's alerts down with it.
     for (const extra of mailboxes.slice(1)) {
-      const r = await listInboxMessagesSince(extra, since, 25, caller.entra_email);
+      const r = await withExtraMailboxTimeout(listInboxMessagesSince(extra, since, 25, caller.entra_email), {
+        ok: false as const,
+        error: "timed out",
+      });
       if (r.ok) tagged.push(...r.messages.map((m) => ({ m, mailbox: extra })));
       else console.error("[inbound-email] extra mailbox read failed", r.error.slice(0, 160));
+    }
+    if (!read.ok && tagged.length) {
+      // Extras still alert, but the main mailbox's failure is never hidden behind them.
+      console.error("[inbound-email] main inbox read failed", read.error);
     }
     if (!read.ok && !tagged.length) {
       // The raw Graph text can echo the mailbox; log it server-side, return only the status code.
@@ -141,7 +151,14 @@ export async function runInboundEmailWatch(
     let delivered = 0;
 
     for (const { m, mailbox: msgMailbox } of msgs) {
-      const verdict = screenMessage(m, mode, msgMailbox);
+      // Mail FROM any of the owner's own connected mailboxes is his own mail, wherever it landed —
+      // a CC or forward between his two addresses is never announced back (VERIFY-second-mailbox-2c #3).
+      const fromSelf = mailboxes.some(
+        (mb) => mb.trim().toLowerCase() === String(m.fromAddress ?? "").trim().toLowerCase(),
+      );
+      const verdict: ScreenVerdict = fromSelf
+        ? { keep: false, reason: "self" }
+        : screenMessage(m, mode, msgMailbox);
       const row: (typeof decisions)[number] = {
         received: m.receivedDateTime ?? null,
         fromDomain:
@@ -224,7 +241,8 @@ export async function runInboundEmailWatch(
       }
     }
     return {
-      ok: true,
+      // A failed MAIN read is reported even when outside mailboxes still delivered their alerts.
+      ok: read.ok,
       mailboxResolved: true,
       mode,
       since,
@@ -232,6 +250,7 @@ export async function runInboundEmailWatch(
       decisions,
       delivered,
       subscription,
+      ...(read.ok ? {} : { error: "main inbox read failed" }),
     };
   } catch (err) {
     console.error("[inbound-email] run failed", err instanceof Error ? err.message : err);

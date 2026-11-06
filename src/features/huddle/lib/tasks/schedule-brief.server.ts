@@ -316,7 +316,7 @@ export async function meetingsForDate(
    *  in as for them. Their failures are logged, never fatal — the main mailbox decides `error`. */
   more: { extraMailboxes?: string[]; owner?: string } = {},
 ): Promise<{ items: BriefItem[]; error?: string }> {
-  const { getGraphCalendarEvents, graphEmailConfigured } =
+  const { getGraphCalendarEvents, graphEmailConfigured, withExtraMailboxTimeout } =
     await import("../email/graph-email.server");
   if (!graphEmailConfigured()) {
     // Honest absence: say the source is off rather than reporting an empty calendar.
@@ -338,7 +338,7 @@ export async function meetingsForDate(
     if (!r.ok) return { items: [], error: r.error || "calendar read failed" };
     const events = [...(r.events ?? [])];
     for (const mb of more.extraMailboxes ?? []) {
-      const x = await read(mb);
+      const x = await withExtraMailboxTimeout(read(mb), { ok: false, mailbox: mb, error: "timed out" });
       if (x.ok) events.push(...(x.events ?? []));
       else console.error("[schedule-brief] extra calendar read failed", x.error?.slice(0, 120));
     }
