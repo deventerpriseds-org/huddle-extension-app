@@ -231,7 +231,7 @@ export function withExtraMailboxTimeout<T>(
   const limit = new Promise<T>((resolve) => {
     timer = setTimeout(() => resolve(onTimeout), ms);
   });
-  return Promise.race([call.catch(() => onTimeout), limit]).finally(() => clearTimeout(timer));
+  return call.catch(() => onTimeout);
 }
 
 const delegatedTokenCache = new Map<string, { token: string; until: number }>();
