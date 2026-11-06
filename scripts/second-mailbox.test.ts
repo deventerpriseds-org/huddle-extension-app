@@ -139,7 +139,12 @@ const { withExtraMailboxTimeout, pickReplyOriginal, getOwnerCalendarEvents } = a
 console.log("D. EXTRA-MAILBOX TIME LIMIT — a hanging outside mailbox cannot hold up the main one");
 {
   const t0 = Date.now();
-  const hung = await withExtraMailboxTimeout(new Promise<string>(() => {}), "timed out", 50);
+  // The test bounds ITSELF: without the helper's limit this would hang forever, so a 1s guard turns
+  // that into a visible FAIL (and keeps a mutation run from hanging).
+  const hung = await Promise.race([
+    withExtraMailboxTimeout(new Promise<string>(() => {}), "timed out", 50),
+    new Promise<string>((r) => setTimeout(() => r("HUNG — no limit applied"), 1000)),
+  ]);
   t("D1 a call that never settles resolves to the fallback at the limit", [hung, Date.now() - t0 < 1000], ["timed out", true]);
   t("D2 a call that rejects resolves to the fallback", await withExtraMailboxTimeout(Promise.reject(new Error("x")), "fb", 50), "fb");
   t("D3 a fast call returns its own value", await withExtraMailboxTimeout(Promise.resolve("ok"), "fb", 50), "ok");
