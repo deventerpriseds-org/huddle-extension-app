@@ -4856,6 +4856,13 @@ judge time limits (5s create, 3s in-chat groom, 20s weekly). 2 verifier loops (V
 - Open (pre-existing, not built): agents can reassign via journey update_task without the judge; caller identity is
   client-asserted (owner chose to ship on today's trust model).
 
+### ACT:schedule-today-visible (2026-11-07) — BUILT ON BRANCH, PAUSED BY OWNER, NOT shipped
+Owner: "It reran the schedule and said it was done despite the error but the schedule view is empty" (screenshot: TODAY'S SCHEDULE header, nothing under it).
+- Ground truth: journey public.tasks + Huddle mirror both hold 5 rows today (2:45-8:00 PM ET). Live phone probe verify-uat run 42409814370 (`schedule-today-checks.mjs`): band liCount 5, bandHeight 0 — flex-column overflow-y-auto band squeezed to 0px by a long Up Next list.
+- Fix on branch `claude_schedule-today-visible` (10d551b + e1381de): ScrollBand `keep` = shrink-0 + max-h ~45vh on the Today band. tsc 0; `test:schedule-today-band` pass; mutation proof interrupted by owner (tree clean after).
+- Related shipped today: journey-voice#101 (background rebuild + one-at-a-time guard), huddle#155 (job-check follow-up turn). Verifier loop 1 for rebuild_schedule: VERIFY-rebuild-schedule-tool-1.md (journey branch claude_verify-rebuild-schedule-tool) — overlapping v1 runs left Nov 8 thin + 13 UP_NEXT unscheduled; 1970-01-01 start on "Start AI certification course" (old bug).
+- [ ] Owner: ship display fix? rebuild week to repair Nov 8? (both pending)
+
 ### ACT:rebuild-schedule-tool (2026-11-07) — DEPLOYED, NOT owner-confirmed
 Owner screenshot: asked Iris "I want you to re run the scheduling job"; she replied "I can't directly trigger the nightly scheduling job from this chat". Owner: "This needs to be fixed right away after an eds skills repo sync".
 - [x] eds-skills sync: setup.sh v75 applied, 16 hooks at v75; clones /workspace + /root current; /home/user/eds-claude-skills on a no-upstream feature branch left untouched.
