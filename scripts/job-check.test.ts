@@ -66,7 +66,7 @@ const hf = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
 const voice = readFileSync("src/features/huddle/lib/voice/realtime-tools.server.ts", "utf8");
 const rem = readFileSync("src/features/huddle/lib/tasks/reminders.ts", "utf8");
 const turns = readFileSync("src/features/huddle/lib/tasks/turns.server.ts", "utf8");
-check("W1 both text dispatch paths arm a job check", (hf.match(/await armJobCheck\(\{/g) ?? []).length === 2);
+check("W1 both text dispatch paths arm a job check on every successful journey call", (hf.match(/if \(r\.ok\) \{\s*\n\s*const \{ armJobCheck \} = await import\("\.\/tasks\/job-check\.server"\);\s*\n\s*await armJobCheck\(\{/g) ?? []).length === 2);
 check("W2 text paths pass the turn's own jobCheck as current", (hf.match(/current: data\.jobCheck \?\? null/g) ?? []).length === 2);
 check("W3 Input declares jobCheck", /\n  jobCheck: z\s*\n\s*\.object\(\{ tool: z\.string\(\)\.max\(40\), since: z\.string\(\)\.max\(40\), attempt:/.test(hf));
 check("W4 voice path arms a job check", /await armJobCheck\(\{\s*\n\s*toolName: name,/.test(voice));
