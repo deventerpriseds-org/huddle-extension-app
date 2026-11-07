@@ -132,3 +132,12 @@ function configureEdsSandboxReceiver() {
   P().setProperty('RECEIVER_URL', 'https://eds-tools-api.azurewebsites.net/api/huddle-sbx-drive-notify');
   console.log('EDS sandbox receiver configured');
 }
+
+function auditDuplicateReceipt() {
+ const p=P(), rows=JSON.parse(p.getProperty('EVIDENCE')||'[]');
+ const r=rows.filter(x=>x.headers && x.headers['x-goog-resource-state']==='update').slice(-1)[0];
+ if(!r) throw new Error('No real update receipt available');
+ const before=p.getProperty('EVIDENCE');
+ const answer=JSON.parse(doPost({postData:{contents:JSON.stringify({received_utc:r.azure_received_utc,headers:r.headers,auth:p.getProperty('TOKEN')})}}).getContent());
+ console.log(JSON.stringify({test:'replay-existing-real-receipt',answer:answer,evidence_unchanged:before===p.getProperty('EVIDENCE')}));
+}
