@@ -83,3 +83,44 @@ Adaptation: add a separate development-only, owner/file/source/type-allowlisted 
 Before PASS for Huddle, correlate real webhook receipt, durable turn ID, stored suggestion and Android device receipt to one original synthetic Event ID. Then collect 10 paced distinct end-to-end samples, one duplicate scenario, p50/p95 and failure counts. None of those downstream outcomes has been observed yet.
 
 References: [Google Drive push notifications](https://developers.google.com/workspace/drive/api/guides/push), [Azure Functions Node reference](https://learn.microsoft.com/en-us/azure/azure-functions/functions-reference-node?pivots=nodejs-model-v3).
+
+## Live Drive webhook execution, 2026-11-07 20:03–20:09 UTC
+
+**Test 1 PASS; Test 2 PASS for real Power Automate content change delivery. Test 3 review complete, runtime integration BLOCKED pending development adapter deployment and Android delivery observation.** No production change or paid resource was created.
+
+### Correlated event
+- Subject: HUDDLE-PA-SBX-20261107-DRIVE-C
+- Flow ID: e2aa77e2-bdcc-4c08-aeb2-92a116e639d3
+- [Successful real run](https://make.powerautomate.com/environments/Default-ee633423-c321-413c-a191-ace8b07e4196/flows/e2aa77e2-bdcc-4c08-aeb2-92a116e639d3/runs/08584075248762454217507063652CU00)
+- Run ID: 08584075248762454217507063652CU00
+- Send click: 20:06:30.207Z; inbox receipt: 20:06:33Z.
+- Trigger start/end UI: 20:06:49Z, duration 0.4 s.
+- Sheets insert start/end UI: 20:06:49Z / 20:06:51Z, duration 1.7 s, succeeded.
+- Processed UTC row value: 20:06:49.7617906Z. This is evaluated before the write, not an exact Google commit timestamp.
+- Inserted connector row ID: 5702ffc8d00149bd80d1f4dc2016ce4a. Events record read back independently by the webhook helper; Notes contains the real run ID above.
+- Notification inbox delivery independently verified by Outlook search: 20:06:53Z.
+- Azure webhook receipt: 20:07:02.225Z; helper receipt: 20:07:03.444Z; matching event read/ingested: 20:07:04.159Z.
+- Inbox to email delivery: 20 s; inbox to Azure webhook: 29.225 s; inbox to event ingestion: 31.159 s.
+- Write expression to Azure webhook: 12.463 s. Rounded write-action end to webhook about 11.2 s. No claim of precise commit-to-webhook latency.
+- One webhook-correlated sample; no p50/p95 claim.
+
+### Real Google registration and receipt headers
+Channel: HUDDLE-SBX-7b0a1557-69ae-4898-accd-6d697c0d0d60-73c4a319-bca9-4192-b4a1-6ae8175c1355
+Resource: 4QZN1w-3LG0r6CD41uxJ7dA_5y4
+Registered 20:03:40Z. Expiration: 2026-11-08T19:03:40Z.
+Initial sync reached Azure 20:03:41.141Z and helper 20:03:42.167Z, message number 1.
+Real update receipt:
+```json
+{"azure_received_utc":"2026-11-07T20:07:02.225Z","helper_received_utc":"2026-11-07T20:07:03.444Z","headers":{"x-goog-channel-id":"HUDDLE-SBX-7b0a1557-69ae-4898-accd-6d697c0d0d60-73c4a319-bca9-4192-b4a1-6ae8175c1355","x-goog-resource-id":"4QZN1w-3LG0r6CD41uxJ7dA_5y4","x-goog-resource-state":"update","x-goog-message-number":"201329","x-goog-changed":"content,properties","x-goog-channel-expiration":"Sun, 08 Nov 2026 19:03:40 GMT"}}
+```
+These sanitized Azure-generated receipt envelopes were persisted in the helper execution evidence. The receiver also emits them to Azure context.log; separate Azure Monitor retention/query was not verified. No tokens are included.
+
+### Executed error handling and deployment
+- eds-tools-api originally contained only host.json. Original and Azure Files backup SHA256 both bed39ce327ea421b377e41505ea7569bef1144f25c4b424e78558a60c0ded136.
+- Added only HuddleDriveNotify files. App settings updates failed both CLI and direct ARM with Cannot find ServerFarm EastUSLinuxDynamicPlan, despite matching plan ID, subscription and East US location.
+- Isolated non-secret sandbox-config.json fallback allowed operation without repairing or changing hosting. Raw channel token stays in Apps Script properties. Endpoint returned 403 to a deliberately unauthenticated probe.
+- Initial sync reconciliation returned Google 403. User activated Sheets API; real update reconciliation then succeeded.
+- Explicit replay audit at 20:08:41Z returned {"ok":true,"duplicate":true}, evidence_unchanged true. This audit replays an existing real receipt and is not claimed as a second real Google delivery.
+- One time-based maintainWatchAndReconcile trigger verified in Apps Script UI. Every five minutes; renews near expiration and reconciles bounded rows. Renewal across actual expiration and deliberately missed-webhook recovery have not been observed.
+- Reconciliation also found the older GOOGLE-B event once; that older event is not attributed to the new update.
+- Main Power Automate flow remains enabled; diagnostic flow was previously disabled. Maintenance is active. No Huddle adapter, Iris turn, proposed reply or Android push has been executed.
