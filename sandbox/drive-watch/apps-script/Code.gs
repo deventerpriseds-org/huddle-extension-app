@@ -127,3 +127,8 @@ function stopSandboxWatch() {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'maintainWatchAndReconcile').forEach(t => ScriptApp.deleteTrigger(t));
   p.deleteProperty('ACTIVE_CHANNEL');
 }
+
+function configureEdsSandboxReceiver() {
+  P().setProperty('RECEIVER_URL', 'https://eds-tools-api.azurewebsites.net/api/huddle-sbx-drive-notify');
+  console.log('EDS sandbox receiver configured');
+}
