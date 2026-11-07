@@ -601,9 +601,31 @@ function EmptyLine({ children, band }: { children: React.ReactNode; band?: boole
 /** Rows scroll rather than truncate — see the NO ROW CAP note at the top of this file. The cap is on
  *  HEIGHT (a viewport fraction), never on row count, so every row the query returned is reachable.
  *  In a full-page view there is no reason to constrain it at all. */
-function ScrollBand({ children, band, full }: { children: React.ReactNode; band?: boolean; full?: boolean }) {
+function ScrollBand({
+  children,
+  band,
+  full,
+  keep,
+}: {
+  children: React.ReactNode;
+  band?: boolean;
+  full?: boolean;
+  /** Never let a sibling squeeze this band away. On the full-page Schedule the sections share one fixed-
+   *  height flex column, and an `overflow-y-auto` child may shrink to ZERO height: on 2026-11-07 the
+   *  owner's TODAY'S SCHEDULE held 5 rows and rendered 0px tall under a long Up Next list (live phone
+   *  probe, verify-uat run 42409814370, schedule-today-checks.mjs). A kept band does not shrink; it caps at
+   *  about half the screen and scrolls itself instead. */
+  keep?: boolean;
+}) {
   return (
-    <div className={cn("overflow-y-auto", full ? "" : "max-h-[min(22rem,45vh)]")} style={band ? BAND_STYLE : undefined}>
+    <div
+      className={cn(
+        "overflow-y-auto",
+        full && !keep ? "" : "max-h-[min(22rem,45vh)]",
+        keep && "shrink-0",
+      )}
+      style={band ? BAND_STYLE : undefined}
+    >
       {children}
     </div>
   );
@@ -1317,7 +1339,7 @@ export function ScheduleWidget({
 
       <SectionLabel>Today’s schedule</SectionLabel>
       {data.todaySchedule.length > 0 ? (
-        <ScrollBand full={full}>
+        <ScrollBand full={full} keep>
           <ul className="border-t border-hairline">
             {data.todaySchedule.map((row) => (
               <ScheduleRowItem key={row.id} row={row} caller={caller} />
