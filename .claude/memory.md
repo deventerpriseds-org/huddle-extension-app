@@ -117,6 +117,14 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Agents can re-run the scheduling job — rebuild_schedule (2026-11-07; journey-voice#100 squash 5b67201 on journey main, Deploy Supabase Functions SUCCESS, live execute-tool v541 contains it; NOT owner-confirmed)
+Trigger: owner asked Iris "I want you to re run the scheduling job"; she said she couldn't. New journey execute-tool case
+`rebuild_schedule` (`_shared/rebuild-schedule.ts`) POSTs nightly-schedule-builder `{userId: <caller>, singleDay: scope==='today'}`
+— today = the app's Reschedule-today button body; week = the nightly 7-day run. Refuses unless `user_explicitly_requested:true`;
+userId never from args. Huddle needs NO change: it loads journey's tool catalog (`fetchJourneyToolDefinitions`, 60s TTL) for text
+AND voice. Evidence: npm test 649/649; mutate.sh 3/3 FIRED (consent, caller scope, dispatch). Live harness tests of 1:1 hand-offs
+are suspended until a harness flag suppresses `deliverOwnerFollowup` (accuracy-log 2026-11-04).
+
 ## Polish — text cleanup tool (2026-11-05; #146 MERGED squash 08457bc, deploy-swa run 42110354027 SUCCESS; NOT owner-confirmed live)
 - ECOSYSTEM (owner chose Option A): contract `docs/polish/CONTRACT-polish-ecosystem.md`. LIVE since 2026-11-05: huddle #148 (8986387) + nexus-hub #176 (2560f21) merged + deployed; live UAT Nexus /polish 3/3 (run 42128580189) and Huddle 7/7 (run 42128584455). Huddle `/api/public/polish` (turn-gate auth); Huddle Send › Google Drive → Nexus `/api/polish/gdrive`; Nexus /polish → Huddle engine. Untested live: email draft, OneDrive, Drive save, docx download. NOT owner-confirmed.
 - Owner (2026-11-05): apps must not depend on each other. Approved incremental: fastest path first (done), THEN a shared tools/connections service. Hosting choice pending (recommended: new `eds-tools` Azure Functions service holding the Polish engine + Google/Microsoft connections).
@@ -129,7 +137,7 @@ index into a requirement list**.
 - Prototype (approval artifact): https://claude.ai/artifact/7MJkFX17io8FHmVWwSZCAn
 - Send sheet (`PolishSendSheet.tsx`): email = DRAFT only (never sends) via createGraphDraft, mailbox list from HUDDLE_EMAIL_FROM; Word = renderMarkdownToDocx + createArtifact(folder "Polish", status approved) + mirrorArtifactToOneDrive (NON-fatal; download still returned). Google Drive: PR #148 adds Save to Google Drive via Nexus /api/polish/gdrive (not deployed); until then the .docx download is the stopgap. Live Graph draft / OneDrive upload NOT exercised by any test yet.
 
-## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04, branch claude_context-and-confirm, NOT merged, NOT deployed, NOT owner-confirmed)
+## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04; MERGED #133 squash 1ddd9ec, deploy-swa run 41769512390 SUCCESS; NOT owner-confirmed, NOT live-harness-verified)
 - **Confirm-intent:** the pre-model `isPlainConfirmation` short-circuit is GONE. Block A of `runHuddleTurn` is
   READ-ONLY (looks up the last-asked pending confirm, also on chunk continuations). A typed "ok"/"great" is
   recorded ONLY when the agent calls `confirm_task_intent` after reading it; `confirmReplyDirective` carries
