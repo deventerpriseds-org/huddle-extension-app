@@ -927,6 +927,19 @@ export async function executeRealtimeTool(
         caller: ctx.caller ?? {},
         context: { source: "huddle", huddleId: ctx.huddleId, agentId: ctx.agentId },
       });
+      // Long-running journey job (rebuild_schedule): arm the delayed follow-up check in the agent's DM,
+      // exactly as the text paths do (tasks/job-check.ts). The voice call itself can end; the result
+      // still lands in the 1:1 as a normal reply.
+      if (r.ok) {
+        const { armJobCheck } = await import("../tasks/job-check.server");
+        await armJobCheck({
+          toolName: name,
+          output: r.output,
+          huddleId: ctx.huddleId ?? (ctx.agentId ? `dm-${ctx.agentId}` : null),
+          agentId: ctx.agentId,
+          caller: ctx.caller,
+        });
+      }
       return done(annotateRawCreateOutput(r.output, dedup));
     }
     return done(JSON.stringify({ error: `Tool not available on the voice path: ${name}` }));
