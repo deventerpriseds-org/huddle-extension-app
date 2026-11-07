@@ -268,6 +268,12 @@ const Input = z.object({
   // and lane-deferral machinery must NOT run on it: doing so mis-reads the directive as "a user ask in
   // the wrong lane" and spawns follow-ups that re-trigger follow-ups (the notification-barrage loop).
   internal: z.boolean().optional(),
+  // A follow-up CHECK on a long-running journey job this DM started (tasks/job-check.ts): which tool, the
+  // started_at it returned, and which attempt this is. Lets a "still running" status arm the NEXT check,
+  // capped at MAX_JOB_CHECK_ATTEMPTS. Only fireJobCheck sets it.
+  jobCheck: z
+    .object({ tool: z.string().max(40), since: z.string().max(40), attempt: z.number().int().min(1).max(5) })
+    .optional(),
   // A new-email alert turn (inbound-email.server.ts): the email this turn is ABOUT, so the reply card
   // (Save to Drafts / Dismiss) is attached to the target agent's reply even if the model skips
   // propose_email_reply. Display-only; every button re-reads chat.email_replies by emailId.
@@ -4910,6 +4916,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 },
               });
               if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+              // Long-running journey job (rebuild_schedule): its start returns before the work is done, so
+              // arm a delayed follow-up check in this DM (tasks/job-check.ts). No-op for every other tool.
+              if (r.ok) {
+                const { armJobCheck } = await import("./tasks/job-check.server");
+                await armJobCheck({
+                  toolName: c.name,
+                  output: r.output,
+                  huddleId: data.huddleId,
+                  agentId: winner.id,
+                  caller: data.caller,
+                  current: data.jobCheck ?? null,
+                });
+              }
               recordToolUse(
                 winner.id,
                 c.name,
@@ -6574,6 +6593,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                       },
                     });
                     if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+                    // Same long-running job follow-up as the OpenAI path (tasks/job-check.ts).
+                    if (r.ok) {
+                      const { armJobCheck } = await import("./tasks/job-check.server");
+                      await armJobCheck({
+                        toolName: def.name,
+                        output: r.output,
+                        huddleId: data.huddleId,
+                        agentId: winner.id,
+                        caller: data.caller,
+                        current: data.jobCheck ?? null,
+                      });
+                    }
                     recordToolUse(
                       winner.id,
                       def.name,
