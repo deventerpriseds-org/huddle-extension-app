@@ -27,7 +27,8 @@ export const checks = [
     await page.waitForTimeout(800);
     await screenshot("schedule-today-band");
     const m = await page.evaluate(() => {
-      const labels = [...document.querySelectorAll("div")].filter((d) => /^today.s schedule$/i.test((d.textContent || "").trim()));
+      // The header is a <button> (collapsible section) since 2026-11-07; older builds used a <div>.
+      const labels = [...document.querySelectorAll("button,div")].filter((d) => /^today.s schedule(\s*\(\d+\))?$/i.test((d.textContent || "").trim()));
       const label = labels[labels.length - 1];
       if (!label) return { found: false };
       const band = label.nextElementSibling;
@@ -50,5 +51,30 @@ export const checks = [
     console.log("TODAY-BAND " + JSON.stringify(m));
     check("today band located", m.found === true, JSON.stringify(m));
     check("today band shows its rows (height > 0 when it has rows)", !m.found || m.liCount === 0 || (m.bandHeight ?? 0) > 20, JSON.stringify(m));
+    // Up Next must sit BELOW the last today row (pushed down, not overlapping or squeezing it).
+    const order = await page.evaluate(() => {
+      const today = [...document.querySelectorAll("button")].find((b) => /^today.s schedule/i.test((b.textContent || "").trim()));
+      const upnext = [...document.querySelectorAll("button")].find((b) => /^up next/i.test((b.textContent || "").trim()));
+      const lis = today ? [...(today.parentElement?.querySelectorAll("li") ?? [])] : [];
+      const lastBottom = lis.length ? Math.max(...lis.map((l) => l.getBoundingClientRect().bottom)) : null;
+      return { hasHeaders: Boolean(today && upnext), lastTodayBottom: lastBottom, upNextTop: upnext ? upnext.getBoundingClientRect().top : null, todayExpanded: today?.getAttribute("aria-expanded") };
+    });
+    check("sections are collapsible headers (Today's schedule, Up next)", order.hasHeaders && order.todayExpanded === "true", JSON.stringify(order));
+    check("Up next sits below the last Today row", order.lastTodayBottom === null || (order.upNextTop ?? 0) >= order.lastTodayBottom - 1, JSON.stringify(order));
+    // Collapse Today, see its rows go, expand again (restores the device's default).
+    const btn = page.getByRole("button", { name: /Collapse Today.s schedule/i }).first();
+    if (await btn.count()) {
+      await btn.click();
+      await page.waitForTimeout(300);
+      const collapsed = await page.evaluate(() => {
+        const today = [...document.querySelectorAll("button")].find((b) => /^today.s schedule/i.test((b.textContent || "").trim()));
+        return { expanded: today?.getAttribute("aria-expanded"), lis: today ? today.parentElement?.querySelectorAll("li").length ?? 0 : -1 };
+      });
+      await screenshot("schedule-today-collapsed");
+      check("tapping the Today header collapses it", collapsed.expanded === "false" && collapsed.lis === 0, JSON.stringify(collapsed));
+      await page.getByRole("button", { name: /Expand Today.s schedule/i }).first().click().catch(() => {});
+    } else {
+      check("tapping the Today header collapses it", false, "no 'Collapse Today's schedule' button found");
+    }
   },
 ];
