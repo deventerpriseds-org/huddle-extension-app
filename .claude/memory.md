@@ -117,10 +117,10 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
-## Schedule tab TODAY band collapsed to 0px (2026-11-07; fix on branch claude_schedule-today-visible, PAUSED by owner, NOT shipped)
+## Schedule tab TODAY band collapsed to 0px (2026-11-07; FIXED IN CODE #156 e29d4a8 + live probe 7/7; NOT owner-confirmed)
 The full-page Schedule (widgetShell "page" = fixed-height flex column) lets an `overflow-y-auto` ScrollBand shrink to ZERO:
 5 today rows rendered 0px tall under a long Up Next (verify-uat 42409814370, probe `schedule-today-checks.mjs`). Data was fine.
-Fix = ScrollBand `keep` (shrink-0 + max-h) on the Today band. Hardening: "view looks empty" — check the band's rendered height
+Fix (owner's design): Schedule page scrolls as a whole, bands flow at natural height (`ScrollBand flow`), all three sections are CollapsibleSection (open by default, per-device). Priorities page untouched. Hardening: "view looks empty" — check the band's rendered height
 in a real browser before blaming data; the empty-state line ("Nothing scheduled for today.") being ABSENT meant rows existed.
 rebuild_schedule v2 (journey#101 + huddle#155) is live: background start, one-at-a-time, follow-up job-check turn.
 
