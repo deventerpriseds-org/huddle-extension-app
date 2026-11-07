@@ -67,7 +67,8 @@
     "test:inbox-read": "bun scripts/inbox-read.test.ts",
     "test:context-and-confirm": "bun scripts/context-and-confirm.test.ts",
     "test:reminder-tools": "bun scripts/reminder-tools.test.ts",
-    "test:polish": "bun scripts/polish-core.test.ts"
+    "test:polish": "bun scripts/polish-core.test.ts",
+    "test:job-check": "bun scripts/job-check.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

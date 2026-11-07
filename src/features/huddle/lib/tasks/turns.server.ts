@@ -695,6 +695,7 @@ export async function getFiredRemindersSince(huddleId: string, sinceMs: number):
         (EXTRACT(EPOCH FROM fired_at) * 1000)::bigint AS fired_ms
        FROM chat.reminders
       WHERE huddle_id = $1 AND status = 'fired' AND fired_at > to_timestamp($2 / 1000.0)
+        AND kind <> 'job-check' -- internal follow-up checks (tasks/job-check.ts) are never shown as reminders
       ORDER BY fired_at ASC
       LIMIT 20`,
     [huddleId, Math.max(0, sinceMs)],
@@ -731,6 +732,7 @@ export async function listRemindersForOwner(
        FROM chat.reminders
       WHERE lower(coalesce(user_email, '')) = lower($1)
         AND status = ANY($2::text[])
+        AND kind <> 'job-check' -- internal follow-up checks are not the user's reminders
         AND due_at >= to_timestamp($3 / 1000.0)
       ORDER BY due_at ASC
       LIMIT $4`,
