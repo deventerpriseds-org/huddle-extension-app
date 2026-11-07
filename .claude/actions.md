@@ -4856,6 +4856,12 @@ judge time limits (5s create, 3s in-chat groom, 20s weekly). 2 verifier loops (V
 - Open (pre-existing, not built): agents can reassign via journey update_task without the judge; caller identity is
   client-asserted (owner chose to ship on today's trust model).
 
+### ACT:rebuild-schedule-tool (2026-11-07) — DEPLOYED, NOT owner-confirmed
+Owner screenshot: asked Iris "I want you to re run the scheduling job"; she replied "I can't directly trigger the nightly scheduling job from this chat". Owner: "This needs to be fixed right away after an eds skills repo sync".
+- [x] eds-skills sync: setup.sh v75 applied, 16 hooks at v75; clones /workspace + /root current; /home/user/eds-claude-skills on a no-upstream feature branch left untouched.
+- [x] journey-voice#100 (squash 5b67201): new additive `rebuild_schedule` tool (execute-tool + tool-definitions + `_shared/rebuild-schedule.ts`). scope today = app's Reschedule-today body `{userId, singleDay:true}`; week = nightly 7-day run. Caller-only userId; requires `user_explicitly_requested:true`. npm test 649/649, check:symbols clean, mutate.sh 3/3 FIRED. Deploy Supabase Functions success; live execute-tool v541 contains the case + definition. Huddle picks it up via the journey catalog (60s TTL) — no Huddle change.
+- [ ] Owner asks Iris again and confirms the schedule rebuilt.
+
 ### ACT:change-register-2026-11-03 — owner verdicts + 8 build lanes (2026-11-03/04)
 Owner: *"go until deployed. my bigger concern is you undoing or pivoting or regressing previous design without getting my thumbs up first."* → hard rule merged (#128, 32f50e4).
 - Verdicts: #1 MODIFIED (short "ok"/"great" in a 1:1 confirms the task last asked about, AFTER the agent reads the message) + NEW: 1:1 widgets/buttons/process rows missing from agent context + NEW BUG: attachment button broken. #2-#13, #15 APPROVED; #11 = agents write @handle to bring teammates in. #14 ON HOLD (recommended hold).
