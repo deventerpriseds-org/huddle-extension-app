@@ -5066,3 +5066,8 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
   was never sent anywhere. Not yet traced to which alarms lack the token.
 - **Pending owner decision:** A) one shared pool (~8) in Huddle -- free, recommended; B) bigger Azure DB tier
   (~$35-50/mo more); C) both. Also pending go: trace alarm pushes missing the action token.
+
+### ACT:history-paging-reapplied (2026-11-08) — owner: "the paging is proven safe so the rollback isn't necessary, reapply"
+- Reverted the rollback (#183): the app again opens with the recent window (30 days + newest 40 per huddle), loads
+  older pages on scroll-up, and saves MERGE by id. The load/save failures were DB connection exhaustion
+  (ACT:db-connection-exhaustion, fixed by one shared pool #185), not paging. #173's alarm skip stays.
