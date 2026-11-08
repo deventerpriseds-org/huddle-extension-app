@@ -363,7 +363,7 @@ export function priorAttemptDispatches(
 // Tokens follow journey's own dedup signature (journey-voice supabase/functions/_shared/task-dedup.ts
 // `titleSignature`: lowercase, NFKD, punctuation stripped, the SAME filler-stopword list) plus a trailing-s
 // plural strip. A title matches a sent title on normalizeTaskTitle equality, or on token-set Jaccard >=
-// RERUN_REWORD_JACCARD with >= RERUN_REWORD_MIN_SHARED shared tokens. Measured on the real 11-07 lines
+// RERUN_REWORD_JACCARD (which includes journey's own exact-signature match). Measured on the real 11-07 lines
 // (FIX-iris-timeout-no-rerun.md, Revision B): 13/17 re-sent paraphrases caught, 0/253 distinct-original
 // pairs matched, 2/9 near-miss new tasks wrongly skipped. Misses fall through to journey's semantic dedup.
 
@@ -372,7 +372,6 @@ const REWORD_STOPWORDS = new Set([
   "on", "in", "at", "with", "this", "that", "please", "pls", "now",
 ]);
 export const RERUN_REWORD_JACCARD = 0.7;
-export const RERUN_REWORD_MIN_SHARED = 3;
 
 /** Significant tokens of a title (journey's signature tokens + a plural strip), as a set. */
 export function titleTokenSet(title: string): Set<string> {
@@ -399,7 +398,7 @@ export function isRewordOf(candidate: string, sent: string): boolean {
   let shared = 0;
   for (const t of a) if (b.has(t)) shared++;
   const union = a.size + b.size - shared;
-  return union > 0 && shared >= RERUN_REWORD_MIN_SHARED && shared / union >= RERUN_REWORD_JACCARD;
+  return union > 0 && shared / union >= RERUN_REWORD_JACCARD;
 }
 
 export type AlreadySent = { title: string; matchedSentTitle: string };

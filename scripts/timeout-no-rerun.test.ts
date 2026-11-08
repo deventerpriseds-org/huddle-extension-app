@@ -211,6 +211,8 @@ describe("(b) the re-queued attempt skips ONLY what it already sent (Revision B)
     // exact (normalizeTaskTitle: case, trailing punctuation, quotes, spaces)
     expect(splitByPriorDispatch(ledger, "iris-chase", "A2", ["  measure MY panel. "]).alreadySent.length).toBe(1);
     expect(splitByPriorDispatch(ledger, "iris-chase", "A2", ['"Clean my office"']).alreadySent.length).toBe(1);
+    // journey's exact signature (same significant tokens, any order) on a short title
+    expect(splitByPriorDispatch(ledger, "iris-chase", "A2", ["Office clean"]).alreadySent.length).toBe(1);
     // loose (word order, filler, plural)
     expect(splitByPriorDispatch(ledger, "iris-chase", "A2", ["Debug the WIP in Huddle end to end"]).alreadySent.length).toBe(1);
     expect(splitByPriorDispatch(ledger, "iris-chase", "A2", ["Prepare intro scripts for intro meetings, including questions"]).alreadySent.length).toBe(1);

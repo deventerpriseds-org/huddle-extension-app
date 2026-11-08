@@ -130,7 +130,7 @@ plus a trailing-`s` plural strip.
 | exact signature (journey's layer 1) | 5/17 | 0/253 | 0/9 |
 | Jaccard >= 0.6 | 16/17 | 0/253 | 4/9 |
 | containment >= 0.8 | 16/17 | 0/253 | 3/6 (smaller set) |
-| **Jaccard >= 0.7 AND >= 3 shared tokens (chosen)** | **13/17** | **0/253** | **2/9** |
+| **Jaccard >= 0.7 (chosen; a >=2 or >=3 shared-token floor measured identical)** | **13/17** | **0/253** | **2/9** |
 | Jaccard >= 0.75 | 10/17 | 0/253 | 2/9 |
 
 Reasoning (INFERRED): token overlap cannot separate "reworded" from "different by one content word"; both
@@ -143,7 +143,8 @@ set a couple of initial strategies", and "Define a software engineering maturity
 ### Steps (Revision B)
 1. **Helpers** (`create-task-core.ts`): `priorBatchDispatch` REMOVED. Added `titleTokenSet`, `isRewordOf`,
    `splitByPriorDispatch`, `alreadySentSkips`, constants `RERUN_REWORD_JACCARD = 0.7` /
-   `RERUN_REWORD_MIN_SHARED = 3`. `alreadyDispatchedResult` now takes the matched pairs (title → sent title).
+   no shared-token floor: at Jaccard >= 0.7 a 2-token floor only ever blocked identical 2-token sets
+   (journey's own signature match, e.g. "Office clean" vs "Clean my office"), so it was dropped. `alreadyDispatchedResult` now takes the matched pairs (title → sent title).
    The re-run directive now ends "If the user asked for anything that is NOT on this list, create it normally."
 2. **Call sites** (`huddle.functions.ts`): `createBatchTasksFromTool` sends `rerun.fresh` and lists the rest in
    `skipped` with the sent title they matched; `createSuggestedTaskFromTool` skips only a matching title;
