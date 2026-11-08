@@ -7,3 +7,19 @@
 # EVIDENCE:   tested head d186cf12 (detached from origin/claude_trinnex-onedrive-feed)
 
 ## Claims
+
+### Suites (observed, head d186cf12)
+- onedrive-feed.test.ts: all passed | inbound-email.test.ts: 69/0 | schedule-brief: 76/0 | schedule-brief-dedupe: 21/0
+- mail-subscription: 24/0 | ownership-judge: ALL PASS | journey-calendar-edit-exposure: 13/0 | tsc --noEmit: rc=0
+
+### Fix re-derivation (observed unless marked)
+- D1 CONFIRMED: graph-permission-check FEED_CONFIG = `inputs.feed_dry_run && secrets.HUDDLE_ONEDRIVE_FEEDS`; old feed_config/own_addresses inputs removed. Residual (inferred, low): section-6 dry run prints sender DOMAINS per record; with live mail, internal senders reveal the work-mailbox domain. Secret masking covers the whole JSON string only.
+- onedrive-feed-config.yml CONFIRMED no private value printed: inputs are public EDS values; token/mailbox/source_login masked before use and never echoed; only config KEYS printed; python errors print no data.
+- D2 CONFIRMED: propose_email_reply adds draftable:false when isFeedId(row.graph_message_id); graphMessageId is stored from m.id (feed: prefix); email-reply-ask parses it; HuddleView renders copy-only; server draft path also refuses feed ids.
+- D3 CONFIRMED: getOwnerCalendarEvents keeps feed events on EDS failure with ok:false/error; meetingsForDate keeps items and returns error; buildBrief pushes `meetings: <error>` and keeps items.
+- D4 PARTIAL: id-less / array records dropped and `skipped` set (probe: 4 records -> recs=2 skipped=2), but nothing reads `skipped` (no log/warning) -- the count is dead data.
+- D5 PARTIAL: reply header tail, blockquote and URL query strings dropped (probe H1/H2/H3). Nested blockquote leaks the outer quote's tail: `<blockquote>a<blockquote>b?</blockquote>c?</blockquote>` -> "c?" survives. EDS path does not call htmlToText (only mapFeedMessage does).
+- D7 CONFIRMED: wrong/case-different source -> wrong_source; live config refuses synthetic true/missing/"false"; published >10 min ahead -> bad_timestamps (5 min ok); email window_start > published -> bad_timestamps.
+- D8 CONFIRMED (code): >7d-old calendar snapshot adds warning. D9 CONFIRMED (code): one AbortSignal.timeout(10s) shared by metadata + content.
+- Self rule (d186cf12) CONFIRMED against new intent: verdict = screenMessage(m, mode, msgMailbox) for both sources; isFromOwner removed everywhere (grep: no references).
+- Flood: notBefore drops pre-enable mail (probe: 02:59 dropped, 03:01 kept, duplicate id deduped); MAX_PER_RUN=5 shared across EDS+feed, checked before recordOwedEmail; turn id = inboundEmailTurnId(m.id) (once per email). CONFIRMED.
