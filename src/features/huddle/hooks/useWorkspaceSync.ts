@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { getToken, isAuthBypassActive } from "@/lib/entra-auth";
 import { useAuth } from "@/hooks/useAuth";
 import { loadWorkspace, saveWorkspace } from "@/features/huddle/lib/identity/workspace.functions";
+import { RECENT_DAYS } from "@/features/huddle/lib/identity/workspace-window";
 import {
   clearLegacyLocalWorkspace,
   getPersistablePayload,
@@ -80,7 +81,9 @@ export function useWorkspaceSync() {
           }
           return;
         }
-        const remote = await loadWorkspace({ data: { idToken } });
+        // Paged history: open with the recent window only; older pages load on scroll-up
+        // (Transcript -> loadOlderMessages). Saves then MERGE into the stored history (mergeMessages).
+        const remote = await loadWorkspace({ data: { idToken, recentDays: RECENT_DAYS } });
         if (cancelled) return;
         if (remote) {
           try {
@@ -151,7 +154,8 @@ export function useWorkspaceSync() {
           if (!idToken) return;
           const payload = getPersistablePayload();
           await saveWorkspace({
-            data: { idToken, stateJson: JSON.stringify(payload) },
+            // The app holds only a WINDOW of history, so the server merges by id rather than replacing.
+            data: { idToken, stateJson: JSON.stringify(payload), mergeMessages: true },
           });
         } catch (e) {
           console.error("[workspace-sync] save failed", e);
