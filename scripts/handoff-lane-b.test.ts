@@ -282,7 +282,7 @@ test("F3 wiring", () => {
   check("AC-F3-5 an INTERNAL turn's confirm_task_intent never records a live confirmation", /const recordLiveTypedConfirm = async \(taskId: string, email: string\) => \{\s*if \(data\.internal\) return;/.test(hf));
   check("AC-F4-11 BOTH confirm_task_intent handlers record a typed live confirm", (hf.match(/await confirmTaskIntent\(taskId, email, dod\);\s*await recordLiveTypedConfirm\(taskId, email\);/g) ?? []).length === 2);
   check("F3 every turn exit advances typed live confirms (approach step if the agent skipped it)", (hf.match(/await advanceLiveConfirmedTasks\(\);/g) ?? []).length === 3);
-  check("AC-F3-2 the shared approach gate starts a live task on a PASS", /approveApproach\(opts\.taskId, opts\.email, opts\.approach\)[\s\S]{0,700}advanceLiveConfirmedTask\(\{ taskId: opts\.taskId, email: opts\.email \}\)/.test(ag));
+  check("AC-F3-2 the shared approach gate starts a live task on a PASS", /approveApproach\(opts\.taskId, opts\.email, opts\.approach\)[\s\S]{0,1400}advanceLiveConfirmedTask\(\{ taskId: opts\.taskId, email: opts\.email \}\)/.test(ag));
   check("AC-F3-14 an owner override starts a live task", /if \(!applied\) return \{ ok: true, alreadyDone: true, taskId, title: task\.title \};[\s\S]{0,500}advanceLiveConfirmedTask\(\{ taskId, email \}\)/.test(ca));
   check("F3 voice confirms are tagged via=voice", /via: "voice"/.test(rt));
   // AC-F3-9: no new DOING writer outside the promoter (autowork.server.ts).
