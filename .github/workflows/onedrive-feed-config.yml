@@ -1,0 +1,109 @@
+name: Configure work-mailbox OneDrive feed (sets HUDDLE_ONEDRIVE_FEEDS)
+
+# WHAT:       Builds the server-only HUDDLE_ONEDRIVE_FEEDS config and stores it as a repo secret, which
+#             deploy-swa.yml syncs to the app. Then the next deploy turns the feed on (or off).
+# WHY:        The session proxy 403s /actions/secrets (same reason as vapid-keys.yml), and the config holds
+#             private values (the work mailbox, the source login) that must never pass through a workflow
+#             INPUT: inputs are printed in this PUBLIC repo's logs (VERIFY-trinnex-onedrive-feed-1 D1).
+#             So the private values are READ ON THE RUNNER from the feed file's own envelope with the
+#             app-only Graph token, masked before anything is printed, and never echoed.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/actions.md ACT:trinnex-onedrive-feed; external-feeds/onedrive-feed.ts parseFeedsConfig.
+#
+# Inputs carry ONLY values already public in this repo (EDS addresses, paths, flags).
+
+on:
+  workflow_dispatch:
+    inputs:
+      enabled:
+        description: "true = feed ON; false = write a disabled config (feed OFF after the next deploy)."
+        required: true
+        type: boolean
+        default: true
+      drive_user:
+        description: "EDS user whose OneDrive holds the feed files."
+        required: true
+        default: "von.ellis@enterpriseds.io"
+      owner_logins:
+        description: "Comma list: Huddle logins / data-scope emails the feed belongs to."
+        required: true
+        default: "dev@enterpriseds.io,von.ellis@enterpriseds.io"
+      live:
+        description: "true = the flows publish LIVE mail (synthetic=false). false = synthetic test mode (needs subject_prefix)."
+        required: true
+        type: boolean
+        default: true
+      subject_prefix:
+        description: "Synthetic mode only: the test subject prefix."
+        required: false
+        default: "HUDDLE-PA-SBX-"
+      not_before_now:
+        description: "true = never announce mail received before this run (stops a backlog flood on first enable)."
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GHUB_KEY }}
+      REPO: ${{ github.repository }}
+      TENANT: ${{ secrets.AZURE_TENANT_ID }}
+      CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      IN_ENABLED: ${{ inputs.enabled }}
+      IN_DRIVE_USER: ${{ inputs.drive_user }}
+      IN_OWNER_LOGINS: ${{ inputs.owner_logins }}
+      IN_LIVE: ${{ inputs.live }}
+      IN_PREFIX: ${{ inputs.subject_prefix }}
+      IN_NOT_BEFORE_NOW: ${{ inputs.not_before_now }}
+    steps:
+      - name: Build config on the runner and store it as a secret
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then echo "::error::GHUB_KEY is empty for this repo (org secret not granted to it)"; exit 1; fi
+          if [ "$IN_ENABLED" != "true" ]; then
+            echo '{"enabled":false}' > /tmp/cfg.json
+          else
+            TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
+              -d "client_id=$CLIENT_ID" --data-urlencode "client_secret=$CLIENT_SECRET" \
+              -d "scope=https://graph.microsoft.com/.default" -d "grant_type=client_credentials" \
+              | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
+            echo "::add-mask::$TOKEN"
+            [ -n "$TOKEN" ] || { echo "::error::no app-only Graph token"; exit 1; }
+            HTTP=$(curl -s -L -o /tmp/env.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+              "https://graph.microsoft.com/v1.0/users/$IN_DRIVE_USER/drive/root:/automation/email/emails.json:/content")
+            [ "$HTTP" = "200" ] || { echo "::error::could not read the email feed file (HTTP $HTTP)"; exit 1; }
+            # Private values: read from the file, MASKED before anything else can print them.
+            MAILBOX=$(python3 -c 'import json;print(str(json.load(open("/tmp/env.json")).get("mailbox","")).strip().lower())')
+            SRC_LOGIN=$(python3 -c 'import json;print(str(json.load(open("/tmp/env.json")).get("source_login","")).strip().lower())')
+            [ -n "$MAILBOX" ] && echo "::add-mask::$MAILBOX"
+            [ -n "$SRC_LOGIN" ] && echo "::add-mask::$SRC_LOGIN"
+            [ -n "$MAILBOX" ] || { echo "::error::feed file has no mailbox"; exit 1; }
+            NOT_BEFORE=""
+            [ "$IN_NOT_BEFORE_NOW" = "true" ] && NOT_BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            MAILBOX="$MAILBOX" SRC_LOGIN="$SRC_LOGIN" NOT_BEFORE="$NOT_BEFORE" python3 - <<'PY' > /tmp/cfg.json
+          import json, os
+          live = os.environ["IN_LIVE"] == "true"
+          cfg = {
+              "enabled": True,
+              "ownerLogins": [e.strip().lower() for e in os.environ["IN_OWNER_LOGINS"].split(",") if e.strip()],
+              "driveUser": os.environ["IN_DRIVE_USER"].strip().lower(),
+              "mailbox": os.environ["MAILBOX"],
+              "synthetic": not live,
+              "maxBytes": 8000000,
+          }
+          if os.environ.get("SRC_LOGIN"): cfg["sourceLogin"] = os.environ["SRC_LOGIN"]
+          if not live: cfg["subjectPrefix"] = os.environ.get("IN_PREFIX", "").strip()
+          if os.environ.get("NOT_BEFORE"): cfg["notBeforeUtc"] = os.environ["NOT_BEFORE"]
+          print(json.dumps(cfg))
+          PY
+          fi
+          # Shape only -- never the values.
+          python3 -c 'import json;c=json.load(open("/tmp/cfg.json"));print("config keys:", sorted(c.keys()), "| enabled", c.get("enabled"), "| synthetic", c.get("synthetic"), "| notBefore set", "notBeforeUtc" in c)'
+          gh secret set HUDDLE_ONEDRIVE_FEEDS --repo "$REPO" < /tmp/cfg.json
+          echo "HUDDLE_ONEDRIVE_FEEDS stored. Re-run deploy-swa.yml (or push to main) to apply it to the app."
