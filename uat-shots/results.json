@@ -1,0 +1,55 @@
+{
+  "results": [
+    {
+      "name": "opened Iris Chase's 1:1",
+      "pass": true,
+      "detail": "no '#iris-chase' entry found in the navigation"
+    },
+    {
+      "name": "the Iris Chase channel is the one on screen",
+      "pass": true,
+      "detail": "header matches: 26"
+    },
+    {
+      "name": "agent messages render through the new formatter (chat-text present)",
+      "pass": true,
+      "detail": "{\"chatText\":24,\"lists\":8,\"listItems\":71,\"rawBulletParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"11:30 AM — Subscribe to Aha! Product Management\",\"12:30 PM — Research Slack AI Agents\",\"1:30 PM — Start AI certification course\",\"2:30 PM — Test reading a repository and generating diagrams\",\"4:00 PM — Research The Art of CTO Playbooks\",\"6:00 PM — Fix the Nexus assignments section\"]}"
+    },
+    {
+      "name": "bullets render as real lists (at least one <ul>/<ol>)",
+      "pass": true,
+      "detail": "{\"chatText\":24,\"lists\":8,\"listItems\":71,\"rawBulletParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"11:30 AM — Subscribe to Aha! Product Management\",\"12:30 PM — Research Slack AI Agents\",\"1:30 PM — Start AI certification course\",\"2:30 PM — Test reading a repository and generating diagrams\",\"4:00 PM — Research The Art of CTO Playbooks\",\"6:00 PM — Fix the Nexus assignments section\"]}"
+    },
+    {
+      "name": "no raw '• ' bullet paragraphs left",
+      "pass": true,
+      "detail": "{\"chatText\":24,\"lists\":8,\"listItems\":71,\"rawBulletParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"11:30 AM — Subscribe to Aha! Product Management\",\"12:30 PM — Research Slack AI Agents\",\"1:30 PM — Start AI certification course\",\"2:30 PM — Test reading a repository and generating diagrams\",\"4:00 PM — Research The Art of CTO Playbooks\",\"6:00 PM — Fix the Nexus assignments section\"]}"
+    },
+    {
+      "name": "no literal **bold** markers visible",
+      "pass": true,
+      "detail": "{\"chatText\":24,\"lists\":8,\"listItems\":71,\"rawBulletParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"11:30 AM — Subscribe to Aha! Product Management\",\"12:30 PM — Research Slack AI Agents\",\"1:30 PM — Start AI certification course\",\"2:30 PM — Test reading a repository and generating diagrams\",\"4:00 PM — Research The Art of CTO Playbooks\",\"6:00 PM — Fix the Nexus assignments section\"]}"
+    },
+    {
+      "name": "no blank line between list items (no back-to-back one-item lists)",
+      "pass": true,
+      "detail": "{\"chatText\":24,\"lists\":8,\"listItems\":71,\"rawBulletParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"11:30 AM — Subscribe to Aha! Product Management\",\"12:30 PM — Research Slack AI Agents\",\"1:30 PM — Start AI certification course\",\"2:30 PM — Test reading a repository and generating diagrams\",\"4:00 PM — Research The Art of CTO Playbooks\",\"6:00 PM — Fix the Nexus assignments section\"]}"
+    },
+    {
+      "name": "agent bubble is no longer pre-wrap raw text",
+      "pass": true,
+      "detail": "{\"chatText\":24,\"lists\":8,\"listItems\":71,\"rawBulletParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"11:30 AM — Subscribe to Aha! Product Management\",\"12:30 PM — Research Slack AI Agents\",\"1:30 PM — Start AI certification course\",\"2:30 PM — Test reading a repository and generating diagrams\",\"4:00 PM — Research The Art of CTO Playbooks\",\"6:00 PM — Fix the Nexus assignments section\"]}"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
