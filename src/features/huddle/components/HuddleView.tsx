@@ -1859,7 +1859,8 @@ function Composer({ huddle }: { huddle: Huddle }) {
       if (all.some((m) => m.id === mid)) return;
       // Paged history: a reminder older than this thread's oldest loaded message is already in the stored
       // history and comes back with the older pages -- never append it to the bottom as if it were new.
-      if (!shouldAppendReminder(r.firedMs, all.filter((m) => m.huddleId === huddle.id))) return;
+      const inThread = all.filter((m) => m.huddleId === huddle.id);
+      if (!shouldAppendReminder(r.firedMs, inThread)) return;
       const agentId = (
         r.agentId && AGENT_BY_ID[r.agentId as AgentId] ? r.agentId : huddle.members[0]
       ) as AgentId;
@@ -1878,7 +1879,12 @@ function Composer({ huddle }: { huddle: Huddle }) {
       // before it is wiped while the cursor has already moved past it, and the skip rule above needs the
       // loaded history to compare against.
       if (!isWorkspaceHydrated()) {
-        if (!hydrationRetry) hydrationRetry = setTimeout(() => { hydrationRetry = null; void poll(); }, 2_000);
+        if (!hydrationRetry) {
+          hydrationRetry = setTimeout(() => {
+            hydrationRetry = null;
+            void poll();
+          }, 2_000);
+        }
         return;
       }
       try {

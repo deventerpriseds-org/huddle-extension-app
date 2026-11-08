@@ -71,7 +71,7 @@ check("A4 a thread with nothing loaded takes every alarm", shouldAppendReminder(
 check("A5 messages without a usable ts don't define the window", shouldAppendReminder(NOW - 90 * DAY, [{ id: "z" }, { id: "y", ts: NaN }]));
 const pollStart = view.indexOf("// Reminder delivery:");
 const pollSrc = view.slice(pollStart, view.indexOf("}, [huddle.id]);", pollStart));
-check("A6 the reminder poll applies the rule before appending", /if \(!shouldAppendReminder\(r\.firedMs, all\.filter\(\(m\) => m\.huddleId === huddle\.id\)\)\) return;/.test(pollSrc));
+check("A6 the reminder poll applies the rule before appending", /const inThread = all\.filter\(\(m\) => m\.huddleId === huddle\.id\);\s*\n\s*if \(!shouldAppendReminder\(r\.firedMs, inThread\)\) return;/.test(pollSrc));
 check("A7 the reminder poll waits for the history to load (hydrate replaces the list)", /if \(!isWorkspaceHydrated\(\)\) \{/.test(pollSrc) && pollSrc.indexOf("isWorkspaceHydrated()") < pollSrc.indexOf("getReminderDeliveries({"));
 
 // load-failure reason (owner option A, 2026-11-08)

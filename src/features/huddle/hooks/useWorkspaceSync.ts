@@ -48,7 +48,8 @@ export function useWorkspaceSync() {
       if (cancelled) return;
       if (attempt + 1 < LOAD_MAX_ATTEMPTS) {
         // From the second failure on, say WHY it is retrying (owner option A, 2026-11-08).
-        if (attempt >= 1) toast.loading(`Loading your message history… (retrying: ${why})`, { id: LOAD_TOAST_ID });
+        if (attempt >= 1)
+          toast.loading(`Loading your message history… (retrying: ${why})`, { id: LOAD_TOAST_ID });
         retryTimer = setTimeout(() => void load(attempt + 1), LOAD_RETRY_MS);
       } else {
         toast.error(
