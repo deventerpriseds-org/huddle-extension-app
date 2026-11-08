@@ -4859,6 +4859,12 @@ judge time limits (5s create, 3s in-chat groom, 20s weekly). 2 verifier loops (V
 - Open (pre-existing, not built): agents can reassign via journey update_task without the judge; caller identity is
   client-asserted (owner chose to ship on today's trust model).
 
+### ACT:history-paging + ACT:apk-mic (2026-11-08) — BUILT, shipping
+Owner: "loading some amount and as i scroll far enough up for it to load more and more as I go indefinitely" + "The other two audio buttons don't work ... 'Could not start audio source'".
+- History paging (branch claude_history-paging): open = last 30 days + newest 40 per huddle; scroll-top fetches 60 older (loadOlderMessages, SQL-filtered); paged saves MERGE by id under FOR UPDATE; old clients unchanged. test:workspace-window 22/22; mutate.sh 3/3 FIRED; 62/62 suites; tsc 0. Backup: identity.workspace_state_bak_20261108 (3,766 msgs). Live SQL page check: 61 rows, 0 bad ts.
+- Mic (android-bridge-template claude_mic-permission 95b827b): Huddle config has no voice block -> app never requested RECORD_AUDIO; onPermissionRequest now asks Android, then grants/denies the page. Android CI green.
+- [ ] Owner confirms: fast open + scroll-up loads older; mic works after installing the next Huddle APK.
+
 ### ACT:history-load-slow (2026-11-07) — RESOLVED ITSELF, owner-confirmed "fixed again now"; decision pending
 Owner: "stuck saying loading after the schedule view updates" (screenshot: "Loading your message history…", demo seed shown).
 - Evidence: deploy-swa runs finished 20:12:55Z (f9208cf) and 20:25:35Z (e29d4a8 #156) right before the report; live loadWorkspace probe (agent-serverfn-uat 42412108286) answered in 267-381ms; DB 26 conns / 1 active; workspace_state intact (2.63M chars, 3,730 messages Jul 10 -> Nov 7, saved 20:14Z).
