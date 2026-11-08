@@ -287,5 +287,122 @@ const email = BUILTIN_PROFILES[0];
   if (saved.k !== undefined) process.env.OPENAI_API_KEY = saved.k;
 }
 
+// 12. Phase 2: profiles come from eds-tools; the blob seeds it once; unreachable -> blob.
+{
+  const { loadOwnPolishProfiles, edsToolsProfiles } =
+    await import("../src/features/huddle/lib/polish/polish.server");
+  const savedTok = process.env.JOURNEY_PROXY_TOKEN;
+  process.env.JOURNEY_PROXY_TOKEN = "tok";
+  const blobDoc = {
+    profiles: [{ ...email, id: "c-blob", name: "From blob", custom: true }],
+    lastProfileId: "c-blob",
+  };
+  const blob = async () => blobDoc;
+  const calls: { method: string; user: string; body?: string }[] = [];
+  const fake =
+    (getBody: unknown, status = 200) =>
+    async (_u: string | URL | Request, init?: RequestInit) => {
+      const h = init?.headers as Record<string, string>;
+      calls.push({
+        method: String(init?.method),
+        user: h["x-eds-user"],
+        body: init?.body as string,
+      });
+      const body =
+        init?.method === "PUT" ? { ok: true, ...JSON.parse(String(init.body)) } : getBody;
+      return { status, json: async () => body } as unknown as Response;
+    };
+
+  calls.length = 0;
+  const a = await loadOwnPolishProfiles(
+    "Me@Example.com",
+    fake({
+      ok: true,
+      found: true,
+      profiles: [
+        { id: "c-shared", name: "Shared" },
+        { id: "work-email", name: "spoof" },
+      ],
+      lastProfileId: "c-shared",
+    }) as typeof fetch,
+    blob,
+  );
+  check(
+    "profiles: eds-tools found -> used",
+    a.source === "eds-tools" && a.profiles.length === 1 && a.profiles[0].id === "c-shared",
+    JSON.stringify(a),
+  );
+  check(
+    "profiles: built-in id from service dropped",
+    !a.profiles.some((p) => p.id === "work-email"),
+  );
+  check(
+    "profiles: user sent lowercased",
+    calls[0]?.user === "me@example.com",
+    JSON.stringify(calls),
+  );
+  check("profiles: found -> no seed write", !calls.some((c) => c.method === "PUT"));
+
+  calls.length = 0;
+  const b = await loadOwnPolishProfiles(
+    "me@example.com",
+    fake({ ok: true, found: false, profiles: [], lastProfileId: "work-email" }) as typeof fetch,
+    blob,
+  );
+  const put = calls.find((c) => c.method === "PUT");
+  check(
+    "profiles: empty service seeded from blob",
+    !!put && put.body!.includes("c-blob"),
+    JSON.stringify(calls),
+  );
+  check(
+    "profiles: seeded result used",
+    b.source === "eds-tools" && b.profiles[0]?.id === "c-blob",
+    JSON.stringify(b),
+  );
+
+  calls.length = 0;
+  const c = await loadOwnPolishProfiles(
+    "me@example.com",
+    (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch,
+    blob,
+  );
+  check(
+    "profiles: unreachable -> blob",
+    c.source === "blob" && c.profiles[0]?.id === "c-blob",
+    JSON.stringify(c),
+  );
+
+  const d = await loadOwnPolishProfiles(
+    "me@example.com",
+    fake({ ok: false, error: "unauthorized" }, 401) as typeof fetch,
+    blob,
+  );
+  check("profiles: 401 -> blob, no seed", d.source === "blob");
+
+  calls.length = 0;
+  const e = await loadOwnPolishProfiles(
+    "me@example.com",
+    fake({ ok: true, found: false, profiles: [], lastProfileId: "work-email" }) as typeof fetch,
+    async () => ({ profiles: [], lastProfileId: "work-email" }),
+  );
+  check(
+    "profiles: nothing anywhere -> no seed write",
+    !calls.some((x) => x.method === "PUT") && e.source === "eds-tools",
+  );
+
+  delete process.env.JOURNEY_PROXY_TOKEN;
+  calls.length = 0;
+  const f = await edsToolsProfiles(
+    "me@example.com",
+    undefined,
+    fake({ ok: true, found: true }) as typeof fetch,
+  );
+  check("profiles: no token -> never calls out", f === null && calls.length === 0);
+  if (savedTok !== undefined) process.env.JOURNEY_PROXY_TOKEN = savedTok;
+}
+
 console.log(fail ? `\n${fail} FAILED` : "\nall passed");
 process.exit(fail ? 1 : 0);

@@ -37,6 +37,46 @@ export const polishTextFn = createServerFn({ method: "POST" })
     return runPolish(data.profileName, data.settings, data.request as PolishRequest);
   });
 
+// ---------------------------------------------------------------- profiles (eds-tools phase 2)
+// The user's own writing profiles live in the shared eds-tools service, so Nexus and any later app see
+// the same set. Keyed by the signed-in Entra email (the same key the cross-app route's subject uses).
+// The workspace blob keeps a copy and is the fallback when eds-tools can't be reached.
+
+const ProfileIn = z
+  .object({ id: z.string().min(1).max(80), name: z.string().min(1).max(80) })
+  .passthrough();
+
+export const polishProfilesFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => z.object({ caller: Caller }).parse(raw))
+  .handler(async ({ data }) => {
+    const email = data.caller?.entra_email;
+    if (!email) return { ok: false as const, error: "Sign in to load your profiles." };
+    const { loadOwnPolishProfiles } = await import("./polish.server");
+    const own = await loadOwnPolishProfiles(email);
+    return { ok: true as const, ...own };
+  });
+
+export const savePolishProfilesFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z
+      .object({
+        caller: Caller,
+        profiles: z.array(ProfileIn).max(30),
+        lastProfileId: z.string().max(80),
+      })
+      .parse(raw),
+  )
+  .handler(async ({ data }): Promise<{ ok: boolean; error?: string }> => {
+    const email = data.caller?.entra_email;
+    if (!email) return { ok: false, error: "Sign in to save your profiles." };
+    const { edsToolsProfiles } = await import("./polish.server");
+    const saved = await edsToolsProfiles(email, {
+      profiles: data.profiles as never,
+      lastProfileId: data.lastProfileId,
+    });
+    return saved ? { ok: true } : { ok: false, error: "Couldn't reach the shared tools service." };
+  });
+
 // ---------------------------------------------------------------- send-to destinations
 // Each reuses an EXISTING Huddle path: email drafts = graph-email.server `createGraphDraft` (the same
 // call agents' create_email_draft uses, so the allowed-mailbox list HUDDLE_EMAIL_FROM governs it);
