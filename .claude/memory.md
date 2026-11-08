@@ -3911,3 +3911,8 @@ here as fact three times before being checked.)
   (reproduced offline on main 32f50e4): default limit 10 + scheduled view spans all days + starred items sort first.
 - Times were ALREADY localized on main (formatInTz + resolveJourneyIdentity tz). Edge: no profile + no browser zone → UTC.
 - Guard: `npm run test:status-answers` (23 checks, 7 mutations FIRED). Evidence: docs/qc-evidence/BUILD-status-answers.md.
+
+### 2026-11-08 — work-mailbox (Trinnex) via OneDrive files
+- Trinnex tenant refused Huddle's Graph app; owner's own Power Automate (CDM Smith dev env) publishes snapshots to von.ellis@enterpriseds.io OneDrive `/automation/email/emails.json` + `/automation/appointments/appointments.json`. Huddle's app key (Files.ReadWrite.All) reads them (proved, run 42436209509). dev@'s OneDrive does NOT have them.
+- Feed records: email `from` is a STRING, headers `[{name,value}]` (68), `body` string + `isHtml`; no inferenceClassification. Appointments: `startWithTimeZone`/`endWithTimeZone`, `location`/`organizer` strings.
+- Feed ids are `feed:<mailbox>:<original id>` — never pass one to Graph. Config = server-only HUDDLE_ONEDRIVE_FEEDS (deploy secret). Repo is PUBLIC: never commit tenant/flow/calendar ids or the cdmsmith login.
