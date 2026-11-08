@@ -75,7 +75,8 @@
     "test:schedule-today-band": "bun scripts/schedule-today-band.test.ts",
     "test:timeout-no-rerun": "bun test scripts/timeout-no-rerun.test.ts",
     "test:attention": "tsx scripts/attention.test.ts",
-    "test:id-token-expiry": "bun scripts/id-token-expiry.test.ts"
+    "test:id-token-expiry": "bun scripts/id-token-expiry.test.ts",
+    "test:shared-pool": "bun scripts/shared-pool.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

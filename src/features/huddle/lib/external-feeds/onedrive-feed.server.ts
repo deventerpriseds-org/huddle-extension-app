@@ -10,7 +10,8 @@
 // detected by the drive item's eTag; an unchanged eTag reuses the stored last-good snapshot. A snapshot
 // that fails validation is recorded as the latest status but NEVER replaces the last good one.
 
-import { Pool } from "pg";
+import type { Pool } from "pg";
+import { getSharedPool } from "../db/shared-pool.server";
 import {
   coversWindow,
   eligibleFeedMessages,
@@ -39,13 +40,7 @@ function getPool(): Pool {
   if (_pool) return _pool;
   const url = process.env.AZURE_PG_URL;
   if (!url) throw new Error("AZURE_PG_URL not configured");
-  _pool = new Pool({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
-    max: 2,
-    idleTimeoutMillis: 20_000,
-    connectionTimeoutMillis: 10_000,
-  });
+  _pool = getSharedPool();
   return _pool;
 }
 

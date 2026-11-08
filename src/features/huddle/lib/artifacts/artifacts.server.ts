@@ -2,7 +2,8 @@
 // schema `artifacts`. Bytes live in Blob Storage (blob.server.ts); this table is the index the UI reads.
 // Every read/write is scoped by user_email so one user can never see another's artifacts or SAS URLs.
 // Auto-bootstraps its schema on first use (same lazy pattern as tasks.server.ts / identity.server.ts).
-import { Pool } from "pg";
+import type { Pool } from "pg";
+import { getSharedPool } from "../db/shared-pool.server";
 import { randomUUID } from "node:crypto";
 import { putArtifactBlob, artifactSasUrl, artifactBlobSize, getArtifactBlobBytes, deleteArtifactBlob } from "./blob.server";
 
@@ -11,13 +12,7 @@ function getPool(): Pool {
   if (_pool) return _pool;
   const url = process.env.AZURE_PG_URL;
   if (!url) throw new Error("AZURE_PG_URL not configured");
-  _pool = new Pool({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
-    max: 3,
-    idleTimeoutMillis: 20_000,
-    connectionTimeoutMillis: 10_000,
-  });
+  _pool = getSharedPool();
   return _pool;
 }
 
