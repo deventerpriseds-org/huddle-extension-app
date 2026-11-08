@@ -9,7 +9,10 @@
 #             still wrote, and `mergeAgentResult` re-queued Iris blind 6 times (paraphrased re-creates).
 #             The turn ended with replies=[] toolUses=[], so Iris later said "only one added".
 # SUPERSEDES: nothing.
-# SUPERSEDED-BY: nothing -- current.
+# SUPERSEDED-BY: nothing for the file. ONE RULE IN IT IS SUPERSEDED (2026-11-08, owner option B): the
+#             BLANKET block ("after a prior batch, the re-run may send no create at all", PR #164) is
+#             replaced by SKIP-ONLY-WHAT-WAS-SENT (branch claude_iris-rerun-skip-only-sent, section
+#             "Revision B" at the end). Every other piece of #164 stands.
 # EVIDENCE:   journey-voice docs/qc-evidence/FINDINGS-iris-bulk-task-categories.md (branch
 #             claude_iris-task-category-findings), sections 1d, 2b, 2f-1, 3c. Base: huddle origin/main 09731f8f.
 
@@ -43,7 +46,7 @@ Pure helpers live in `src/features/huddle/lib/tasks/create-task-core.ts` (the ex
    create_huddle_tasks, create_huddle_task and raw quick_create_task/parse_and_create_tasks/create_task
    for that agent for the rest of the turn. `mergeAgentResult`'s re-queue is unchanged: the agent still
    gets its reply turn, now told what it already sent. tsc: 0 errors.
-   - Judgement call (reversible): single creates are blocked too after a prior batch, because on 11-07 a
+   - **SUPERSEDED by Revision B below (owner, 2026-11-08).** Judgement call (reversible): single creates are blocked too after a prior batch, because on 11-07 a
      blocked batch would otherwise just become one reworded single create per item. Cost: a genuinely new
      single task in the SAME turn after a timed-out batch is not created; the agent is told what was sent.
 3. **Tests** `scripts/timeout-no-rerun.test.ts` (`npm run test:timeout-no-rerun`), 12 tests / 94 expects, all pass.
@@ -99,3 +102,42 @@ until journey's parallel PR reads it.
 - A 31s parse still cannot finish in a 40s 1:1 budget; this fix stops the multiplication, not the timeout.
 - Late journey answers arriving after a chunk is saved are not written back into the persisted turn.
 - Live confirmation: not deployed, not run against a real turn.
+
+---
+
+## Revision B — skip ONLY what was already sent (owner decision 2026-11-08)
+
+Owner, choosing option B: *"Asking me to re ask is terrible design when I didn't need to before."* The
+blanket block from #164 (merged as huddle main 35a86d7) would drop a genuinely new task asked for in the same
+message. New rule, for a re-queued attempt of an agent whose earlier attempt in the same turn sent creates:
+- **batch** (`create_huddle_tasks`, raw `parse_and_create_tasks`): drop only the requested titles that match a
+  title already sent; send the remainder; if nothing remains, return `alreadyDispatchedResult` with no journey call.
+- **single** (`create_huddle_task`, raw `quick_create_task` / `create_task`): skip only on a match; otherwise create.
+- Every skip names the sent title it matched, so a wrong skip is visible in the reply, not silent.
+- Misses fall through to journey's own dedup (signature + semantic), which is now ON for the owner
+  (`config.dedup.enabled=true`). Huddle builds no semantic matcher.
+
+### The match, and how it was chosen (OBSERVED, measured on the real 11-07 lines)
+Source: journey edge log `[PARSE_AND_CREATE] Input` lines, 2026-11-07 14:38-14:43Z (`query_logs`, read
+2026-11-08): the 23 lines call 1 sent, and the 17 paraphrases calls 2-5 RE-SENT in the same turn. Negatives:
+the 23 distinct originals compared pairwise (253 pairs), plus 9 hand-written near-miss NEW tasks (one content
+word different from a sent title, e.g. "Sign up for an Aha! developer account" vs "Sign up for an Esri developer
+account"). Tokens: journey `_shared/task-dedup.ts` `titleSignature` (same stopword list, punctuation stripped)
+plus a trailing-`s` plural strip.
+
+| rule | re-sent paraphrases caught | distinct-original pairs matched | near-miss new items wrongly skipped |
+|---|---|---|---|
+| exact signature (journey's layer 1) | 5/17 | 0/253 | 0/9 |
+| Jaccard >= 0.6 | 16/17 | 0/253 | 4/9 |
+| containment >= 0.8 | 16/17 | 0/253 | 3/6 (smaller set) |
+| **Jaccard >= 0.7 AND >= 3 shared tokens (chosen)** | **13/17** | **0/253** | **2/9** |
+| Jaccard >= 0.75 | 10/17 | 0/253 | 2/9 |
+
+Reasoning (INFERRED): token overlap cannot separate "reworded" from "different by one content word"; both
+directions have a cost. A missed reword is caught by journey's semantic dedup (now on); a wrong skip loses a
+task the owner asked for, the failure he just rejected. 0.7 is the knee: past it recall drops with no gain in
+precision. The threshold is one named constant (`RERUN_REWORD_JACCARD`), reversible. The 4 misses at 0.7 are
+the two "Walk backwards from my 30/60/90…" rewrites of "Translate my 30/60/90 plan…", "Sign up for Aha! and
+set a couple of initial strategies", and "Define a software engineering maturity curve…".
+
+### Steps (Revision B)
