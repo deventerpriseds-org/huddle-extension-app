@@ -507,9 +507,11 @@ from the session → workflow closes it" loop does NOT help, because the session
   check must run LAST). Runner = app-agnostic `.claude/skills/test-agent-serverfn/scripts/run-uat.mjs`;
   the ONLY app-specific file is `huddle-checks.mjs` (a `checks` array of `{page,check,screenshot}` fns).
 - **Getting the screenshots back to the session:** the artifact zip is proxy-blocked (HTTP 000) and
-  base64-in-logs bloats context. `verify-uat.yml` force-pushes shots to an orphan **`uat-shots` branch**
-  (job has `permissions: contents: write`); session `git fetch origin uat-shots` → `git show
-  origin/uat-shots:uat-shots/<f>.png > /tmp/<f>.png` → `SendUserFile`. Delete the branch after. (Full
+  base64-in-logs bloats context. `verify-uat.yml` pushes shots to a **per-run** orphan branch
+  **`uat-shots-run-<run_id>`** (since 2026-11-08; the old shared `uat-shots` branch was force-pushed by every
+  run, so parallel sessions overwrote each other's shots). Session: `git fetch origin uat-shots-run-<id>` →
+  `git show FETCH_HEAD:uat-shots/<f>.png > /tmp/<f>.png` → `SendUserFile`. Branches older than 7 days are
+  pruned by the workflow itself. (Full
   pattern in the central `gha-playwright-uat` skill.)
 - **Injecting a BARGE from Playwright (no mic):** typing into the meeting Chat compose
   (`textarea[placeholder="Message the room…"]` under `[data-testid="tab-chat"]`, Enter) DURING a live

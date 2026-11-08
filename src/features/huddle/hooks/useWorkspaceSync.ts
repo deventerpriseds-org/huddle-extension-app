@@ -190,8 +190,10 @@ export function useWorkspaceSync() {
           console.error("[workspace-sync] save failed", e);
           // Saves failed SILENTLY for 10 days once the workspace crossed the size cap (2026-10-18 to
           // 10-28): new messages lived only in memory and an app restart lost them. Never silent again.
+          // Name the reason, as the load error does (owner option A, 2026-11-08): saves failed after a
+          // re-sign-in and the fixed wording gave nothing to diagnose from.
           toast.error(
-            "Couldn't save your latest messages. They're safe on the server and will reload.",
+            `Couldn't save your latest messages (${describeLoadFailure(e)}). They stay on this screen; saving retries on your next change.`,
             {
               id: "workspace-save",
             },
