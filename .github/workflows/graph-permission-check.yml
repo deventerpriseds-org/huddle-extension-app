@@ -35,6 +35,14 @@ on:
         description: "Section 5: comma-separated drive-relative feed file paths."
         required: false
         default: "/automation/email/emails.json,/automation/appointments/appointments.json"
+      feed_config:
+        description: "Section 6: HUDDLE_ONEDRIVE_FEEDS JSON to dry-run the REAL files through the shipped validator/mapper/screen (blank = skip). Verdicts and counts only."
+        required: false
+        default: ""
+      own_addresses:
+        description: "Section 6: the owner's own addresses (comma list) for the self rule."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -43,6 +51,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        if: ${{ inputs.feed_config != '' }}
       - name: Read grants + probe calendar access
         env:
           TENANT: ${{ secrets.AZURE_TENANT_ID }}
@@ -51,6 +61,8 @@ jobs:
           MAILBOXES: ${{ inputs.mailboxes }}
           FEED_USERS: ${{ inputs.feed_drive_users }}
           FEED_PATHS: ${{ inputs.feed_paths }}
+          FEED_CONFIG: ${{ inputs.feed_config }}
+          OWN_ADDRESSES: ${{ inputs.own_addresses }}
         run: |
           set -uo pipefail
           for v in TENANT CLIENT_ID CLIENT_SECRET; do
@@ -147,4 +159,11 @@ jobs:
               done
             done
             echo "(403 on the item = the app lacks Files.Read.All / Files.ReadWrite.All application permission)"
+          fi
+
+          # 6. Dry-run the REAL feed files through the shipped code (validator, mapper, screen).
+          if [ -n "${FEED_CONFIG// /}" ]; then
+            echo "=== 6. Feed dry run through the shipped validator / mapper / screenMessage ==="
+            TOKEN="$TOKEN" HUDDLE_ONEDRIVE_FEEDS="$FEED_CONFIG" OWN_ADDRESSES="$OWN_ADDRESSES" \
+              npx -y tsx@4.19.2 scripts/onedrive-feed-dryrun.ts
           fi
