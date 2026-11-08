@@ -4992,3 +4992,16 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - **Observed (screenshots, verify-uat 42483232750):** the spoken "Hey, Sam." never appeared in the transcript; screen read "mic muted — tap the mic to talk". The ceremony starts muted BY DESIGN since 2026-10-19 (MeetingBar.tsx ~L1930). App behaviour unchanged.
 - **Four TEST defects (huddle-checks.mjs, branch claude_standup-barge-fix):** (1) never tapped Unmute -> now taps `button[aria-label="Unmute"]` and asserts "mic — listening"; (2) read the row after the barge by POSITION -> now reads the first new `data-turn-kind="answer"` row after a `data-turn-kind="barge"` user row; (3) noise guard counted every row -> counts answer rows only; (4) completion wait passed `{timeout}` in waitForFunction's ARG slot (30s default applied) -> options in slot 3, 8 min.
 - **Evidence:** branch run 42487020520 (8933a1bd) 22/23 — hail "Right here, sir.", park named both investor-pitch cards, quick answered; only completion failed (ceremony healthy, still speaking at 04:12, 36 rows). Run 42489768771 on 4f28ec39: **23/23 PASSED** (hail 'Yes sir?', park named both pitch cards, quick 0 blockers, noise ignored, ceremony completed in 362s / 50 rows).
+
+### ACT:history-alarms-reason + ACT:apk-mic-audio-settings (2026-11-08) — owner approved "C2, a, b"
+- **Owner reports (2026-11-08):** after paging (#169) old Aug/Sep alarms show at the BOTTOM of today's 1:1 thread;
+  the history load keeps failing in the Huddle Android app with "(server error)" while the phone's BROWSER loads fine;
+  closing/reopening the app did not help; mic still "Could not start audio source" after granting permission.
+- **Cause of the alarms (read from code):** the reminder poll (`HuddleView.tsx` "Reminder delivery") starts its cursor at 0,
+  gets every reminder ever fired in the huddle and appends any not in the store. Paging leaves old ones unloaded, so they
+  were appended at the end. Stored history order was never changed (merge-save keeps stored positions).
+- **C2 (approved):** `shouldAppendReminder` skips a reminder older than the thread's oldest loaded message; the poll waits
+  for hydration (hydrate replaces the list). **A (approved):** `describeLoadFailure` names the reason in the retry toast and
+  the final error. Tests A1-A7, E1-E8 in `scripts/workspace-window.test.ts`; mutations A1/A6/A7/E7 all FIRED.
+- **B (approved):** android-bridge-template manifest `MODIFY_AUDIO_SETTINGS` + Huddle v1.0.16 build.
+- Status: implemented, mechanism verified offline, NOT yet confirmed live by the owner.

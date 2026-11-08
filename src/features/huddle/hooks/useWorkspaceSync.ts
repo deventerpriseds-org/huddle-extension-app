@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { getToken, isAuthBypassActive } from "@/lib/entra-auth";
 import { useAuth } from "@/hooks/useAuth";
 import { loadWorkspace, saveWorkspace } from "@/features/huddle/lib/identity/workspace.functions";
-import { RECENT_DAYS } from "@/features/huddle/lib/identity/workspace-window";
+import { describeLoadFailure, RECENT_DAYS } from "@/features/huddle/lib/identity/workspace-window";
 import {
   clearLegacyLocalWorkspace,
   getPersistablePayload,
@@ -47,7 +47,9 @@ export function useWorkspaceSync() {
     const failed = (attempt: number, why: string) => {
       if (cancelled) return;
       if (attempt + 1 < LOAD_MAX_ATTEMPTS) {
-        if (attempt === 1) toast.loading("Loading your message history…", { id: LOAD_TOAST_ID });
+        // From the second failure on, say WHY it is retrying (owner option A, 2026-11-08).
+        if (attempt >= 1)
+          toast.loading(`Loading your message history… (retrying: ${why})`, { id: LOAD_TOAST_ID });
         retryTimer = setTimeout(() => void load(attempt + 1), LOAD_RETRY_MS);
       } else {
         toast.error(
@@ -114,7 +116,7 @@ export function useWorkspaceSync() {
         if (attempt > 0) toast.dismiss(LOAD_TOAST_ID);
       } catch (e) {
         console.error("[workspace-sync] load failed", e);
-        failed(attempt, "server error");
+        failed(attempt, describeLoadFailure(e));
       }
     };
     void load(0);

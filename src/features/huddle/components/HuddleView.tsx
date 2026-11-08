@@ -66,6 +66,7 @@ import {
 import { loadOlderMessages } from "../lib/identity/workspace.functions";
 import { getToken } from "@/lib/entra-auth";
 import { isRenderableMessage, isWorkspaceHydrated } from "../store";
+import { shouldAppendReminder } from "../lib/identity/workspace-window";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
@@ -1854,7 +1855,12 @@ function Composer({ huddle }: { huddle: Huddle }) {
       firedMs: number;
     }) => {
       const mid = `rem-${r.id}`;
-      if (useHuddleStore.getState().messages.some((m) => m.id === mid)) return;
+      const all = useHuddleStore.getState().messages;
+      if (all.some((m) => m.id === mid)) return;
+      // Paged history: a reminder older than this thread's oldest loaded message is already in the stored
+      // history and comes back with the older pages -- never append it to the bottom as if it were new.
+      const inThread = all.filter((m) => m.huddleId === huddle.id);
+      if (!shouldAppendReminder(r.firedMs, inThread)) return;
       const agentId = (
         r.agentId && AGENT_BY_ID[r.agentId as AgentId] ? r.agentId : huddle.members[0]
       ) as AgentId;
@@ -1866,8 +1872,21 @@ function Composer({ huddle }: { huddle: Huddle }) {
         ts: r.firedMs || Date.now(),
       });
     };
+    let hydrationRetry: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
       if (stopped) return;
+      // Wait for the history to load first: hydration REPLACES the message list, so anything appended
+      // before it is wiped while the cursor has already moved past it, and the skip rule above needs the
+      // loaded history to compare against.
+      if (!isWorkspaceHydrated()) {
+        if (!hydrationRetry) {
+          hydrationRetry = setTimeout(() => {
+            hydrationRetry = null;
+            void poll();
+          }, 2_000);
+        }
+        return;
+      }
       try {
         const { reminders } = await getReminderDeliveries({
           data: { huddleId: huddle.id, sinceMs: cursor },
@@ -1890,6 +1909,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
     return () => {
       stopped = true;
       clearInterval(iv);
+      if (hydrationRetry) clearTimeout(hydrationRetry);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("pageshow", onVisible);
     };
