@@ -62,15 +62,23 @@ import {
 // journey date normalization and the honest outcome note. Shared with the VOICE executor
 // (voice/realtime-tools.server.ts) so the two surfaces cannot drift; see create-task-core.ts.
 import {
+  alreadyDispatchedResult,
   annotateRawCreateOutput,
   describeRawCreateSkip,
+  dispatchedToolUses,
+  journeyCreateContext,
   loadOpenTaskTitles,
   normalizeJourneyDate,
   normalizeTaskTitle,
   screenCapabilityMetaTask,
   screenRawJourneyCreate,
+  priorBatchDispatch,
+  priorDispatchDirective,
+  RAW_JOURNEY_CREATE_TOOLS,
+  recordDispatchedCreate,
   splitTaskEntries,
   summarizeQuickCreateOutcome,
+  type DispatchedCreate,
   type OpenTitleLoad,
 } from "./tasks/create-task-core";
 import {
@@ -628,6 +636,9 @@ type TurnResumeState = {
   remainingQueue: AgentId[];
   spoken: AgentId[];
   createdTaskTitles: string[];
+  /** Every task create sent to journey this turn, recorded AT DISPATCH (FIX-iris-timeout-no-rerun.md).
+   *  Optional so a resume row written before this field existed still loads. */
+  dispatchedCreates?: DispatchedCreate[];
   claimedActions: string[];
   handoffById: [AgentId, { fromName: string; ask: string }][];
   interjectors: AgentId[];
@@ -1931,6 +1942,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // createSuggestedTaskFromTool below, which claims a title here before writing.
   const createdTaskTitles = new Set<string>(resume?.createdTaskTitles ?? []);
 
+  // Task creates SENT to journey this turn, recorded before the await (tasks/create-task-core.ts
+  // DispatchedCreate). Round-trips in the resume state like createdTaskTitles. A timed-out attempt's
+  // result is built from it (runBounded), its re-run is told about it (priorDispatchDirective in the
+  // scene) and cannot send a second batch (priorBatchDispatch). 2026-11-07: without it a 23-task ask
+  // became 43 journey rows over 6 timed-out attempts and the turn ended with no record of any of them.
+  const dispatchedCreates: DispatchedCreate[] = resume?.dispatchedCreates
+    ? resume.dispatchedCreates.map((e) => ({ ...e, titles: [...e.titles] }))
+    : [];
+
   // Tasks whose approach gate ESCALATED during this turn, by the agent that hit it. Drives the
   // in-thread "Approve anyway" row (the same reply-chip channel as confirmAsk), because escalation had
   // NO user-visible surface at all before this: `grep -rn escalated src/**/*.tsx` returned zero, so a
@@ -2274,6 +2294,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // without it, which a later retry then discovers and misreports as pre-existing. Threaded into
     // both model backends so neither can zombie.
     signal?: AbortSignal,
+    // This invocation's id in the dispatched-create ledger. runBounded mints it so its timeout branch
+    // can name exactly this attempt's creates; a different id for the same agent = an EARLIER attempt.
+    attemptId: string = `${nextId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
   ): Promise<AgentTurnResult> => {
     const winner = AGENT_BY_ID[nextId]!;
     const agentBackend = agentsCfg[nextId] ?? { backend: "lovable" as const };
@@ -2478,6 +2501,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     const handoffDirective = handoff
       ? `\n\nYou were brought into this turn by ${handoff.fromName}, who handed this to you: "${handoff.ask}". Address exactly that in your lane — answer it directly or take the action they need. Do not re-ask what was already said or restate their message.`
       : "";
+    // A re-queued attempt after a timeout: name the creates its earlier attempt already sent, so it
+    // reports them instead of sending reworded copies (empty on every ordinary attempt).
+    const priorDispatchBlock = priorDispatchDirective(dispatchedCreates, nextId, attemptId);
     // Domain/theme lane hand-off (1:1 only — group turns already route to the right lane). If the
     // user's ask clearly belongs to another agent's lane (by domains/themes, e.g. "tighten my
     // budget" → Finn), tell THIS agent to defer and bring them in, even though that owner isn't in
@@ -2541,7 +2567,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       priorInThisTurn && !ceremonyDirective
         ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
         : ""
-    }${interjectDirective}${ceremonyDirective}${selfRecallBlock}${ceremonyBoardBlock}${ceremonyPriorReact}${handoffDirective}${laneDirective}${captureDirective}${confirmReplyDirective}${
+    }${interjectDirective}${ceremonyDirective}${selfRecallBlock}${ceremonyBoardBlock}${ceremonyPriorReact}${handoffDirective}${priorDispatchBlock}${laneDirective}${captureDirective}${confirmReplyDirective}${
       data.huddleId === `dm-${winner.id}` ? unblockReplyDirective : ""
     }`;
 
@@ -2865,8 +2891,34 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       rawArgs: unknown,
     ): Promise<
       | { skipOutput: string }
-      | { args: unknown; decision: Awaited<ReturnType<typeof screenRawJourneyCreate>> }
+      | {
+          args: unknown;
+          decision: Awaited<ReturnType<typeof screenRawJourneyCreate>>;
+          /** Set for a create actually being sent: the caller stamps journey's answer on it. */
+          dispatch?: DispatchedCreate;
+        }
     > {
+      // Same no-re-send rule as create_huddle_task(s): an EARLIER attempt of this agent already sent a
+      // batch create this turn, so a raw create in the re-run is that request again (often reworded).
+      if (RAW_JOURNEY_CREATE_TOOLS.has(toolName)) {
+        const priorBatch = priorBatchDispatch(dispatchedCreates, winner.id, attemptId);
+        if (priorBatch) {
+          recordToolUse(
+            winner.id,
+            toolName,
+            `not re-sent — ${priorBatch.titles.length} task(s) already sent earlier this turn`,
+            true,
+            undefined,
+            rawArgs,
+          );
+          const a = (rawArgs && typeof rawArgs === "object" ? rawArgs : {}) as Record<string, unknown>;
+          const requested =
+            toolName === "parse_and_create_tasks"
+              ? splitTaskEntries(a)
+              : [String(a.title ?? a.task ?? a.name ?? "")];
+          return { skipOutput: JSON.stringify(alreadyDispatchedResult(priorBatch, requested)) };
+        }
+      }
       const decision = await screenRawJourneyCreate(toolName, rawArgs, {
         ledger: createdTaskTitles,
         loadTitles: loadExistingOpenTitles,
@@ -2877,7 +2929,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         recordToolUse(winner.id, toolName, describeRawCreateSkip(decision.skipped), true, undefined, rawArgs);
         return { skipOutput: JSON.stringify(decision.result) };
       }
-      return { args: decision.args, decision };
+      // Forwarding to journey: record the create AT DISPATCH (the caller awaits journey next).
+      const isBatch = toolName === "parse_and_create_tasks";
+      const titles = isBatch
+        ? splitTaskEntries(decision.args)
+        : [String(decision.args.title ?? decision.args.task ?? decision.args.name ?? "").trim()].filter(Boolean);
+      const dispatch = recordDispatchedCreate(dispatchedCreates, {
+        agentId: winner.id,
+        attemptId,
+        tool: toolName,
+        batch: isBatch,
+        titles,
+      });
+      return { args: decision.args, decision, dispatch };
     }
 
     function resolveTaskLane(value: unknown): TaskLane {
@@ -2950,6 +3014,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // don't create a second card. The first caller claims the title here.
       // Keyed by THE normalizer (not a local lowercase) so the raw-create interception, which shares
       // this ledger, collides with it whatever whitespace/punctuation either side used (AC-60).
+      // After an EARLIER attempt's batch create (then a timeout) a single create in the re-run is the
+      // same request reworded one item at a time — the same block as the batch path.
+      const priorBatchForSingle = priorBatchDispatch(dispatchedCreates, winner.id, attemptId);
+      if (priorBatchForSingle) {
+        recordToolUse(
+          winner.id,
+          "create_huddle_task",
+          `not re-sent — ${priorBatchForSingle.titles.length} task(s) already sent earlier this turn`,
+          true,
+        );
+        return alreadyDispatchedResult(priorBatchForSingle, [title]);
+      }
       const titleKey = normTitle(title);
       if (createdTaskTitles.has(titleKey)) {
         recordToolUse(
@@ -3024,12 +3100,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // "next Friday" — can't silently break the scheduling call; drop it and fall back to the
           // title-text NL parser, which handles those phrases correctly.
           const dateArg = normalizeJourneyDate(args.date);
+          const singleDispatch = recordDispatchedCreate(dispatchedCreates, {
+            agentId: winner.id,
+            attemptId,
+            tool: "create_huddle_task",
+            batch: false,
+            titles: [task.title],
+          });
           const r = await invokeJourneyTool({
             toolName: "quick_create_task",
             args: dateArg ? { title: task.title, date: dateArg } : { title: task.title },
             caller: data.caller ?? {},
             context: { source: "huddle", huddleId: data.huddleId, agentId: winner.id },
           });
+          singleDispatch.result = r.ok ? { ok: true, created: 1 } : { ok: false, error: r.error ?? "unknown" };
           if (r.ok) {
             if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
             else suggestedTasks.push(task); // journey didn't echo a row — keep a Huddle card
@@ -3198,6 +3282,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         return { ok: false, error };
       }
 
+      // An EARLIER attempt of this agent in this turn already sent a batch create (and then timed out):
+      // the same request, typically reworded, which the exact-title checks below cannot catch. Do not
+      // send it again (FIX-iris-timeout-no-rerun.md; 6 re-sends on 2026-11-07).
+      const priorBatch = priorBatchDispatch(dispatchedCreates, winner.id, attemptId);
+      if (priorBatch) {
+        recordToolUse(
+          winner.id,
+          "create_huddle_tasks",
+          `not re-sent — ${priorBatch.titles.length} task(s) already sent earlier this turn`,
+          true,
+        );
+        return alreadyDispatchedResult(priorBatch, entries);
+      }
+
       // Per-entry guards (mirror the single path): exclusive-capability meta-task guard + dedup.
       const existing = await openTitlesForCreate("create_huddle_tasks");
       const survivors: string[] = [];
@@ -3234,16 +3332,32 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         try {
           const { invokeJourneyTool } = await import("./journey/proxy.functions");
           const target_date = normalizeJourneyDate(args.date);
+          // The user's own message, so journey's parser categorizes with the framing the owner gave
+          // ("priorities I need to work on today"), not only the bare titles. journey ignores an arg it
+          // does not read (parseAndCreateTasks reads text/target_date/auto_schedule/default_status/
+          // source_topic_id only, execute-tool/index.ts:1753), so this is safe before journey reads it.
+          const createContext = journeyCreateContext(data.text);
+          // Recorded BEFORE the await: if this attempt times out while journey is still parsing, the
+          // ledger is the only record that these were sent (journey writes them regardless).
+          const dispatch = recordDispatchedCreate(dispatchedCreates, {
+            agentId: winner.id,
+            attemptId,
+            tool: "create_huddle_tasks",
+            batch: true,
+            titles: survivors,
+          });
           const r = await invokeJourneyTool({
             toolName: "parse_and_create_tasks",
             args: {
               text: survivors.join("\n"),
               auto_schedule: true,
               ...(target_date ? { target_date } : {}),
+              ...(createContext ? { context: createContext } : {}),
             },
             caller: data.caller ?? {},
             context: { source: "huddle", huddleId: data.huddleId, agentId: winner.id },
           });
+          dispatch.result = r.ok ? { ok: true } : { ok: false, error: r.error ?? "unknown" };
           if (r.ok) {
             let created = 0;
             let createdTasks: unknown[] = [];
@@ -3264,6 +3378,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 created = survivors.length;
               }
             }
+            dispatch.result = { ok: true, created };
             recordToolUse(
               winner.id,
               "create_huddle_tasks",
@@ -4923,6 +5038,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   agentId: winner.id,
                 },
               });
+              if ("dispatch" in dedup && dedup.dispatch) {
+                dedup.dispatch.result = r.ok ? { ok: true } : { ok: false, error: r.error ?? "unknown" };
+              }
               if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
               // Long-running journey job (rebuild_schedule): its start returns before the work is done, so
               // arm a delayed follow-up check in this DM (tasks/job-check.ts). No-op for every other tool.
@@ -6601,6 +6719,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                         agentId: winner.id,
                       },
                     });
+                    if ("dispatch" in dedup && dedup.dispatch) {
+                      dedup.dispatch.result = r.ok ? { ok: true } : { ok: false, error: r.error ?? "unknown" };
+                    }
                     if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
                     // Same long-running job follow-up as the OpenAI path (tasks/job-check.ts).
                     if (r.ok) {
@@ -7203,7 +7324,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // cards" when 3 of the 4 had in fact just been created by his own earlier, timed-out attempt in
     // this exact turn, 40s before that reply.
     const controller = new AbortController();
-    const attempt = runAgentTurn(id, prior, userTextOverride, controller.signal);
+    const attemptId = `${id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const attempt = runAgentTurn(id, prior, userTextOverride, controller.signal, attemptId);
     // The abort() below makes this settle (usually reject with an AbortError) after the race has
     // already resolved via the timeout branch. Nobody awaits `attempt` past that point — swallow it
     // here so an aborted/failed zombie doesn't surface as an unhandled promise rejection.
@@ -7225,7 +7347,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 inline: "response timed out — deferred",
               },
             ],
-            toolUses: [],
+            // NOT []: the creates this attempt already sent to journey are still being written there.
+            // Dropping them is what made the 2026-11-07 turn end with no record of 43 created rows (no
+            // ensureNotSilentOnRealWork reply, nothing for the next turn's "what did you add").
+            toolUses: dispatchedToolUses(dispatchedCreates, id, attemptId) as AgentTurnResult["toolUses"],
             journeyTaskUpdates: [],
             suggestedTasks: [],
             reasoning: [],
@@ -7243,6 +7368,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     remainingQueue: [...queue],
     spoken: [...spoken],
     createdTaskTitles: [...createdTaskTitles],
+    dispatchedCreates: dispatchedCreates.map((e) => ({ ...e, titles: [...e.titles] })),
     claimedActions: [...turnActionLedger],
     handoffById: [...handoffById.entries()],
     interjectors: [...interjectorSet],

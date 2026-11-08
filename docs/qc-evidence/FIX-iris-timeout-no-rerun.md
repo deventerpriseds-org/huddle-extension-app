@@ -34,3 +34,15 @@ Pure helpers live in `src/features/huddle/lib/tasks/create-task-core.ts` (the ex
    `priorBatchDispatch`, `dispatchedToolUses`, `priorDispatchDirective`, `alreadyDispatchedResult`,
    `journeyCreateContext`. Baseline `npx tsc --noEmit -p .` on origin/main 09731f8f: 0 errors; after: 0.
    (Deps installed with `npm ci --ignore-scripts`: `bun install` 403s on bun.lock's private registry.)
+2. **Wiring** (`huddle.functions.ts`): turn-scoped `dispatchedCreates` (seeded from `resume.dispatchedCreates`,
+   written by `buildResumeState`); `runBounded` mints an `attemptId` and passes it to `runAgentTurn`; its
+   timeout result's `toolUses` = `dispatchedToolUses(dispatchedCreates, id, attemptId)`; scene gets
+   `priorDispatchBlock` (after `handoffDirective`); recorded at dispatch in `createBatchTasksFromTool`
+   (+ `context: journeyCreateContext(data.text)`), `createSuggestedTaskFromTool` and
+   `guardRawJourneyCreate` (both raw dispatch sites stamp the result). A prior attempt's batch blocks
+   create_huddle_tasks, create_huddle_task and raw quick_create_task/parse_and_create_tasks/create_task
+   for that agent for the rest of the turn. `mergeAgentResult`'s re-queue is unchanged: the agent still
+   gets its reply turn, now told what it already sent. tsc: 0 errors.
+   - Judgement call (reversible): single creates are blocked too after a prior batch, because on 11-07 a
+     blocked batch would otherwise just become one reworded single create per item. Cost: a genuinely new
+     single task in the SAME turn after a timed-out batch is not created; the agent is told what was sent.
