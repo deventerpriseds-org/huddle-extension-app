@@ -749,6 +749,23 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   const MAX_CHUNKS = 6;
   const turnStore = chunked ? await import("./tasks/turns.server") : null;
 
+  // ---- Attention bell (owner option A, 2026-11-08): "deal with them in the chat". A message the OWNER
+  // sends in a conversation settles that conversation's open meeting/appointment bell items. Emails keep
+  // their own rules (reply detected from Sent Items, or Dismiss). Fire-and-forget: never delays the turn.
+  if (!resume && !data.internal && !data.ceremonyBarge && typeof data.huddleId === "string" && (data.text ?? "").trim()) {
+    void (async () => {
+      try {
+        const owner =
+          (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ?? data.caller?.entra_email;
+        if (!owner) return;
+        const { settleAttentionForHuddle } = await import("./email/email-replies.server");
+        await settleAttentionForHuddle(owner, data.huddleId);
+      } catch {
+        /* best-effort */
+      }
+    })();
+  }
+
   // ---- A: confirm-intent CONTEXT (WIP gate). When the user REPLIES in a 1:1 DM that has a task at
   // confirm_status='asked' for that agent, this message is probably the confirmation response. The reply
   // turn historically carried NO confirm context, so the agent just acknowledged and the task froze in
