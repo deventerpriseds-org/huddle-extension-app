@@ -395,6 +395,9 @@ console.log("K. CODE-BUILT BLOCK FITS THE TURN (verifier loop 1, B1-a: 6 meeting
   const om = briefDeliveryPlan(mk({ forDate: "2026-10-15", items: outlookMax.slice(0, 40), tasks: outlookMax.slice(0, 40).map((x, i) => ({ id: String(i), title: x.title, startIso: x.startIso })), upcoming: outlookMax.slice(40) }), TZ);
   t("K5 the directive (payload text) also fits: 40/day with Outlook-max 255-char subject + location", om.directive.length <= 16000, true);
   t("K5b and it says how many more facts there are", /\(and \d+ more\)/.test(om.directive), true);
+  const longErr = "E".repeat(5000);
+  const ep = briefDeliveryPlan(mk({ errors: [`meetings: ${longErr}`, `classes: ${longErr}`], tasksError: longErr, upcoming: [], items: [] }), TZ);
+  t("K6 5,000-char source errors are clipped, so the directive stays under the cap", ep.directive.length < 16000 && !ep.directive.includes("E".repeat(300)), true);
   t("K4 and says how many more the button shows", /…and \d+ more — the "Open Schedule" button below shows them all\./.test(worst.appendBlock ?? ""), true);
 }
 
