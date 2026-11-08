@@ -17,7 +17,9 @@ async function openIris(page) {
   }
   // Tap the CHANNEL ROW (button/link), not the label text: run 42496820414 matched the label but the
   // drawer stayed open and the group chat behind it was measured.
-  const row = page.locator("button, a, [role=button]", { hasText: /#iris-chase/i }).first();
+  // At phone width the page holds a HIDDEN desktop sidebar as well as the drawer, so match only the
+  // VISIBLE row (run 42497223485 clicked the hidden copy and measured the group chat).
+  const row = page.locator("button:visible", { hasText: /#iris-chase/i }).first();
   if (!(await row.count())) return false;
   await row.click().catch(() => {});
   await page.waitForTimeout(800);
