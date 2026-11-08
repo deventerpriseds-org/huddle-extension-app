@@ -163,3 +163,38 @@ set a couple of initial strategies", and "Define a software engineering maturity
    - b5: directive lists every sent title and says to create anything not on it; scene carries it.
    - b6/b7: wiring of batch / single / raw sites (fresh remainder sent; all-sent returns before journey).
    - b8: the blanket block is gone (no `priorBatchDispatch(` call; not exported).
+   - Later on this branch: the >=3 shared-token floor was dropped (see step 1), b2 gained "Office clean" (journey's
+     exact signature on a short title) and a filler-only title ("This and that" / "this and that.") that only
+     the exact check can match. 15 tests / 130 expects, all pass.
+4. **Full suite**, every `scripts/*.test.*` file, run one after the other: origin/main ea7a81a0 89 PASS / 4 FAIL;
+   branch 89 PASS / 4 FAIL. The same 4 fail on both, unrelated (confirm-reask-db, focus F22, memory-mode,
+   model-policy). `npx tsc --noEmit -p .`: 0 errors.
+5. **Mutations** (`mutate.sh`, anchors from files, bare test names, bun `(fail)` normalised to `FAIL`):
+   13/13 FIRED, tree clean after each. The (a)/(c) guards and their #164 mutations are unchanged.
+
+   | id | defect reinstated | must fail | verdict |
+   |---|---|---|---|
+   | N1 | loose match off (exact only) | TNR-b1 | FIRED |
+   | N2 | exact match off (loose only) | TNR-b2 | INERT on first run (exact is redundant with Jaccard except for a filler-only title); FIRED after adding that case |
+   | N3 | threshold 0.7 → 0.6 | TNR-b3 | FIRED |
+   | N4 | journey-refused send counted as sent | TNR-b2 | FIRED |
+   | N5 | the attempt's own titles counted as "earlier" | TNR-b2 | FIRED |
+   | N6 | batch sends every entry, not the fresh remainder | TNR-b6 | FIRED |
+   | N7 | batch returns whenever ANY title was sent (blanket again) | TNR-b6 | FIRED |
+   | N8 | single blocked after any prior dispatch (blanket again) | TNR-b7 | FIRED |
+   | N9 | raw batch not rewritten to the remainder | TNR-b7 | FIRED |
+   | N10 | raw skips not reported | TNR-b7 | FIRED |
+   | N11 | `priorBatchDispatch` exported again | TNR-b8 | FIRED |
+   | N12 | directive no longer says to create anything not on the list | TNR-b5 | FIRED |
+   | N13 | plural strip removed | TNR-b1 | FIRED |
+
+### What will no longer be in place (Revision B)
+- The blanket block from #164 is gone. A re-run is no longer refused every create after an earlier attempt's
+  batch; it drops only the titles that match what was already sent.
+- `priorBatchDispatch` no longer exists.
+- A re-run's skip no longer arrives as one opaque refusal. Each skipped title is paired with the sent title it
+  matched (`sentEarlierThisTurn`, `skipped[].reason`).
+- Known trade-off: 4 of the 17 real 11-07 rewordings are not caught by Huddle and fall to journey's semantic
+  dedup (now on). 2 of 9 near-miss new tasks would be wrongly skipped, and each skip names its match in the reply.
+
+Status (Revision B): COMPLETE 2026-11-08 — implemented, unit-tested and mutation-proved. NOT deployed, NOT confirmed live.
