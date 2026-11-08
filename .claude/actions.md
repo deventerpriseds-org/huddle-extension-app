@@ -4856,6 +4856,13 @@ judge time limits (5s create, 3s in-chat groom, 20s weekly). 2 verifier loops (V
 - Open (pre-existing, not built): agents can reassign via journey update_task without the judge; caller identity is
   client-asserted (owner chose to ship on today's trust model).
 
+### ACT:history-load-slow (2026-11-07) — RESOLVED ITSELF, owner-confirmed "fixed again now"; decision pending
+Owner: "stuck saying loading after the schedule view updates" (screenshot: "Loading your message history…", demo seed shown).
+- Evidence: deploy-swa runs finished 20:12:55Z (f9208cf) and 20:25:35Z (e29d4a8 #156) right before the report; live loadWorkspace probe (agent-serverfn-uat 42412108286) answered in 267-381ms; DB 26 conns / 1 active; workspace_state intact (2.63M chars, 3,730 messages Jul 10 -> Nov 7, saved 20:14Z).
+- Cause (inference, medium-high): first load after each deploy = cold SWA function + new client bundle, multiplied by a 2.6 MB single-blob history. No code on the history path changed.
+- [ ] Owner decision: A load last ~30 days first (rec.) / B keep / C hide >90 days.
+- [ ] Owner decision: merge android-bridge-template#23 (paperclip in Huddle APK; Android CI green on f4b2160) + rebuild Huddle APK.
+
 ### ACT:schedule-today-visible (2026-11-07) — DEPLOYED (#156 e29d4a8), live probe 7/7, NOT owner-confirmed
 Owner: "It reran the schedule and said it was done despite the error but the schedule view is empty" (screenshot: TODAY'S SCHEDULE header, nothing under it).
 - Ground truth: journey public.tasks + Huddle mirror both hold 5 rows today (2:45-8:00 PM ET). Live phone probe verify-uat run 42409814370 (`schedule-today-checks.mjs`): band liCount 5, bandHeight 0 — flex-column overflow-y-auto band squeezed to 0px by a long Up Next list.

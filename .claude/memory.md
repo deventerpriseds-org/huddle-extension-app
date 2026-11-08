@@ -117,6 +117,14 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Message history load = ONE 2.6 MB workspace blob (2026-11-07; NOT changed; decision pending)
+`identity.workspace_state.state.messages` holds every message since Jul 10 (3,730, 2.55 MB; growing ~0.6 MB/month) and
+`useWorkspaceSync` downloads + parses all of it on every open. Right after a deploy the first open is slow (cold function +
+new bundle) — owner saw "Loading your message history…" for a while after the 11-07 deploys, then it recovered by itself.
+Hardening: when the owner says "it broke after your change", line the report up against deploy-swa run times FIRST — a
+deploy-time slowdown looks exactly like a regression. Paging options A/B/C put to owner. Huddle APK has no file chooser;
+fix = android-bridge-template#23 (CI green), not merged.
+
 ## Schedule tab TODAY band collapsed to 0px (2026-11-07; FIXED IN CODE #156 e29d4a8 + live probe 7/7; NOT owner-confirmed)
 The full-page Schedule (widgetShell "page" = fixed-height flex column) lets an `overflow-y-auto` ScrollBand shrink to ZERO:
 5 today rows rendered 0px tall under a long Up Next (verify-uat 42409814370, probe `schedule-today-checks.mjs`). Data was fine.
