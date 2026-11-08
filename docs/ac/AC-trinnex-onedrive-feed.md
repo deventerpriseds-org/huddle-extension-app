@@ -162,3 +162,105 @@ RFC 5322 §1.2.2 / §2.2 (header field names are case-insensitive). Body for "as
 | P-5 | `RE: [TEST] Can we meet?` | NOT eligible (proposed default; Gap G-3) | FALSE PASS |
 | P-6 | empty / null subject | NOT eligible, no throw | FALSE PASS |
 
+## 4. Email: source-aware identity, once-per-email, ledger, Save/Dismiss
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-30 | Given the SAME raw id string `X` arriving once from EDS Graph and once from the Trinnex feed, then the two turn ids differ, the two ledger ids differ, and neither equals `inboundEmailTurnId(X)` computed the other way (e.g. the Trinnex id hashes a source-namespaced key such as `trinnex:` + `X`). EDS turn ids for EDS messages stay EXACTLY `inboundEmailTurnId(graphId)` (unchanged formula). | happy-path / regression | Unit: compute both; assert inequality; assert EDS id equals current formula |
+| AC-31 | Given a Trinnex record already announced, when the same snapshot is re-read (unchanged eTag, or changed eTag because a different record was added, or a 12h-lookback re-read), then no second turn is enqueued and no second push fires for it (`enqueueTurn` returns not-fresh). | happy-path (dedupe) | DB: `chat.pending_turns` count for that id == 1; push spy count == 1 |
+| AC-32 | Given a Trinnex turn id, then it does not match `^u-\d+$` and does not start with `xapp-` (those render as a "You" bubble). | regression | Unit regex |
+| AC-33 | Given a kept Trinnex record, then `recordOwedEmail` writes one `chat.email_replies` row with `mailbox` = `<CFG.mailbox>` and a field that marks the source as Trinnex (a new column or an unambiguous id/mailbox convention), owner key = `resolveTaskEmail(caller)` (same as EDS), status `owed`; the owed count in the next directive includes it. | happy-path | DB row; directive text contains the incremented owed count |
+| AC-34 | Given a Trinnex owed row, when the run reconciles (`reconcileRepliedFromSentItems`), then NO Graph request is made for that row (no `/users/<CFG.mailbox>/…` URL at all), the row stays `owed`, and EDS rows reconcile exactly as before. | error (no wrong-tenant call) | Spy: zero Graph URLs containing the Trinnex mailbox; EDS settle count unchanged vs feed-OFF |
+| AC-35 | Given a Trinnex alert turn, then the reply card renders Dismiss and NOT "Save to Drafts" (no Edit-first draft button either), and the directive does NOT tell the owner to tap Save to Drafts; it says a draft cannot be saved to the Trinnex mailbox from Huddle yet. | happy-path (no write path) | UI test / Playwright on a seeded Trinnex turn; directive string assertions |
+| AC-36 | Given a crafted call `saveEmailReplyDraftFn({emailId: <trinnex ledger id>})` (button hidden but the server fn hit directly), then it returns an explicit refusal (ok:false with a reason naming Trinnex), makes ZERO Graph calls (`createReplyDraftForMessage` not invoked), and the row status stays `owed`. | error (server-side gate, not UI-only) | Spy on createReplyDraftForMessage call count == 0; DB status |
+| AC-37 | Given a Trinnex owed row, when `dismissEmailReplyFn` is called, then the row becomes `dismissed`, the owed count drops by 1, and no Graph call is made. | happy-path | DB status; counts fn |
+| AC-38 | Given a Trinnex alert, then the phone push title follows the existing `inboundEmailPush` shape ("New email from <name> …", sticky) — no new sender, no new channel; and `ensureMailSubscription` is NOT called for the Trinnex mailbox (no Graph subscription on another tenant). | regression | Push spy payload; spy on ensureMailSubscription args |
+| AC-39 | Given 4 EDS and 4 Trinnex kept messages in one run, then the per-run cap is enforced deterministically and documented (proposed default: one shared cap of `MAX_PER_RUN` = 5 across both sources, oldest first by `receivedDateTime`); the undelivered ones are delivered on the next run, none lost, none duplicated. | edge | Run `delivered` count; second run delivers the remainder |
+| AC-40 | Given a Trinnex record whose `receivedDateTime` is older than the watch lookback (`INBOUND_EMAIL_LOOKBACK_HOURS_DEFAULT` = 12h, or the run's `lookbackHours`), then it is not announced (the same window as EDS). | edge | Unit with nowMs fixed |
+
+## 5. Calendar: merge into every reader
+
+Readers: `meetingsForDate` (schedule brief + lookahead + T-60 seed ids via `BriefItem.sourceId`),
+`get_external_calendar_events` in `voice/realtime-tools.server.ts` and in BOTH
+`huddle.functions.ts` dispatch sites, and the tool descriptions in `calendar/tools.ts`.
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-41 | Given feed ON with one valid Trinnex appointment in the window, then EACH of the four call sites returns the EDS events unchanged (same order, same fields, deep-equal to a feed-OFF run with the same mocked Graph) PLUS the Trinnex event, which is labelled by source (e.g. `source: "trinnex"`) so the agent can say which calendar it is on. | happy-path | Unit/integration per call site with mocked Graph + mocked drive |
+| AC-42 | Given a Trinnex appointment, then its `CalendarEvent.id` (and therefore `BriefItem.sourceId`, the T-60 key) is source-namespaced, can never equal any EDS Graph event id, and is IDENTICAL across two refreshes of the snapshot in which that appointment is unchanged or only moved/renamed. | happy-path / dedupe | Unit: two snapshots, same appointment id, different subject/start -> same id |
+| AC-43 | Given a recurring Trinnex series with two occurrences in the window, then two events with two distinct ids are returned, each stable across refresh. | edge | Unit |
+| AC-44 | Given the EDS Graph read fails (e.g. 403 missing Calendars.Read), then the Trinnex events are still returned AND the EDS error is still surfaced exactly as today (not swallowed by the Trinnex success). Conversely, a Trinnex failure never changes the EDS result or turns an EDS success into an error. | error / regression | Per call site: result contains Trinnex events + the existing EDS error string |
+| AC-45 | Given a Trinnex appointment with `isAllDay: true` on 2026-11-10, then it maps to `isAllDay: true`, `meetingsForDate` renders it with `startIso: null` and `day: "2026-11-10"` (no midnight-UTC shift to the 9th in America/New_York). | edge | Unit on meetingsForDate output |
+| AC-46 | Given `organizer`, `location` in the record, then `CalendarEvent.organizer` / `location` are populated the same way the Graph mapper does (name, else address; displayName trimmed, else null); `subject` empty -> `(no subject)`. | happy-path | Unit |
+
+### Time zone (the format trap: Graph returns OFFSET-LESS wall times in the zone named by the Prefer header, and `meetingsForDate` asks for UTC then pins with `graphUtcToIso`)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-47 | Given a Trinnex event at 09:00-09:30 America/New_York on 2026-11-09 (EST, UTC-5), when read with `timeZone: "UTC"`, then `start` represents 14:00 UTC on 2026-11-09 and `graphUtcToIso(start)` == `2026-11-09T14:00:00.000Z` (or `…T14:00:00Z`). | happy-path | Unit on mapped event + graphUtcToIso |
+| AC-48 | Same event read with `timeZone: "America/New_York"` -> `start` wall time `2026-11-09T09:00:00` (offset-less, matching Graph's own format so every consumer formats it the same). | happy-path | Unit |
+| AC-49 | DST: an event at 09:00 America/New_York on 2026-07-15 (EDT, UTC-4) read in UTC -> 13:00 UTC; on 2026-10-31 (EDT) -> 13:00 UTC; on 2026-11-01 (the day DST ends, EST) -> 14:00 UTC; on 2026-03-08 (DST starts) 09:00 -> 13:00 UTC. | edge (DST) | Unit, four fixtures |
+| AC-50 | Given the source record carries only `start`/`end` WITHOUT offset plus `startWithTimeZone`/`endWithTimeZone` WITH offset, then the instant is taken from the offset-bearing field; an offset-less source value is never re-read as server-local or as UTC by accident (the 4-5 hour-early defect `graphUtcToIso` documents). | error | Unit: fixture with the two fields disagreeing in format |
+| AC-51 | Given `meetingsForDate("2026-11-09", "America/New_York", …)`, then the Trinnex event's `day` is `2026-11-09` and it is briefed on that day; an event at 23:30 America/New_York on 2026-11-09 (04:30Z on the 10th) is still briefed on the 9th. | edge | Unit |
+
+### Window overlap (window = the requested [start, end), half-open, as Graph calendarView treats it)
+
+| # | Event vs requested window W=[10:00,11:00) | Expected | Wrong answer would be |
+|---|---|---|---|
+| AC-52 | event 09:00-10:00 (ends exactly at W.start) | excluded | FALSE PASS |
+| AC-53 | event 11:00-12:00 (starts exactly at W.end) | excluded | FALSE PASS |
+| AC-54 | event 09:30-10:15 (starts before, ends inside) | included | FALSE REFUSAL |
+| AC-55 | event 10:45-11:30 (starts inside, ends after) | included | FALSE REFUSAL |
+| AC-56 | event 08:00-13:00 (spans W entirely) | included | FALSE REFUSAL |
+| AC-57 | zero-length event at 10:30 | included | FALSE REFUSAL |
+| AC-58 | Given the requested range extends beyond the snapshot's [`window_start_utc`, `window_end_utc`], then events in the covered part are returned AND a warning says the Trinnex calendar is not covered for the uncovered part — never a silent "nothing scheduled" for that part. | error | Reader warning present; covered events present |
+
+## 6. Feed OFF — byte-for-byte unchanged
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-59 | Given the feed disabled OR any required key unset, when the inbound watch runs with a fixed mocked Graph inbox, then the returned `InboundEmailRunResult` JSON is byte-identical to the pre-change output for the same inputs (no added keys, including no `trinnex` key), the enqueued turn ids and payloads are identical, and directive strings are identical. | regression | Golden-file test: serialize result + payloads, compare against a fixture captured at `c80288f5` |
+| AC-60 | Given feed OFF, then ZERO requests are made to any `/drive/` URL, and no checkpoint/eTag storage is read or written. | regression | Spy; DB/table untouched |
+| AC-61 | Given feed OFF, then each of the four calendar call sites returns output deep-equal to pre-change for the same mocked Graph response, including the error branches (Graph not configured; 403). | regression | Golden outputs per call site |
+| AC-62 | Given feed OFF, `bun scripts/inbound-email.test.ts` and the existing schedule-brief / router suites pass unchanged (no edited expectations). | regression | test runner output; `git diff` of existing test files shows additions only |
+
+## 7. Performance and reliability (proposed defaults — confirm)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-63 | Given the drive GET hangs, then it is aborted at <= 10 s per file and the EDS pass still finishes in the same run; the whole watch run with feed ON adds <= 15 s over feed OFF in the worst case. | performance | Timed unit with a never-resolving fetch mock |
+| AC-64 | Given a calendar reader call (voice or chat), then the Trinnex contribution is served from the last validated snapshot without re-downloading when the eTag is unchanged, adding <= 1 s at p95 on an unchanged file. | performance | Timed run; Spy shows a 304 / no content GET |
+| AC-65 | Given the watch fires every five minutes and the file is unchanged, then each run costs at most one conditional metadata/content request per file (no content download). | performance | Spy request count per run |
+
+## Goal -> AC coverage
+
+- "Trinnex mail reaches Iris like EDS mail does, once" -> AC-1, AC-26, AC-29, AC-31, AC-33, AC-38, AC-39, AC-40
+- "Only real people asking something; never my own mail, bulk or robots" -> AC-27..AC-29a, S-1..S-28
+- "Synthetic only until I authorize live" -> AC-19, AC-29a, P-1..P-6
+- "Trinnex never gets confused with EDS (ids, drafts, reconciliation)" -> AC-30, AC-32, AC-34..AC-37, AC-42
+- "Trinnex meetings appear in my brief, reminders and calendar answers, in the right time" -> AC-41..AC-51
+- "A broken or old feed is said out loud, never shown as an empty day" -> AC-5, AC-6, AC-23..AC-25, AC-44, AC-58
+- "Nothing I have today changes" -> AC-6, AC-30, AC-41, AC-44, AC-59..AC-62
+- "No private data in public logs; no new secret; read-only" -> AC-1, AC-2, AC-7, AC-8
+- Every AC traces to a goal above; no orphans found.
+
+## Gaps / open questions for the owner
+
+- G-1 Where the eTag checkpoint and last-good snapshot live (a new small table vs an existing store).
+  Either works for these ACs; it must survive a process restart (SWA cold start), so in-memory alone
+  does NOT satisfy AC-4/AC-5.
+- G-2 Per-run cap: one shared cap of 5 across both sources (proposed) vs 5 per source.
+- G-3 Synthetic prefix and replies: should `RE: [TEST] …` count? Proposed default NO (P-5), because a
+  wrong YES lets non-test mail through before live data is authorized.
+- G-4 The same meeting on both calendars (same `iCalUId`): show both labelled (proposed, no data loss)
+  or merge into one; and whether one or two T-60 reminders fire. Needs a decision before T-60 seeding.
+- G-5 Stale threshold `<CFG.maxAgeMinutes>`: the feed refreshes only on source events, so an idle
+  file can be legitimately old. The email side should NOT warn on age; the calendar side needs a
+  threshold (proposed 24 h) or a "no change since" phrasing rather than a warning.
+- G-6 Sent-items reconciliation for Trinnex is impossible without a feed of Sent Items, so Trinnex owed
+  rows settle only by Dismiss. Confirm that is acceptable, or add a sent-items snapshot later.
+- G-7 The T-60 seeder that consumes `BriefItem.sourceId` was not found by grep in `src/` at
+  `c80288f5` (only the producers). AC-42 is written against `sourceId`; the implementer must name the
+  consumer, or confirm none exists yet.
+- G-8 The instant-alert route (`mail-subscription.server.ts`) has no Trinnex equivalent; Trinnex
+  alerts arrive on the five-minute tick only. Confirm acceptable.
