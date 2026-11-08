@@ -141,3 +141,12 @@ the two "Walk backwards from my 30/60/90…" rewrites of "Translate my 30/60/90 
 set a couple of initial strategies", and "Define a software engineering maturity curve…".
 
 ### Steps (Revision B)
+1. **Helpers** (`create-task-core.ts`): `priorBatchDispatch` REMOVED. Added `titleTokenSet`, `isRewordOf`,
+   `splitByPriorDispatch`, `alreadySentSkips`, constants `RERUN_REWORD_JACCARD = 0.7` /
+   `RERUN_REWORD_MIN_SHARED = 3`. `alreadyDispatchedResult` now takes the matched pairs (title → sent title).
+   The re-run directive now ends "If the user asked for anything that is NOT on this list, create it normally."
+2. **Call sites** (`huddle.functions.ts`): `createBatchTasksFromTool` sends `rerun.fresh` and lists the rest in
+   `skipped` with the sent title they matched; `createSuggestedTaskFromTool` skips only a matching title;
+   `guardRawJourneyCreate` rewrites a raw batch to its fresh titles (same field the model used) and skips a
+   raw single only on a match; the matched rows join `decision.skipped`, so `annotateRawCreateOutput` reports
+   them. Journey refusals are not counted as sent. tsc: 0 errors.

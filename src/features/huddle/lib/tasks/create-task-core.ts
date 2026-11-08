@@ -357,14 +357,74 @@ export function priorAttemptDispatches(
   return ledger.filter((e) => e.agentId === agentId && e.attemptId !== attemptId);
 }
 
-/** The earlier attempt's batch create, if any. While one exists the re-run must not create again:
- *  every title it would send is the same request, usually reworded, which no exact-title check sees. */
-export function priorBatchDispatch(
+// ── Re-run matching: skip ONLY what an earlier attempt already sent (Revision B, owner 2026-11-08) ──
+// SUPERSEDES the blanket `priorBatchDispatch` block from PR #164, which refused EVERY create after an
+// earlier attempt's batch and so dropped genuinely new tasks ("asking me to re ask is terrible design").
+// Tokens follow journey's own dedup signature (journey-voice supabase/functions/_shared/task-dedup.ts
+// `titleSignature`: lowercase, NFKD, punctuation stripped, the SAME filler-stopword list) plus a trailing-s
+// plural strip. A title matches a sent title on normalizeTaskTitle equality, or on token-set Jaccard >=
+// RERUN_REWORD_JACCARD with >= RERUN_REWORD_MIN_SHARED shared tokens. Measured on the real 11-07 lines
+// (FIX-iris-timeout-no-rerun.md, Revision B): 13/17 re-sent paraphrases caught, 0/253 distinct-original
+// pairs matched, 2/9 near-miss new tasks wrongly skipped. Misses fall through to journey's semantic dedup.
+
+const REWORD_STOPWORDS = new Set([
+  "a", "an", "the", "to", "for", "of", "and", "or", "my", "your", "me", "i",
+  "on", "in", "at", "with", "this", "that", "please", "pls", "now",
+]);
+export const RERUN_REWORD_JACCARD = 0.7;
+export const RERUN_REWORD_MIN_SHARED = 3;
+
+/** Significant tokens of a title (journey's signature tokens + a plural strip), as a set. */
+export function titleTokenSet(title: string): Set<string> {
+  const out = new Set<string>();
+  const words = String(title ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/);
+  for (let w of words) {
+    if (!w || REWORD_STOPWORDS.has(w)) continue;
+    if (w.length > 3 && w.endsWith("s") && !w.endsWith("ss")) w = w.slice(0, -1);
+    out.add(w);
+  }
+  return out;
+}
+
+/** True when `candidate` is the same task as `sent`: identical after normalizeTaskTitle, or a rewording
+ *  close enough by significant-token overlap (see the block comment above for the measured rule). */
+export function isRewordOf(candidate: string, sent: string): boolean {
+  if (normalizeTaskTitle(candidate) === normalizeTaskTitle(sent)) return true;
+  const a = titleTokenSet(candidate);
+  const b = titleTokenSet(sent);
+  let shared = 0;
+  for (const t of a) if (b.has(t)) shared++;
+  const union = a.size + b.size - shared;
+  return union > 0 && shared >= RERUN_REWORD_MIN_SHARED && shared / union >= RERUN_REWORD_JACCARD;
+}
+
+export type AlreadySent = { title: string; matchedSentTitle: string };
+
+/** Split requested titles into the ones to create and the ones an EARLIER attempt of this agent already
+ *  sent this turn (exactly or reworded). With no earlier dispatch everything is `fresh`, untouched. A
+ *  dispatch journey explicitly refused does not count as sent. */
+export function splitByPriorDispatch(
   ledger: readonly DispatchedCreate[],
   agentId: string,
   attemptId: string,
-): DispatchedCreate | null {
-  return priorAttemptDispatches(ledger, agentId, attemptId).find((e) => e.batch) ?? null;
+  titles: readonly string[],
+): { fresh: string[]; alreadySent: AlreadySent[] } {
+  const sent = priorAttemptDispatches(ledger, agentId, attemptId)
+    .filter((e) => e.result?.ok !== false)
+    .flatMap((e) => e.titles);
+  if (!sent.length) return { fresh: [...titles], alreadySent: [] };
+  const fresh: string[] = [];
+  const alreadySent: AlreadySent[] = [];
+  for (const t of titles) {
+    const hit = sent.find((s) => isRewordOf(t, s));
+    if (hit) alreadySent.push({ title: t, matchedSentTitle: hit });
+    else fresh.push(t);
+  }
+  return { fresh, alreadySent };
 }
 
 function titlePreview(titles: readonly string[], max = 5): string {
@@ -421,15 +481,14 @@ export function priorDispatchDirective(
   return (
     `\n\nIMPORTANT: an earlier attempt of yours in THIS SAME turn ran out of time AFTER it had already ` +
     `sent these ${titles.length} task(s) to the board, and they are being created:\n${lines.join("\n")}\n` +
-    `Do NOT create any of them again, not even reworded. Do not call create_huddle_tasks, create_huddle_task ` +
-    `or parse_and_create_tasks for them. Tell the user plainly which tasks you added (the list above), ` +
-    `then do anything else they asked.`
+    `Do NOT create any of them again, not even reworded. Tell the user plainly which tasks you added (the ` +
+    `list above). If the user asked for anything that is NOT on this list, create it normally.`
   );
 }
 
-/** What the model gets back when it tries to create again after an earlier attempt's batch create. */
+/** What the model gets back when EVERY title it asked for was already sent by an earlier attempt. */
 export function alreadyDispatchedResult(
-  prior: DispatchedCreate,
+  alreadySent: readonly AlreadySent[],
   requested: readonly string[],
 ): Record<string, unknown> {
   return {
@@ -437,11 +496,19 @@ export function alreadyDispatchedResult(
     created: 0,
     alreadyDispatched: true,
     requested: requested.length,
-    sentEarlierThisTurn: prior.titles,
+    sentEarlierThisTurn: alreadySent,
     note:
-      `Not sent again: your earlier attempt in this turn already sent ${prior.titles.length} task(s) to the ` +
-      `board, listed in sentEarlierThisTurn. Do not create them again. Tell the user those were added.`,
+      `Not sent again: each of these matches a task your earlier attempt in this turn already sent ` +
+      `(sentEarlierThisTurn pairs each with the title that was sent). Tell the user those were added.`,
   };
+}
+
+/** The `skipped[]` rows for titles dropped because an earlier attempt already sent them. */
+export function alreadySentSkips(alreadySent: readonly AlreadySent[]): Array<{ title: string; reason: string }> {
+  return alreadySent.map((a) => ({
+    title: a.title,
+    reason: `already sent earlier this turn as "${a.matchedSentTitle}"`,
+  }));
 }
 
 /** The user's own words for journey's task parser (`parse_and_create_tasks` optional `context` arg),
