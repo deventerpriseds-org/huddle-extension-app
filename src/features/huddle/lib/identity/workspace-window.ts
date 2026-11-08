@@ -96,3 +96,47 @@ export function prependOlder<M extends WindowableMessage>(current: readonly M[],
   // Older pages go in FRONT (oldest first); the existing list keeps its exact order.
   return [...fresh.slice().sort((a, b) => tsOf(a) - tsOf(b)), ...current];
 }
+
+/**
+ * Should a fired reminder/alarm be added to the end of this huddle's thread?
+ * WHY: the reminder poll asks for EVERY reminder ever fired in the huddle (cursor starts at 0) and appends any
+ * it can't find in the store. With paged history the old ones are simply not loaded yet, so they were appended
+ * to the BOTTOM as if new (owner screenshot 2026-11-08: Aug/Sep alarms under today's messages). A reminder that
+ * fired before the oldest loaded message of this huddle is already part of the stored history and arrives with
+ * the older pages; only add ones at or after that point. A huddle with nothing loaded takes everything.
+ */
+export function shouldAppendReminder(
+  firedMs: number,
+  huddleMessages: readonly WindowableMessage[],
+): boolean {
+  let oldest = Infinity;
+  for (const m of huddleMessages) {
+    const t = tsOf(m);
+    if (t > 0 && t < oldest) oldest = t;
+  }
+  if (oldest === Infinity) return true;
+  return firedMs >= oldest;
+}
+
+/**
+ * The reason shown when the history load fails, instead of a bare "server error" for everything.
+ * WHY: the owner's app showed "Couldn't load your message history (server error)" while the phone's browser
+ * loaded fine (2026-11-08); every failure, including a rejected sign-in, carried the same words, so the
+ * cause could not be told apart. Owner approved showing the real reason (option A).
+ */
+export function describeLoadFailure(e: unknown): string {
+  const raw = (e instanceof Error ? e.message : typeof e === "string" ? e : "").replace(/\s+/g, " ").trim();
+  const code = e && typeof e === "object" && "code" in e ? String((e as { code: unknown }).code) : "";
+  const s = `${code} ${raw}`;
+  let label = "server error";
+  if (/ERR_JWT_EXPIRED|"exp" claim|token.*expired|expired.*token/i.test(s)) label = "sign-in expired";
+  else if (/ERR_JW[STK]|ERR_JWKS_NO_MATCHING|"aud" claim|"iss" claim|"nbf" claim|signature verification|oid\/sub|Invalid Compact JWS/i.test(s))
+    label = "sign-in rejected";
+  else if (/client id not configured|ENTRA_TENANT_ID/i.test(s)) label = "server sign-in setup";
+  else if (/JWKS|Failed to fetch|fetch failed|NetworkError|Load failed|timed? ?out|ECONN|ETIMEDOUT|ENOTFOUND/i.test(s))
+    label = "couldn't reach the server";
+  else if (/\b50[234]\b|Service Unavailable|Bad Gateway|Gateway Time/i.test(s)) label = "server unavailable";
+  if (!raw) return label;
+  const detail = raw.length > 90 ? `${raw.slice(0, 87)}…` : raw;
+  return `${label}: ${detail}`;
+}

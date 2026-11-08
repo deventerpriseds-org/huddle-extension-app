@@ -4,7 +4,7 @@
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   run with `npm run test:workspace-window`.
 import { readFileSync } from "node:fs";
-import { mergeMessages, olderPage, prependOlder, windowMessages } from "../src/features/huddle/lib/identity/workspace-window";
+import { describeLoadFailure, mergeMessages, olderPage, prependOlder, shouldAppendReminder, windowMessages } from "../src/features/huddle/lib/identity/workspace-window";
 
 let fail = 0;
 const check = (n: string, ok: boolean, d = "") => { console.log(`${ok ? "PASS" : "FAIL"} ${n}${!ok && d ? ` — ${d}` : ""}`); if (!ok) fail++; };
@@ -61,5 +61,28 @@ check("S3 merge happens under a row lock", /FOR UPDATE/.test(fns) && /mergeMessa
 check("S4 the app asks for the window AND merges its saves", /recentDays: RECENT_DAYS/.test(sync) && /mergeMessages: true/.test(sync));
 check("S5 scrolling to the top fetches older pages", /else if \(start <= 0 && m\.scrollTop < LOAD_OLDER_PX\) void fetchOlder\(\);/.test(view) && /loadOlderMessages\(\{/.test(view));
 check("S6 fetched pages pass the same filter as hydrate", /\.filter\(isRenderableMessage\)/.test(view));
+
+// alarms/reminders (owner 2026-11-08: Aug/Sep alarms appeared at the bottom of today's thread)
+const loaded = [msg("l1", "dm-iris", 10), msg("l2", "dm-iris", 2)];
+check("A1 an alarm older than the oldest loaded message is NOT appended (it comes with older pages)", !shouldAppendReminder(NOW - 90 * DAY, loaded));
+check("A2 an alarm that fired after the window start IS appended", shouldAppendReminder(NOW - 1 * DAY, loaded));
+check("A3 boundary: same instant as the oldest loaded counts as loaded range", shouldAppendReminder(NOW - 10 * DAY, loaded));
+check("A4 a thread with nothing loaded takes every alarm", shouldAppendReminder(NOW - 300 * DAY, []));
+check("A5 messages without a usable ts don't define the window", shouldAppendReminder(NOW - 90 * DAY, [{ id: "z" }, { id: "y", ts: NaN }]));
+const pollStart = view.indexOf("// Reminder delivery:");
+const pollSrc = view.slice(pollStart, view.indexOf("}, [huddle.id]);", pollStart));
+check("A6 the reminder poll applies the rule before appending", /if \(!shouldAppendReminder\(r\.firedMs, all\.filter\(\(m\) => m\.huddleId === huddle\.id\)\)\) return;/.test(pollSrc));
+check("A7 the reminder poll waits for the history to load (hydrate replaces the list)", /if \(!isWorkspaceHydrated\(\)\) \{/.test(pollSrc) && pollSrc.indexOf("isWorkspaceHydrated()") < pollSrc.indexOf("getReminderDeliveries({"));
+
+// load-failure reason (owner option A, 2026-11-08)
+const jose = (code: string, message: string) => Object.assign(new Error(message), { code });
+check("E1 expired sign-in", describeLoadFailure(jose("ERR_JWT_EXPIRED", '"exp" claim timestamp check failed')).startsWith("sign-in expired: "));
+check("E2 rejected sign-in (audience)", describeLoadFailure(jose("ERR_JWT_CLAIM_VALIDATION_FAILED", 'unexpected "aud" claim value')).startsWith("sign-in rejected: "));
+check("E3 rejected sign-in (signature)", describeLoadFailure(jose("ERR_JWS_SIGNATURE_VERIFICATION_FAILED", "signature verification failed")).startsWith("sign-in rejected: "));
+check("E4 network", describeLoadFailure(new TypeError("Failed to fetch")).startsWith("couldn't reach the server: "));
+check("E5 unknown error keeps the raw text", describeLoadFailure(new Error("relation \"identity.workspace_state\" does not exist")) === 'server error: relation "identity.workspace_state" does not exist');
+check("E6 empty error -> bare label, long text is cut", describeLoadFailure({}) === "server error" && describeLoadFailure(new Error("x".repeat(300))).length < 120);
+check("E7 the loader shows the described reason, not a fixed 'server error'", /failed\(attempt, describeLoadFailure\(e\)\);/.test(sync) && !/failed\(attempt, "server error"\)/.test(sync));
+check("E8 the retry toast says why it is retrying", /Loading your message history… \(retrying: \$\{why\}\)/.test(sync));
 console.log(fail ? `${fail} failed` : "all passed");
 process.exit(fail ? 1 : 0);
