@@ -133,7 +133,16 @@ jobs:
           v=((d.get("snapshot") or {}).get("value")) if isinstance(d,dict) else None
           print("feed_type", d.get("feed_type"), "| schema", d.get("schema_version"), "| complete", d.get("complete"),
                 "| synthetic", d.get("synthetic"), "| records", len(v) if isinstance(v,list) else "-",
-                "| mailbox domain", str(d.get("mailbox","")).split("@")[-1] or "-")' 2>/dev/null || echo "-")
+                "| mailbox domain", str(d.get("mailbox","")).split("@")[-1] or "-")
+          # SHAPE ONLY (names + JSON types, never values): what the mapper must read.
+          def shape(o, depth=0):
+              if isinstance(o, dict):
+                  return "{" + ", ".join(f"{k}:{shape(v, depth+1) if depth < 1 else type(v).__name__}" for k, v in sorted(o.items())) + "}"
+              if isinstance(o, list):
+                  return "[" + (shape(o[0], depth+1) if o and depth < 1 else "") + "]"
+              return type(o).__name__
+          print("   envelope keys:", sorted(d.keys()) if isinstance(d,dict) else "-")
+          if isinstance(v,list) and v: print("   record[0] shape:", shape(v[0]))' 2>/dev/null || echo "-")
                 echo "$u $p | item HTTP $M -> $MSUM | content HTTP $C -> $CSUM"
               done
             done
