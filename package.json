@@ -74,6 +74,7 @@
     "test:job-check": "bun scripts/job-check.test.ts",
     "test:schedule-today-band": "bun scripts/schedule-today-band.test.ts",
     "test:timeout-no-rerun": "bun test scripts/timeout-no-rerun.test.ts",
+    "test:attention": "tsx scripts/attention.test.ts",
     "test:id-token-expiry": "bun scripts/id-token-expiry.test.ts"
   },
   "dependencies": {

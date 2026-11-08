@@ -82,6 +82,7 @@ import { useDictation } from "../hooks/useDictation";
 import { usePush } from "../hooks/usePush";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useAuth } from "@/hooks/useAuth";
+import { AttentionBell } from "./AttentionBell";
 import {
   confirmTaskFromButtonFn,
   overrideApproachFromButtonFn,
@@ -210,6 +211,8 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
             exactly where the bottom bar takes over (HuddleApp) — the two are complementary, so
             precisely one is on screen at any width. They used to BOTH render at 390px, stacked. */}
         <ViewSwitcher variant="inline" className="app-hidden max-w-full overflow-x-auto md:inline-flex" />
+
+        <AttentionBell />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
