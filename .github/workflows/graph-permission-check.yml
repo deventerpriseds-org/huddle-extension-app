@@ -10,6 +10,9 @@ name: Graph permission check (read-only)
 #             re-runnable to prove the fix after an admin grants access.
 #             Section 4 (2026-10-15) also probes app-only Inbox read + Drafts folder access, the
 #             premise of an inbound-email watcher (Iris missed Amy Corriveau's email: nothing reads mail).
+#             Section 5 (2026-11-08) proves the app-only key can READ the work-mailbox OneDrive feed
+#             files (external-feeds/onedrive-feed.server.ts). Power Automate WRITING them proves nothing
+#             about Huddle's own application permission. Prints status/size/shape/counts only.
 # SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 # EVIDENCE:   .claude/evidence/schedule-brief-fix.md; deploy-swa.yml "Ensure Graph Mail.Send" step
 #             (grants Mail.Send only).
@@ -24,6 +27,14 @@ on:
         description: "Comma-separated mailboxes to test the calendar read against."
         required: true
         default: "dev@enterpriseds.io,von.ellis@enterpriseds.io"
+      feed_drive_users:
+        description: "Section 5: comma-separated EDS users whose OneDrive may hold the feed files (blank = skip)."
+        required: false
+        default: ""
+      feed_paths:
+        description: "Section 5: comma-separated drive-relative feed file paths."
+        required: false
+        default: "/automation/email/emails.json,/automation/appointments/appointments.json"
 
 permissions:
   contents: read
@@ -38,6 +49,8 @@ jobs:
           CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           MAILBOXES: ${{ inputs.mailboxes }}
+          FEED_USERS: ${{ inputs.feed_drive_users }}
+          FEED_PATHS: ${{ inputs.feed_paths }}
         run: |
           set -uo pipefail
           for v in TENANT CLIENT_ID CLIENT_SECRET; do
@@ -95,3 +108,34 @@ jobs:
               "https://graph.microsoft.com/v1.0/users/$m/mailFolders/drafts?\$select=displayName,totalItemCount")
             echo "$m | inbox HTTP $I -> $ISUM | drafts folder HTTP $D"
           done
+
+          # 5. App-only READ of the OneDrive feed files (the exact calls readFeed makes: item metadata
+          #    with eTag, then /content). THIS REPO'S LOGS ARE PUBLIC: status, size, envelope shape and
+          #    counts only -- never subjects, senders, bodies or ids.
+          if [ -n "${FEED_USERS// /}" ]; then
+            echo "=== 5. App-only OneDrive feed file read ==="
+            IFS=',' read -ra FU <<< "$FEED_USERS"; IFS=',' read -ra FP <<< "$FEED_PATHS"
+            for u in "${FU[@]}"; do
+              u=$(echo "$u" | xargs)
+              for p in "${FP[@]}"; do
+                p=$(echo "$p" | xargs)
+                M=$(curl -s -o /tmp/m.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+                  "https://graph.microsoft.com/v1.0/users/$u/drive/root:$p?\$select=eTag,size")
+                MSUM=$(python3 -c 'import json;d=json.load(open("/tmp/m.json"));e=(d.get("error") or {}).get("code","");print("size", d.get("size","-"), "etag", "yes" if d.get("eTag") else "no", e)' 2>/dev/null || echo "-")
+                C=$(curl -s -L -o /tmp/f.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+                  "https://graph.microsoft.com/v1.0/users/$u/drive/root:$p:/content")
+                CSUM=$(python3 -c '
+          import json
+          try:
+              d=json.load(open("/tmp/f.json"))
+          except Exception:
+              print("not JSON"); raise SystemExit
+          v=((d.get("snapshot") or {}).get("value")) if isinstance(d,dict) else None
+          print("feed_type", d.get("feed_type"), "| schema", d.get("schema_version"), "| complete", d.get("complete"),
+                "| synthetic", d.get("synthetic"), "| records", len(v) if isinstance(v,list) else "-",
+                "| mailbox domain", str(d.get("mailbox","")).split("@")[-1] or "-")' 2>/dev/null || echo "-")
+                echo "$u $p | item HTTP $M -> $MSUM | content HTTP $C -> $CSUM"
+              done
+            done
+            echo "(403 on the item = the app lacks Files.Read.All / Files.ReadWrite.All application permission)"
+          fi
