@@ -206,5 +206,15 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("B7 spacedClock leaves ranges readable", spacedClock("7:00PM–10:00PM") === "7:00 PM–10:00 PM");
 }
 
+// Owner, 2026-11-08: "that run on paragraph is not clean formatting and is worse" — the agents' shared
+// house style must ask for one-item-per-line lists, not forbid them.
+{
+  const hf = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+  const house = /const HOUSE_STYLE =\s*"([^"\\]|\\.)*"/.exec(hf)?.[0] ?? "";
+  check("STYLE-1 house style no longer forbids bullet lists", house.length > 0 && !/no long bullet dumps/.test(house), house.slice(0, 200));
+  check("STYLE-2 house style asks for 3+ item lists one per line as bullets", /list of three or more items[^"]*own line starting/.test(house));
+  check("STYLE-3 the operating contract no longer says 'not headings or long lists'", !/not headings or " \+\s*"long lists/.test(hf));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
