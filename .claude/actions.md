@@ -4981,7 +4981,7 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [x] Live browser UAT `chat-format-checks.mjs` (verify-uat 42498817299, 390x844, #iris-chase): 10/10 — 8 lists / 71 items, 0 raw bullets, 0 literal **, 0 split lists.
 - [ ] OWNER to confirm on his phone (his 2026-11-08 screenshot was the pre-deploy renderer).
 - [ ] D (long research -> document + short summary) HELD by owner.
-- [ ] DECISION pending: agents' ad-hoc replies still write lists as one run-on sentence ("Today's schedule now shows: 11:00 AM …; 12:00 PM …") because HOUSE_STYLE (huddle.functions.ts) says "no long bullet dumps". Changing it is a change to an existing agent rule — needs owner thumbs-up.
+- [x] Owner approved (2026-11-08: "that run on paragraph is not clean formatting and is worse") replacing the HOUSE_STYLE "no long bullet dumps" line: lists of 3+ items now go one per line as bullets. #182 squash 57c17a7, deploy-swa 42500312471 success. NOT yet seen in a live agent reply.
 - [ ] Watch: with a reply card, a model that skips propose_email_reply leaves NO draft in the prose (card says "No suggested reply yet").
 
 ## ACT:trinnex-onedrive-feed — work-mailbox mail + calendar via EDS OneDrive files (2026-11-08) — BUILT on dev branch, NOT live
