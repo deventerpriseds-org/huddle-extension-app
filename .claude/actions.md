@@ -4973,6 +4973,15 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [ ] Row (parallel lane, not blocking): isCoursework is a title regex — loop 3 measured recall 16->7 of 25 realistic coursework titles and 26/26 constructed adversarial false positives; the owner's real examples are all caught. Better signal is data (Nexus 📚 sync / the real course list; agents.ts:226-283 keeps a separate coursework word list). File: src/features/huddle/lib/tasks/workability.ts.
 - [ ] Row: approach-gate.server.ts ~335 — a grader-call error on a FRESH approach still returns approved:true for that turn (documented, pre-existing).
 
+## ACT:chat-format — clean, consistent chat message layout (owner-approved A, B, C, E; D held, 2026-11-05)
+- [x] Diagnosis: Iris's 29 messages 11-03..05 (azure-pg-query run 42105101844). Same brief spaced two ways; raw `**bold**`; four "N more" phrasings; draft + tally in prose; quota error as Iris. Cause: HuddleView rendered `{m.text}` raw + layout delegated to the model.
+- [x] A renderer (`lib/chat-format.ts`, `components/ChatText.tsx`); B code-built brief/priority lists (`appendBlock`); C draft only in the card; E failure replies as grey notices. Commits aad39f4, 0a38101; 5 guards mutation-FIRED.
+- [ ] Independent verifier (docs/qc-evidence/VERIFY-chat-format-1.md) -> merge -> deploy -> owner confirms on his phone/browser.
+- [ ] D (long research -> document + short summary) HELD: owner will judge after using the cleaned-up layout.
+- [ ] Watch: with a reply card, a model that skips propose_email_reply now leaves NO draft in the prose (card says "No suggested reply yet — tap Edit first").
+
+## ACT:trinnex-onedrive-feed — work-mailbox mail + calendar via EDS OneDrive files (2026-11-08) — BUILT on dev branch, NOT live
+
 ## ACT:trinnex-onedrive-feed — work-mailbox mail + calendar via EDS OneDrive files (2026-11-08) — LIVE, OWNER-CONFIRMED (alert path)
 - **2026-11-08 06:1x UTC OWNER CONFIRMED:** test email (dev@ -> work mailbox, received 05:48Z) read from the OneDrive feed, verdict keep "from a person and asks something" (dry run 42453100468), announced by a manual live run (alert hours are 7am-10pm ET by design since 2026-10-15; outside them the first morning check with 12h lookback announces). Owner: "I received it". Merged #159 (1ac1280c), config run 42443445406, deploy 42443494430.
 - **Header overlap fixed:** #161 (6cdb10d9) -- Meeting button wraps instead of sliding under the ContextPanel at 1000px. PROVEN by full-suite runs 42452437543 and 42483232750: the Meeting click and stand-up room now work (first reply 684/693ms).
@@ -4993,9 +5002,37 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - **Four TEST defects (huddle-checks.mjs, branch claude_standup-barge-fix):** (1) never tapped Unmute -> now taps `button[aria-label="Unmute"]` and asserts "mic — listening"; (2) read the row after the barge by POSITION -> now reads the first new `data-turn-kind="answer"` row after a `data-turn-kind="barge"` user row; (3) noise guard counted every row -> counts answer rows only; (4) completion wait passed `{timeout}` in waitForFunction's ARG slot (30s default applied) -> options in slot 3, 8 min.
 - **Evidence:** branch run 42487020520 (8933a1bd) 22/23 — hail "Right here, sir.", park named both investor-pitch cards, quick answered; only completion failed (ceremony healthy, still speaking at 04:12, 36 rows). Run 42489768771 on 4f28ec39: **23/23 PASSED** (hail 'Yes sir?', park named both pitch cards, quick 0 blockers, noise ignored, ceremony completed in 362s / 50 rows).
 
+<<<<<<< HEAD
 ## ACT:attention-bell — "Needs you" bell with a count until dismissed or dealt with in chat (2026-11-08) — BUILT, shipping
 - **Asked for (owner 2026-11-08):** "huddle needs a notifications icon that has a count until I dismiss there or deal with them in the chat — for things I identify as urgent like communication or meeting or appointments related". Option A chosen: ONE list.
 - **Trigger for the ask:** the 9:31 work-mailbox alert (and 3 other Huddle pushes) were accepted by FCM but never shown on the phone (send-push-notification logs "FCM sent … 1 success"; owner saw the chat message but no alert). Two test pushes (9:57, 10:12) also did not show — phone-side cause still OPEN (token unchanged since 10-05, re-registered 10:06; app-side display unproven).
 - **Built (branch claude_attention-bell):** extends `chat.email_replies` (owed/settled list) with `kind` (email|meeting|appointment) + `huddle_id`; `chat.attention_settings` (owner's urgent kinds, default all three, editable from the bell). Writers: fired reminders/alarms -> appointment item; schedule brief with meetings/classes -> meeting item. Settles: emails as before (reply detected / Dismiss); meeting/appointment when the owner messages that conversation, or Dismiss in the bell. Email-only queries now filter `kind='email'`. Header bell (AttentionBell.tsx) polls 60s + on focus.
 - **Evidence:** scripts/attention.test.ts all passed; inbound-email 69/0; onedrive-feed all passed; tsc clean; bell kind-filter mutation FIRED. 7 emails currently owed (oldest 10-30) -> initial count 7.
 - **Old-alarms-at-bottom bug (from #169 paging):** diagnosed (reminder poll cursor starts at 0; dedup misses unloaded history) and HANDED to the session that built paging (owner choice), via send_message.
+=======
+### ACT:history-alarms-reason + ACT:apk-mic-audio-settings (2026-11-08) — owner approved "C2, a, b"
+- **Owner reports (2026-11-08):** after paging (#169) old Aug/Sep alarms show at the BOTTOM of today's 1:1 thread;
+  the history load keeps failing in the Huddle Android app with "(server error)" while the phone's BROWSER loads fine;
+  closing/reopening the app did not help; mic still "Could not start audio source" after granting permission.
+- **Cause of the alarms (read from code):** the reminder poll (`HuddleView.tsx` "Reminder delivery") starts its cursor at 0,
+  gets every reminder ever fired in the huddle and appends any not in the store. Paging leaves old ones unloaded, so they
+  were appended at the end. Stored history order was never changed (merge-save keeps stored positions).
+- **C2 (approved):** `shouldAppendReminder` skips a reminder older than the thread's oldest loaded message; the poll waits
+  for hydration (hydrate replaces the list). **A (approved):** `describeLoadFailure` names the reason in the retry toast and
+  the final error. Tests A1-A7, E1-E8 in `scripts/workspace-window.test.ts`; mutations A1/A6/A7/E7 all FIRED.
+- **B (approved):** android-bridge-template manifest `MODIFY_AUDIO_SETTINGS` + Huddle v1.0.16 build.
+- Status: implemented, mechanism verified offline, NOT yet confirmed live by the owner.
+
+### ACT:signin-refresh (2026-11-08) — owner asked: "a catch that knows the login expired and preferably something that keeps it from expiring"
+- **Cause, confirmed two ways:** (1) owner signed out and back in and history loaded at once; (2) read from
+  `@azure/msal-common` `SilentFlowClient.mjs`: the silent flow checks only the ACCESS token's expiry, then returns the
+  cached ID token unchecked. Entra access tokens live 60-90 min, ID tokens ~60, so for up to ~30 min `getToken()` sent
+  an expired ID token and `jwtVerify` rejected every server call -- matching "fixed itself 20 minutes later".
+- **Prevent:** `getToken` silently refreshes the ID token when expired or within 5 min (`src/lib/id-token-expiry.ts`).
+- **Catch:** history load retries at once with a fresh token on a sign-in rejection; a final failure offers
+  "Sign in again". Saves retry once with a fresh token. Tests `scripts/id-token-expiry.test.ts` T1-T7, W1-W4;
+  mutations T3/W1/W2/W3 all FIRED. Status: implemented, NOT yet confirmed live by the owner.
+- **UAT note:** `thread-render-check.mjs` run 42496045426 failed only "User's own messages render" (July/Aug Terry
+  messages the bypass session's back-fill no longer returns); shell, console and network checks passed. Neither #173
+  nor this change touches the back-fill; the check's fixture is stale (row it, don't fix inline).
+>>>>>>> origin/main

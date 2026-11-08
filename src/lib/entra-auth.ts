@@ -8,6 +8,7 @@ import {
   type Configuration,
 } from "@azure/msal-browser";
 import { hasUatTokenParam, resolveUatBypassFromUrl } from "@/lib/uat-bypass-url";
+import { idTokenNeedsRefresh } from "@/lib/id-token-expiry";
 
 const tenantName = import.meta.env.VITE_ENTRA_TENANT_NAME as string | undefined;
 const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID as string | undefined;
@@ -397,18 +398,29 @@ export async function signOut(): Promise<void> {
   await msal.logoutRedirect();
 }
 
-export async function getToken(): Promise<string | null> {
+export async function getToken(opts: { forceRefresh?: boolean } = {}): Promise<string | null> {
   const msal = getMsal();
   if (!msal) return null;
   const account = getCurrentUser();
   if (!account) return null;
   try {
-    traceAuth("token:silent:start");
-    const result: AuthenticationResult = await msal.acquireTokenSilent({
+    traceAuth("token:silent:start", { forceRefresh: Boolean(opts.forceRefresh) });
+    let result: AuthenticationResult = await msal.acquireTokenSilent({
       scopes: loginRequest.scopes,
       account,
-      forceRefresh: false,
+      forceRefresh: Boolean(opts.forceRefresh),
     });
+    // MSAL only checks the ACCESS token's expiry before returning cached tokens, so the ID token it hands
+    // back can already be expired (see id-token-expiry.ts). Every server call verifies the ID token, so
+    // refresh it here, silently, before it is sent.
+    if (!opts.forceRefresh && idTokenNeedsRefresh(result.idToken, Date.now())) {
+      traceAuth("token:silent:idtoken-stale-refresh");
+      result = await msal.acquireTokenSilent({
+        scopes: loginRequest.scopes,
+        account,
+        forceRefresh: true,
+      });
+    }
     traceAuth("token:silent:success");
     return result.idToken;
   } catch (e) {

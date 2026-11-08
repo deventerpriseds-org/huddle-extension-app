@@ -10,6 +10,14 @@
 - Playwright `waitForFunction(fn, ARG, OPTIONS)`: an options object in the ARG slot is silently ignored (30s default).
 - Before trusting a UAT "pass", check which CHECKS_FILE the run used: 42452788195 / 42411015067 ran narrow check files, not the full suite (ledger corrected in #165).
 
+## Sign-in: MSAL hands back EXPIRED ID tokens — "history stuck loading" (2026-11-08; FIX SHIPPING, NOT owner-confirmed)
+- `getToken()` returns `result.idToken`; MSAL's silent flow checks only the ACCESS token's expiry before returning the
+  cached ID token (msal-common `SilentFlowClient.mjs`). Access 60-90 min vs ID ~60 min => up to ~30 min of expired ID
+  tokens; every server fn that runs `verifyEntraIdToken` fails. Symptom: "Couldn't load your message history", Android
+  app only (the browser had a fresher sign-in), self-heals ~20 min later, instantly fixed by sign-out/in (owner-proven).
+- Fix: `src/lib/id-token-expiry.ts` + `getToken` refresh-ahead (5 min); load/save retry once with `forceRefresh`.
+  NOT caused by paging (#169) — that was a wrong lead; paging DID cause old alarms at the bottom (fixed #173).
+
 ## ▶ DATA MODEL INDEX — READ THIS BEFORE QUERYING ANYTHING (added 2026-10-15, owner-directed)
 
 <!-- WHAT:       One lookup table for every id, ref, table and scoping key in this system.
@@ -126,6 +134,11 @@ different requirement under a different lane, so **the widget must never key any
 index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
+
+## Chat message layout: rendered lists/bold/links + code-built brief lists (2026-11-05, branch claude/vibrant-allen-p52snq, NOT merged, NOT deployed, NOT owner-confirmed)
+- Agent bubbles render via `ChatText` (`lib/chat-format.ts` = the ONE set of layout rules: normalize whitespace, parse blocks, `noticeText`, `stripRepeatedDraft`, `joinOpenerAndBlock`). User bubbles unchanged.
+- Scheduled brief + priority check: the list is CODE-BUILT (`briefDeliveryPlan(...).appendBlock`, `priorityAppendBlock`) and attached by `ensureAppendBlockDelivered` at BOTH turn endings, before `ensureNavLinkDelivered`. The model writes one opener only. Do not move layout back into prompt prose — that is what made the same brief come out spaced two different ways.
+- Email alerts with a card: draft lives only in the card. D (research -> artifact) HELD by owner.
 
 ## Message history load = ONE 2.6 MB workspace blob (2026-11-07; NOT changed; decision pending)
 `identity.workspace_state.state.messages` holds every message since Jul 10 (3,730, 2.55 MB; growing ~0.6 MB/month) and
