@@ -10,7 +10,6 @@ import { loadWorkspace, saveWorkspace } from "@/features/huddle/lib/identity/wor
 import {
   describeLoadFailure,
   isSignInFailure,
-  RECENT_DAYS,
 } from "@/features/huddle/lib/identity/workspace-window";
 import {
   clearLegacyLocalWorkspace,
@@ -99,9 +98,7 @@ export function useWorkspaceSync() {
           }
           return;
         }
-        // Paged history: open with the recent window only; older pages load on scroll-up
-        // (Transcript -> loadOlderMessages). Saves then MERGE into the stored history (mergeMessages).
-        const remote = await loadWorkspace({ data: { idToken, recentDays: RECENT_DAYS } });
+        const remote = await loadWorkspace({ data: { idToken } });
         if (cancelled) return;
         if (remote) {
           try {
@@ -174,10 +171,9 @@ export function useWorkspaceSync() {
           const save = async (forceRefresh: boolean) => {
             const idToken = await getToken({ forceRefresh });
             if (!idToken) return;
-            await saveWorkspace({
-              // The app holds only a WINDOW of history, so the server merges by id rather than replacing.
-              data: { idToken, stateJson: JSON.stringify(payload), mergeMessages: true },
-            });
+            // Paging (#169) was rolled back at the owner's request (2026-11-08): the app holds the FULL
+            // history again, so a save replaces the stored blob as it did before paging.
+            await saveWorkspace({ data: { idToken, stateJson: JSON.stringify(payload) } });
           };
           try {
             await save(false);

@@ -5037,3 +5037,14 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - **Built (branch claude_attention-bell):** extends `chat.email_replies` (owed/settled list) with `kind` (email|meeting|appointment) + `huddle_id`; `chat.attention_settings` (owner's urgent kinds, default all three, editable from the bell). Writers: fired reminders/alarms -> appointment item; schedule brief with meetings/classes -> meeting item. Settles: emails as before (reply detected / Dismiss); meeting/appointment when the owner messages that conversation, or Dismiss in the bell. Email-only queries now filter `kind='email'`. Header bell (AttentionBell.tsx) polls 60s + on focus.
 - **Evidence:** scripts/attention.test.ts all passed; inbound-email 69/0; onedrive-feed all passed; tsc clean; bell kind-filter mutation FIRED. 7 emails currently owed (oldest 10-30) -> initial count 7.
 - **Old-alarms-at-bottom bug (from #169 paging):** diagnosed (reminder poll cursor starts at 0; dedup misses unloaded history) and HANDED to the session that built paging (owner choice), via send_message.
+
+### ACT:history-paging-rollback (2026-11-08) — owner: "roll back your paging fix as it introduced issues; reapply once I'm working as usual"
+- Client side of #169 reverted: full-history load, saves replace the blob, no scroll-up older-page fetch,
+  `prependOlderMessages` gone. KEPT on purpose: the server still MERGES a save that sends `mergeMessages:true`,
+  because a phone still running the paged build would otherwise REPLACE the blob with only its 30-day window
+  and erase older history. Also kept: #173 (alarm skip + hydration gate + load reasons), #174 (sign-in
+  refresh), #178 (save reason). Test pins S4/S5 now assert the rollback; S1-S3 keep the server merge.
+- Saves had failed since 15:50:59Z (DB) with the paged client; cause still unknown -- the save-reason toast
+  (#178) is live to name it if it recurs. Re-apply paging only after the owner is working normally again.
+- Also open (owner, same message): "server connectivity has been an issue the past few weeks, even when I press
+  some of the full screen alert buttons" -- investigate the alarm-overlay button path (android-bridge-template).
