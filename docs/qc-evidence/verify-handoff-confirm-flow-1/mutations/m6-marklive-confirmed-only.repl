@@ -1,0 +1,2 @@
+      WHERE task_id = $1
+      RETURNING task_id
