@@ -10,7 +10,6 @@ import {
   eligibleFeedMessages,
   feedBelongsTo,
   isFeedId,
-  isFromOwner,
   mapFeedAppointments,
   mapFeedMessage,
   parseFeedsConfig,
@@ -135,18 +134,16 @@ t("C9 a link's ? is not a question", verdict0({ body: "<p>Notes at https://x.exa
 t("C5 object-shaped from also works", mapFeedMessage(msg({ from: { emailAddress: { name: "A B", address: "A@B.example" } } }), WORK).fromAddress, "a@b.example");
 
 console.log("D. SCREENING — the SAME screenMessage on the original (spelling table)");
-const verdict = (over: Record<string, unknown>) => {
-  const m = mapFeedMessage(msg(over), WORK);
-  if (isFromOwner(m, [EDS, WORK])) return "self";
-  return screenMessage(m, INBOUND_EMAIL_MODE_DEFAULT, WORK).reason;
-};
+// Exactly what the inbox watch does for feed mail: screenMessage against the work mailbox, nothing else.
+const verdict = (over: Record<string, unknown>) =>
+  screenMessage(mapFeedMessage(msg(over), WORK), INBOUND_EMAIL_MODE_DEFAULT, WORK).reason;
 t("D1 a real person asking something -> kept", verdict({}), "from a person and asks something");
 t("D2 noreply@ -> automated", verdict({ from: "noreply@partner.example", internetMessageHeaders: [] }), "automated-sender");
 t("D3 notifications@ -> automated", verdict({ from: "notifications@partner.example", internetMessageHeaders: [] }), "automated-sender");
 t("D4 List-Unsubscribe header -> bulk", verdict({ internetMessageHeaders: [{ name: "List-Unsubscribe", value: "<mailto:x>" }] }), "bulk-header");
 t("D5 Auto-Submitted: auto-generated -> bulk", verdict({ internetMessageHeaders: [{ name: "Auto-Submitted", value: "auto-generated" }] }), "bulk-header");
-t("D6 from the WORK address itself -> self", verdict({ from: WORK, internetMessageHeaders: [] }), "self");
-t("D7 from the EDS address (CC between his two mailboxes) -> self", verdict({ from: EDS, internetMessageHeaders: [] }), "self");
+t("D6 from the WORK address itself -> self (screenMessage's own rule)", verdict({ from: WORK, internetMessageHeaders: [] }), "self");
+t("D7 from his EDS address INTO the work mailbox -> screened like any sender (owner: no extra self rule)", verdict({ from: EDS, internetMessageHeaders: [] }), "from a person and asks something");
 t("D8 a person with no ask -> no-ask (needs-reply mode)", verdict({ subject: "HUDDLE-PA-SBX- fyi", bodyPreview: "Notes attached.", body: "Notes attached.", isHtml: false }), "no-ask");
 
 console.log("E. ELIGIBILITY — lookback, notBefore, synthetic prefix, dedupe");

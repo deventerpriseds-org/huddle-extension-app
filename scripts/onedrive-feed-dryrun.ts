@@ -10,7 +10,6 @@
 //      (own addresses are derived from the config). Run: npx -y tsx scripts/onedrive-feed-dryrun.ts
 import {
   eligibleFeedMessages,
-  isFromOwner,
   mapFeedAppointments,
   mapFeedMessage,
   parseFeedsConfig,
@@ -25,8 +24,6 @@ if (!cfg) {
   process.exit(0);
 }
 const token = process.env.TOKEN ?? "";
-// The owner's own addresses come from the config itself (bound logins + drive user), never an input.
-const own = [...cfg.ownerLogins, cfg.driveUser];
 const base = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.driveUser)}/drive/root:`;
 const get = async (path: string) => {
   const r = await fetch(`${base}${path}:/content`, { headers: { Authorization: `Bearer ${token}` } });
@@ -42,8 +39,7 @@ if (ev.ok) {
   const eligible = eligibleFeedMessages(mapped, cfg, ev.snapshot.windowStartUtc);
   console.log(`  records ${mapped.length} | eligible (prefix/window/dedupe) ${eligible.length}`);
   for (const m of mapped) {
-    const self = isFromOwner(m, [cfg.mailbox, ...own]);
-    const v = self ? "self" : screenMessage(m, INBOUND_EMAIL_MODE_DEFAULT, cfg.mailbox).reason;
+    const v = screenMessage(m, INBOUND_EMAIL_MODE_DEFAULT, cfg.mailbox).reason;
     console.log(
       `  - from domain ${dom(m.fromAddress)} | name ${m.fromName ? "yes" : "no"} | headers ${m.headerNames?.length ?? 0} | body ${m.bodyText ? "yes" : "no"} | received ${m.receivedDateTime ? "yes" : "no"} | eligible ${eligible.some((x) => x.id === m.id)} | verdict ${v}`,
     );

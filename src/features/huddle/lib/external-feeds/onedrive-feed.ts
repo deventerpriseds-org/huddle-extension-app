@@ -292,12 +292,6 @@ export function eligibleFeedMessages(
   });
 }
 
-/** Pure: the owner's OWN addresses -- mail from any of them is his, wherever it landed. */
-export function isFromOwner(m: InboundMessage, ownAddresses: (string | undefined | null)[]): boolean {
-  const from = String(m.fromAddress ?? "").trim().toLowerCase();
-  return !!from && ownAddresses.some((a) => !!a && a.trim().toLowerCase() === from);
-}
-
 /** Pure: an ISO instant rendered as Graph renders a dateTime in `timeZone` ("YYYY-MM-DDTHH:mm:ss.0000000"). */
 export function zonedGraphDateTime(iso: string, timeZone: string): string | null {
   const t = Date.parse(iso);
