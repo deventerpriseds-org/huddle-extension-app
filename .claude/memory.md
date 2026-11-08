@@ -6,6 +6,14 @@
 - Playwright `waitForFunction(fn, ARG, OPTIONS)`: an options object in the ARG slot is silently ignored (30s default).
 - Before trusting a UAT "pass", check which CHECKS_FILE the run used: 42452788195 / 42411015067 ran narrow check files, not the full suite (ledger corrected in #165).
 
+## Sign-in: MSAL hands back EXPIRED ID tokens — "history stuck loading" (2026-11-08; FIX SHIPPING, NOT owner-confirmed)
+- `getToken()` returns `result.idToken`; MSAL's silent flow checks only the ACCESS token's expiry before returning the
+  cached ID token (msal-common `SilentFlowClient.mjs`). Access 60-90 min vs ID ~60 min => up to ~30 min of expired ID
+  tokens; every server fn that runs `verifyEntraIdToken` fails. Symptom: "Couldn't load your message history", Android
+  app only (the browser had a fresher sign-in), self-heals ~20 min later, instantly fixed by sign-out/in (owner-proven).
+- Fix: `src/lib/id-token-expiry.ts` + `getToken` refresh-ahead (5 min); load/save retry once with `forceRefresh`.
+  NOT caused by paging (#169) — that was a wrong lead; paging DID cause old alarms at the bottom (fixed #173).
+
 ## ▶ DATA MODEL INDEX — READ THIS BEFORE QUERYING ANYTHING (added 2026-10-15, owner-directed)
 
 <!-- WHAT:       One lookup table for every id, ref, table and scoping key in this system.

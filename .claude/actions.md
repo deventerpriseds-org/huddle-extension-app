@@ -5014,3 +5014,16 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
   the final error. Tests A1-A7, E1-E8 in `scripts/workspace-window.test.ts`; mutations A1/A6/A7/E7 all FIRED.
 - **B (approved):** android-bridge-template manifest `MODIFY_AUDIO_SETTINGS` + Huddle v1.0.16 build.
 - Status: implemented, mechanism verified offline, NOT yet confirmed live by the owner.
+
+### ACT:signin-refresh (2026-11-08) — owner asked: "a catch that knows the login expired and preferably something that keeps it from expiring"
+- **Cause, confirmed two ways:** (1) owner signed out and back in and history loaded at once; (2) read from
+  `@azure/msal-common` `SilentFlowClient.mjs`: the silent flow checks only the ACCESS token's expiry, then returns the
+  cached ID token unchecked. Entra access tokens live 60-90 min, ID tokens ~60, so for up to ~30 min `getToken()` sent
+  an expired ID token and `jwtVerify` rejected every server call -- matching "fixed itself 20 minutes later".
+- **Prevent:** `getToken` silently refreshes the ID token when expired or within 5 min (`src/lib/id-token-expiry.ts`).
+- **Catch:** history load retries at once with a fresh token on a sign-in rejection; a final failure offers
+  "Sign in again". Saves retry once with a fresh token. Tests `scripts/id-token-expiry.test.ts` T1-T7, W1-W4;
+  mutations T3/W1/W2/W3 all FIRED. Status: implemented, NOT yet confirmed live by the owner.
+- **UAT note:** `thread-render-check.mjs` run 42496045426 failed only "User's own messages render" (July/Aug Terry
+  messages the bypass session's back-fill no longer returns); shell, console and network checks passed. Neither #173
+  nor this change touches the back-fill; the check's fixture is stale (row it, don't fix inline).

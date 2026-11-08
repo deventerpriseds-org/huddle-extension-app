@@ -163,3 +163,8 @@ export function describeLoadFailure(e: unknown): string {
   const detail = raw.length > 90 ? `${raw.slice(0, 87)}…` : raw;
   return `${label}: ${detail}`;
 }
+
+/** A failure caused by the sign-in token (expired/rejected): fixed by getting a fresh token, not by waiting. */
+export function isSignInFailure(e: unknown): boolean {
+  return describeLoadFailure(e).startsWith("sign-in ");
+}
