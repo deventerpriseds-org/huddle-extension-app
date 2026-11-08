@@ -980,16 +980,36 @@ function EmailReplyRow({ m }: { m: HuddleMessage }) {
         </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <button
-          type="button"
-          disabled={!!busy}
-          onClick={save}
-          className={cn(CONFIRM_ASK_BTN, "font-semibold")}
-          data-testid="email-reply-save"
-        >
-          {busy === "save" ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
-          Save to Drafts
-        </button>
+        {ask.draftable === false ? (
+          // Work-mailbox email (OneDrive feed): Huddle has no way to write a draft there yet, so the card
+          // never offers a Save that cannot work — the reply is copied into Outlook by hand.
+          <button
+            type="button"
+            disabled={!!busy || !ask.replyBody}
+            onClick={() =>
+              navigator.clipboard
+                ?.writeText(ask.replyBody)
+                .then(() => toast.success("Reply copied — paste it into your work Outlook"))
+                .catch(() => toast.error("Couldn't copy — select the text above instead."))
+            }
+            className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+            data-testid="email-reply-copy"
+          >
+            <Check size={12} style={{ color: "var(--ai)" }} />
+            Copy reply
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={save}
+            className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+            data-testid="email-reply-save"
+          >
+            {busy === "save" ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
+            Save to Drafts
+          </button>
+        )}
         <button
           type="button"
           disabled={!!busy}

@@ -581,8 +581,9 @@ export async function executeRealtimeTool(
       const endRaw = typeof args.end === "string" && args.end.trim() ? args.end.trim() : startRaw;
       const startISO = startRaw.length > 10 ? startRaw : `${startRaw.slice(0, 10)}T00:00:00`;
       const endISO = endRaw.length > 10 ? endRaw : `${endRaw.slice(0, 10)}T23:59:59`;
-      const { getGraphCalendarEvents } = await import("../email/graph-email.server");
-      const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+      // The EDS calendar exactly as before, plus the work calendar feed when one is configured.
+      const { getOwnerCalendarEvents } = await import("../email/graph-email.server");
+      const r = await getOwnerCalendarEvents({ caller: ctx.caller, mailbox, startISO, endISO, timeZone: tz });
       return done(JSON.stringify(r));
     }
     if (name === "focus_on") {
