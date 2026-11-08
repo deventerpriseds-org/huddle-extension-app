@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "test:router": "bun scripts/router-winners.test.ts",
     "test:priority-check": "bun scripts/priority-check.test.ts",
+    "test:chat-format": "bun scripts/chat-format.test.ts",
     "test:blocked": "bun scripts/blocked-line.test.mjs",
     "test:standup-ranking": "bun scripts/standup-ranking.test.ts",
     "test:standup-deliver": "bun scripts/standup-deliver-mode.test.ts",
@@ -73,7 +74,8 @@
     "test:job-check": "bun scripts/job-check.test.ts",
     "test:schedule-today-band": "bun scripts/schedule-today-band.test.ts",
     "test:timeout-no-rerun": "bun test scripts/timeout-no-rerun.test.ts",
-    "test:attention": "tsx scripts/attention.test.ts"
+    "test:attention": "tsx scripts/attention.test.ts",
+    "test:id-token-expiry": "bun scripts/id-token-expiry.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

@@ -12,6 +12,7 @@
 
 import {
   priorityCheckDirective,
+  priorityAppendBlock,
   priorityCheckPush,
   priorityCheckTurnId,
   summarizeBand,
@@ -137,7 +138,7 @@ check("P20 Send now calls the scheduler's own runner with a fresh runId",
   check("P-NAV10 a turn with a navLink always ends with it: attached to the target's reply, or a fallback reply",
     /const ensureNavLinkDelivered = \(\) => \{[\s\S]{0,400}if \(!replies\[i\]\.navLink\) replies\[i\] = \{ \.\.\.replies\[i\], navLink: link \};[\s\S]{0,300}replies\.push\(\{\s*agentId: target,/.test(hf));
   check("P-NAV11 the guarantee runs at BOTH turn endings (chunked and sync)",
-    (hf.match(/ensureNotSilentOnRealWork\(\);\s*ensureNavLinkDelivered\(\);/g) ?? []).length === 2);
+    (hf.match(/ensureNotSilentOnRealWork\(\);\s*ensureAppendBlockDelivered\(\);\s*ensureNavLinkDelivered\(\);/g) ?? []).length === 2);
   const app = readFileSync("src/features/huddle/components/HuddleApp.tsx", "utf8");
   check("P-NAV9 both delivery paths map navLink onto the message",
     /navLink: reply\.navLink,/.test(app) && /navLink: reply\.navLink,/.test(hv));
@@ -156,9 +157,16 @@ check("P20 Send now calls the scheduler's own runner with a fresh runId",
     [row({ title: "Alpha" }), row({ title: "Bravo" }), row({ title: "Charlie" }), row({ title: "Delta" })],
     "evening", today, dueKey);
   const d = priorityCheckDirective(named);
-  check("P-LAYOUT1 asks for separate short lines, one priority per line", /SEPARATE SHORT LINES/.test(d) && /ONE PER LINE, each line starting "• "/.test(d), d);
+  // Owner 2026-11-05: the list is CODE-BUILT (priorityAppendBlock); the model writes one opening line.
+  const blk = priorityAppendBlock(named) ?? "";
+  check("P-LAYOUT1 the block puts one priority per line, no blank lines between them", blk.startsWith("• Alpha\n• Bravo\n• Charlie\n\n"), blk);
+  check("P-LAYOUT1b the directive asks for ONE opening line and no list", /Write exactly ONE short line/.test(d) && /Do NOT list the priorities/.test(d), d);
+  check("P-LAYOUT1c one fixed phrasing for the rest", /\n\n4 open priorities \(1 more not shown\): 4 not yet scheduled\.\n\n/.test(blk), blk);
+  check("P-LAYOUT1d an empty band has no block (stays a short model message)", priorityAppendBlock(summarizeBand([], "evening", today, dueKey)) === undefined);
+  const prSrc = readFileSync("src/features/huddle/lib/tasks/priority-check.server.ts", "utf8");
+  check("P-LAYOUT1e the payload carries the block", /\.\.\.\(appendBlock \? \{ appendBlock \} : \{\}\),/.test(prSrc));
   check("P-LAYOUT2 plain text only (the chat does not render markdown)", /no \*\* or #/.test(d), d);
-  check("P-LAYOUT3 the question stays on its own line after a blank line", /a blank line, then ONE short line asking whether these are still right/.test(d), d);
+  check("P-LAYOUT3 the question stays on its own line after a blank line", /\n\nAre these still right\? [^\n]*"Open Priorities" button below[^\n]*$/.test(blk), blk);
   check("P-LAYOUT4 no longer asks for two or three run-together lines", !/TWO or THREE short spoken lines/.test(d), d);
 }
 
