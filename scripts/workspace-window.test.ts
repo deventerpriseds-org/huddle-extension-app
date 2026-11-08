@@ -56,11 +56,10 @@ const fns = readFileSync("src/features/huddle/lib/identity/workspace.functions.t
 const sync = readFileSync("src/features/huddle/hooks/useWorkspaceSync.ts", "utf8");
 const view = readFileSync("src/features/huddle/components/HuddleView.tsx", "utf8");
 check("S1 load windows ONLY when the client asks (old cached clients get everything)", /if \(recentDays && Array\.isArray\(state\.messages\)\)/.test(fns));
-check("S2 save merges ONLY when the client asks (old clients replace as before)", /if \(mergeMessages\) return saveMergedImpl\(/.test(fns) && /data\.mergeMessages === true/.test(fns));
+check("S2 server still MERGES a save that asks (a phone still on the paged build must never erase history)", /if \(mergeMessages\) return saveMergedImpl\(/.test(fns) && /data\.mergeMessages === true/.test(fns));
 check("S3 merge happens under a row lock", /FOR UPDATE/.test(fns) && /mergeMessages\(stored, incoming\)/.test(fns));
-check("S4 the app asks for the window AND merges its saves", /recentDays: RECENT_DAYS/.test(sync) && /mergeMessages: true/.test(sync));
-check("S5 scrolling to the top fetches older pages", /else if \(start <= 0 && m\.scrollTop < LOAD_OLDER_PX\) void fetchOlder\(\);/.test(view) && /loadOlderMessages\(\{/.test(view));
-check("S6 fetched pages pass the same filter as hydrate", /\.filter\(isRenderableMessage\)/.test(view));
+check("S4 ROLLED BACK (owner 2026-11-08): the app loads the FULL history and saves by replace again", /loadWorkspace\(\{ data: \{ idToken \} \}\)/.test(sync) && !/recentDays/.test(sync) && !/mergeMessages: true/.test(sync));
+check("S5 ROLLED BACK: no scroll-up fetch of older pages in the thread", !/loadOlderMessages|fetchOlder/.test(view));
 
 // alarms/reminders (owner 2026-11-08: Aug/Sep alarms appeared at the bottom of today's thread)
 const loaded = [msg("l1", "dm-iris", 10), msg("l2", "dm-iris", 2)];
