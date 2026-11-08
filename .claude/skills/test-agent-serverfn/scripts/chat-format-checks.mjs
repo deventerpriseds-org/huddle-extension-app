@@ -15,11 +15,18 @@ async function openIris(page) {
     await nav.click().catch(() => {});
     await page.waitForTimeout(500);
   }
-  // The agent channel is labelled "#iris-chase" (an unread badge may follow it).
-  const iris = page.getByText(/^#?iris-chase$/i).first();
-  if (!(await iris.count())) return false;
-  await iris.click().catch(() => {});
+  // Tap the CHANNEL ROW (button/link), not the label text: run 42496820414 matched the label but the
+  // drawer stayed open and the group chat behind it was measured.
+  const row = page.locator("button, a, [role=button]", { hasText: /#iris-chase/i }).first();
+  if (!(await row.count())) return false;
+  await row.click().catch(() => {});
   await page.waitForTimeout(800);
+  // If the drawer is still open, close it so the chat is what's on screen.
+  if (await page.getByText(/^AGENT CHANNELS$/i).first().isVisible().catch(() => false)) {
+    const close = page.getByRole("button", { name: /close/i }).first();
+    if (await close.count()) await close.click().catch(() => {});
+    await page.waitForTimeout(500);
+  }
   return true;
 }
 

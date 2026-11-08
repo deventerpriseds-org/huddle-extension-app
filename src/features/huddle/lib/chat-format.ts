@@ -59,7 +59,8 @@ export function normalizeChatText(raw: string): string {
       continue;
     }
     if (l.trim() !== "") {
-      out.push(l);
+      // A Markdown "\\" hard break at line end: the line break is already real, drop the backslash.
+      out.push(i < lines.length - 1 ? l.replace(/(^|[^\\])\\$/, "$1") : l);
       continue;
     }
     let j = i + 1;
@@ -93,14 +94,15 @@ function isGreeting(line: string): boolean {
 
 export type Inline =
   | { t: "text"; v: string }
-  | { t: "bold"; v: string; em?: boolean }
-  | { t: "em"; v: string }
+  // bold / italic hold PARSED parts, so a link or italic inside bold still works ("**see https://x now**").
+  | { t: "bold"; parts: Inline[] }
+  | { t: "em"; parts: Inline[] }
   | { t: "code"; v: string }
   | { t: "link"; href: string; label: string };
 
 /** Only http(s) ever becomes a link. Trailing sentence punctuation stays outside the URL. */
 const INLINE_RE =
-  /\*\*\*([^*\n]+?)\*\*\*|\*\*([^*\n]+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|<(https?:\/\/[^\s<>]+)>|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))*(?:[^\s<>().,;:!?'"’”*]|\([^\s<>()]*\)))|(^|[^\w*])\*([^\s*](?:[^*\n]*?[^\s*])?)\*(?![\w*])|(^|[^\w_])_([^\s_](?:[^_\n]*?[^\s_])?)_(?![\w_])/g;
+  /\*\*\*([^*\n]+?)\*\*\*|\*\*((?:[^*\n]|\*(?!\*))+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|<(https?:\/\/[^\s<>]+)>|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))*(?:[^\s<>().,;:!?'"’”*]|\([^\s<>()]*\)))|(^|[^\w*])\*([^\s*](?:[^*\n]*?[^\s*])?)\*(?![\w*])|(^|[^\w_])_([^\s_](?:[^_\n]*?[^\s_])?)_(?![\w_])/g;
 
 export function parseInline(s: string): Inline[] {
   const out: Inline[] = [];
@@ -110,14 +112,10 @@ export function parseInline(s: string): Inline[] {
     if (at > last) out.push({ t: "text", v: s.slice(last, at) });
     // "__x__" is deliberately NOT bold: it ate the underscores of names like __init__.
     if (m[1] != null)
-      out.push({ t: "bold", v: m[1], em: true }); // ***bold italic***
+      out.push({ t: "bold", parts: [{ t: "em", parts: parseInline(m[1]) }] }); // ***x***
     else if (m[2] != null) {
-      const v = m[2];
-      const inner = /^_([^_]+)_$/.exec(v) ?? /^\*([^*]+)\*$/.exec(v); // **_bold italic_**
-      if (/^https?:\/\/\S+$/.test(v))
-        out.push({ t: "link", href: v, label: shortUrlLabel(v) }); // **url**
-      else if (inner) out.push({ t: "bold", v: inner[1], em: true });
-      else out.push({ t: "bold", v });
+      // Content is parsed again: **_x_** -> bold italic, **https://…** -> bold link, **a *b* c** works.
+      out.push({ t: "bold", parts: parseInline(m[2]) });
     } else if (m[3] != null) out.push({ t: "code", v: m[3] });
     else if (m[4] != null && m[5] != null) out.push({ t: "link", href: m[5], label: m[4] });
     else if (m[6] != null)
@@ -129,7 +127,7 @@ export function parseInline(s: string): Inline[] {
     else if (m[9] != null || m[11] != null) {
       const lead = (m[8] ?? m[10] ?? "") as string;
       if (lead) out.push({ t: "text", v: lead });
-      out.push({ t: "em", v: (m[9] ?? m[11]) as string });
+      out.push({ t: "em", parts: parseInline((m[9] ?? m[11]) as string) });
     }
     last = at + m[0].length;
   }
@@ -138,6 +136,15 @@ export function parseInline(s: string): Inline[] {
 }
 
 /** "https://zoom.us/j/9164221159?pwd=abc" -> "zoom.us/j/9164221159". Query strings never shown. */
+/** The visible text of parsed inline parts (link labels included). */
+export function inlineText(parts: Inline[]): string {
+  return parts
+    .map((p) =>
+      p.t === "bold" || p.t === "em" ? inlineText(p.parts) : p.t === "link" ? p.label : p.v,
+    )
+    .join("");
+}
+
 export function shortUrlLabel(href: string, max = 40): string {
   try {
     const u = new URL(href);
