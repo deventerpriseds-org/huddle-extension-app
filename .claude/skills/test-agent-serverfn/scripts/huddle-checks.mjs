@@ -90,15 +90,27 @@ async function voiceBarge({ page, check, screenshot }, { label, text }) {
     check(`Voice barge (${label}) — ElevenLabs clip ready`, false, "no clip (missing EL key/voice or API error)");
     return "";
   }
-  const before = await page.locator(turnSel).count();
+  // Read the barge ANSWER by its own marker, never by position. The ceremony keeps speaking while a
+  // barge is answered, so "the row after mine" is often the next scripted line or the "…" placeholder
+  // of the spoken turn itself (verify-uat 42483232750 / 42486645869). MeetingBar marks the spoken turn
+  // data-turn-user + data-turn-kind="barge" and every barge answer/ack data-turn-kind="answer".
+  const userSel = `${turnSel}[data-turn-user="true"][data-turn-kind="barge"]`;
+  const answerSel = `${turnSel}[data-turn-agent="true"][data-turn-kind="answer"]`;
+  const userBefore = await page.locator(userSel).count();
+  const answersBefore = await page.locator(answerSel).count();
   await page.evaluate((b) => (window.__playBarge ? window.__playBarge(b) : Promise.reject("no fake mic")), b64).catch(() => {});
   let got = false;
   try {
-    await page.waitForFunction((n) => document.querySelectorAll('[data-testid="transcript-turn"]').length >= n + 2, before, { timeout: 45000 });
+    await page.waitForFunction(
+      ([u, a, us, as]) => document.querySelectorAll(us).length > u && document.querySelectorAll(as).length > a,
+      [userBefore, answersBefore, userSel, answerSel],
+      { timeout: 45000 },
+    );
     got = true;
   } catch { /* capture whatever rendered */ }
-  const turns = await page.locator(turnSel).allInnerTexts();
-  const reply = (turns[before + 1] || turns[turns.length - 1] || "").replace(/\s+/g, " ").trim();
+  await page.waitForTimeout(1200); // let the answer's first sentence finish rendering
+  const answers = await page.locator(answerSel).allInnerTexts();
+  const reply = (answers[answersBefore] || "").replace(/\s+/g, " ").trim();
   await page.locator('[data-testid="tab-transcript"]').click().catch(() => {});
   await screenshot(`vbarge-${label}`);
   check(`Voice barge (${label}) HEARD through the mic and answered`, got && reply.length > 0 && !CANNED_RE.test(reply), `reply="${reply.slice(0, 160)}"`);
@@ -243,15 +255,16 @@ export const checks = [
       await page.waitForTimeout(300);
       const noiseBox = page.locator('textarea[placeholder="Message the room…"]').first();
       if (await noiseBox.count()) {
-        const beforeNoise = await page.locator(turnSel).count();
+        // Count only barge ANSWER rows: the ceremony's own scripted lines keep arriving meanwhile.
+        const answerSel = `${turnSel}[data-turn-agent="true"][data-turn-kind="answer"]`;
+        const beforeNoise = await page.locator(answerSel).count();
         await noiseBox.fill("mhm");
         await noiseBox.press("Enter");
         await page.waitForTimeout(6000); // give it ample time to (wrongly) wake an agent
-        const afterNoise = await page.locator(turnSel).count();
+        const afterNoise = await page.locator(answerSel).count();
         await page.locator('[data-testid="tab-transcript"]').click().catch(() => {});
         await screenshot("noise-mhm-ignored");
-        // A real barge answer would add ≥2 rows (user + agent). The guard should add at most the user echo.
-        check("Typed 'mhm' noise barge is IGNORED (no agent reply)", afterNoise - beforeNoise <= 1, `delta=${afterNoise - beforeNoise} (>1 ⇒ an agent wrongly answered the noise)`);
+        check("Typed 'mhm' noise barge is IGNORED (no agent reply)", afterNoise - beforeNoise === 0, `answer rows added=${afterNoise - beforeNoise} (>0 ⇒ an agent wrongly answered the noise)`);
       }
     }
     // UNMUTE FIRST. Since 2026-10-19 the ceremony starts with the barge mic MUTED by design
@@ -287,8 +300,11 @@ export const checks = [
     let doneMs = null;
     let doneError = null;
     try {
+      // waitForFunction(fn, ARG, OPTIONS): the options object used to sit in the ARG slot, so the
+      // intended 180s never applied and every run gave up at Playwright's 30s default.
       await page.waitForFunction(
         () => Array.from(document.querySelectorAll("button")).some((b) => b.textContent?.trim() === "Run again"),
+        undefined,
         { timeout: 180000 },
       );
       doneMs = Date.now() - t0;
