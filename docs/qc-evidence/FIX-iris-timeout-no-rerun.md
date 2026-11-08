@@ -30,3 +30,7 @@ Pure helpers live in `src/features/huddle/lib/tasks/create-task-core.ts` (the ex
 
 ## Steps
 
+1. **Helpers** (`create-task-core.ts`): `DispatchedCreate`, `recordDispatchedCreate`, `priorAttemptDispatches`,
+   `priorBatchDispatch`, `dispatchedToolUses`, `priorDispatchDirective`, `alreadyDispatchedResult`,
+   `journeyCreateContext`. Baseline `npx tsc --noEmit -p .` on origin/main 09731f8f: 0 errors; after: 0.
+   (Deps installed with `npm ci --ignore-scripts`: `bun install` 403s on bun.lock's private registry.)
