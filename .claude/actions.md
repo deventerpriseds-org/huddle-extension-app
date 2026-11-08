@@ -4973,6 +4973,15 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [ ] Row (parallel lane, not blocking): isCoursework is a title regex — loop 3 measured recall 16->7 of 25 realistic coursework titles and 26/26 constructed adversarial false positives; the owner's real examples are all caught. Better signal is data (Nexus 📚 sync / the real course list; agents.ts:226-283 keeps a separate coursework word list). File: src/features/huddle/lib/tasks/workability.ts.
 - [ ] Row: approach-gate.server.ts ~335 — a grader-call error on a FRESH approach still returns approved:true for that turn (documented, pre-existing).
 
+## ACT:chat-format — clean, consistent chat message layout (owner-approved A, B, C, E; D held, 2026-11-05)
+- [x] Diagnosis: Iris's 29 messages 11-03..05 (azure-pg-query run 42105101844). Same brief spaced two ways; raw `**bold**`; four "N more" phrasings; draft + tally in prose; quota error as Iris. Cause: HuddleView rendered `{m.text}` raw + layout delegated to the model.
+- [x] A renderer (`lib/chat-format.ts`, `components/ChatText.tsx`); B code-built brief/priority lists (`appendBlock`); C draft only in the card; E failure replies as grey notices. Commits aad39f4, 0a38101; 5 guards mutation-FIRED.
+- [ ] Independent verifier (docs/qc-evidence/VERIFY-chat-format-1.md) -> merge -> deploy -> owner confirms on his phone/browser.
+- [ ] D (long research -> document + short summary) HELD: owner will judge after using the cleaned-up layout.
+- [ ] Watch: with a reply card, a model that skips propose_email_reply now leaves NO draft in the prose (card says "No suggested reply yet — tap Edit first").
+
+## ACT:trinnex-onedrive-feed — work-mailbox mail + calendar via EDS OneDrive files (2026-11-08) — BUILT on dev branch, NOT live
+
 ## ACT:trinnex-onedrive-feed — work-mailbox mail + calendar via EDS OneDrive files (2026-11-08) — LIVE, OWNER-CONFIRMED (alert path)
 - **2026-11-08 06:1x UTC OWNER CONFIRMED:** test email (dev@ -> work mailbox, received 05:48Z) read from the OneDrive feed, verdict keep "from a person and asks something" (dry run 42453100468), announced by a manual live run (alert hours are 7am-10pm ET by design since 2026-10-15; outside them the first morning check with 12h lookback announces). Owner: "I received it". Merged #159 (1ac1280c), config run 42443445406, deploy 42443494430.
 - **Header overlap fixed:** #161 (6cdb10d9) -- Meeting button wraps instead of sliding under the ContextPanel at 1000px. PROVEN by full-suite runs 42452437543 and 42483232750: the Meeting click and stand-up room now work (first reply 684/693ms).

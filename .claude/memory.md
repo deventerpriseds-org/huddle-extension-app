@@ -123,6 +123,11 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Chat message layout: rendered lists/bold/links + code-built brief lists (2026-11-05, branch claude/vibrant-allen-p52snq, NOT merged, NOT deployed, NOT owner-confirmed)
+- Agent bubbles render via `ChatText` (`lib/chat-format.ts` = the ONE set of layout rules: normalize whitespace, parse blocks, `noticeText`, `stripRepeatedDraft`, `joinOpenerAndBlock`). User bubbles unchanged.
+- Scheduled brief + priority check: the list is CODE-BUILT (`briefDeliveryPlan(...).appendBlock`, `priorityAppendBlock`) and attached by `ensureAppendBlockDelivered` at BOTH turn endings, before `ensureNavLinkDelivered`. The model writes one opener only. Do not move layout back into prompt prose — that is what made the same brief come out spaced two different ways.
+- Email alerts with a card: draft lives only in the card. D (research -> artifact) HELD by owner.
+
 ## Message history load = ONE 2.6 MB workspace blob (2026-11-07; NOT changed; decision pending)
 `identity.workspace_state.state.messages` holds every message since Jul 10 (3,730, 2.55 MB; growing ~0.6 MB/month) and
 `useWorkspaceSync` downloads + parses all of it on every open. Right after a deploy the first open is slow (cold function +

@@ -292,6 +292,20 @@ check(
   "tracking: owed + settled counts are in the directive",
   dTool.includes("including this one: 3") && dTool.includes("Settled today: 1"),
 );
+// Owner 2026-11-05: summary, draft and "15 replies owed" ran together as one block. With a card, the
+// draft lives ONLY in the card (it already shows the draft and the tally); the prose is two lines.
+check(
+  "card: the draft is NOT written in the message, only in propose_email_reply",
+  /Do NOT write the suggested reply in your message/.test(dTool) && /ONLY in propose_email_reply's reply_body/.test(dTool) && !/2\. A suggested reply/.test(dTool),
+);
+check(
+  "card: the owed count is not repeated in the prose",
+  /already shows this count, so do not repeat it/.test(dTool) && !/Mention the owed count/.test(dTool),
+);
+check(
+  "no card (legacy): the draft is still written in the message",
+  /2\. A suggested reply, written AS the owner/.test(inboundEmailDirective(amy, "now")),
+);
 check(
   "no emailId (legacy) still forbids tools",
   /Do NOT call any tool/.test(inboundEmailDirective(amy, "now")),
