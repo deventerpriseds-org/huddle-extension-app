@@ -84,5 +84,6 @@ check("E5 unknown error keeps the raw text", describeLoadFailure(new Error("rela
 check("E6 empty error -> bare label, long text is cut", describeLoadFailure({}) === "server error" && describeLoadFailure(new Error("x".repeat(300))).length < 120);
 check("E7 the loader shows the described reason, not a fixed 'server error'", /failed\(attempt, describeLoadFailure\(e\)\);/.test(sync) && !/failed\(attempt, "server error"\)/.test(sync));
 check("E8 the retry toast says why it is retrying", /Loading your message history… \(retrying: \$\{why\}\)/.test(sync));
+check("E9 the save error names the reason too", /Couldn't save your latest messages \(\$\{describeLoadFailure\(e\)\}\)/.test(sync));
 console.log(fail ? `${fail} failed` : "all passed");
 process.exit(fail ? 1 : 0);
