@@ -252,6 +252,7 @@ export async function reconcileRepliedFromSentItems(ownerEmail: string): Promise
         row.mailbox,
         row.conversation_id,
         row.received_at,
+        row.owner_email,
       );
       if (replied === true && (await settleEmailReply(row.id, "replied"))) settled++;
     }
