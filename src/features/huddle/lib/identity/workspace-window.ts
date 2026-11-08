@@ -21,7 +21,8 @@ export const MIN_PER_HUDDLE = 40;
 /** Messages per scroll-up page fetched from the server. */
 export const OLDER_PAGE = 60;
 
-const tsOf = (m: WindowableMessage) => (typeof m.ts === "number" && Number.isFinite(m.ts) ? m.ts : 0);
+const tsOf = (m: WindowableMessage) =>
+  typeof m.ts === "number" && Number.isFinite(m.ts) ? m.ts : 0;
 
 /** The messages sent to the app on open: last `days` days, plus the newest `minPerHuddle` of every huddle. */
 export function windowMessages<M extends WindowableMessage>(
@@ -42,7 +43,10 @@ export function windowMessages<M extends WindowableMessage>(
     else byHuddle.set(h, [m]);
   }
   for (const list of byHuddle.values()) {
-    const newest = list.slice().sort((a, b) => tsOf(b) - tsOf(a)).slice(0, minPerHuddle);
+    const newest = list
+      .slice()
+      .sort((a, b) => tsOf(b) - tsOf(a))
+      .slice(0, minPerHuddle);
     for (const m of newest) keep.add(m.id);
   }
   const out = messages.filter((m) => m && keep.has(m.id));
@@ -56,7 +60,10 @@ export function windowMessages<M extends WindowableMessage>(
  * Safe because the client never deletes messages (store.ts only appends or upserts), so "absent from the
  * client" always means "not loaded yet", never "deleted".
  */
-export function mergeMessages<M extends WindowableMessage>(stored: readonly M[], incoming: readonly M[]): M[] {
+export function mergeMessages<M extends WindowableMessage>(
+  stored: readonly M[],
+  incoming: readonly M[],
+): M[] {
   const incomingById = new Map<string, M>();
   for (const m of incoming) if (m && typeof m.id === "string") incomingById.set(m.id, m);
   const seen = new Set<string>();
@@ -89,7 +96,10 @@ export function olderPage<M extends WindowableMessage>(
 }
 
 /** Insert server-fetched older messages into the client list: skip ids already present. */
-export function prependOlder<M extends WindowableMessage>(current: readonly M[], older: readonly M[]): M[] {
+export function prependOlder<M extends WindowableMessage>(
+  current: readonly M[],
+  older: readonly M[],
+): M[] {
   const have = new Set(current.map((m) => m.id));
   const fresh = older.filter((m) => m && typeof m.id === "string" && !have.has(m.id));
   if (!fresh.length) return current as M[];
@@ -125,17 +135,30 @@ export function shouldAppendReminder(
  * cause could not be told apart. Owner approved showing the real reason (option A).
  */
 export function describeLoadFailure(e: unknown): string {
-  const raw = (e instanceof Error ? e.message : typeof e === "string" ? e : "").replace(/\s+/g, " ").trim();
-  const code = e && typeof e === "object" && "code" in e ? String((e as { code: unknown }).code) : "";
+  const raw = (e instanceof Error ? e.message : typeof e === "string" ? e : "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const code =
+    e && typeof e === "object" && "code" in e ? String((e as { code: unknown }).code) : "";
   const s = `${code} ${raw}`;
   let label = "server error";
-  if (/ERR_JWT_EXPIRED|"exp" claim|token.*expired|expired.*token/i.test(s)) label = "sign-in expired";
-  else if (/ERR_JW[STK]|ERR_JWKS_NO_MATCHING|"aud" claim|"iss" claim|"nbf" claim|signature verification|oid\/sub|Invalid Compact JWS/i.test(s))
+  if (/ERR_JWT_EXPIRED|"exp" claim|token.*expired|expired.*token/i.test(s))
+    label = "sign-in expired";
+  else if (
+    /ERR_JW[STK]|ERR_JWKS_NO_MATCHING|"aud" claim|"iss" claim|"nbf" claim|signature verification|oid\/sub|Invalid Compact JWS/i.test(
+      s,
+    )
+  )
     label = "sign-in rejected";
   else if (/client id not configured|ENTRA_TENANT_ID/i.test(s)) label = "server sign-in setup";
-  else if (/JWKS|Failed to fetch|fetch failed|NetworkError|Load failed|timed? ?out|ECONN|ETIMEDOUT|ENOTFOUND/i.test(s))
+  else if (
+    /JWKS|Failed to fetch|fetch failed|NetworkError|Load failed|timed? ?out|ECONN|ETIMEDOUT|ENOTFOUND/i.test(
+      s,
+    )
+  )
     label = "couldn't reach the server";
-  else if (/\b50[234]\b|Service Unavailable|Bad Gateway|Gateway Time/i.test(s)) label = "server unavailable";
+  else if (/\b50[234]\b|Service Unavailable|Bad Gateway|Gateway Time/i.test(s))
+    label = "server unavailable";
   if (!raw) return label;
   const detail = raw.length > 90 ? `${raw.slice(0, 87)}…` : raw;
   return `${label}: ${detail}`;

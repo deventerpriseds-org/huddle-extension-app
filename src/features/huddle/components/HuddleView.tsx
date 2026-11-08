@@ -1878,7 +1878,12 @@ function Composer({ huddle }: { huddle: Huddle }) {
       // before it is wiped while the cursor has already moved past it, and the skip rule above needs the
       // loaded history to compare against.
       if (!isWorkspaceHydrated()) {
-        if (!hydrationRetry) hydrationRetry = setTimeout(() => { hydrationRetry = null; void poll(); }, 2_000);
+        if (!hydrationRetry) {
+          hydrationRetry = setTimeout(() => {
+            hydrationRetry = null;
+            void poll();
+          }, 2_000);
+        }
         return;
       }
       try {
