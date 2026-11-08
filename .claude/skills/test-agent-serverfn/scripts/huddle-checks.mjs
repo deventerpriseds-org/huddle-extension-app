@@ -305,7 +305,9 @@ export const checks = [
       await page.waitForFunction(
         () => Array.from(document.querySelectorAll("button")).some((b) => b.textContent?.trim() === "Run again"),
         undefined,
-        { timeout: 180000 },
+        // 8 min: a full voiced round of every agent's update ran past 4 minutes and was still healthy
+        // (run 42487020520: Iris mid-update at 04:12, 36 rows). The job allows 15 min in total.
+        { timeout: 480000 },
       );
       doneMs = Date.now() - t0;
     } catch (err) {
