@@ -17,6 +17,7 @@ import {
   type ToolUseEvent,
 } from "./data/seed";
 import type { JourneyTask } from "./lib/journey/types";
+import { prependOlder } from "./lib/identity/workspace-window";
 import type { PolishProfile } from "./lib/polish/polish-core";
 
 // The side-menu view registry. EXPORTED because HuddleView's header switcher and HuddleApp's mobile
@@ -169,6 +170,7 @@ interface HuddleState {
   openArtifactById: (id: string | null) => void;
   setDraftPrefill: (text: string | null) => void;
   addUserMessage: (m: HuddleMessage) => void;
+  prependOlderMessages: (older: HuddleMessage[]) => void;
   addAgentMessage: (m: HuddleMessage) => void;
   upsertAgentMessage: (m: HuddleMessage) => void;
   resolveConfirmAsk: (messageId: string, how?: "confirmed" | "backlogged" | "parked") => void;
@@ -308,6 +310,12 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
     set(id ? { activeArtifactId: id, view: "artifacts" } : { activeArtifactId: null }),
   setDraftPrefill: (text) => set({ draftPrefill: text }),
   addUserMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
+  // Older history fetched on scroll-up (paged load). Goes in FRONT; already-present ids are skipped.
+  prependOlderMessages: (older) =>
+    set((s) => {
+      const next = prependOlder(s.messages, older);
+      return next === s.messages ? {} : { messages: next };
+    }),
   // A message arriving in the ALREADY-OPEN huddle counts as read on arrival, so it never shows unread.
   addAgentMessage: (m) =>
     set((s) => ({
@@ -617,6 +625,21 @@ export function getPersistablePayload(): PersistedWorkspace {
   };
 }
 
+/** A stored message the app can render (shared by hydrate and scroll-up paging). */
+export function isRenderableMessage(m: HuddleMessage): boolean {
+  if (!m || !m.author) return false;
+  if (m.author.kind === "agent") {
+    return !!AGENT_BY_ID[m.author.agentId as AgentId];
+  }
+  // Self-heal: a brief regression rendered agent-INITIATED turn directives (ids like
+  // `autowork-…`/`standup-…`/`groom-…`/`followup-…`/`review-…`) as the USER's own message and the
+  // debounced workspace sync persisted them into the blob. A genuine user message is only ever
+  // `u-…`/`uv-…` (typed/voice) or a seeded demo id — never an agent-turn id. Drop any user-authored
+  // message carrying an agent-turn id so the corrupt "You" bubbles clear on the next hydrate.
+  if (m.author.kind === "user" && /^(autowork|standup|groom|followup|review)-/.test(m.id)) return false;
+  return true;
+}
+
 /** Merge a remote workspace blob into the store, filtering invalid messages. */
 export function hydrateFromRemote(blob: Record<string, unknown> | null | undefined) {
   const seed = seedDefaults();
@@ -627,19 +650,7 @@ export function hydrateFromRemote(blob: Record<string, unknown> | null | undefin
   }
   const p = blob as Partial<PersistedWorkspace>;
   const messages = Array.isArray(p.messages)
-    ? p.messages.filter((m) => {
-        if (!m || !m.author) return false;
-        if (m.author.kind === "agent") {
-          return !!AGENT_BY_ID[m.author.agentId as AgentId];
-        }
-        // Self-heal: a brief regression rendered agent-INITIATED turn directives (ids like
-        // `autowork-…`/`standup-…`/`groom-…`/`followup-…`/`review-…`) as the USER's own message and the
-        // debounced workspace sync persisted them into the blob. A genuine user message is only ever
-        // `u-…`/`uv-…` (typed/voice) or a seeded demo id — never an agent-turn id. Drop any user-authored
-        // message carrying an agent-turn id so the corrupt "You" bubbles clear on the next hydrate.
-        if (m.author.kind === "user" && /^(autowork|standup|groom|followup|review)-/.test(m.id)) return false;
-        return true;
-      })
+    ? p.messages.filter(isRenderableMessage)
     : seed.messages;
   // A push deep link (`?huddle=<id>`) is an explicit intent to open that channel; it must WIN over the
   // workspace-synced activeHuddleId restored here. Without this, hydration (which resolves async, after

@@ -5037,6 +5037,7 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - **Built (branch claude_attention-bell):** extends `chat.email_replies` (owed/settled list) with `kind` (email|meeting|appointment) + `huddle_id`; `chat.attention_settings` (owner's urgent kinds, default all three, editable from the bell). Writers: fired reminders/alarms -> appointment item; schedule brief with meetings/classes -> meeting item. Settles: emails as before (reply detected / Dismiss); meeting/appointment when the owner messages that conversation, or Dismiss in the bell. Email-only queries now filter `kind='email'`. Header bell (AttentionBell.tsx) polls 60s + on focus.
 - **Evidence:** scripts/attention.test.ts all passed; inbound-email 69/0; onedrive-feed all passed; tsc clean; bell kind-filter mutation FIRED. 7 emails currently owed (oldest 10-30) -> initial count 7.
 - **Old-alarms-at-bottom bug (from #169 paging):** diagnosed (reminder poll cursor starts at 0; dedup misses unloaded history) and HANDED to the session that built paging (owner choice), via send_message.
+<<<<<<< HEAD
 
 ### ACT:history-paging-rollback (2026-11-08) — owner: "roll back your paging fix as it introduced issues; reapply once I'm working as usual"
 - Client side of #169 reverted: full-history load, saves replace the blob, no scroll-up older-page fetch,
@@ -5065,3 +5066,5 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
   was never sent anywhere. Not yet traced to which alarms lack the token.
 - **Pending owner decision:** A) one shared pool (~8) in Huddle -- free, recommended; B) bigger Azure DB tier
   (~$35-50/mo more); C) both. Also pending go: trace alarm pushes missing the action token.
+=======
+>>>>>>> parent of a59a32c (Roll back paged chat history (#169) at the owner's request; keep the server merge for stale clients (#183))
