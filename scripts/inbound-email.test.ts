@@ -119,8 +119,8 @@ check(
   JSON.stringify(f),
 );
 check(
-  "A: owner's own mail is never announced",
-  screenMessage(self, "needs-reply", MAILBOX).keep === false,
+  "A: owner's own mail asking something IS announced (no self block, owner 2026-11-08)",
+  screenMessage(self, "needs-reply", MAILBOX).keep === true,
 );
 check(
   "A: Outlook 'Other' classification is skipped",
@@ -139,7 +139,7 @@ check(
 check("B: donotreply@ still skipped", screenMessage(equifax, "people", MAILBOX).keep === false);
 // all
 check("C: promo IS announced", screenMessage(ihg, "all", MAILBOX).keep === true);
-check("C: own mail still never announced", screenMessage(self, "all", MAILBOX).keep === false);
+check("C: own mail is announced in all mode too", screenMessage(self, "all", MAILBOX).keep === true);
 // a person whose DOMAIN contains "mail" is not mistaken for a machine
 check(
   "domain containing 'mail' is not automated",

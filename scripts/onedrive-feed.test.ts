@@ -144,7 +144,7 @@ t("D2 noreply@ -> automated", verdict({ from: "noreply@partner.example", interne
 t("D3 notifications@ -> automated", verdict({ from: "notifications@partner.example", internetMessageHeaders: [] }), "automated-sender");
 t("D4 List-Unsubscribe header -> bulk", verdict({ internetMessageHeaders: [{ name: "List-Unsubscribe", value: "<mailto:x>" }] }), "bulk-header");
 t("D5 Auto-Submitted: auto-generated -> bulk", verdict({ internetMessageHeaders: [{ name: "Auto-Submitted", value: "auto-generated" }] }), "bulk-header");
-t("D6 from the WORK address itself -> self (screenMessage's own rule)", verdict({ from: WORK, internetMessageHeaders: [] }), "self");
+t("D6 from the WORK address itself -> screened like any sender (owner: no self block)", verdict({ from: WORK, internetMessageHeaders: [] }), "from a person and asks something");
 t("D7 from his EDS address INTO the work mailbox -> screened like any sender (owner: no extra self rule)", verdict({ from: EDS, internetMessageHeaders: [] }), "from a person and asks something");
 t("D8 a person with no ask -> no-ask (needs-reply mode)", verdict({ subject: "HUDDLE-PA-SBX- fyi", bodyPreview: "Notes attached.", body: "Notes attached.", isHtml: false }), "no-ask");
 

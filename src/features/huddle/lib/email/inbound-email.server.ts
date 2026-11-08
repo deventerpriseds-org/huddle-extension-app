@@ -148,10 +148,8 @@ export async function runInboundEmailWatch(
       // A feed record carries a "feed:" id, never an EDS Graph id, so its source is unambiguous.
       const fromFeed = !!feed && isFeedId(m.id);
       const msgMailbox = fromFeed && feed ? feed.mailbox : mailbox;
-      // The SAME screen for both sources. Owner, 2026-11-08: no extra cross-address "self" rule for
-      // feed mail ("unnecessary and complicates testing") -- mail from his EDS address INTO the work
-      // mailbox is screened like any sender. screenMessage's own rule (from === the mailbox it arrived
-      // in) still applies to both sources, unchanged.
+      // The SAME screen for both sources, with no "own mail" block at all (owner, 2026-11-08: "The
+      // self email block is unnecessary and complicates testing for no reason").
       const verdict: ScreenVerdict = screenMessage(m, mode, msgMailbox);
       const row: (typeof decisions)[number] = {
         received: m.receivedDateTime ?? null,

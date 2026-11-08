@@ -51,7 +51,7 @@ export type ScreenVerdict =
   | { keep: true; reason: string }
   | {
       keep: false;
-      reason: "self" | "automated-sender" | "bulk-header" | "other-folder" | "no-ask";
+      reason: "automated-sender" | "bulk-header" | "other-folder" | "no-ask";
     };
 
 /** Local parts that are machines, not people. Matched against the WHOLE part before "@" (a +tag is
@@ -117,8 +117,10 @@ export function screenMessage(
   const from = String(m.fromAddress ?? "")
     .trim()
     .toLowerCase();
-  // Never announce the owner's own mail back to him, in any mode.
-  if (from && from === mailbox.trim().toLowerCase()) return { keep: false, reason: "self" };
+  // No "own mail" block (owner, 2026-11-08: "The self email block is unnecessary and complicates
+  // testing for no reason"): a message from the owner's own address is screened like any sender, so
+  // the owner can test alerts by mailing himself. `mailbox` stays in the signature for callers.
+  void mailbox;
   if (mode === "all") return { keep: true, reason: "all mode" };
 
   const headers = new Set((m.headerNames ?? []).map((h) => h.toLowerCase()));
