@@ -1,5 +1,11 @@
 # Project Memory — huddle-extension-app
 
+## Hardening — 2026-11-08: a UAT "failure" that was the TEST, four ways (stand-up voice barges)
+- The ceremony mic starts MUTED by design; any voice-barge check must tap `button[aria-label="Unmute"]` (RoomControl is icon-only, the word is a sibling span) and assert "mic — listening" first.
+- Read barge answers by `data-turn-kind="answer"`, never by row position: the ceremony keeps speaking during a barge.
+- Playwright `waitForFunction(fn, ARG, OPTIONS)`: an options object in the ARG slot is silently ignored (30s default).
+- Before trusting a UAT "pass", check which CHECKS_FILE the run used: 42452788195 / 42411015067 ran narrow check files, not the full suite (ledger corrected in #165).
+
 ## ▶ DATA MODEL INDEX — READ THIS BEFORE QUERYING ANYTHING (added 2026-10-15, owner-directed)
 
 <!-- WHAT:       One lookup table for every id, ref, table and scoping key in this system.
