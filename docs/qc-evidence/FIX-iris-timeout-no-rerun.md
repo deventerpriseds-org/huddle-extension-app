@@ -150,3 +150,15 @@ set a couple of initial strategies", and "Define a software engineering maturity
    `guardRawJourneyCreate` rewrites a raw batch to its fresh titles (same field the model used) and skips a
    raw single only on a match; the matched rows join `decision.skipped`, so `annotateRawCreateOutput` reports
    them. Journey refusals are not counted as sent. tsc: 0 errors.
+3. **Tests** `scripts/timeout-no-rerun.test.ts`: the #164 blanket-block tests (b1-b5) are REPLACED by
+   TNR-b1..b8; (a) and (c) unchanged. 15 tests, all pass. Fixtures are the real 11-07 lines.
+   - b1: 11-07 replay — 23 sent; re-run asks for the 17 re-sent paraphrases + "Call Amy about orientation" →
+     13 skipped (each paired with the line actually sent), the new item and the 4 measured misses are sent.
+   - b2: exact repeats (case/punctuation/quotes) and loose repeats skipped; same attempt, other agent,
+     empty ledger and a journey-refused send are untouched.
+   - b3: a single NEW item after a prior batch is created; 7/9 near-miss new items created, the 2 known
+     over-matches pinned.
+   - b4: 0/253 matches among the 23 distinct originals; threshold pinned at 0.7.
+   - b5: directive lists every sent title and says to create anything not on it; scene carries it.
+   - b6/b7: wiring of batch / single / raw sites (fresh remainder sent; all-sent returns before journey).
+   - b8: the blanket block is gone (no `priorBatchDispatch(` call; not exported).
