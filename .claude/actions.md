@@ -12,7 +12,10 @@ Last updated: 2026-10-27
 - [x] ECOSYSTEM (owner chose Option A): MERGED huddle #148 (squash 8986387) + nexus-hub #176 (squash 2560f21). Deploys: huddle deploy-swa 42123268349 success; nexus api-deploy 42123277569 + web deploy-swa 42123277616 success. LIVE browser UAT: Nexus /polish via Huddle's engine (nexus verify-essay-uat run 42128580189, checks scripts/uat/nexus-polish-checks.mjs on nexus branch claude_polish-uat) 3/3 PASS, polished in 5s; Huddle on main (verify-uat run 42128584455 @390) 7/7 PASS. Review: inline only (docs/qc-evidence/REVIEW-polish-ecosystem-inline.md) — 3 independent verifier runs killed by container restarts. NOT exercised live: Create draft, Save document/OneDrive, Save to Google Drive, Download .docx. NOT owner-confirmed.
 - [x] Owner question (2026-11-05): why route Drive through Nexus instead of a shared app-independent function? Answered: only because Nexus holds the Google token today. Owner: "incremental — fastest first, then the shared tool service" (done: fastest path live).
 - [x] Owner (2026-11-05): "I don't see where the apps option is in huddle" — Polish was an UNLABELLED pen icon (desktop rail) / far-right "Polish" column (phone). Sent annotated screenshots; added a labelled **Apps** launcher (components/AppsLauncher.tsx: Rail popover + phone bottom-sheet) listing Polish + Sidecar/Prompto "Coming soon". Local render both widths OK, no page errors.
-- [ ] STEP 3 shared tools service: owner chose **A** (new `eds-tools` Azure Functions service) 2026-11-05. In progress.
+- [x] STEP 3 / PHASE 1 shared tools service LIVE (2026-11-08): new repo deventerpriseds-org/eds-tools; Azure Function `eds-tools-fn` (Flex Consumption) at https://eds-tools-fn.azurewebsites.net — POST /api/polish (JOURNEY_PROXY_TOKEN + x-eds-app), GET /api/health. Deploy run 42487583013: health 200, no-token 401, real polish with token 200. Huddle #167 (dc0e24d): runPolish -> eds-tools first, runPolishLocal fallback (48/48, fallback-rule mutation FIRED). Live UAT after: Huddle 8/8 (run 42490058635), Nexus /polish 3/3 (run 42490061442). Which engine answered is NOT directly observed (fallback is silent) — inference: eds-tools. NOT owner-confirmed.
+- [ ] Cleanup owed: Azure app `eds-tools-api` stuck on a non-existent plan; CLI delete fails; delete from the Azure portal (eds-tools docs/PLAN.md).
+- [~] PHASE 2 (2026-11-08): writing profiles in eds-tools. eds-tools #3 (cf206fb) LIVE: GET/PUT /api/polish/profiles on Azure Table `polishprofiles` (storage edstoolsstor, conn read from Azure at deploy, no new secret); deploy run 42490900563 live save+read-back+401 checks green; mutations FIRED (built-in id guard, wrong-token 401). Huddle (this PR): loadOwnPolishProfiles = eds-tools first, blob seeds it once, unreachable/401 -> blob; PolishView loads on open + saves changes (800ms debounce); Nexus reads via /api/public/polish automatically. 58/58 offline, 3 mutations FIRED. NOT owner-confirmed; live save from the Huddle screen not yet observed.
+- [ ] PHASE 3: Google + Microsoft connections move into eds-tools (owner reconnects Google once).
 
 ## ACT:context-and-confirm — confirm after the agent reads; agent sees widgets/cards in the 1:1 stream (2026-11-04)
 Status: 🔨 implemented on `claude_context-and-confirm`, offline-verified, NOT merged / deployed / owner-confirmed.
@@ -4856,12 +4859,18 @@ judge time limits (5s create, 3s in-chat groom, 20s weekly). 2 verifier loops (V
 - Open (pre-existing, not built): agents can reassign via journey update_task without the judge; caller identity is
   client-asserted (owner chose to ship on today's trust model).
 
+### ACT:history-paging + ACT:apk-mic (2026-11-08) — BUILT, shipping
+Owner: "loading some amount and as i scroll far enough up for it to load more and more as I go indefinitely" + "The other two audio buttons don't work ... 'Could not start audio source'".
+- History paging (branch claude_history-paging): open = last 30 days + newest 40 per huddle; scroll-top fetches 60 older (loadOlderMessages, SQL-filtered); paged saves MERGE by id under FOR UPDATE; old clients unchanged. test:workspace-window 22/22; mutate.sh 3/3 FIRED; 62/62 suites; tsc 0. Backup: identity.workspace_state_bak_20261108 (3,766 msgs). Live SQL page check: 61 rows, 0 bad ts.
+- Mic (android-bridge-template claude_mic-permission 95b827b): Huddle config has no voice block -> app never requested RECORD_AUDIO; onPermissionRequest now asks Android, then grants/denies the page. Android CI green.
+- [ ] Owner confirms: fast open + scroll-up loads older; mic works after installing the next Huddle APK.
+
 ### ACT:history-load-slow (2026-11-07) — RESOLVED ITSELF, owner-confirmed "fixed again now"; decision pending
 Owner: "stuck saying loading after the schedule view updates" (screenshot: "Loading your message history…", demo seed shown).
 - Evidence: deploy-swa runs finished 20:12:55Z (f9208cf) and 20:25:35Z (e29d4a8 #156) right before the report; live loadWorkspace probe (agent-serverfn-uat 42412108286) answered in 267-381ms; DB 26 conns / 1 active; workspace_state intact (2.63M chars, 3,730 messages Jul 10 -> Nov 7, saved 20:14Z).
 - Cause (inference, medium-high): first load after each deploy = cold SWA function + new client bundle, multiplied by a 2.6 MB single-blob history. No code on the history path changed.
 - [ ] Owner decision: A load last ~30 days first (rec.) / B keep / C hide >90 days.
-- [ ] Owner decision: merge android-bridge-template#23 (paperclip in Huddle APK; Android CI green on f4b2160) + rebuild Huddle APK.
+- [x] Owner: "Merge the paperclip fix" (2026-11-08). android-bridge-template#23 squash aaac3f8; Huddle APK rebuilt via #24 (46125e7) -> build-apk run 42452513006 success, **Huddle v1.0.14** uploaded. [ ] Owner installs v1.0.14 and confirms the paperclip opens the picker.
 
 ### ACT:schedule-today-visible (2026-11-07) — DEPLOYED (#156 e29d4a8), live probe 7/7, NOT owner-confirmed
 Owner: "It reran the schedule and said it was done despite the error but the schedule view is empty" (screenshot: TODAY'S SCHEDULE header, nothing under it).
@@ -4972,6 +4981,12 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [ ] Watch: with a reply card, a model that skips propose_email_reply now leaves NO draft in the prose (card says "No suggested reply yet — tap Edit first").
 
 ## ACT:trinnex-onedrive-feed — work-mailbox mail + calendar via EDS OneDrive files (2026-11-08) — BUILT on dev branch, NOT live
+
+## ACT:trinnex-onedrive-feed — work-mailbox mail + calendar via EDS OneDrive files (2026-11-08) — LIVE, OWNER-CONFIRMED (alert path)
+- **2026-11-08 06:1x UTC OWNER CONFIRMED:** test email (dev@ -> work mailbox, received 05:48Z) read from the OneDrive feed, verdict keep "from a person and asks something" (dry run 42453100468), announced by a manual live run (alert hours are 7am-10pm ET by design since 2026-10-15; outside them the first morning check with 12h lookback announces). Owner: "I received it". Merged #159 (1ac1280c), config run 42443445406, deploy 42443494430.
+- **Header overlap fixed:** #161 (6cdb10d9) -- Meeting button wraps instead of sliding under the ContextPanel at 1000px. PROVEN by full-suite runs 42452437543 and 42483232750: the Meeting click and stand-up room now work (first reply 684/693ms).
+- **CORRECTION (2026-11-08 13:1x UTC):** an earlier line here cited verify-uat 42452788195 as a pass -- that run used board-deeplink-checks.mjs (8/8), NOT the full suite; 42411015067 likewise ran schedule-today-checks.mjs. The FULL suite is 19/22 in both runs that reached the stand-up: FAILING "Hail 'Hey Sam' gets a short ready-ack", "Park ack NAMES the investor pitch", "Standup ceremony reaches completion" (30s timeout, 17-19 turns). These were masked by the header bug before #161, so whether they are new is unknown. Ceremony code (ceremonies*, ceremony-script*) does not call getOwnerCalendarEvents / buildScheduleBrief (grep, origin/main 09731f8f) -- inference: not caused by the feed work. OPEN, awaiting owner.
+- **Self rule:** the pre-existing screenMessage "same inbox" rule (since 2026-10-19) is KEPT per owner; only the extra cross-address rule (added in this work) was removed.
 - 2026-11-08 verifier loop 3 (`docs/qc-evidence/VERIFY-trinnex-onedrive-feed-3.md`, branch claude_verify-trinnex-onedrive-feed-3): D1/D2/D3/D7/D8/D9, self-rule removal, flood guard CONFIRMED. PARTIALs D4 (skipped count unused) and D5 (nested blockquote leak) FIXED in the follow-up commit (C10/C11 tests; C10 mutation FIRED). D6 (object start with no offset read as UTC) open but not hit: live file carries startWithTimeZone. Owner approved go-live ("Approved").
 - TaskOS side (A: calendar) is journey-voice branch claude_trinnex-onedrive-taskos -- see that repo's actions.md.
 - **Asked for:** "I need my messages about emails and upcoming meetings for the day etc to include the trinnex source … use a different approach to pull from a file(s) instead of graph for the trinnex data only. Do not get rid of the current tools … Implement the Huddle email and calendar ingestion updates on a development branch. Keep Trinnex as the source and EDS OneDrive as the destination. The flows still use synthetic test filters until ready to go live." Spec: owner's transfer kit (ONEDRIVE_CURRENT.md, CLAUDE_HANDOFF.md) — private, NOT committed (public repo).
@@ -4981,3 +4996,21 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - **Not done / blocked:** merge+deploy (needs owner approval; main = production); set repo secret HUDDLE_ONEDRIVE_FEEDS; positive Iris proof needs a DISTINCT human sender's HUDDLE-PA-SBX- email; Save-to-Drafts into the work mailbox (Power Automate command channel = next phase); TaskOS/journey side not started; PA-side gaps from the kit (scheduled refresh, appointment capacity guard) are the owner's flows.
 - **2026-11-08 verifier loop 1** (`claude_verify-trinnex-onedrive-feed-1`): 49/66 CONFIRMED + all spelling rows; D1 HIGH = graph-permission-check run 42436419080's public log printed the feed config (work address, drive owner, logins) via workflow inputs. Fixed `7f59c9a1` (config from masked secret) with D2-D5, D7-D9; 59 checks green. Loop 2 running. Leaked log NOT yet deleted (owner decision).
 - **2026-11-08 owner test:** EDS Dev (dev@) -> work address, "Files returned on time", no Iris reply. Cause: Huddle side not deployed (PR #159 unmerged, no secret); and dev@ is the owner's own login -> would screen `self`. Probe run 42439733666: the flow is now LIVE (email file synthetic=False, 46 records, ~1.2 MB) — config must be synthetic:false at go-live.
+
+## ACT:standup-barge-uat — owner "Fix #1": stand-up voice-interruption checks failing (2026-11-08) — TEST FIXED, 23/23 UAT PASS
+- **Observed (screenshots, verify-uat 42483232750):** the spoken "Hey, Sam." never appeared in the transcript; screen read "mic muted — tap the mic to talk". The ceremony starts muted BY DESIGN since 2026-10-19 (MeetingBar.tsx ~L1930). App behaviour unchanged.
+- **Four TEST defects (huddle-checks.mjs, branch claude_standup-barge-fix):** (1) never tapped Unmute -> now taps `button[aria-label="Unmute"]` and asserts "mic — listening"; (2) read the row after the barge by POSITION -> now reads the first new `data-turn-kind="answer"` row after a `data-turn-kind="barge"` user row; (3) noise guard counted every row -> counts answer rows only; (4) completion wait passed `{timeout}` in waitForFunction's ARG slot (30s default applied) -> options in slot 3, 8 min.
+- **Evidence:** branch run 42487020520 (8933a1bd) 22/23 — hail "Right here, sir.", park named both investor-pitch cards, quick answered; only completion failed (ceremony healthy, still speaking at 04:12, 36 rows). Run 42489768771 on 4f28ec39: **23/23 PASSED** (hail 'Yes sir?', park named both pitch cards, quick 0 blockers, noise ignored, ceremony completed in 362s / 50 rows).
+
+### ACT:history-alarms-reason + ACT:apk-mic-audio-settings (2026-11-08) — owner approved "C2, a, b"
+- **Owner reports (2026-11-08):** after paging (#169) old Aug/Sep alarms show at the BOTTOM of today's 1:1 thread;
+  the history load keeps failing in the Huddle Android app with "(server error)" while the phone's BROWSER loads fine;
+  closing/reopening the app did not help; mic still "Could not start audio source" after granting permission.
+- **Cause of the alarms (read from code):** the reminder poll (`HuddleView.tsx` "Reminder delivery") starts its cursor at 0,
+  gets every reminder ever fired in the huddle and appends any not in the store. Paging leaves old ones unloaded, so they
+  were appended at the end. Stored history order was never changed (merge-save keeps stored positions).
+- **C2 (approved):** `shouldAppendReminder` skips a reminder older than the thread's oldest loaded message; the poll waits
+  for hydration (hydrate replaces the list). **A (approved):** `describeLoadFailure` names the reason in the retry toast and
+  the final error. Tests A1-A7, E1-E8 in `scripts/workspace-window.test.ts`; mutations A1/A6/A7/E7 all FIRED.
+- **B (approved):** android-bridge-template manifest `MODIFY_AUDIO_SETTINGS` + Huddle v1.0.16 build.
+- Status: implemented, mechanism verified offline, NOT yet confirmed live by the owner.

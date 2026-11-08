@@ -70,8 +70,10 @@
     "test:context-and-confirm": "bun scripts/context-and-confirm.test.ts",
     "test:reminder-tools": "bun scripts/reminder-tools.test.ts",
     "test:polish": "bun scripts/polish-core.test.ts",
+    "test:workspace-window": "bun scripts/workspace-window.test.ts",
     "test:job-check": "bun scripts/job-check.test.ts",
-    "test:schedule-today-band": "bun scripts/schedule-today-band.test.ts"
+    "test:schedule-today-band": "bun scripts/schedule-today-band.test.ts",
+    "test:timeout-no-rerun": "bun test scripts/timeout-no-rerun.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

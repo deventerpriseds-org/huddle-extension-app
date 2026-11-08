@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { getToken, isAuthBypassActive } from "@/lib/entra-auth";
 import { useAuth } from "@/hooks/useAuth";
 import { loadWorkspace, saveWorkspace } from "@/features/huddle/lib/identity/workspace.functions";
+import { describeLoadFailure, RECENT_DAYS } from "@/features/huddle/lib/identity/workspace-window";
 import {
   clearLegacyLocalWorkspace,
   getPersistablePayload,
@@ -46,7 +47,9 @@ export function useWorkspaceSync() {
     const failed = (attempt: number, why: string) => {
       if (cancelled) return;
       if (attempt + 1 < LOAD_MAX_ATTEMPTS) {
-        if (attempt === 1) toast.loading("Loading your message history…", { id: LOAD_TOAST_ID });
+        // From the second failure on, say WHY it is retrying (owner option A, 2026-11-08).
+        if (attempt >= 1)
+          toast.loading(`Loading your message history… (retrying: ${why})`, { id: LOAD_TOAST_ID });
         retryTimer = setTimeout(() => void load(attempt + 1), LOAD_RETRY_MS);
       } else {
         toast.error(
@@ -80,7 +83,9 @@ export function useWorkspaceSync() {
           }
           return;
         }
-        const remote = await loadWorkspace({ data: { idToken } });
+        // Paged history: open with the recent window only; older pages load on scroll-up
+        // (Transcript -> loadOlderMessages). Saves then MERGE into the stored history (mergeMessages).
+        const remote = await loadWorkspace({ data: { idToken, recentDays: RECENT_DAYS } });
         if (cancelled) return;
         if (remote) {
           try {
@@ -111,7 +116,7 @@ export function useWorkspaceSync() {
         if (attempt > 0) toast.dismiss(LOAD_TOAST_ID);
       } catch (e) {
         console.error("[workspace-sync] load failed", e);
-        failed(attempt, "server error");
+        failed(attempt, describeLoadFailure(e));
       }
     };
     void load(0);
@@ -151,7 +156,8 @@ export function useWorkspaceSync() {
           if (!idToken) return;
           const payload = getPersistablePayload();
           await saveWorkspace({
-            data: { idToken, stateJson: JSON.stringify(payload) },
+            // The app holds only a WINDOW of history, so the server merges by id rather than replacing.
+            data: { idToken, stateJson: JSON.stringify(payload), mergeMessages: true },
           });
         } catch (e) {
           console.error("[workspace-sync] save failed", e);

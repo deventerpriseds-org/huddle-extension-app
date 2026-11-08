@@ -49,7 +49,11 @@ import {
   type PolishRequest,
   type PolishSettings,
 } from "../lib/polish/polish-core";
-import { polishTextFn } from "../lib/polish/polish.functions";
+import {
+  polishProfilesFn,
+  polishTextFn,
+  savePolishProfilesFn,
+} from "../lib/polish/polish.functions";
 import { PolishSendSheet } from "./PolishSendSheet";
 
 type Version = { text: string; label: string; edited?: boolean };
@@ -89,6 +93,42 @@ export function PolishView() {
   const profileId = useHuddleStore((s) => s.polishProfileId);
   const setCustom = useHuddleStore((s) => s.setPolishProfiles);
   const setProfileId = useHuddleStore((s) => s.setPolishProfileId);
+  // Profiles are shared across apps via eds-tools (phase 2): load once when signed in, then save every
+  // change (debounced). The synced workspace blob still keeps a copy, so a failed load changes nothing.
+  const sharedSynced = useRef<string | null>(null);
+  useEffect(() => {
+    if (!caller) return;
+    let cancelled = false;
+    polishProfilesFn({ data: { caller } })
+      .then((r) => {
+        if (cancelled || !r.ok || r.source !== "eds-tools") return;
+        const st = useHuddleStore.getState();
+        const known =
+          BUILTIN_PROFILES.some((p) => p.id === r.lastProfileId) ||
+          r.profiles.some((p) => p.id === r.lastProfileId);
+        const last = known ? r.lastProfileId : st.polishProfileId;
+        sharedSynced.current = JSON.stringify([r.profiles, last]);
+        if (JSON.stringify(st.polishProfiles) !== JSON.stringify(r.profiles)) setCustom(r.profiles);
+        if (st.polishProfileId !== last) setProfileId(last);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [caller, setCustom, setProfileId]);
+  useEffect(() => {
+    if (!caller || sharedSynced.current === null) return; // not loaded from eds-tools: don't overwrite it
+    const snap = JSON.stringify([custom, profileId]);
+    if (snap === sharedSynced.current) return;
+    const t = setTimeout(() => {
+      savePolishProfilesFn({ data: { caller, profiles: custom, lastProfileId: profileId } })
+        .then((r) => {
+          if (r.ok) sharedSynced.current = snap;
+        })
+        .catch(() => undefined);
+    }, 800);
+    return () => clearTimeout(t);
+  }, [caller, custom, profileId]);
   const allProfiles = useMemo(
     () => [...BUILTIN_PROFILES, ...custom.map((p) => ({ ...p, custom: true }))],
     [custom],

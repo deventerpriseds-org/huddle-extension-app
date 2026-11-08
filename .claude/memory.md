@@ -1,5 +1,11 @@
 # Project Memory — huddle-extension-app
 
+## Hardening — 2026-11-08: a UAT "failure" that was the TEST, four ways (stand-up voice barges)
+- The ceremony mic starts MUTED by design; any voice-barge check must tap `button[aria-label="Unmute"]` (RoomControl is icon-only, the word is a sibling span) and assert "mic — listening" first.
+- Read barge answers by `data-turn-kind="answer"`, never by row position: the ceremony keeps speaking during a barge.
+- Playwright `waitForFunction(fn, ARG, OPTIONS)`: an options object in the ARG slot is silently ignored (30s default).
+- Before trusting a UAT "pass", check which CHECKS_FILE the run used: 42452788195 / 42411015067 ran narrow check files, not the full suite (ledger corrected in #165).
+
 ## ▶ DATA MODEL INDEX — READ THIS BEFORE QUERYING ANYTHING (added 2026-10-15, owner-directed)
 
 <!-- WHAT:       One lookup table for every id, ref, table and scoping key in this system.
@@ -148,6 +154,7 @@ are suspended until a harness flag suppresses `deliverOwnerFollowup` (accuracy-l
 ## Polish — text cleanup tool (2026-11-05; #146 MERGED squash 08457bc, deploy-swa run 42110354027 SUCCESS; NOT owner-confirmed live)
 - ECOSYSTEM (owner chose Option A): contract `docs/polish/CONTRACT-polish-ecosystem.md`. LIVE since 2026-11-05: huddle #148 (8986387) + nexus-hub #176 (2560f21) merged + deployed; live UAT Nexus /polish 3/3 (run 42128580189) and Huddle 7/7 (run 42128584455). Huddle `/api/public/polish` (turn-gate auth); Huddle Send › Google Drive → Nexus `/api/polish/gdrive`; Nexus /polish → Huddle engine. Untested live: email draft, OneDrive, Drive save, docx download. NOT owner-confirmed.
 - Owner (2026-11-05): apps must not depend on each other. Approved incremental: fastest path first (done), THEN a shared tools/connections service. Hosting choice pending (recommended: new `eds-tools` Azure Functions service holding the Polish engine + Google/Microsoft connections).
+- SHARED TOOLS SERVICE (Option A, phase 1 LIVE 2026-11-08): repo `deventerpriseds-org/eds-tools`, Azure Function `eds-tools-fn` (Flex Consumption; the legacy Linux Consumption plan refuses new apps). Huddle `runPolish` calls `EDS_TOOLS_URL` (default https://eds-tools-fn.azurewebsites.net) `/api/polish` with `JOURNEY_PROXY_TOKEN` + `x-eds-app: huddle`; falls back to `runPolishLocal` on network/401/403/503/5xx-except-502. Phase 2 (profiles) shipped 2026-11-08: eds-tools GET/PUT `/api/polish/profiles` (headers x-webhook-secret + x-eds-app + x-eds-user=Entra email, lowercased) on Azure Table `polishprofiles`; Huddle `loadOwnPolishProfiles` (polish.server.ts) reads it first, seeds it ONCE from the workspace blob when eds-tools has nothing, falls back to the blob when unreachable. The blob still holds a copy. Phase 3 (Google/Microsoft connections) pending — see eds-tools `docs/PLAN.md`.
 - ENTRY POINT: tool apps live behind a labelled **Apps** launcher (`components/AppsLauncher.tsx` HUDDLE_APPS registry) — Rail popover on desktop, bottom-bar Apps sheet on phone. Owner could not find the earlier unlabelled pen icon.
 - Browser UAT: `.claude/skills/test-agent-serverfn/scripts/polish-checks.mjs` via verify-uat.yml (checks_file). LIVE RUN 42113529991 (390x844, deployed app): 7/7 PASS — real engine returned polished copy in 4s, Send sheet listed dev@ + von.ellis@, zero console/4xx errors. Still NOT owner-confirmed.
 - New view `polish` (store View union). Rail entry under a divider ("tools" group); phone bottom bar is now 6 columns. Sidebar + ContextPanel are hidden ONLY on this view (`FULL_WIDTH_VIEWS` in HuddleApp.tsx); every other view unchanged.

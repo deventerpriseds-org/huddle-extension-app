@@ -312,3 +312,143 @@ export function splitTaskEntries(args: Record<string, unknown>): string[] {
     .filter(Boolean);
   return parts.length ? parts : [blob];
 }
+
+// ── Dispatched-create ledger (FIX-iris-timeout-no-rerun.md) ──────────────────────────────────────────
+// A task create an agent attempt SENDS to journey, recorded at the moment of dispatch (before the
+// await), turn-scoped and round-tripped in the chunk resume state exactly like `createdTaskTitles`.
+// WHY: runBounded used to resolve a timed-out attempt with `toolUses: []` while its in-flight journey
+// call still wrote; the re-queued attempt then had no idea it had created anything and created
+// paraphrased copies again (2026-11-07: 23 asked → 43 rows over 6 attempts). The ledger is what
+// survives the timeout: the timed-out result carries it, the re-run is told about it, and a batch
+// create it already sent is not sent again.
+
+export interface DispatchedCreate {
+  agentId: string;
+  /** One runAgentTurn invocation. Same agent + different attempt = an earlier (timed-out) attempt. */
+  attemptId: string;
+  tool: string;
+  /** A multi-task create (create_huddle_tasks / raw parse_and_create_tasks). */
+  batch: boolean;
+  /** The titles actually sent to journey (after Huddle's own dedup). */
+  titles: string[];
+  ts: number;
+  /** Stamped when journey answered INSIDE the attempt. Absent = no answer before the attempt ended,
+   *  which does NOT mean nothing was created: journey keeps writing after Huddle stops waiting. */
+  result?: { ok: boolean; created?: number; error?: string };
+}
+
+/** Record a create at dispatch time; returns the entry so the caller can stamp its result later. */
+export function recordDispatchedCreate(
+  ledger: DispatchedCreate[],
+  entry: Omit<DispatchedCreate, "ts">,
+  now: number = Date.now(),
+): DispatchedCreate {
+  const e: DispatchedCreate = { ...entry, titles: [...entry.titles], ts: now };
+  ledger.push(e);
+  return e;
+}
+
+/** Creates THIS agent sent in an EARLIER attempt of the same turn (never the current attempt's own). */
+export function priorAttemptDispatches(
+  ledger: readonly DispatchedCreate[],
+  agentId: string,
+  attemptId: string,
+): DispatchedCreate[] {
+  return ledger.filter((e) => e.agentId === agentId && e.attemptId !== attemptId);
+}
+
+/** The earlier attempt's batch create, if any. While one exists the re-run must not create again:
+ *  every title it would send is the same request, usually reworded, which no exact-title check sees. */
+export function priorBatchDispatch(
+  ledger: readonly DispatchedCreate[],
+  agentId: string,
+  attemptId: string,
+): DispatchedCreate | null {
+  return priorAttemptDispatches(ledger, agentId, attemptId).find((e) => e.batch) ?? null;
+}
+
+function titlePreview(titles: readonly string[], max = 5): string {
+  const shown = titles.slice(0, max).join("; ");
+  return titles.length > max ? `${shown}; … (+${titles.length - max} more)` : shown;
+}
+
+function describeDispatch(e: DispatchedCreate): string {
+  const n = e.titles.length;
+  const noun = n === 1 ? "task" : "tasks";
+  if (e.result?.ok === false) return `${e.tool}: journey refused ${n} ${noun} (${e.result.error ?? "error"})`;
+  if (e.result?.ok) {
+    const created = typeof e.result.created === "number" ? e.result.created : n;
+    return `created ${created}/${n} ${noun} on journey: ${titlePreview(e.titles)}`;
+  }
+  return `sent ${n} ${noun} to journey to create (answer not back before the time limit): ${titlePreview(e.titles)}`;
+}
+
+/** The tool-use record a TIMED-OUT attempt resolves with: one entry per create it dispatched. This is
+ *  what makes the creates reach the turn's `toolUses`, its resume state, its final result, and
+ *  `ensureNotSilentOnRealWork` (which fires on any ok non-catalog tool use). */
+export function dispatchedToolUses(
+  ledger: readonly DispatchedCreate[],
+  agentId: string,
+  attemptId: string,
+  now: number = Date.now(),
+): Array<{ id: string; ts: number; agentId: string; tool: string; summary: string; ok: boolean; detail?: string }> {
+  return ledger
+    .filter((e) => e.agentId === agentId && e.attemptId === attemptId)
+    .map((e, i) => ({
+      id: `tu-${now}-${agentId}-dispatched-${i}`,
+      ts: now,
+      agentId,
+      tool: e.tool,
+      summary: describeDispatch(e),
+      // A refusal journey actually returned is a failure; anything else was sent and journey writes it.
+      ok: e.result?.ok !== false,
+      detail: e.titles.join("\n"),
+    }));
+}
+
+/** Scene directive for a re-queued agent: exactly what its earlier attempt(s) already sent. Empty when
+ *  there is nothing (zero prompt overhead on every ordinary turn). */
+export function priorDispatchDirective(
+  ledger: readonly DispatchedCreate[],
+  agentId: string,
+  attemptId: string,
+): string {
+  const prior = priorAttemptDispatches(ledger, agentId, attemptId).filter((e) => e.result?.ok !== false);
+  if (!prior.length) return "";
+  const titles = prior.flatMap((e) => e.titles);
+  const lines = titles.slice(0, 60).map((t) => `- ${t}`);
+  if (titles.length > 60) lines.push(`- … and ${titles.length - 60} more`);
+  return (
+    `\n\nIMPORTANT: an earlier attempt of yours in THIS SAME turn ran out of time AFTER it had already ` +
+    `sent these ${titles.length} task(s) to the board, and they are being created:\n${lines.join("\n")}\n` +
+    `Do NOT create any of them again, not even reworded. Do not call create_huddle_tasks, create_huddle_task ` +
+    `or parse_and_create_tasks for them. Tell the user plainly which tasks you added (the list above), ` +
+    `then do anything else they asked.`
+  );
+}
+
+/** What the model gets back when it tries to create again after an earlier attempt's batch create. */
+export function alreadyDispatchedResult(
+  prior: DispatchedCreate,
+  requested: readonly string[],
+): Record<string, unknown> {
+  return {
+    ok: true,
+    created: 0,
+    alreadyDispatched: true,
+    requested: requested.length,
+    sentEarlierThisTurn: prior.titles,
+    note:
+      `Not sent again: your earlier attempt in this turn already sent ${prior.titles.length} task(s) to the ` +
+      `board, listed in sentEarlierThisTurn. Do not create them again. Tell the user those were added.`,
+  };
+}
+
+/** The user's own words for journey's task parser (`parse_and_create_tasks` optional `context` arg),
+ *  so its categorizer sees the framing ("priorities I need to work on today") and not only the bare
+ *  titles. Trimmed to `max` chars; undefined when there is nothing to send. */
+export function journeyCreateContext(text: unknown, max = 1500): string | undefined {
+  const t = typeof text === "string" ? text.trim() : "";
+  if (!t) return undefined;
+  return t.length > max ? t.slice(0, max) : t;
+}

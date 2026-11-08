@@ -63,7 +63,12 @@ import {
   pinnedStartOnScroll,
   shouldRevealOlder,
   windowStart,
+  LOAD_OLDER_PX,
 } from "../lib/transcript-scroll";
+import { loadOlderMessages } from "../lib/identity/workspace.functions";
+import { getToken } from "@/lib/entra-auth";
+import { isRenderableMessage, isWorkspaceHydrated } from "../store";
+import { shouldAppendReminder } from "../lib/identity/workspace-window";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
@@ -314,14 +319,50 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
       .top;
   const lastId = messages[messages.length - 1]?.id;
 
+  // Paged history (workspace-window.ts): the app opens with the recent window only. When the reader has
+  // revealed every loaded message and scrolls to the top, fetch the next older page of THIS huddle from the
+  // server and prepend it -- "load more and more as I go indefinitely" (owner, 2026-11-08).
+  const [older, setOlder] = useState<"idle" | "loading" | "done">("idle");
+  const olderRef = useRef<"idle" | "loading" | "done">("idle");
+  const fetchOlder = useCallback(async () => {
+    if (olderRef.current !== "idle" || !isWorkspaceHydrated()) return;
+    olderRef.current = "loading";
+    setOlder("loading");
+    const first = messages[0];
+    const top = first ? rowTop(first.id) : undefined;
+    if (first && top !== undefined) anchorRef.current = { id: first.id, top };
+    let next: "idle" | "done" = "idle";
+    try {
+      const idToken = await getToken();
+      if (!idToken) throw new Error("not signed in");
+      const r = await loadOlderMessages({
+        data: { idToken, huddleId: huddle.id, beforeTs: first?.ts ?? Date.now() },
+      });
+      const page = (JSON.parse(r.messagesJson) as HuddleMessage[]).filter(isRenderableMessage);
+      if (page.length) useHuddleStore.getState().prependOlderMessages(page);
+      else anchorRef.current = null;
+      if (!r.hasMore) next = "done";
+    } catch (e) {
+      console.warn("[transcript] older history fetch failed", e);
+      anchorRef.current = null;
+    } finally {
+      olderRef.current = next;
+      setOlder(next);
+    }
+  }, [messages, huddle.id]);
+
   const revealOlder = useCallback(() => {
     const el = scrollRef.current;
-    if (!el || anchorRef.current || start <= 0) return;
+    if (!el || anchorRef.current) return;
+    if (start <= 0) {
+      void fetchOlder();
+      return;
+    }
     const id = messages[start]?.id;
     const top = id === undefined ? undefined : rowTop(id);
     if (id !== undefined && top !== undefined) anchorRef.current = { id, top };
     setPinnedStart(olderStart(start));
-  }, [start, messages]);
+  }, [start, messages, fetchOlder]);
 
   // Pin to the newest message when the list changes or a turn starts. Layout effect so the first paint
   // is already at the bottom; a second pin after paint catches rows that grow late (markdown, widgets).
@@ -352,8 +393,8 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
       const after = rowTop(before.id);
       if (after !== undefined) el.scrollTop = anchoredScrollTop(el.scrollTop, before.top, after);
     }
-    if (start > 0 && el.scrollHeight <= el.clientHeight) revealOlder();
-  }, [start, revealOlder]);
+    if (el.scrollHeight <= el.clientHeight) revealOlder();
+  }, [start, revealOlder, messages.length]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -367,6 +408,7 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
     const pinned = pinnedStartOnScroll(follow.following, pinnedStart, start);
     if (pinned !== pinnedStart) setPinnedStart(pinned);
     if (shouldRevealOlder(m, start)) revealOlder();
+    else if (start <= 0 && m.scrollTop < LOAD_OLDER_PX) void fetchOlder();
   };
 
   const dayLabel = useMemo(() => {
@@ -387,7 +429,12 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
         {/* Older history loads on its own as you scroll up, so there is no button for it. The day label
             marks the true start of the thread, so it shows only once the oldest message is rendered. */}
-        {start === 0 && (
+        {older === "loading" && (
+          <div className="flex justify-center" data-testid="older-loading">
+            <span className="text-[11px] text-muted-foreground">Loading earlier messages…</span>
+          </div>
+        )}
+        {start === 0 && older === "done" && (
           <div className="flex justify-center">
             <span className="rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground">
               {dayLabel}
@@ -1828,7 +1875,12 @@ function Composer({ huddle }: { huddle: Huddle }) {
       firedMs: number;
     }) => {
       const mid = `rem-${r.id}`;
-      if (useHuddleStore.getState().messages.some((m) => m.id === mid)) return;
+      const all = useHuddleStore.getState().messages;
+      if (all.some((m) => m.id === mid)) return;
+      // Paged history: a reminder older than this thread's oldest loaded message is already in the stored
+      // history and comes back with the older pages -- never append it to the bottom as if it were new.
+      const inThread = all.filter((m) => m.huddleId === huddle.id);
+      if (!shouldAppendReminder(r.firedMs, inThread)) return;
       const agentId = (
         r.agentId && AGENT_BY_ID[r.agentId as AgentId] ? r.agentId : huddle.members[0]
       ) as AgentId;
@@ -1840,8 +1892,21 @@ function Composer({ huddle }: { huddle: Huddle }) {
         ts: r.firedMs || Date.now(),
       });
     };
+    let hydrationRetry: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
       if (stopped) return;
+      // Wait for the history to load first: hydration REPLACES the message list, so anything appended
+      // before it is wiped while the cursor has already moved past it, and the skip rule above needs the
+      // loaded history to compare against.
+      if (!isWorkspaceHydrated()) {
+        if (!hydrationRetry) {
+          hydrationRetry = setTimeout(() => {
+            hydrationRetry = null;
+            void poll();
+          }, 2_000);
+        }
+        return;
+      }
       try {
         const { reminders } = await getReminderDeliveries({
           data: { huddleId: huddle.id, sinceMs: cursor },
@@ -1864,6 +1929,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
     return () => {
       stopped = true;
       clearInterval(iv);
+      if (hydrationRetry) clearTimeout(hydrationRetry);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("pageshow", onVisible);
     };
