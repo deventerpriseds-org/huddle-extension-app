@@ -407,6 +407,28 @@ export async function runScheduleBrief(
   try {
     const { enqueueTurn } = await import("./turns.server");
     const fresh = await enqueueTurn(turnId, `dm-${BRIEF_OWNER}`, caller.entra_email, payload);
+    // Attention bell (owner option A, 2026-11-08): a brief that lists meetings/classes stays OPEN in the
+    // bell until dismissed there or answered in Iris's 1:1. Keyed on the turn id, so one item per edition.
+    if (fresh && brief.items.length) {
+      try {
+        const { recordAttentionItem } = await import("../email/email-replies.server");
+        const { attentionId, meetingBellTitle } = await import("../attention/attention");
+        const title = meetingBellTitle(brief.items, tz);
+        if (title) {
+          const { resolveTaskEmail } = await import("../journey/identity");
+          await recordAttentionItem({
+            id: attentionId("meeting", turnId),
+            ownerEmail: (await resolveTaskEmail(caller)) ?? caller.entra_email,
+            kind: "meeting",
+            huddleId: `dm-${BRIEF_OWNER}`,
+            title,
+            detail: "From Iris's schedule brief",
+          });
+        }
+      } catch {
+        /* the bell is an extra; the brief still goes out */
+      }
+    }
     if (fresh) {
       const { runTurnById } = await import("../huddle.functions");
       await runTurnById(turnId);
