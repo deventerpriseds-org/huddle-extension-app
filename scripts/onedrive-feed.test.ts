@@ -114,6 +114,7 @@ t("C1 feed id, never an EDS Graph id", [m1.id, isFeedId(m1.id), isFeedId("AAMkAG
 t("C2 sender from the record, display name from the original From header", [m1.fromAddress, m1.fromName], ["colleague@partner.example", "Pat Colleague"]);
 t("C3 HTML body becomes words", m1.bodyText, "Hi Von,\n Can we meet Tuesday?");
 t("C4 inferenceClassification left undefined, not invented", m1.inferenceClassification, undefined);
+t("C6 capitalised header items {Name,Value} are read too", screenMessage(mapFeedMessage(msg({ internetMessageHeaders: [{ Name: "List-Unsubscribe", Value: "<x>" }] }), WORK), INBOUND_EMAIL_MODE_DEFAULT, WORK).reason, "bulk-header");
 t("C5 object-shaped from also works", mapFeedMessage(msg({ from: { emailAddress: { name: "A B", address: "A@B.example" } } }), WORK).fromAddress, "a@b.example");
 
 console.log("D. SCREENING — the SAME screenMessage on the original (spelling table)");

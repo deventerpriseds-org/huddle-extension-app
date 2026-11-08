@@ -208,10 +208,11 @@ export function htmlToText(html: string): string {
  * does not apply to feed mail (documented gap).
  */
 export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): InboundMessage {
-  const headers = (Array.isArray(rec.internetMessageHeaders) ? rec.internetMessageHeaders : []) as {
-    name?: unknown;
-    value?: unknown;
-  }[];
+  // Outlook connectors write header items as {name,value} or {Name,Value}; accept both.
+  const headers = (Array.isArray(rec.internetMessageHeaders) ? rec.internetMessageHeaders : []).map((h) => {
+    const o = (h && typeof h === "object" ? h : {}) as Record<string, unknown>;
+    return { name: o.name ?? o.Name, value: o.value ?? o.Value };
+  });
   const header = (n: string) => headers.find((h) => str(h?.name).toLowerCase() === n);
   const from = parseAddress(rec.from);
   // Display name: the connector's From is often a bare address; the original From header has the name.

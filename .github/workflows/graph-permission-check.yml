@@ -139,7 +139,7 @@ jobs:
               if isinstance(o, dict):
                   return "{" + ", ".join(f"{k}:{shape(v, depth+1) if depth < 1 else type(v).__name__}" for k, v in sorted(o.items())) + "}"
               if isinstance(o, list):
-                  return "[" + (shape(o[0], depth+1) if o and depth < 1 else "") + "]"
+                  return "[" + (str(len(o)) + "x " + (shape(o[0], depth+1) if depth < 1 else (sorted(o[0].keys()).__str__() if isinstance(o[0], dict) else type(o[0]).__name__)) if o else "") + "]"
               return type(o).__name__
           print("   envelope keys:", sorted(d.keys()) if isinstance(d,dict) else "-")
           if isinstance(v,list) and v: print("   record[0] shape:", shape(v[0]))' 2>/dev/null || echo "-")
