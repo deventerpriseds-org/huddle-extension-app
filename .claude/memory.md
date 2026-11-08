@@ -183,6 +183,10 @@ are suspended until a harness flag suppresses `deliverOwnerFollowup` (accuracy-l
 - Another session (`session_014kkrf14UMrBfSWyZ1vzHa1`) shipped #131/#133 into the same code mid-flight; check `git log origin/main` for overlap before resuming any lane.
 - Harness hygiene: `qa-plan-and-answer-first.mjs` wrote 4 `Test- qa-paf-*` turns into the owner's live Iris thread (owner saw `focus_on` failures and thought the app broke). Deleted; 0 remaining. Harnesses must target a test huddle id and auto-clean.
 
+- **2026-11-08 integration state (branch `claude/modest-brown-2hdt5n` e5c1f5b6, NOT merged, NOT deployed, NOT owner-confirmed):** rows 1–5 built (F1 skip hand-off when handled/"now", F2 hand-off = task + Confirm buttons, F3 live confirm → Doing past the WIP cap, F4 live asks stamped `asked`, urgency negations). Rows 6–9 (F6 board-claim presenter, F7 dedup, F5 assist default, harness test-thread) NOT built. Schema: three additive nullable columns on `tasks.task_engagement_state` (`live_start_at`, `live_start_via`, `live_started_at`) via the existing lazy `ADD COLUMN IF NOT EXISTS` bootstrap; no new npm deps.
+- **Hardening — in-session lanes are not reclaim-proof:** three lane runs were killed by container restarts (each after ~30 min–6 h); only per-AC-group pushes and the `eds-wip/*` autosaves survived. When restarts are frequent, integrate inline with a push per step rather than re-spawning lanes.
+- **Hardening — a merged-in comment can break a source-shape test:** `handoff-lane-b.test.ts` AC-F3-2 used a 700-char regex window; keeping main's 11-05 approval-kick comment pushed the call past it (false FAIL, not a regression). Widened to 1400 and re-proved FIRED with `mutate.sh`.
+
 ## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04, branch claude_context-and-confirm, NOT merged, NOT deployed, NOT owner-confirmed)
 - **Confirm-intent:** the pre-model `isPlainConfirmation` short-circuit is GONE. Block A of `runHuddleTurn` is
   READ-ONLY (looks up the last-asked pending confirm, also on chunk continuations). A typed "ok"/"great" is
