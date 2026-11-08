@@ -173,7 +173,10 @@ export async function readFeed(cfg: OneDriveFeedsConfig, kind: Kind): Promise<Fe
     }
     const v = kind === "email" ? validateEmailSnapshot(json, cfg) : validateAppointmentSnapshot(json, cfg);
     if (!v.ok) return fail(`rejected:${v.reason}`);
-    await record("ok", null, { etag, snapshot: v.snapshot });
+    // Malformed records (no id) are dropped, not fatal -- but say so, or the flow's bug is invisible.
+    const skippedNote = v.snapshot.skipped ? `skipped ${v.snapshot.skipped} record(s) with no id` : null;
+    if (skippedNote) console.warn(`[onedrive-feed] ${kind}: ${skippedNote}`);
+    await record("ok", skippedNote, { etag, snapshot: v.snapshot });
     return { ok: true, snapshot: v.snapshot, changed: true };
   } catch (err) {
     return fail("error", err instanceof Error ? err.message.slice(0, 200) : "unknown");

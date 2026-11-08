@@ -130,6 +130,8 @@ t("C4 inferenceClassification left undefined, not invented", m1.inferenceClassif
 t("C6 capitalised header items {Name,Value} are read too", screenMessage(mapFeedMessage(msg({ internetMessageHeaders: [{ Name: "List-Unsubscribe", Value: "<x>" }] }), WORK), INBOUND_EMAIL_MODE_DEFAULT, WORK).reason, "bulk-header");
 t("C7 quoted <blockquote> history is not this email's ask", verdict0({ body: "<div>Thanks!</div><blockquote>Can we meet Tuesday?</blockquote>", subject: "HUDDLE-PA-SBX- Re: meeting" }), "no-ask");
 t("C8 Outlook reply header block and everything after it dropped", verdict0({ body: '<p>Sounds good.</p><div id="divRplyFwdMsg">From: x Sent: y</div><p>Can you send it?</p>', subject: "HUDDLE-PA-SBX- Re: files" }), "no-ask");
+t("C10 nested quote: the outer quote's tail does not leak", verdict0({ body: "<div>Thanks!</div><blockquote>a<blockquote>b?</blockquote>Can we meet Tuesday?</blockquote>", subject: "HUDDLE-PA-SBX- Re: q" }), "no-ask");
+t("C11 unclosed quote swallows the rest; text before it is kept", verdict0({ body: "<p>Can you send it?</p><blockquote>old words", subject: "HUDDLE-PA-SBX- Re: q2" }) !== "no-ask", true);
 t("C9 a link's ? is not a question", verdict0({ body: "<p>Notes at https://x.example/a?b=1 for you.</p>", subject: "HUDDLE-PA-SBX- notes" }), "no-ask");
 t("C5 object-shaped from also works", mapFeedMessage(msg({ from: { emailAddress: { name: "A B", address: "A@B.example" } } }), WORK).fromAddress, "a@b.example");
 
