@@ -260,7 +260,8 @@ export const checks = [
     // in the transcript ("mic muted — tap the mic to talk" on screen), and voiceBarge then read the next
     // scripted line as the "answer" -- a false HEARD pass and false hail/park failures.
     {
-      const unmute = page.locator("button", { hasText: /^Unmute$/ }).first();
+      // RoomControl renders an icon-only button (aria-label) with the word beside it in a span.
+      const unmute = page.locator('button[aria-label="Unmute"]').first();
       if (await unmute.count()) await unmute.click().catch(() => {});
       const live = await page
         .locator("text=/mic — (listening|hearing you)/")
