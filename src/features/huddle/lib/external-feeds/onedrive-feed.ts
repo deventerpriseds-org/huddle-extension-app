@@ -106,10 +106,17 @@ export type FeedRejection =
   | "incomplete"
   | "bad_timestamps"
   | "too_many_records"
-  | "bad_records";
+  | "bad_records"
+  | "wrong_source";
+
+export const FEED_SOURCE_EXPECTED = "power-automate-outlook";
+/** A snapshot dated further ahead than this is refused (a wrong clock or a forged file). */
+const FUTURE_SKEW_MS = 10 * 60_000;
 
 export interface ValidSnapshot<R> {
   publishedUtc: string;
+  /** Records dropped because they had no id (the rest of the snapshot is still used). */
+  skipped?: number;
   windowStartUtc: string;
   windowEndUtc?: string;
   runId?: string;
@@ -122,11 +129,13 @@ function validateEnvelope(
   j: unknown,
   cfg: OneDriveFeedsConfig,
   feedType: "email_snapshot" | "appointments_snapshot",
+  nowMs: number,
 ): Validation<Record<string, unknown>> {
   if (!j || typeof j !== "object" || Array.isArray(j)) return { ok: false, reason: "not_json" };
   const e = j as Record<string, unknown>;
   if (str(e.schema_version).split(".")[0] !== "1") return { ok: false, reason: "wrong_schema" };
   if (e.feed_type !== feedType) return { ok: false, reason: "wrong_feed_type" };
+  if (e.source !== FEED_SOURCE_EXPECTED) return { ok: false, reason: "wrong_source" };
   if (str(e.mailbox).toLowerCase() !== cfg.mailbox) return { ok: false, reason: "wrong_mailbox" };
   if (cfg.sourceLogin && str(e.source_login).toLowerCase() !== cfg.sourceLogin) {
     return { ok: false, reason: "wrong_source_login" };
@@ -134,9 +143,16 @@ function validateEnvelope(
   // While configured synthetic-only, a snapshot that is NOT marked synthetic is refused (live mail must
   // not start flowing before the owner switches the config). Live config accepts either.
   if (cfg.synthetic && e.synthetic !== true) return { ok: false, reason: "synthetic_mismatch" };
+  // ...and the reverse: once live, a file still marked synthetic (or unmarked) is a misconfigured flow.
+  if (!cfg.synthetic && e.synthetic !== false) return { ok: false, reason: "synthetic_mismatch" };
   // complete=false means the flow hit a cap or pagination: partial is NOT the same as empty.
   if (e.complete !== true) return { ok: false, reason: "incomplete" };
   if (!isIso(e.published_utc) || !isIso(e.window_start_utc)) return { ok: false, reason: "bad_timestamps" };
+  const published = Date.parse(str(e.published_utc));
+  if (published > nowMs + FUTURE_SKEW_MS) return { ok: false, reason: "bad_timestamps" };
+  if (feedType === "email_snapshot" && Date.parse(str(e.window_start_utc)) > published) {
+    return { ok: false, reason: "bad_timestamps" };
+  }
   if (feedType === "appointments_snapshot") {
     if (!isIso(e.window_end_utc) || Date.parse(str(e.window_end_utc)) <= Date.parse(str(e.window_start_utc))) {
       return { ok: false, reason: "bad_timestamps" };
@@ -146,9 +162,11 @@ function validateEnvelope(
   const value = snap && Array.isArray(snap.value) ? (snap.value as unknown[]) : null;
   if (!value) return { ok: false, reason: "bad_records" };
   if (value.length >= FEED_MAX_RECORDS) return { ok: false, reason: "too_many_records" };
-  if (!value.every((r) => r && typeof r === "object" && str((r as Record<string, unknown>).id))) {
-    return { ok: false, reason: "bad_records" };
-  }
+  // One malformed record must not freeze the whole feed on its last-good copy: drop it, count it.
+  const records = value.filter(
+    (r) => r && typeof r === "object" && !Array.isArray(r) && str((r as Record<string, unknown>).id),
+  ) as Record<string, unknown>[];
+  const skipped = value.length - records.length;
   return {
     ok: true,
     snapshot: {
@@ -156,15 +174,16 @@ function validateEnvelope(
       windowStartUtc: str(e.window_start_utc),
       windowEndUtc: str(e.window_end_utc) || undefined,
       runId: str(e.run_id) || undefined,
-      records: value as Record<string, unknown>[],
+      records,
+      ...(skipped ? { skipped } : {}),
     },
   };
 }
 
-export const validateEmailSnapshot = (j: unknown, cfg: OneDriveFeedsConfig) =>
-  validateEnvelope(j, cfg, "email_snapshot");
-export const validateAppointmentSnapshot = (j: unknown, cfg: OneDriveFeedsConfig) =>
-  validateEnvelope(j, cfg, "appointments_snapshot");
+export const validateEmailSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowMs: number = Date.now()) =>
+  validateEnvelope(j, cfg, "email_snapshot", nowMs);
+export const validateAppointmentSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowMs: number = Date.now()) =>
+  validateEnvelope(j, cfg, "appointments_snapshot", nowMs);
 
 /** Prefix that marks an id as coming from a feed. EDS Graph ids never start with it, so a feed record
  *  can never be mistaken for (or collide with) an EDS Graph message or event. */
@@ -187,6 +206,10 @@ export function parseAddress(v: unknown): { address: string; name: string } {
 /** Pure: crude HTML -> text for a body that arrived as HTML (the screen only needs the words). */
 export function htmlToText(html: string): string {
   return html
+    // Quoted history is the OTHER person's old words, not this email's ask: Outlook's reply/forward
+    // header block and everything after it, and any <blockquote>, are dropped (verifier D5).
+    .replace(/<div[^>]*id=["']?(divRplyFwdMsg|appendonsend)["']?[\s\S]*$/i, " ")
+    .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, " ")
     .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
     .replace(/<br\s*\/?>|<\/(p|div|li|tr|h\d)>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
@@ -196,6 +219,8 @@ export function htmlToText(html: string): string {
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
+    // A URL's "?" is a query string, not a question.
+    .replace(/\bhttps?:\/\/\S+/gi, "[link]")
     .replace(/[ \t]+/g, " ")
     .replace(/\n\s*\n+/g, "\n\n")
     .trim();

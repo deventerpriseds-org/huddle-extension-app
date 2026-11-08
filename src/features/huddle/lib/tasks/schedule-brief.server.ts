@@ -333,7 +333,10 @@ export async function meetingsForDate(
       timeZone: "UTC", // response rendered in UTC so graphUtcToIso can pin it unambiguously
     };
     const r = caller ? await getOwnerCalendarEvents({ ...window, caller }) : await getGraphCalendarEvents(window);
-    if (!r.ok) return { items: [], error: r.error || "calendar read failed", warnings: r.warnings };
+    // EDS read failed: still brief any work meetings that loaded, and report the failure (verifier D3).
+    if (!r.ok && !(r.events ?? []).length) {
+      return { items: [], error: r.error || "calendar read failed", warnings: r.warnings };
+    }
     const items: BriefItem[] = [];
     for (const e of r.events ?? []) {
       // An event with no id cannot be keyed for an idempotent T-60, so it is still BRIEFED (the
@@ -355,7 +358,11 @@ export async function meetingsForDate(
             })(),
       });
     }
-    return r.warnings?.length ? { items, warnings: r.warnings } : { items };
+    return {
+      items,
+      ...(r.ok ? {} : { error: r.error || "calendar read failed" }),
+      ...(r.warnings?.length ? { warnings: r.warnings } : {}),
+    };
   } catch (err) {
     return { items: [], error: err instanceof Error ? err.message : "calendar read failed" };
   }

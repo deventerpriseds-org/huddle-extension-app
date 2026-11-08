@@ -7,7 +7,7 @@
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   .claude/actions.md ACT:trinnex-onedrive-feed.
 // Env: TOKEN (app-only Graph), FEED_DRIVE_USER, HUDDLE_ONEDRIVE_FEEDS (same JSON the app reads),
-//      OWN_ADDRESSES (comma list). Run: npx -y tsx scripts/onedrive-feed-dryrun.ts
+//      (own addresses are derived from the config). Run: npx -y tsx scripts/onedrive-feed-dryrun.ts
 import {
   eligibleFeedMessages,
   isFromOwner,
@@ -25,7 +25,8 @@ if (!cfg) {
   process.exit(0);
 }
 const token = process.env.TOKEN ?? "";
-const own = (process.env.OWN_ADDRESSES ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+// The owner's own addresses come from the config itself (bound logins + drive user), never an input.
+const own = [...cfg.ownerLogins, cfg.driveUser];
 const base = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.driveUser)}/drive/root:`;
 const get = async (path: string) => {
   const r = await fetch(`${base}${path}:/content`, { headers: { Authorization: `Bearer ${token}` } });

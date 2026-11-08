@@ -574,7 +574,15 @@ export async function getOwnerCalendarEvents(input: {
     feed = { events: [], warnings: ["Work calendar feed could not be read; work meetings are NOT included."] };
   }
   if (!feed.events.length && !feed.warnings.length) return r;
-  if (!r.ok) return feed.warnings.length ? { ...r, warnings: feed.warnings } : r;
+  // The EDS failure is still reported (ok:false + its error), but work meetings that DID load are not
+  // thrown away with it (verifier D3).
+  if (!r.ok) {
+    return {
+      ...r,
+      ...(feed.events.length ? { events: feed.events } : {}),
+      ...(feed.warnings.length ? { warnings: feed.warnings } : {}),
+    };
+  }
   const events = [...(r.events ?? []), ...feed.events].sort((a, b) =>
     String(a.start ?? "").localeCompare(String(b.start ?? "")),
   );

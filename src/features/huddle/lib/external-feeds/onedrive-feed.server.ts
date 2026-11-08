@@ -27,8 +27,12 @@ import {
 import type { InboundMessage } from "../email/inbound-email";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
-/** Every OneDrive call is bounded: a slow or hung drive must never hold up the EDS inbox or calendar. */
-const FEED_HTTP_TIMEOUT_MS = 8_000;
+/** ONE deadline per file read (metadata + content together): a slow or hung drive must never hold up
+ *  the EDS inbox or calendar for longer than this (verifier D9: per-request limits stacked to >16s). */
+const FEED_READ_DEADLINE_MS = 10_000;
+/** A calendar snapshot older than this gets a "may be out of date" note (the flow refreshes on calendar
+ *  changes only, so a quiet week is legitimate -- this only flags a flow that may have stopped). */
+const CALENDAR_AGE_WARN_MS = 7 * 24 * 3_600_000;
 
 let _pool: Pool | null = null;
 function getPool(): Pool {
@@ -89,9 +93,7 @@ const drivePath = (cfg: OneDriveFeedsConfig, path: string) =>
     .map((seg) => encodeURIComponent(seg))
     .join("/")}`;
 
-async function timedFetch(url: string, init: RequestInit): Promise<Response> {
-  return fetch(url, { ...init, signal: AbortSignal.timeout(FEED_HTTP_TIMEOUT_MS) });
-}
+
 
 /**
  * Read ONE feed file: eTag check -> download only when changed -> validate -> store as last good.
@@ -146,6 +148,8 @@ export async function readFeed(cfg: OneDriveFeedsConfig, kind: Kind): Promise<Fe
   };
   try {
     const { getAppToken } = await import("../email/graph-email.server");
+    const deadline = AbortSignal.timeout(FEED_READ_DEADLINE_MS);
+    const timedFetch = (url: string, init: RequestInit) => fetch(url, { ...init, signal: deadline });
     const auth = { Authorization: `Bearer ${await getAppToken()}` };
     const meta = await timedFetch(`${drivePath(cfg, file.path)}?$select=eTag,size`, { headers: auth });
     if (meta.status === 404) return fail("missing");
@@ -220,6 +224,9 @@ export async function feedCalendarEvents(
     );
   }
   if (!snap) return { events: [], warnings };
+  if (Date.now() - Date.parse(snap.publishedUtc) > CALENDAR_AGE_WARN_MS) {
+    warnings.push(`Work calendar feed was last updated ${snap.publishedUtc}; it may be out of date.`);
+  }
   if (!coversWindow(snap, startISO, endISO)) {
     warnings.push("Work calendar feed only covers part of the requested dates; work meetings may be missing.");
   }

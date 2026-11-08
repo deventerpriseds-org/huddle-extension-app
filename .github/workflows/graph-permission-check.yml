@@ -35,14 +35,11 @@ on:
         description: "Section 5: comma-separated drive-relative feed file paths."
         required: false
         default: "/automation/email/emails.json,/automation/appointments/appointments.json"
-      feed_config:
-        description: "Section 6: HUDDLE_ONEDRIVE_FEEDS JSON to dry-run the REAL files through the shipped validator/mapper/screen (blank = skip). Verdicts and counts only."
+      feed_dry_run:
+        description: "Section 6: dry-run the REAL feed files through the shipped code, using the HUDDLE_ONEDRIVE_FEEDS repo secret (masked in logs). Verdicts and counts only."
         required: false
-        default: ""
-      own_addresses:
-        description: "Section 6: the owner's own addresses (comma list) for the self rule."
-        required: false
-        default: ""
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -52,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        if: ${{ inputs.feed_config != '' }}
+        if: ${{ inputs.feed_dry_run }}
       - name: Read grants + probe calendar access
         env:
           TENANT: ${{ secrets.AZURE_TENANT_ID }}
@@ -61,8 +58,9 @@ jobs:
           MAILBOXES: ${{ inputs.mailboxes }}
           FEED_USERS: ${{ inputs.feed_drive_users }}
           FEED_PATHS: ${{ inputs.feed_paths }}
-          FEED_CONFIG: ${{ inputs.feed_config }}
-          OWN_ADDRESSES: ${{ inputs.own_addresses }}
+          # A SECRET, never a workflow input: inputs are printed in this public log's env block
+          # (VERIFY-trinnex-onedrive-feed-1 D1 -- an earlier run printed the config that way).
+          FEED_CONFIG: ${{ inputs.feed_dry_run && secrets.HUDDLE_ONEDRIVE_FEEDS || '' }}
         run: |
           set -uo pipefail
           for v in TENANT CLIENT_ID CLIENT_SECRET; do
@@ -164,6 +162,6 @@ jobs:
           # 6. Dry-run the REAL feed files through the shipped code (validator, mapper, screen).
           if [ -n "${FEED_CONFIG// /}" ]; then
             echo "=== 6. Feed dry run through the shipped validator / mapper / screenMessage ==="
-            TOKEN="$TOKEN" HUDDLE_ONEDRIVE_FEEDS="$FEED_CONFIG" OWN_ADDRESSES="$OWN_ADDRESSES" \
+            TOKEN="$TOKEN" HUDDLE_ONEDRIVE_FEEDS="$FEED_CONFIG" \
               npx -y tsx@4.19.2 scripts/onedrive-feed-dryrun.ts
           fi

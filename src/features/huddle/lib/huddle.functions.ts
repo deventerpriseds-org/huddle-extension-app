@@ -4044,6 +4044,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   fromAddress: row.from_address ?? "",
                   subject: row.subject ?? "",
                   replyBody: body,
+                  // A work-mailbox (OneDrive feed) email has no draft write path: carry that on EVERY
+                  // card for it, not only the alert turn's (VERIFY-trinnex-onedrive-feed-1 D2).
+                  ...((await import("./external-feeds/onedrive-feed")).isFeedId(row.graph_message_id)
+                    ? { draftable: false }
+                    : {}),
                 }),
               );
               return JSON.stringify({ ok: true, email_id: emailId });

@@ -82,9 +82,10 @@ const env = (over: Record<string, unknown> = {}, records: unknown[] = [msg()]) =
   complete: true,
   ...over,
 });
-t("B1 good snapshot passes", validateEmailSnapshot(env(), cfg).ok, true);
+const NOW = Date.parse("2026-11-08T15:00:00Z"); // fixtures are dated this day
+t("B1 good snapshot passes", validateEmailSnapshot(env(), cfg, NOW).ok, true);
 const reason = (j: unknown) => {
-  const v = validateEmailSnapshot(j, cfg);
+  const v = validateEmailSnapshot(j, cfg, NOW);
   return v.ok ? "ok" : v.reason;
 };
 t("B2 not an object", reason([1]), "not_json");
@@ -96,25 +97,41 @@ t("B7 live data while configured synthetic refused", reason(env({ synthetic: fal
 t("B8 complete=false is partial, refused", reason(env({ complete: false })), "incomplete");
 t("B9 bad published_utc refused", reason(env({ published_utc: "yesterday" })), "bad_timestamps");
 t("B10 1000 records refused (cap)", reason(env({}, Array.from({ length: 1000 }, (_, i) => msg({ id: `m${i}` })))), "too_many_records");
-t("B11 record without id refused", reason(env({}, [msg({ id: "" })])), "bad_records");
+t("B11 a record without id is SKIPPED, the rest still used", (() => {
+  const v = validateEmailSnapshot(env({}, [msg({ id: "" }), msg({ id: "ok" })]), cfg, NOW);
+  return v.ok ? [v.snapshot.records.length, v.snapshot.skipped] : v.reason;
+})(), [1, 1]);
+t("B15 a different source refused", reason(env({ source: "something-else" })), "wrong_source");
+t("B16 published in the future refused", reason(env({ published_utc: "2030-01-01T00:00:00Z" })), "bad_timestamps");
+t("B17 email window starting after publication refused", reason(env({ window_start_utc: "2026-11-09T00:00:00Z" })), "bad_timestamps");
+t("B18 live config refuses a file still marked synthetic", (() => {
+  const live = parseFeedsConfig(JSON.stringify({ ...cfgJson, synthetic: false, subjectPrefix: "" }))!;
+  const v = validateEmailSnapshot(env(), live, NOW);
+  return v.ok ? "ok" : v.reason;
+})(), "synthetic_mismatch");
 t("B12 empty but complete is a valid EMPTY inbox", reason(env({}, [])), "ok");
 const apptEnv = (over: Record<string, unknown> = {}) => ({
   ...env({ feed_type: "appointments_snapshot", window_end_utc: "2027-01-07T00:00:00Z", calendar_name: "cal" }, []),
   ...over,
 });
 t("B13 appointments: missing window_end refused", (() => {
-  const v = validateAppointmentSnapshot(apptEnv({ window_end_utc: undefined }), cfg);
+  const v = validateAppointmentSnapshot(apptEnv({ window_end_utc: undefined }), cfg, NOW);
   return v.ok ? "ok" : v.reason;
 })(), "bad_timestamps");
-t("B14 appointments: good passes", validateAppointmentSnapshot(apptEnv(), cfg).ok, true);
+t("B14 appointments: good passes", validateAppointmentSnapshot(apptEnv(), cfg, NOW).ok, true);
 
 console.log("C. MAPPING — the ORIGINAL message, with a feed id");
+const verdict0 = (over: Record<string, unknown>) =>
+  screenMessage(mapFeedMessage(msg({ bodyPreview: "", isHtml: true, internetMessageHeaders: [], ...over }), WORK), INBOUND_EMAIL_MODE_DEFAULT, WORK).reason;
 const m1 = mapFeedMessage(msg(), WORK);
 t("C1 feed id, never an EDS Graph id", [m1.id, isFeedId(m1.id), isFeedId("AAMkAGUw")], [`feed:${WORK}:AAMk-1`, true, false]);
 t("C2 sender from the record, display name from the original From header", [m1.fromAddress, m1.fromName], ["colleague@partner.example", "Pat Colleague"]);
 t("C3 HTML body becomes words", m1.bodyText, "Hi Von,\n Can we meet Tuesday?");
 t("C4 inferenceClassification left undefined, not invented", m1.inferenceClassification, undefined);
 t("C6 capitalised header items {Name,Value} are read too", screenMessage(mapFeedMessage(msg({ internetMessageHeaders: [{ Name: "List-Unsubscribe", Value: "<x>" }] }), WORK), INBOUND_EMAIL_MODE_DEFAULT, WORK).reason, "bulk-header");
+t("C7 quoted <blockquote> history is not this email's ask", verdict0({ body: "<div>Thanks!</div><blockquote>Can we meet Tuesday?</blockquote>", subject: "HUDDLE-PA-SBX- Re: meeting" }), "no-ask");
+t("C8 Outlook reply header block and everything after it dropped", verdict0({ body: '<p>Sounds good.</p><div id="divRplyFwdMsg">From: x Sent: y</div><p>Can you send it?</p>', subject: "HUDDLE-PA-SBX- Re: files" }), "no-ask");
+t("C9 a link's ? is not a question", verdict0({ body: "<p>Notes at https://x.example/a?b=1 for you.</p>", subject: "HUDDLE-PA-SBX- notes" }), "no-ask");
 t("C5 object-shaped from also works", mapFeedMessage(msg({ from: { emailAddress: { name: "A B", address: "A@B.example" } } }), WORK).fromAddress, "a@b.example");
 
 console.log("D. SCREENING — the SAME screenMessage on the original (spelling table)");
@@ -201,6 +218,37 @@ console.log("H. FEED OFF — the calendar answer is exactly the Graph answer");
   const plain = await ge.getGraphCalendarEvents(args);
   const owner = await ge.getOwnerCalendarEvents({ ...args, caller: { entra_email: "login@eds.example" } });
   t("H1 identical result with the feed unconfigured", owner, plain);
+}
+
+console.log("I. EDS FAILS, FEED LOADS — the error is reported AND the work meetings are kept");
+{
+  delete process.env.AZURE_PG_URL; // state store unavailable: the read must still work (logged, not fatal)
+  process.env.HUDDLE_ONEDRIVE_FEEDS = JSON.stringify(cfgJson);
+  const appt = {
+    schema_version: "1.0",
+    feed_type: "appointments_snapshot",
+    source: "power-automate-outlook",
+    mailbox: WORK,
+    source_login: "login@work.example",
+    synthetic: true,
+    published_utc: new Date(Date.now() - 3_600_000).toISOString(),
+    window_start_utc: "2026-11-01T00:00:00Z",
+    window_end_utc: "2027-01-07T00:00:00Z",
+    snapshot: { value: [{ id: "W1", subject: "Work standup", startWithTimeZone: "2026-11-09T09:00:00-05:00", endWithTimeZone: "2026-11-09T09:30:00-05:00", isAllDay: false }] },
+    complete: true,
+  };
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes("login.microsoftonline.com")) return new Response(JSON.stringify({ access_token: "APP" }), { status: 200 });
+    if (url.includes("/calendarView")) return new Response(JSON.stringify({ error: { message: "denied" } }), { status: 403 });
+    if (url.includes("/drive/root:") && url.endsWith(":/content")) return new Response(JSON.stringify(appt), { status: 200 });
+    if (url.includes("/drive/root:")) return new Response(JSON.stringify({ eTag: "e1", size: 500 }), { status: 200 });
+    return new Response("unexpected " + url, { status: 500 });
+  }) as typeof fetch;
+  const ge = await import("../src/features/huddle/lib/email/graph-email.server");
+  const r = await ge.getOwnerCalendarEvents({ caller: { entra_email: "login@eds.example" }, mailbox: EDS, startISO: "2026-11-09T00:00:00Z", endISO: "2026-11-10T00:00:00Z", timeZone: "America/New_York" });
+  t("I1 ok:false with the EDS error, work meeting still returned", [r.ok, /403/.test(r.error ?? ""), (r.events ?? []).map((e) => e.subject)], [false, true, ["Work standup"]]);
+  delete process.env.HUDDLE_ONEDRIVE_FEEDS;
 }
 
 if (fail) {

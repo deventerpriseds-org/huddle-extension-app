@@ -62,6 +62,7 @@ export function emailReplyAskFromDetail(detail: unknown): EmailReplyAsk | undefi
       fromAddress: typeof p.fromAddress === "string" ? p.fromAddress : "",
       subject: typeof p.subject === "string" ? p.subject : "",
       replyBody: typeof p.replyBody === "string" ? p.replyBody : "",
+      ...(p.draftable === false ? { draftable: false } : {}),
     };
   } catch {
     return undefined;
