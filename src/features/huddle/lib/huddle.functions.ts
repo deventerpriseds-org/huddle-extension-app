@@ -2290,6 +2290,47 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     turnActionLedger.add(k);
     return true;
   };
+  // F3 START-NOW, typed path (docs/qc-evidence/BUILD-handoff-lane-b.md). Since #133 a typed "ok" is recorded by the
+  // agent's own confirm_task_intent call. In a NON-internal turn that call is the owner's live confirmation, so the
+  // handler records the server-written live marker (kickLiveConfirm, approach turn NOT yet: this same turn is told
+  // to call propose_approach) and remembers the task here. When this execution ends, advanceLiveConfirmedTasks
+  // either starts the task (approach approved) or enqueues the approach step (the agent skipped propose_approach).
+  // `data.internal` turns (autowork, groom, follow-up, worker, reminder) NEVER mark: a model confirming inside a
+  // system turn is not the owner confirming.
+  const liveConfirmedThisTurn = new Set<string>();
+  const recordLiveTypedConfirm = async (taskId: string, email: string) => {
+    if (data.internal) return;
+    try {
+      const { kickLiveConfirm } = await import("./tasks/autowork.server");
+      const r = await kickLiveConfirm({
+        caller: data.caller,
+        taskId,
+        email,
+        via: "typed",
+        approachTurn: false,
+        timeZone: data.timeZone,
+      });
+      if (r.marked && !r.started) liveConfirmedThisTurn.add(`${email}\u0000${taskId}`);
+    } catch {
+      /* start-now is an accelerator, never a condition of the confirmation */
+    }
+  };
+  const advanceLiveConfirmedTasks = async () => {
+    if (!liveConfirmedThisTurn.size) return;
+    const items = [...liveConfirmedThisTurn];
+    liveConfirmedThisTurn.clear();
+    try {
+      const { advanceLiveConfirmedTask } = await import("./tasks/autowork.server");
+      await Promise.all(
+        items.map((k) => {
+          const [email, taskId] = k.split("\u0000");
+          return advanceLiveConfirmedTask({ caller: data.caller, taskId, email, approachTurn: true, timeZone: data.timeZone });
+        }),
+      );
+    } catch {
+      /* best-effort; the cadence re-drive still covers a confirmed task with no approach */
+    }
+  };
   // Nexus writes (W3/W17, docs/FIX-nexus-write-redteam.md): the FIRST call's outcome, by claim key, so a
   // teammate whose identical write is suppressed is handed THAT real outcome (and its reply is checked
   // against it) instead of an unconditional "already done". Every write this turn is also collected so
@@ -4330,6 +4371,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
               const { confirmTaskIntent } = await import("./tasks/tasks.server");
               await confirmTaskIntent(taskId, email, dod);
+              await recordLiveTypedConfirm(taskId, email); // F3: live only in a non-internal turn
               // Durably on journey's canonical task too (flows to the mirror + board tooltip).
               let journeySet = false;
               let journeyError = "";
@@ -5843,6 +5885,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               if (!email) return JSON.stringify({ ok: false, error: "sign-in required" });
               const { confirmTaskIntent } = await import("./tasks/tasks.server");
               await confirmTaskIntent(taskId, email, dod);
+              await recordLiveTypedConfirm(taskId, email); // F3: live only in a non-internal turn
               let journeySet = false;
               try {
                 const { invokeJourneyTool } = await import("./journey/proxy.functions");
@@ -7883,6 +7926,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       } catch (e) {
         console.error("[turn-chunk] partial save failed", e instanceof Error ? e.message : e);
       }
+      await advanceLiveConfirmedTasks(); // F3: the confirming agent's reply is complete at a chunk boundary
       return { ...finalResult(), partial: true };
     }
     ensureNotSilentOnRealWork();
@@ -7895,6 +7939,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       console.error("[turn-chunk] done save failed", e instanceof Error ? e.message : e);
     }
     persistResearchedMemory();
+    await advanceLiveConfirmedTasks(); // F3
     return { ...finalResult(), partial: false };
   }
 
@@ -7903,6 +7948,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   ensureNavLinkDelivered();
   await ensureProduceOfferDelivered();
   persistResearchedMemory();
+  await advanceLiveConfirmedTasks(); // F3
   return finalResult();
 }
 

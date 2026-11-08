@@ -42,6 +42,8 @@ export async function confirmTaskFromProposal(opts: {
   email: string;
   /** Optional spoken/typed correction, appended to the SERVER's proposal. Never a replacement. */
   additions?: string;
+  /** Which LIVE surface confirmed (F3 audit trail). Every caller of this function is a live owner act. */
+  via?: "button" | "voice";
 }): Promise<ButtonResult & { taskId?: string; title?: string; definitionOfDone?: string }> {
   const { caller, taskId, email } = opts;
   try {
@@ -111,6 +113,20 @@ export async function confirmTaskFromProposal(opts: {
       caller: caller ?? {},
       context: { source: "huddle" },
     });
+    // F3 START-NOW (docs/qc-evidence/BUILD-handoff-lane-b.md): a confirm made here is the owner's live act (the
+    // button tap or voice), so THIS task starts now -- approach step enqueued, then DOING the moment the approach is
+    // approved, past the per-agent DOING cap / REVIEW freeze (owner Option A). Not for REMIND mode: confirming a
+    // reminder IS the scheduling and starts no work (AC-F3-10). The marker is written before returning; the
+    // advance runs in the background so the button still answers in under 3s (AC-F3-15). Best-effort: a failure
+    // leaves a confirmed task for the normal pass, exactly as before.
+    if (!isRemind) {
+      try {
+        const { kickLiveConfirm } = await import("./autowork.server");
+        await kickLiveConfirm({ caller, taskId, email, via: opts.via ?? "button", approachTurn: true, background: true });
+      } catch {
+        /* start-now is an accelerator, never a condition of the confirmation */
+      }
+    }
     if (reminderNote) return { ok: true, error: reminderNote, taskId, title: task.title, definitionOfDone: dod };
     // Huddle's own confirm_status is already durable even if the journey mirror write fails — same
     // non-fatal posture as the model's confirm_task_intent tool handler.
@@ -236,6 +252,14 @@ export async function overrideEscalatedApproach(opts: {
     // click, or the grader landing a pass). Nothing is stuck either way, so report it as already done
     // rather than as a failure the user has to act on.
     if (!applied) return { ok: true, alreadyDone: true, taskId, title: task.title };
+    // F3 (AC-F3-14): an override of a LIVE-confirmed task's escalated approach starts that task now, like a pass
+    // would. advanceLiveConfirmedTask is a no-op without the live marker (background caps then apply).
+    try {
+      const { advanceLiveConfirmedTask } = await import("./autowork.server");
+      void advanceLiveConfirmedTask({ taskId, email }).catch(() => {});
+    } catch {
+      /* best-effort accelerator */
+    }
     return { ok: true, taskId, title: task.title };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

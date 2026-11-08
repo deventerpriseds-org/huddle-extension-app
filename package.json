@@ -76,7 +76,8 @@
     "test:timeout-no-rerun": "bun test scripts/timeout-no-rerun.test.ts",
     "test:attention": "tsx scripts/attention.test.ts",
     "test:id-token-expiry": "bun scripts/id-token-expiry.test.ts",
-    "test:handoff-lane-a": "bun test scripts/handoff-lane-a.test.ts"
+    "test:handoff-lane-a": "bun test scripts/handoff-lane-a.test.ts",
+    "test:handoff-lane-b": "bun test scripts/handoff-lane-b.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

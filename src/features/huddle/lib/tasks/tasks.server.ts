@@ -229,6 +229,19 @@ ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS confirm_last_se
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS confirm_ask_count INT NOT NULL DEFAULT 0;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_redrive_count INT NOT NULL DEFAULT 0;
 ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS approach_redrive_last_at TIMESTAMPTZ;
+-- LIVE START (docs/qc-evidence/BUILD-handoff-lane-b.md, F3 / owner Option A). Written ONLY by server code on a
+-- confirmation the owner made in a live conversation: the Confirm button, voice, or the agent recording a
+-- typed confirm in a NON-internal turn. A model call inside an internal turn (autowork, groom, follow-up,
+-- worker) never writes it. It does NOT unlock anything by itself -- the confirm + approach gate still decides
+-- -- it only lets THAT task start now, past the per-agent DOING cap and REVIEW freeze, instead of waiting for
+-- the 9/13/17 pass (which keeps every cap for every other task).
+--   live_start_at:   when the live confirmation happened (NULL = no live confirmation -> background caps).
+--   live_start_via:  'button' | 'voice' | 'typed', for the audit trail.
+--   live_started_at: the start CLAIM (CAS) -- set once when the task was moved to DOING, so a double tap, a
+--                    retry and a second approval all start it at most once.
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS live_start_at TIMESTAMPTZ;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS live_start_via TEXT;
+ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS live_started_at TIMESTAMPTZ;
 -- One-time backfill for asks sent before these columns existed (35 live 'asked' rows, oldest 2026-08-10): the
 -- best record of when they went out is the instant they were armed for. Idempotent -- after the first run no
 -- row matches (last_sent is set), so later bootstraps touch nothing. updated_at deliberately NOT bumped.
@@ -917,6 +930,11 @@ export interface TaskEngagementState {
   /** Approach re-drives sent (confirmed but approach never proposed); bounded by WorkflowCaps.approach. */
   approach_redrive_count: number;
   approach_redrive_last_at: string | null;
+  /** F3 live start (see the DDL note): set only by a live confirmation; NULL = background caps apply. */
+  live_start_at: string | null;
+  live_start_via: "button" | "voice" | "typed" | null;
+  /** The start claim: when a live-confirmed task was actually moved to DOING (at most once). */
+  live_started_at: string | null;
 }
 
 const ENGAGEMENT_COLS =
@@ -924,7 +942,8 @@ const ENGAGEMENT_COLS =
   "approach_status,proposed_approach,approach_revision_count,clarify_status,clarify_count,open_question,open_question_asked_at," +
   "approach_override_by,approach_override_at,approach_override_via,approach_override_quote,approach_override_turn_id," +
   "approach_escalated_at,approach_override_requested_at,approach_override_requested_by,approach_override_request_reason,updated_at," +
-  "confirm_last_sent_at,confirm_ask_count,approach_redrive_count,approach_redrive_last_at";
+  "confirm_last_sent_at,confirm_ask_count,approach_redrive_count,approach_redrive_last_at," +
+  "live_start_at,live_start_via,live_started_at";
 
 /**
  * "Armed but not yet sent", as SQL over a task_engagement_state alias. A FIRST ask is armed while 'awaiting'
@@ -1194,15 +1213,17 @@ export async function getDueConfirmAsks(nowIso: string, limit = 100): Promise<Du
 /**
  * The task (if any) whose confirm-intent ask is OUTSTANDING for a given agent+user — i.e. the agent
  * already sent the reach-out (`confirm_status='asked'`) and is waiting on the user's reply. Used by the
- * turn engine to recognize that a user's DM message IS the response to a pending confirmation, so it can
- * record `confirm_task_intent` deterministically instead of hoping the model calls the tool.
+ * turn engine to recognize that a user's DM message IS the response to a pending confirmation. Since #133 it
+ * only hands that task to the responding agent as its confirm directive (nothing is written before the model
+ * reads the message); `confirm_task_intent` and the Confirm button stay the writers.
  *
  * WHICH asked task, when an agent has several (the lane rotation makes that normal): the one whose ask was
  * most recently SENT — that is the message sitting at the bottom of the DM the user is answering. It used to
- * be the newest `updated_at`, which any unrelated write bumps (proposeTaskDod, a re-arm, a reassignment), so a
+ * be the newest `updated_at`, which any unrelated write bumps (a re-arm, a reassignment), so a
  * plain "yes" could confirm a task the user was not looking at — a gate leak, because confirmed + approved is
  * exactly what moves a task to DOING (AC-27). NULLS LAST keeps a never-stamped legacy row from outranking a
- * real send; `updated_at` only breaks a tie between rows with no send record at all.
+ * real send; `updated_at` only breaks a tie between rows with no send record at all. A LIVE in-chat
+ * `propose_task_intent` IS a send (proposeTaskDod stamps it, AC-F4-3), so it is the last-asked ask too.
  */
 export async function getPendingConfirmForAgent(
   userEmail: string,
@@ -1599,6 +1620,56 @@ export async function confirmTaskIntent(taskId: string, userEmail: string, dod: 
   );
 }
 
+/**
+ * F3 (docs/qc-evidence/BUILD-handoff-lane-b.md): record that the owner confirmed THIS task in a live conversation.
+ * Callers are server code only -- confirmTaskFromProposal (button, voice) and the confirm_task_intent handler in
+ * a NON-internal turn -- never a model argument. FAIL CLOSED: the row must already be 'confirmed' (the WHERE
+ * clause), so a marker can never exist on an unconfirmed task. A fresh live confirmation re-arms the start claim
+ * (live_started_at=NULL) so a task the owner sent back and confirmed again can start again. Returns false when no
+ * confirmed row matched.
+ */
+export async function markLiveConfirm(
+  taskId: string,
+  via: "button" | "voice" | "typed",
+): Promise<boolean> {
+  await ensureBootstrapped();
+  const r = await getPool().query(
+    `UPDATE tasks.task_engagement_state
+        SET live_start_at = date_trunc('milliseconds', now()), live_start_via = $2, live_started_at = NULL, updated_at = now()
+      WHERE task_id = $1 AND confirm_status = 'confirmed'
+      RETURNING task_id`,
+    [taskId, via],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * F3 start claim (compare-and-set). Returns the live_start_at instant (ms) when THIS caller won the right to move
+ * the task to DOING, or null when there is no live marker, the row is not confirmed, or someone already started it.
+ * This is what makes a double tap / retry / second approval start the task at most once (AC-F3-11).
+ */
+export async function claimLiveStart(taskId: string): Promise<number | null> {
+  await ensureBootstrapped();
+  const r = await getPool().query<{ live_start_at: string | Date }>(
+    `UPDATE tasks.task_engagement_state
+        SET live_started_at = now(), updated_at = now()
+      WHERE task_id = $1 AND live_start_at IS NOT NULL AND live_started_at IS NULL AND confirm_status = 'confirmed'
+      RETURNING live_start_at`,
+    [taskId],
+  );
+  const v = r.rows[0]?.live_start_at;
+  return v ? new Date(v).getTime() : null;
+}
+
+/** Give a start claim back when the DOING write failed, so the next approval / confirm can retry it. */
+export async function releaseLiveStart(taskId: string): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE tasks.task_engagement_state SET live_started_at = NULL, updated_at = now() WHERE task_id = $1`,
+    [taskId],
+  );
+}
+
 /** Record the agent's PROPOSED Definition of Done the moment it sends the confirm-intent ask — before
  * the user has replied. Distinct from confirmTaskIntent: this never touches confirm_status/confirmed_dod,
  * it only stores what was proposed so a later deterministic action (the Confirm button) has a durable,
@@ -1617,12 +1688,34 @@ export async function proposeTaskDod(
   // confirmTaskIntent's full column list rather than a minimal proposed_dod-only insert.
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { userId } = await resolveScopeByEmail(userEmail);
+  // F4 / AC-F4-3 (docs/qc-evidence/AC-handoff-confirm-flow.md, CF-3): a propose_task_intent IS an ask the
+  // user can now see and answer, so it is stamped as SENT — confirm_status='asked', confirm_last_sent_at=now.
+  // Without this a LIVE ask (a hand-off, an in-chat proposal) could never be "the pending ask" for
+  // getPendingConfirmForAgent, which filters 'asked' and orders by confirm_last_sent_at, so a typed "yes"
+  // bound to whatever older autowork ask existed. Three guards:
+  //  - a CONFIRMED row is never downgraded (status, stamp and schedule all left exactly as they were);
+  //  - confirm_ask_at is set to the SAME instant as the send stamp, so the row is not "armed but unsent"
+  //    (ARMED_UNSENT_SQL needs confirm_ask_at > confirm_last_sent_at) — fireDueConfirmAsks therefore sends
+  //    no second ask for it, and planConfirmArming's 24h per-item floor runs from this send (AC-F4-4);
+  //  - confirm_ask_count is only raised to at least 1, never incremented: it is the CAS key autowork's
+  //    claimConfirmAskSend uses, and an autowork ask turn that calls propose_task_intent must not count twice.
   await getPool().query(
-    `INSERT INTO tasks.task_engagement_state (task_id, user_email, proposed_dod, user_id, proposed_reminder_at)
-     VALUES ($1,$2,$3,$4,$5)
+    `INSERT INTO tasks.task_engagement_state
+       (task_id, user_email, proposed_dod, user_id, proposed_reminder_at,
+        confirm_status, confirm_ask_at, confirm_last_sent_at, confirm_ask_count)
+     VALUES ($1,$2,$3,$4,$5,'asked',date_trunc('milliseconds', now()),date_trunc('milliseconds', now()),1)
      ON CONFLICT (task_id) DO UPDATE SET
        proposed_dod=EXCLUDED.proposed_dod,
        proposed_reminder_at=EXCLUDED.proposed_reminder_at,
+       confirm_status = CASE WHEN tasks.task_engagement_state.confirm_status = 'confirmed'
+                             THEN tasks.task_engagement_state.confirm_status ELSE 'asked' END,
+       confirm_ask_at = CASE WHEN tasks.task_engagement_state.confirm_status = 'confirmed'
+                             THEN tasks.task_engagement_state.confirm_ask_at ELSE EXCLUDED.confirm_ask_at END,
+       confirm_last_sent_at = CASE WHEN tasks.task_engagement_state.confirm_status = 'confirmed'
+                             THEN tasks.task_engagement_state.confirm_last_sent_at ELSE EXCLUDED.confirm_last_sent_at END,
+       confirm_ask_count = CASE WHEN tasks.task_engagement_state.confirm_status = 'confirmed'
+                             THEN tasks.task_engagement_state.confirm_ask_count
+                             ELSE GREATEST(tasks.task_engagement_state.confirm_ask_count, 1) END,
        user_id=COALESCE(EXCLUDED.user_id, tasks.task_engagement_state.user_id), updated_at=now()`,
     [taskId, userEmail.toLowerCase(), dod, userId, proposedReminderAtIso || null],
   );
@@ -1686,6 +1779,7 @@ export async function resetEngagementOnReassignment(taskId: string): Promise<voi
             clarify_status='none', clarify_count=0, open_question=NULL, open_question_asked_at=NULL,
             confirm_last_sent_at=NULL, confirm_ask_count=0,
             approach_redrive_count=0, approach_redrive_last_at=NULL,
+            live_start_at=NULL, live_start_via=NULL, live_started_at=NULL,
             updated_at=now()
       WHERE task_id = $1`,
     [taskId],

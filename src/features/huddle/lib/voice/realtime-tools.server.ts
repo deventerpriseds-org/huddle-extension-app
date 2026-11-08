@@ -886,6 +886,7 @@ export async function executeRealtimeTool(
         taskId: pending.taskId,
         email,
         additions: typeof args.additions === "string" ? args.additions : undefined,
+        via: "voice", // F3: a spoken confirm is a live confirm (start-now), recorded as such
       });
       return done(
         JSON.stringify({

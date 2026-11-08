@@ -258,14 +258,30 @@ export async function runApproachGate(opts: {
       // Start the work NOW, not at the next 9/13/17 auto-work pass. Owner 2026-11-05, after a confirmed +
       // approved task sat in Up Next: "why would you as an agent follow my schedule instead of starting
       // things as soon as they are confirmed?"
-      const kicked = await kickAutoWorkAfterApproval(opts.email);
+      // F3 (docs/qc-evidence/BUILD-handoff-lane-b.md, AC-F3-2): a LIVE-confirmed task is moved straight to
+      // Doing first (owner Option A: past the one-at-a-time cap). It is a no-op without the server-written
+      // live marker, so background-confirmed tasks fall through to the general kick, unchanged.
+      let liveStarted = false;
+      try {
+        const { advanceLiveConfirmedTask } = await import("./autowork.server");
+        const r = await Promise.race([
+          advanceLiveConfirmedTask({ taskId: opts.taskId, email: opts.email }),
+          new Promise<{ started: boolean }>((res) => setTimeout(() => res({ started: false }), 8_000)),
+        ]);
+        liveStarted = r.started === true;
+      } catch {
+        liveStarted = false;
+      }
+      const kicked = liveStarted || (await kickAutoWorkAfterApproval(opts.email));
       return {
         gated: true,
         approved: true,
         escalated: false,
         note:
           (wasEscalated ? "re-graded after escalation — approach approved" : "approach approved") +
-          (kicked
+          (liveStarted
+            ? ". The work has started now: it is in Doing."
+            : kicked
             ? ". The work is being started now: it moves to Doing immediately unless you already have a task in " +
               "Doing (one at a time), in which case it is next."
             : ". Starting it right now didn't go through, so the next automatic pass (within a few hours) starts " +
