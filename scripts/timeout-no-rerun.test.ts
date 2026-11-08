@@ -211,6 +211,10 @@ describe("(b) the re-queued attempt skips ONLY what it already sent (Revision B)
     // exact (normalizeTaskTitle: case, trailing punctuation, quotes, spaces)
     expect(splitByPriorDispatch(ledger, "iris-chase", "A2", ["  measure MY panel. "]).alreadySent.length).toBe(1);
     expect(splitByPriorDispatch(ledger, "iris-chase", "A2", ['"Clean my office"']).alreadySent.length).toBe(1);
+    // a title made ONLY of filler words has no significant tokens: only the exact check can match it
+    const filler: DispatchedCreate[] = [];
+    recordDispatchedCreate(filler, { agentId: "iris-chase", attemptId: "A1", tool: "create_huddle_task", batch: false, titles: ["This and that"] });
+    expect(splitByPriorDispatch(filler, "iris-chase", "A2", ["this and that."]).alreadySent.length).toBe(1);
     // journey's exact signature (same significant tokens, any order) on a short title
     expect(splitByPriorDispatch(ledger, "iris-chase", "A2", ["Office clean"]).alreadySent.length).toBe(1);
     // loose (word order, filler, plural)
