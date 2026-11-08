@@ -61,6 +61,52 @@ the unsafe direction -- in a 1:1 it tells the addressed agent "do NOT ask them t
 the lane hand-off; for an exclusive-capability ask it sends the owner a `now`-mode directive that also skips
 confirmation. So "don't do it right away" makes an agent start work the owner explicitly deferred.
 
+### Mutation proofs (scripts/mutate.sh; anchors in `verify-handoff-confirm-flow-1/mutations/`)
+
+bun prints `(fail) <name>`, which mutate.sh does not read, so the test command is a wrapper that rewrites it
+to `FAIL <name>` (`scratchpad/bunfail.sh`; pipefail kept, so the exit code is the suite's). Local SQL suite =
+`scripts/handoff-lane-b-db.test.ts` against a throwaway Postgres 16 on 127.0.0.1:54329 (`scripts/local-pg-up.sh`),
+baseline ALL PASS (13 checks).
+
+| # | guard mutated | mutation | named test | outcome |
+|---|---|---|---|---|
+| M1 | liveStartDecision confirm gate (fail-closed) | `if (state.confirm_status !== "confirmed")` -> `if (false)` | F3 liveStartDecision table | FIRED |
+| M2 | requirement unknown = REQUIRED | `input.required !== false` -> `input.required === true` | F3 liveStartDecision table | FIRED |
+| M3 | internal turns never mark live | drop `if (data.internal) return;` in recordLiveTypedConfirm | F3 wiring (source assertion) | FIRED |
+| M4 | F1 handled-suppression | drop the `agentPerformedWork(...) return "handled"` line | AC-F1-1 delegate = handled | FIRED |
+| M5 | negated "now" | drop the first NOT_URGENT_RE pattern | S-U10 | FIRED |
+| M6 | markLiveConfirm only on a confirmed row (SQL) | drop `AND confirm_status = 'confirmed'` | AC-F3-6 markLiveConfirm refuses an 'asked' row | FIRED |
+| M7 | proposeTaskDod never downgrades confirmed (SQL) | CASE -> `'asked'` both arms | F4 a proposal on a CONFIRMED row never downgrades it | FIRED |
+
+Every run reported `restored: ... matches HEAD` and `tree clean`. Caveat on M3: its guard is a source-text
+regex, so it proves the line exists, not the runtime behaviour; the behaviour itself is read below (C5).
+
+### C4 F4 proposeTaskDod stamping -- CONFIRMED
+
+Observation (code, tasks.server.ts:1701-1722 on the branch): the upsert sets `confirm_status='asked'`,
+`confirm_ask_at = confirm_last_sent_at = date_trunc('ms', now())`, `confirm_ask_count = GREATEST(count, 1)`, each
+behind `CASE WHEN existing.confirm_status = 'confirmed' THEN existing ...`. Observation (local SQL, real code):
+`AC-F4-3 fresh live proposal -> asked, last_sent set, ask_at == last_sent, count 1` PASS; `F4 a proposal on a
+CONFIRMED row never downgrades it (status, last_sent, ask_at, count unchanged)` PASS; `AC-F4-4 a future-armed
+autowork ask is NOT still due after the live ask` PASS. M7 FIRED.
+
+Autowork CAS (read, tasks.server.ts:1093-1113): `claimConfirmAskSend` is a CAS on `confirm_ask_count = $expected`
+AND `ARMED_UNSENT_SQL` (`confirm_ask_at > confirm_last_sent_at`). A propose sets ask_at == last_sent, so the row is
+not armed-unsent and the claim correctly declines (no second send). The count is only raised to >=1, never
+incremented, so an autowork ask turn that itself calls propose_task_intent (claim N->N+1 first, then propose)
+leaves the count at N+1. `releaseConfirmAskSend` only runs when the enqueue fails, i.e. before any turn could
+propose, so its `confirm_last_sent_at = sentAt` guard is not disturbed in practice. `getPendingConfirmForAgent`
+orders `confirm_last_sent_at DESC NULLS LAST` (tasks.server.ts:1248/1259), so the live ask is now the newest.
+
+#133 not reinstated: `isPlainConfirmation` appears on the branch only in a comment (huddle.functions.ts:802,
+"the former isPlainConfirmation short-circuit"), same as origin/main:777. `confirmTaskIntent(` is called only from
+confirmTaskFromProposal and the two `confirm_task_intent` tool handlers (huddle.functions.ts:4373, 5887): nothing
+writes a confirmation before the model reads the message.
+
+Behaviour change worth stating (inference, not a defect against the claim): a live propose on a row whose
+autowork re-ask was armed for later disarms that re-ask (ask_at := now), and moves an `awaiting` row's count
+to 1, so the first autowork send for that row becomes a re-ask. Both follow from the design in the code comment.
+
 AC-F1-11 (one classifier): CONFIRMED. `grep -rnE "right away|asap|right now" src` finds the matcher only in
 capabilities.ts:149; the other hit (huddle.functions.ts:2912) is the pre-existing web-search freshness regex,
 present on origin/main, not an urgency matcher.
