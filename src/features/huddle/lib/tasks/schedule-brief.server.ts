@@ -312,8 +312,11 @@ export async function meetingsForDate(
   tz: string,
   mailbox: string,
   toDate: string = forDate,
-): Promise<{ items: BriefItem[]; error?: string }> {
-  const { getGraphCalendarEvents, graphEmailConfigured } =
+  /** The owner, so a configured work-calendar feed is merged in (getOwnerCalendarEvents). Omitted ->
+   *  the EDS Graph calendar only, exactly as before. */
+  caller?: { entra_object_id?: string; entra_email?: string },
+): Promise<{ items: BriefItem[]; error?: string; warnings?: string[] }> {
+  const { getGraphCalendarEvents, getOwnerCalendarEvents, graphEmailConfigured } =
     await import("../email/graph-email.server");
   if (!graphEmailConfigured()) {
     // Honest absence: say the source is off rather than reporting an empty calendar.
@@ -323,13 +326,17 @@ export async function meetingsForDate(
     // One Graph read covering forDate..toDate (inclusive) — a single day unless a range is asked for.
     const { startIso } = localDayBoundsUtc(forDate, tz);
     const { endIso } = localDayBoundsUtc(toDate, tz);
-    const r = await getGraphCalendarEvents({
+    const window = {
       mailbox,
       startISO: startIso,
       endISO: endIso,
       timeZone: "UTC", // response rendered in UTC so graphUtcToIso can pin it unambiguously
-    });
-    if (!r.ok) return { items: [], error: r.error || "calendar read failed" };
+    };
+    const r = caller ? await getOwnerCalendarEvents({ ...window, caller }) : await getGraphCalendarEvents(window);
+    // EDS read failed: still brief any work meetings that loaded, and report the failure (verifier D3).
+    if (!r.ok && !(r.events ?? []).length) {
+      return { items: [], error: r.error || "calendar read failed", warnings: r.warnings };
+    }
     const items: BriefItem[] = [];
     for (const e of r.events ?? []) {
       // An event with no id cannot be keyed for an idempotent T-60, so it is still BRIEFED (the
@@ -351,7 +358,11 @@ export async function meetingsForDate(
             })(),
       });
     }
-    return { items };
+    return {
+      items,
+      ...(r.ok ? {} : { error: r.error || "calendar read failed" }),
+      ...(r.warnings?.length ? { warnings: r.warnings } : {}),
+    };
   } catch (err) {
     return { items: [], error: err instanceof Error ? err.message : "calendar read failed" };
   }
@@ -369,6 +380,8 @@ export async function buildScheduleBrief(opts: {
   edition?: BriefEdition;
   /** The OWNER's Graph mailbox (resolveTaskEmail(caller)). Required — see meetingsForDate. */
   mailbox: string;
+  /** The owner, so a configured work-calendar feed is merged into the meetings. Omitted -> EDS only. */
+  caller?: { entra_object_id?: string; entra_email?: string };
   /** The email the task mirror is keyed by. Omitted -> tasks are not read (legacy callers). */
   taskEmail?: string;
   /** A window message: narrow to what is still ahead in this window; no week lookahead. */
@@ -394,8 +407,12 @@ export async function buildScheduleBrief(opts: {
     items = items.concat(cls.items);
   }
 
-  const mtg = await meetingsForDate(forDate, tz, opts.mailbox);
+  const mtg = await meetingsForDate(forDate, tz, opts.mailbox, forDate, opts.caller);
   if (mtg.error) errors.push(`meetings: ${mtg.error}`);
+  // A stale / partial work-calendar feed is said out loud, never shown as a clear day.
+  for (const w of mtg.warnings ?? []) errors.push(`meetings: ${w}`);
+  // ...but a warning is not a failed source: it never counts toward the brief's ok/not-ok verdict.
+  const warningCount = mtg.warnings?.length ?? 0;
   items = items.concat(mtg.items);
 
   // Earliest first; an item with no start (an all-day meeting) sorts to the end rather than to 1970.
@@ -431,7 +448,7 @@ export async function buildScheduleBrief(opts: {
     items = items.filter((i) => inWindow(i.startIso, w, tz, opts.nowMs));
     if (tasks) tasks = tasks.filter((t) => inWindow(t.startIso, w, tz, opts.nowMs));
     return {
-      ok: errors.length < 2, edition, forDate, items, errors, upcoming: [], upcomingErrors: [],
+      ok: errors.length - warningCount < 2, edition, forDate, items, errors, upcoming: [], upcomingErrors: [],
       ...(tasks ? { tasks } : {}), ...(tasksError ? { tasksError } : {}), window: w,
     };
   }
@@ -449,8 +466,9 @@ export async function buildScheduleBrief(opts: {
       c.items.map((i) => ({ ...i, day: i.startIso ? localDate(Date.parse(i.startIso), tz) : undefined })),
     );
   }
-  const um = await meetingsForDate(from, tz, opts.mailbox, to);
+  const um = await meetingsForDate(from, tz, opts.mailbox, to, opts.caller);
   if (um.error) upcomingErrors.push(`meetings: ${um.error}`);
+  for (const w of um.warnings ?? []) upcomingErrors.push(`meetings: ${w}`);
   upcoming = upcoming.concat(um.items);
   upcoming.sort((a, b) => {
     const ad = a.day ?? "", bd = b.day ?? "";
@@ -463,7 +481,7 @@ export async function buildScheduleBrief(opts: {
   // ok:false ONLY when EVERY source failed. One source failing with the other returning rows is a
   // partial brief that still says something true, and the error rides along so the gap is visible.
   return {
-    ok: errors.length < 2, edition, forDate, items, errors, upcoming, upcomingErrors,
+    ok: errors.length - warningCount < 2, edition, forDate, items, errors, upcoming, upcomingErrors,
     ...(tasks ? { tasks } : {}), ...(tasksError ? { tasksError } : {}),
   };
 }

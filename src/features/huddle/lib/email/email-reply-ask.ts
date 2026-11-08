@@ -15,6 +15,8 @@ export interface EmailReplyAsk {
   /** The reply Iris proposed. Empty when she did not call the tool (card still offers Dismiss). */
   replyBody: string;
   resolved?: "drafted" | "dismissed";
+  /** false = work-mailbox (OneDrive feed) email: Huddle cannot write drafts there, so no Save button. */
+  draftable?: boolean;
 }
 
 export const PROPOSE_EMAIL_REPLY_TOOL = {
@@ -60,6 +62,7 @@ export function emailReplyAskFromDetail(detail: unknown): EmailReplyAsk | undefi
       fromAddress: typeof p.fromAddress === "string" ? p.fromAddress : "",
       subject: typeof p.subject === "string" ? p.subject : "",
       replyBody: typeof p.replyBody === "string" ? p.replyBody : "",
+      ...(p.draftable === false ? { draftable: false } : {}),
     };
   } catch {
     return undefined;

@@ -246,8 +246,11 @@ export async function reconcileRepliedFromSentItems(ownerEmail: string): Promise
     const owed = await listOwedEmailReplies(ownerEmail);
     if (!owed.length) return 0;
     const { hasSentReplyInConversation } = await import("./graph-email.server");
+    const { isFeedId } = await import("../external-feeds/onedrive-feed");
     for (const row of owed) {
       if (!row.conversation_id) continue;
+      // Work-mailbox (feed) rows cannot be checked against Sent Items with the EDS key; they settle by Dismiss.
+      if (isFeedId(row.graph_message_id)) continue;
       const replied = await hasSentReplyInConversation(
         row.mailbox,
         row.conversation_id,

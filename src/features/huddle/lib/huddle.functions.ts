@@ -283,6 +283,8 @@ const Input = z.object({
       fromName: z.string().max(300),
       fromAddress: z.string().max(320),
       subject: z.string().max(500),
+      // false = the email came from the work-mailbox feed, which has no draft write path: no Save button.
+      draftable: z.boolean().optional(),
     })
     .optional(),
   // A tab-switch button attached to the TARGET agent's reply (the priority check: "Open Priorities").
@@ -4042,6 +4044,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   fromAddress: row.from_address ?? "",
                   subject: row.subject ?? "",
                   replyBody: body,
+                  // A work-mailbox (OneDrive feed) email has no draft write path: carry that on EVERY
+                  // card for it, not only the alert turn's (VERIFY-trinnex-onedrive-feed-1 D2).
+                  ...((await import("./external-feeds/onedrive-feed")).isFeedId(row.graph_message_id)
+                    ? { draftable: false }
+                    : {}),
                 }),
               );
               return JSON.stringify({ ok: true, email_id: emailId });
@@ -4807,8 +4814,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const mailbox =
                 (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                 data.caller?.entra_email;
-              const { getGraphCalendarEvents } = await import("./email/graph-email.server");
-              const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+              // The EDS calendar exactly as before, plus the work calendar feed when one is configured.
+              const { getOwnerCalendarEvents } = await import("./email/graph-email.server");
+              const r = await getOwnerCalendarEvents({ caller: data.caller, mailbox, startISO, endISO, timeZone: tz });
               recordToolUse(
                 winner.id,
                 "get_external_calendar_events",
@@ -6376,8 +6384,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const mailbox =
                   (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                   data.caller?.entra_email;
-                const { getGraphCalendarEvents } = await import("./email/graph-email.server");
-                const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+                // The EDS calendar exactly as before, plus the work calendar feed when one is configured.
+                const { getOwnerCalendarEvents } = await import("./email/graph-email.server");
+                const r = await getOwnerCalendarEvents({ caller: data.caller, mailbox, startISO, endISO, timeZone: tz });
                 recordToolUse(
                   winner.id,
                   "get_external_calendar_events",
@@ -6831,7 +6840,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   const emailCardFor = (agentId: AgentId, uses: readonly AgentTurnResult["toolUses"][number][]): EmailReplyAsk | undefined => {
     const use = [...uses].reverse().find((t) => t.agentId === agentId && t.tool === "propose_email_reply" && t.ok);
     const fromTool = use ? emailReplyAskFromDetail(use.detail) : undefined;
-    if (fromTool) return fromTool;
+    // The tool's card carries the body; the alert's ref carries whether Save is possible at all.
+    if (fromTool) return data.emailReplyRef?.draftable === false ? { ...fromTool, draftable: false } : fromTool;
     if (data.emailReplyRef && agentId === data.targetAgentId) return { ...data.emailReplyRef, replyBody: "" };
     return undefined;
   };

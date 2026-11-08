@@ -170,7 +170,7 @@ export const DIRECTIVE_MAX = 3900;
 export function inboundEmailDirective(
   m: InboundMessage,
   receivedLocal: string,
-  ctx: { emailId?: string; owed?: number; settledToday?: number } = {},
+  ctx: { emailId?: string; owed?: number; settledToday?: number; workMailbox?: string } = {},
 ): string {
   const who = (
     m.fromName ? `${m.fromName} <${m.fromAddress}>` : String(m.fromAddress ?? "unknown sender")
@@ -186,14 +186,22 @@ export function inboundEmailDirective(
       : "";
   // The draft is saved by the owner's TAP on the card under this message (Save to Drafts), which
   // acts on the stored email + the reply recorded by propose_email_reply. Never "reply yes".
-  const toolLine = ctx.emailId
+  // Work-mailbox email (OneDrive feed): there is no write path into that mailbox yet, so the card offers
+  // Copy + Dismiss and Iris must not promise Save to Drafts. EDS email keeps the exact text below.
+  const toolLine = ctx.emailId && ctx.workMailbox
+    ? `After writing it, call propose_email_reply with email_id "${ctx.emailId}" and reply_body set to ` +
+      `exactly the suggested reply. That is the ONLY tool you may call this turn. This email is in his ` +
+      `WORK mailbox (${ctx.workMailbox.slice(0, 120)}), where Huddle cannot save drafts yet: buttons appear ` +
+      `under your message (Copy reply / Dismiss), so close by saying he can copy the reply into Outlook, or ` +
+      `tell you what to change first. Do NOT mention Save to Drafts. Do NOT ask him to reply "yes".\n`
+    : ctx.emailId
     ? `After writing it, call propose_email_reply with email_id "${ctx.emailId}" and reply_body set to ` +
       `exactly the suggested reply. That is the ONLY tool you may call this turn. Buttons appear under ` +
       `your message (Save to Drafts / Dismiss), so close by saying he can tap Save to Drafts, or tell ` +
       `you what to change first. Do NOT ask him to reply "yes".\n`
     : `Do NOT call any tool in this turn — nothing is saved or sent until he says so.\n`;
   const build = (body: string) =>
-    `NEW EMAIL ALERT. A new email just arrived in the owner's Outlook inbox. Tell him about it in your ` +
+    `NEW EMAIL ALERT. A new email just arrived in the owner's ${ctx.workMailbox ? "WORK " : ""}Outlook inbox. Tell him about it in your ` +
     `own voice and offer a reply.\n\n` +
     `Write, in this order:\n` +
     `1. One line: who it is from (name and organisation if the address shows it), and what they want, in plain words.\n` +
