@@ -7,6 +7,7 @@
 // Run: bun scripts/chat-format.test.ts   (npm run test:chat-format)
 import {
   bulletSection,
+  inlineText,
   joinOpenerAndBlock,
   noticeText,
   normalizeChatText,
@@ -67,7 +68,7 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
 }
 {
   const b = parseInline(BOLD);
-  const bolds = b.filter((x) => x.t === "bold").map((x) => (x as { v: string }).v);
+  const bolds = b.filter((x) => x.t === "bold").map((x) => inlineText([x]));
   check("A11 **bold** becomes bold, asterisks gone", JSON.stringify(bolds) === '["Up next","November 7 at 7:00 PM"]', bolds);
   check("A12 '**' alone at line start is not a bullet", parseChatBlocks("**Up next** is the lane")[0].t === "p");
   const z = parseInline("Join: https://zoom.us/j/9164221159?pwd=abc123.");
@@ -116,7 +117,7 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("V22 a [label](url) link keeps balanced parentheses in its url", ml?.href === "https://a.io/p_(q)", ml);
   check("V23 and no stray ')' is left behind", JSON.stringify(parseInline("[docs](https://a.io/p_(q)) after").at(-1)) === JSON.stringify({ t: "text", v: " after" }));
   // independent ACs (docs/qc-evidence/AC-chat-format.md)
-  const em = (x: string) => parseInline(x).filter((p) => p.t === "em").map((p) => (p as { v: string }).v);
+  const em = (x: string) => parseInline(x).filter((p) => p.t === "em").map((p) => inlineText([p]));
   check("AC-S12 *note* and _note_ are italic", JSON.stringify(em("a *note* and _this_ here")) === '["note","this"]', em("a *note* and _this_ here"));
   check("AC-S12b the runtime's _(fallback: …)_ suffix is italic, not literal underscores", JSON.stringify(em("Done. _(fallback: router keyword)_")) === '["(fallback: router keyword)"]');
   for (const neg of ["2*3*4 = 24", "a_b_c snake_case", "call __init__ now", "5 * 3 = 15", "file_name_v2.txt"])
@@ -135,11 +136,18 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("AC-C5 the card shows the saved draft exactly (no reformatting)", /\{ask\.replyBody \/\* exactly what Save puts in Drafts/.test(hv2) && !/normalizeChatText\(ask\.replyBody\)/.test(hv2));
   const cfSrc = readFileSync("src/features/huddle/lib/chat-format.ts", "utf8");
   check("AC-COMPAT no regex lookbehind (SyntaxError on iOS Safari < 16.4)", !/\(\?<[!=]/.test(cfSrc));
-  check("AC-S12c text around italics is kept", JSON.stringify(parseInline("(see *this*)")) === JSON.stringify([{ t: "text", v: "(see" }, { t: "text", v: " " }, { t: "em", v: "this" }, { t: "text", v: ")" }]) || parseInline("(see *this*)").map((p) => ("v" in p ? p.v : "")).join("") === "(see this)", parseInline("(see *this*)"));
+  check("AC-S12c text around italics is kept", inlineText(parseInline("(see *this*)")) === "(see this)" && parseInline("(see *this*)").some((p) => p.t === "em"), parseInline("(see *this*)"));
   // verifier loop 5 (docs/qc-evidence/VERIFY-chat-format-5.md)
-  check("L5-S13 ***really*** is bold italic, no stray asterisks", JSON.stringify(parseInline("so ***really*** good")) === JSON.stringify([{ t: "text", v: "so " }, { t: "bold", v: "really", em: true }, { t: "text", v: " good" }]), parseInline("so ***really*** good"));
-  check("L5-S13b **_y_** is bold italic", JSON.stringify(parseInline("**_y_**")) === JSON.stringify([{ t: "bold", v: "y", em: true }]), parseInline("**_y_**"));
-  check("L5-S27 **https://x.com/a** is a clickable link", (parseInline("**https://x.com/a**")[0] as { t: string; href?: string }).href === "https://x.com/a");
+  const bi = (x: string) => JSON.stringify(parseInline(x));
+  check("L5-S13 ***really*** is bold italic, no stray asterisks", bi("so ***really*** good") === JSON.stringify([{ t: "text", v: "so " }, { t: "bold", parts: [{ t: "em", parts: [{ t: "text", v: "really" }] }] }, { t: "text", v: " good" }]), bi("so ***really*** good"));
+  check("L5-S13b **_y_** is bold italic", bi("**_y_**") === JSON.stringify([{ t: "bold", parts: [{ t: "em", parts: [{ t: "text", v: "y" }] }] }]), bi("**_y_**"));
+  check("L5-S27 **https://x.com/a** is bold AND a clickable link", bi("**https://x.com/a**") === JSON.stringify([{ t: "bold", parts: [{ t: "link", href: "https://x.com/a", label: "x.com/a" }] }]), bi("**https://x.com/a**"));
+  // verifier loop 6 (docs/qc-evidence/VERIFY-chat-format-6.md)
+  check("L6-nested **bold *it* bold** shows no literal **", !inlineText(parseInline("**bold *it* bold**")).includes("*") && bi("**bold *it* bold**").includes('"t":"em"'), bi("**bold *it* bold**"));
+  check("L6-url-in-bold **see https://x.com/a now** keeps a clickable link", /"t":"link","href":"https:\/\/x.com\/a"/.test(bi("**see https://x.com/a now**")) && inlineText(parseInline("**see https://x.com/a now**")) === "see x.com/a now", bi("**see https://x.com/a now**"));
+  check("L6-bold-italic-url ***https://x.com*** is a link", bi("***https://x.com***").includes('"t":"link"'), bi("***https://x.com***"));
+  check("L6-S37b a '\\' hard break hides the backslash", normalizeChatText("Best,\\\nVon") === "Best,\nVon", normalizeChatText("Best,\\\nVon"));
+  check("L6-S37c a literal trailing backslash on the LAST line is kept", normalizeChatText("C:\\") === "C:\\");
   const ang = parseInline("see <https://x.com> now");
   check("L5-S26 <https://x.com> is a link with no visible angle brackets", JSON.stringify(ang) === JSON.stringify([{ t: "text", v: "see " }, { t: "link", href: "https://x.com", label: "x.com" }, { t: "text", v: " now" }]), ang);
   check("L5-S32 'Note here.\n10. That's the deadline' stays a paragraph", JSON.stringify(parseChatBlocks("Note here.\n10. That's the deadline").map((b) => b.t)) === '["p"]');
@@ -196,6 +204,16 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("B5 openerOnly stops at a copied section header", openerOnly("Hi.\nOn your task list:\nA", block) === "Hi.");
   check("B6 spacedClock: 7:00PM / 7:00 PM / 7:00 pm -> 7:00 PM", spacedClock("7:00PM, 7:00 PM, 7:00 pm") === "7:00 PM, 7:00 PM, 7:00 PM");
   check("B7 spacedClock leaves ranges readable", spacedClock("7:00PM–10:00PM") === "7:00 PM–10:00 PM");
+}
+
+// Owner, 2026-11-08: "that run on paragraph is not clean formatting and is worse" — the agents' shared
+// house style must ask for one-item-per-line lists, not forbid them.
+{
+  const hf = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
+  const house = /const HOUSE_STYLE =\s*"([^"\\]|\\.)*"/.exec(hf)?.[0] ?? "";
+  check("STYLE-1 house style no longer forbids bullet lists", house.length > 0 && !/no long bullet dumps/.test(house), house.slice(0, 200));
+  check("STYLE-2 house style asks for 3+ item lists one per line as bullets", /list of three or more items[^"]*own line starting/.test(house));
+  check("STYLE-3 the operating contract no longer says 'not headings or long lists'", !/not headings or " \+\s*"long lists/.test(hf));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

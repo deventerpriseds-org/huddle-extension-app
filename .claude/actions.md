@@ -4973,12 +4973,16 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [ ] Row (parallel lane, not blocking): isCoursework is a title regex — loop 3 measured recall 16->7 of 25 realistic coursework titles and 26/26 constructed adversarial false positives; the owner's real examples are all caught. Better signal is data (Nexus 📚 sync / the real course list; agents.ts:226-283 keeps a separate coursework word list). File: src/features/huddle/lib/tasks/workability.ts.
 - [ ] Row: approach-gate.server.ts ~335 — a grader-call error on a FRESH approach still returns approved:true for that turn (documented, pre-existing).
 
-## ACT:chat-format — clean, consistent chat message layout (owner-approved A, B, C, E; D held, 2026-11-05)
+## ACT:chat-format — clean, consistent chat message layout (owner-approved A, B, C, E; D held, 2026-11-05) — DEPLOYED 2026-11-08, NOT owner-confirmed
 - [x] Diagnosis: Iris's 29 messages 11-03..05 (azure-pg-query run 42105101844). Same brief spaced two ways; raw `**bold**`; four "N more" phrasings; draft + tally in prose; quota error as Iris. Cause: HuddleView rendered `{m.text}` raw + layout delegated to the model.
-- [x] A renderer (`lib/chat-format.ts`, `components/ChatText.tsx`); B code-built brief/priority lists (`appendBlock`); C draft only in the card; E failure replies as grey notices. Commits aad39f4, 0a38101; 5 guards mutation-FIRED.
-- [ ] Independent verifier (docs/qc-evidence/VERIFY-chat-format-1.md) -> merge -> deploy -> owner confirms on his phone/browser.
-- [ ] D (long research -> document + short summary) HELD: owner will judge after using the cleaned-up layout.
-- [ ] Watch: with a reply card, a model that skips propose_email_reply now leaves NO draft in the prose (card says "No suggested reply yet — tap Edit first").
+- [x] A renderer (`lib/chat-format.ts`, `components/ChatText.tsx`); B code-built + bounded brief/priority lists (`appendBlock`, `capFacts`); C draft only in the card; E failure replies as grey notices (row buttons kept).
+- [x] Independent verification loops 1-6 + late independent ACs (`docs/qc-evidence/VERIFY-chat-format-*.md`, `AC-chat-format.md`); every fix mutation-proved FIRED.
+- [x] MERGED deventerpriseds-org/huddle-extension-app#149 (squash ca5c02e, deploy-swa 42496393974 success) + #180 follow-up (squash bbc1df5, deploy-swa 42498662836 success). Merge with main checked line-by-line: no other session's lines dropped.
+- [x] Live browser UAT `chat-format-checks.mjs` (verify-uat 42498817299, 390x844, #iris-chase): 10/10 — 8 lists / 71 items, 0 raw bullets, 0 literal **, 0 split lists.
+- [ ] OWNER to confirm on his phone (his 2026-11-08 screenshot was the pre-deploy renderer).
+- [ ] D (long research -> document + short summary) HELD by owner.
+- [ ] DECISION pending: agents' ad-hoc replies still write lists as one run-on sentence ("Today's schedule now shows: 11:00 AM …; 12:00 PM …") because HOUSE_STYLE (huddle.functions.ts) says "no long bullet dumps". Changing it is a change to an existing agent rule — needs owner thumbs-up.
+- [ ] Watch: with a reply card, a model that skips propose_email_reply leaves NO draft in the prose (card says "No suggested reply yet").
 
 ## ACT:trinnex-onedrive-feed — work-mailbox mail + calendar via EDS OneDrive files (2026-11-08) — BUILT on dev branch, NOT live
 

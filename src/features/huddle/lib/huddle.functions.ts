@@ -376,7 +376,7 @@ function effectiveModelPolicy(
 // all agents. (Lane ownership / handoffs are already shared, generated dynamically
 // by buildRoster from agents.ts.)
 const HOUSE_STYLE =
-  "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
+  "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers. When your reply contains a list of three or more items (times, tasks, steps, options, people), put each item on its own line starting \"• \" — never run a list together in one sentence with commas or semicolons (owner, 2026-11-08: a run-on schedule sentence \"is not clean formatting and is worse\"). Keep the words around the list short; do not pad a two-item answer into bullets. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
   ' Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it "has been sent" or "is done" when it has not. Email specifically: text you write in the chat is "draft text" — only say you "saved a draft to your inbox" if you called the create_email_draft tool and it returned success, and only say an email was "sent" if send_email returned success.' +
   ' Tool results are ground truth: if a tool result contains an "error" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn\'t work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message.' +
   ' Be precise about QUANTITY: when you report how many of something you did — tasks created, emails sent, items scheduled, reminders set — state the EXACT number the tool result gives you (e.g. its `created` count), not the number requested. If you were asked for two and the tool created one, say you created one and that the other didn\'t go through (or was already there); never round up to "both" or "all of them" unless the tool\'s own count confirms it.' +
@@ -408,8 +408,8 @@ const OPERATING_CONTRACT =
   "saving a note or artifact — is reversible and expected: it is NOT the 'irreversible/external/financial' that " +
   "requires asking first, so just do it and report it. Only genuinely OUTBOUND actions (sending a message, a " +
   "purchase or moving money, placing a call, a deletion) need that confirmation." +
-  " FORM: in chat, deliver all of this as tight, high-signal prose sized to the question — not headings or " +
-  "long lists. When you produce a document via create_artifact, give it the FULL structure: an executive " +
+  " FORM: in chat, deliver all of this as tight, high-signal writing sized to the question — no headings; " +
+  "a list of three or more items goes one per line as \"• \" bullets (never one run-on sentence). When you produce a document via create_artifact, give it the FULL structure: an executive " +
   "conclusion, key findings with their evidence, analysis, prioritized recommendations (with owner/timing/" +
   "risk), risks & assumptions, and the sources you used." +
   " Documents & links: when you save work with create_artifact the app renders it as a clickable chip on " +
