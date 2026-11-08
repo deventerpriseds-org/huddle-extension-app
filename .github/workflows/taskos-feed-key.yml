@@ -1,0 +1,86 @@
+name: Give TaskOS the work-calendar feed key (copies Huddle's Graph app key to journey-voice)
+
+# WHAT:       Copies Huddle's EXISTING app-only Graph key (AZURE_TENANT_ID / AZURE_CLIENT_ID /
+#             AZURE_CLIENT_SECRET) and a TaskOS feed binding (TASKOS_ONEDRIVE_FEED) into journey-voice's
+#             repo secrets, then re-deploys calendar-delta-sync there so its deploy copies them into the
+#             TaskOS edge secrets. After that TaskOS reads the work-calendar OneDrive snapshot itself.
+# WHY:        Owner, 2026-11-08: "graph unlocks it all with the existing key". journey-voice is under a
+#             personal GitHub account, so this org's secrets cannot reach it, and a stored secret cannot be
+#             read back by anyone -- copying it from a runner that already holds it is the only way to
+#             reuse the existing key (minting a new client secret would be a NEW secret, which the standing
+#             rule forbids).
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   journey-voice PR #103 (deploy-supabase-functions.yml "Sync the work-calendar feed key");
+#             onedrive-feed-config.yml (same masked read-from-envelope pattern, same GHUB_KEY).
+#
+# THIS REPO IS PUBLIC: no value is ever echoed. The work mailbox is read from the feed file's own envelope
+# on the runner and masked before anything can print it. Inputs carry only public EDS values.
+
+on:
+  workflow_dispatch:
+    inputs:
+      drive_user:
+        description: "EDS account whose OneDrive holds the feed files (and whose TaskOS Outlook connection owns the rows)."
+        required: true
+        default: "von.ellis@enterpriseds.io"
+      enabled:
+        description: "true = TaskOS feed ON; false = write a disabled binding (feed OFF after the deploy)."
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GHUB_KEY }}
+      TARGET: deventerprisesds/journey-voice
+      TENANT: ${{ secrets.AZURE_TENANT_ID }}
+      CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      IN_DRIVE_USER: ${{ inputs.drive_user }}
+      IN_ENABLED: ${{ inputs.enabled }}
+    steps:
+      - name: Build the binding, copy the key, re-deploy TaskOS
+        run: |
+          set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo "::error::GHUB_KEY is empty for this repo"; exit 1; }
+          for n in TENANT CLIENT_ID CLIENT_SECRET; do [ -n "${!n}" ] || { echo "::error::$n is empty"; exit 1; }; done
+          if [ "$IN_ENABLED" != "true" ]; then
+            echo '{"enabled":false}' > /tmp/feed.json
+          else
+            TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
+              -d "client_id=$CLIENT_ID" --data-urlencode "client_secret=$CLIENT_SECRET" \
+              -d "scope=https://graph.microsoft.com/.default" -d "grant_type=client_credentials" \
+              | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
+            echo "::add-mask::$TOKEN"
+            [ -n "$TOKEN" ] || { echo "::error::no app-only Graph token"; exit 1; }
+            HTTP=$(curl -s -L -o /tmp/env.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+              "https://graph.microsoft.com/v1.0/users/$IN_DRIVE_USER/drive/root:/automation/appointments/appointments.json:/content")
+            [ "$HTTP" = "200" ] || { echo "::error::could not read the appointments feed file (HTTP $HTTP)"; exit 1; }
+            MAILBOX=$(python3 -c 'import json;print(str(json.load(open("/tmp/env.json")).get("mailbox","")).strip().lower())')
+            [ -n "$MAILBOX" ] && echo "::add-mask::$MAILBOX"
+            [ -n "$MAILBOX" ] || { echo "::error::feed file has no mailbox"; exit 1; }
+            SYNTH=$(python3 -c 'import json;print("true" if json.load(open("/tmp/env.json")).get("synthetic") is True else "false")')
+            MAILBOX="$MAILBOX" SYNTH="$SYNTH" python3 - <<'PY' > /tmp/feed.json
+          import json, os
+          print(json.dumps({
+              "enabled": True,
+              "driveAccount": os.environ["IN_DRIVE_USER"].strip().lower(),
+              "mailbox": os.environ["MAILBOX"],
+              "synthetic": os.environ["SYNTH"] == "true",
+          }))
+          PY
+          fi
+          python3 -c 'import json;c=json.load(open("/tmp/feed.json"));print("binding keys:", sorted(c.keys()), "| enabled", c.get("enabled"), "| synthetic", c.get("synthetic"))'
+          printf '%s' "$TENANT"        | gh secret set AZURE_TENANT_ID      --repo "$TARGET"
+          printf '%s' "$CLIENT_ID"     | gh secret set AZURE_CLIENT_ID      --repo "$TARGET"
+          printf '%s' "$CLIENT_SECRET" | gh secret set AZURE_CLIENT_SECRET  --repo "$TARGET"
+          gh secret set TASKOS_ONEDRIVE_FEED --repo "$TARGET" < /tmp/feed.json
+          echo "4 secrets stored on $TARGET."
+          # The deploy's secret-sync step runs on every deploy; one function is enough to carry them over.
+          gh workflow run deploy-supabase-functions.yml --repo "$TARGET" --ref main -f function_name=calendar-delta-sync
+          echo "Dispatched $TARGET deploy-supabase-functions.yml (calendar-delta-sync) to copy them into the TaskOS edge secrets."
