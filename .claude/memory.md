@@ -1,5 +1,9 @@
 # Project Memory — huddle-extension-app
 
+## Attention bell (2026-11-08) — one "needs you" list on chat.email_replies
+- `kind` column (email|meeting|appointment): ANY new query on chat.email_replies that means "emails" must filter `kind='email'` (findOwed*, listOwedEmailReplies, counts already do). Non-email rows: mailbox '', graph_message_id = own id, no conversation_id.
+- A push the server sent can still not show on the phone (FCM accepts data-only messages; the Huddle app does not report display). The bell is the in-app record that needs no push.
+
 ## Hardening — 2026-11-08: a UAT "failure" that was the TEST, four ways (stand-up voice barges)
 - The ceremony mic starts MUTED by design; any voice-barge check must tap `button[aria-label="Unmute"]` (RoomControl is icon-only, the word is a sibling span) and assert "mic — listening" first.
 - Read barge answers by `data-turn-kind="answer"`, never by row position: the ceremony keeps speaking during a barge.
