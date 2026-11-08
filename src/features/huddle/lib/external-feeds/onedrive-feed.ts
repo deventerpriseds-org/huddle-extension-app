@@ -204,12 +204,25 @@ export function parseAddress(v: unknown): { address: string; name: string } {
 }
 
 /** Pure: crude HTML -> text for a body that arrived as HTML (the screen only needs the words). */
+/** Removes every <blockquote>, innermost first, so a nested quote cannot leak its parent's tail;
+ *  an unclosed one swallows the rest (verifier loop 3, D5). */
+function stripBlockquotes(html: string): string {
+  const innermost = /<blockquote\b[^>]*>(?:(?!<blockquote\b)[\s\S])*?<\/blockquote\s*>/gi;
+  let prev = "";
+  let out = html;
+  for (let i = 0; i < 50 && out !== prev; i++) {
+    prev = out;
+    out = out.replace(innermost, " ");
+  }
+  return out.replace(/<blockquote\b[\s\S]*$/i, " ");
+}
+
 export function htmlToText(html: string): string {
-  return html
+  return stripBlockquotes(
     // Quoted history is the OTHER person's old words, not this email's ask: Outlook's reply/forward
     // header block and everything after it, and any <blockquote>, are dropped (verifier D5).
-    .replace(/<div[^>]*id=["']?(divRplyFwdMsg|appendonsend)["']?[\s\S]*$/i, " ")
-    .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, " ")
+    html.replace(/<div[^>]*id=["']?(divRplyFwdMsg|appendonsend)["']?[\s\S]*$/i, " "),
+  )
     .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
     .replace(/<br\s*\/?>|<\/(p|div|li|tr|h\d)>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
