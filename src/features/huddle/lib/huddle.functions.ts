@@ -269,6 +269,12 @@ const Input = z.object({
   // and lane-deferral machinery must NOT run on it: doing so mis-reads the directive as "a user ask in
   // the wrong lane" and spawns follow-ups that re-trigger follow-ups (the notification-barrage loop).
   internal: z.boolean().optional(),
+  // A follow-up CHECK on a long-running journey job this DM started (tasks/job-check.ts): which tool, the
+  // started_at it returned, and which attempt this is. Lets a "still running" status arm the NEXT check,
+  // capped at MAX_JOB_CHECK_ATTEMPTS. Only fireJobCheck sets it.
+  jobCheck: z
+    .object({ tool: z.string().max(40), since: z.string().max(40), attempt: z.number().int().min(1).max(5) })
+    .optional(),
   // A new-email alert turn (inbound-email.server.ts): the email this turn is ABOUT, so the reply card
   // (Save to Drafts / Dismiss) is attached to the target agent's reply even if the model skips
   // propose_email_reply. Display-only; every button re-reads chat.email_replies by emailId.
@@ -278,6 +284,8 @@ const Input = z.object({
       fromName: z.string().max(300),
       fromAddress: z.string().max(320),
       subject: z.string().max(500),
+      // false = the email came from the work-mailbox feed, which has no draft write path: no Save button.
+      draftable: z.boolean().optional(),
     })
     .optional(),
   // A tab-switch button attached to the TARGET agent's reply (the priority check: "Open Priorities").
@@ -4043,6 +4051,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   fromAddress: row.from_address ?? "",
                   subject: row.subject ?? "",
                   replyBody: body,
+                  // A work-mailbox (OneDrive feed) email has no draft write path: carry that on EVERY
+                  // card for it, not only the alert turn's (VERIFY-trinnex-onedrive-feed-1 D2).
+                  ...((await import("./external-feeds/onedrive-feed")).isFeedId(row.graph_message_id)
+                    ? { draftable: false }
+                    : {}),
                 }),
               );
               return JSON.stringify({ ok: true, email_id: emailId });
@@ -4808,8 +4821,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const mailbox =
                 (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                 data.caller?.entra_email;
-              const { getGraphCalendarEvents } = await import("./email/graph-email.server");
-              const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+              // The EDS calendar exactly as before, plus the work calendar feed when one is configured.
+              const { getOwnerCalendarEvents } = await import("./email/graph-email.server");
+              const r = await getOwnerCalendarEvents({ caller: data.caller, mailbox, startISO, endISO, timeZone: tz });
               recordToolUse(
                 winner.id,
                 "get_external_calendar_events",
@@ -4917,6 +4931,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 },
               });
               if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+              // Long-running journey job (rebuild_schedule): its start returns before the work is done, so
+              // arm a delayed follow-up check in this DM (tasks/job-check.ts). No-op for every other tool.
+              if (r.ok) {
+                const { armJobCheck } = await import("./tasks/job-check.server");
+                await armJobCheck({
+                  toolName: c.name,
+                  output: r.output,
+                  huddleId: data.huddleId,
+                  agentId: winner.id,
+                  caller: data.caller,
+                  current: data.jobCheck ?? null,
+                });
+              }
               recordToolUse(
                 winner.id,
                 c.name,
@@ -6364,8 +6391,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const mailbox =
                   (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                   data.caller?.entra_email;
-                const { getGraphCalendarEvents } = await import("./email/graph-email.server");
-                const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+                // The EDS calendar exactly as before, plus the work calendar feed when one is configured.
+                const { getOwnerCalendarEvents } = await import("./email/graph-email.server");
+                const r = await getOwnerCalendarEvents({ caller: data.caller, mailbox, startISO, endISO, timeZone: tz });
                 recordToolUse(
                   winner.id,
                   "get_external_calendar_events",
@@ -6581,6 +6609,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                       },
                     });
                     if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+                    // Same long-running job follow-up as the OpenAI path (tasks/job-check.ts).
+                    if (r.ok) {
+                      const { armJobCheck } = await import("./tasks/job-check.server");
+                      await armJobCheck({
+                        toolName: def.name,
+                        output: r.output,
+                        huddleId: data.huddleId,
+                        agentId: winner.id,
+                        caller: data.caller,
+                        current: data.jobCheck ?? null,
+                      });
+                    }
                     recordToolUse(
                       winner.id,
                       def.name,
@@ -6807,7 +6847,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   const emailCardFor = (agentId: AgentId, uses: readonly AgentTurnResult["toolUses"][number][]): EmailReplyAsk | undefined => {
     const use = [...uses].reverse().find((t) => t.agentId === agentId && t.tool === "propose_email_reply" && t.ok);
     const fromTool = use ? emailReplyAskFromDetail(use.detail) : undefined;
-    if (fromTool) return fromTool;
+    // The tool's card carries the body; the alert's ref carries whether Save is possible at all.
+    if (fromTool) return data.emailReplyRef?.draftable === false ? { ...fromTool, draftable: false } : fromTool;
     if (data.emailReplyRef && agentId === data.targetAgentId) return { ...data.emailReplyRef, replyBody: "" };
     return undefined;
   };

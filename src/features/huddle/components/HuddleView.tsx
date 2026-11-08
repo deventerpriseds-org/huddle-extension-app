@@ -194,16 +194,21 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
         )}
       </div>
 
-      <div className="ml-auto flex items-center gap-2">
+      {/* min-w-0 + flex-wrap: when the middle column is too narrow for the five view tabs AND the
+          Meeting button (e.g. 1000px with both side panels open), the Meeting button drops to a
+          second row instead of overflowing under the right panel, where it could not be clicked
+          (verify-uat run 42443849250: "<ContextPanel button> intercepts pointer events"). At widths
+          where everything fits this renders exactly as before. */}
+      <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
         {/* The incumbent switcher, extended from three entries to five and lifted into ViewSwitcher
             so the header and the phone's bottom bar cannot drift apart. Hidden below `md`, which is
             exactly where the bottom bar takes over (HuddleApp) — the two are complementary, so
             precisely one is on screen at any width. They used to BOTH render at 390px, stacked. */}
-        <ViewSwitcher variant="inline" className="app-hidden md:inline-flex" />
+        <ViewSwitcher variant="inline" className="app-hidden max-w-full overflow-x-auto md:inline-flex" />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">
+            <button className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">
               <Video size={14} />
               Meeting
               <ChevronDown size={12} />
@@ -982,16 +987,36 @@ function EmailReplyRow({ m }: { m: HuddleMessage }) {
         </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <button
-          type="button"
-          disabled={!!busy}
-          onClick={save}
-          className={cn(CONFIRM_ASK_BTN, "font-semibold")}
-          data-testid="email-reply-save"
-        >
-          {busy === "save" ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
-          Save to Drafts
-        </button>
+        {ask.draftable === false ? (
+          // Work-mailbox email (OneDrive feed): Huddle has no way to write a draft there yet, so the card
+          // never offers a Save that cannot work — the reply is copied into Outlook by hand.
+          <button
+            type="button"
+            disabled={!!busy || !ask.replyBody}
+            onClick={() =>
+              navigator.clipboard
+                ?.writeText(ask.replyBody)
+                .then(() => toast.success("Reply copied — paste it into your work Outlook"))
+                .catch(() => toast.error("Couldn't copy — select the text above instead."))
+            }
+            className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+            data-testid="email-reply-copy"
+          >
+            <Check size={12} style={{ color: "var(--ai)" }} />
+            Copy reply
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={save}
+            className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+            data-testid="email-reply-save"
+          >
+            {busy === "save" ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
+            Save to Drafts
+          </button>
+        )}
         <button
           type="button"
           disabled={!!busy}

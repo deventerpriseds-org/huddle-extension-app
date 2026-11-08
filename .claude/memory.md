@@ -122,6 +122,29 @@ index into a requirement list**.
 - Scheduled brief + priority check: the list is CODE-BUILT (`briefDeliveryPlan(...).appendBlock`, `priorityAppendBlock`) and attached by `ensureAppendBlockDelivered` at BOTH turn endings, before `ensureNavLinkDelivered`. The model writes one opener only. Do not move layout back into prompt prose — that is what made the same brief come out spaced two different ways.
 - Email alerts with a card: draft lives only in the card. D (research -> artifact) HELD by owner.
 
+## Message history load = ONE 2.6 MB workspace blob (2026-11-07; NOT changed; decision pending)
+`identity.workspace_state.state.messages` holds every message since Jul 10 (3,730, 2.55 MB; growing ~0.6 MB/month) and
+`useWorkspaceSync` downloads + parses all of it on every open. Right after a deploy the first open is slow (cold function +
+new bundle) — owner saw "Loading your message history…" for a while after the 11-07 deploys, then it recovered by itself.
+Hardening: when the owner says "it broke after your change", line the report up against deploy-swa run times FIRST — a
+deploy-time slowdown looks exactly like a regression. Paging options A/B/C put to owner. Huddle APK has no file chooser;
+fix = android-bridge-template#23 (CI green), not merged.
+
+## Schedule tab TODAY band collapsed to 0px (2026-11-07; FIXED IN CODE #156 e29d4a8 + live probe 7/7; NOT owner-confirmed)
+The full-page Schedule (widgetShell "page" = fixed-height flex column) lets an `overflow-y-auto` ScrollBand shrink to ZERO:
+5 today rows rendered 0px tall under a long Up Next (verify-uat 42409814370, probe `schedule-today-checks.mjs`). Data was fine.
+Fix (owner's design): Schedule page scrolls as a whole, bands flow at natural height (`ScrollBand flow`), all three sections are CollapsibleSection (open by default, per-device). Priorities page untouched. Hardening: "view looks empty" — check the band's rendered height
+in a real browser before blaming data; the empty-state line ("Nothing scheduled for today.") being ABSENT meant rows existed.
+rebuild_schedule v2 (journey#101 + huddle#155) is live: background start, one-at-a-time, follow-up job-check turn.
+
+## Agents can re-run the scheduling job — rebuild_schedule (2026-11-07; journey-voice#100 squash 5b67201 on journey main, Deploy Supabase Functions SUCCESS, live execute-tool v541 contains it; NOT owner-confirmed)
+Trigger: owner asked Iris "I want you to re run the scheduling job"; she said she couldn't. New journey execute-tool case
+`rebuild_schedule` (`_shared/rebuild-schedule.ts`) POSTs nightly-schedule-builder `{userId: <caller>, singleDay: scope==='today'}`
+— today = the app's Reschedule-today button body; week = the nightly 7-day run. Refuses unless `user_explicitly_requested:true`;
+userId never from args. Huddle needs NO change: it loads journey's tool catalog (`fetchJourneyToolDefinitions`, 60s TTL) for text
+AND voice. Evidence: npm test 649/649; mutate.sh 3/3 FIRED (consent, caller scope, dispatch). Live harness tests of 1:1 hand-offs
+are suspended until a harness flag suppresses `deliverOwnerFollowup` (accuracy-log 2026-11-04).
+
 ## Polish — text cleanup tool (2026-11-05; #146 MERGED squash 08457bc, deploy-swa run 42110354027 SUCCESS; NOT owner-confirmed live)
 - ECOSYSTEM (owner chose Option A): contract `docs/polish/CONTRACT-polish-ecosystem.md`. LIVE since 2026-11-05: huddle #148 (8986387) + nexus-hub #176 (2560f21) merged + deployed; live UAT Nexus /polish 3/3 (run 42128580189) and Huddle 7/7 (run 42128584455). Huddle `/api/public/polish` (turn-gate auth); Huddle Send › Google Drive → Nexus `/api/polish/gdrive`; Nexus /polish → Huddle engine. Untested live: email draft, OneDrive, Drive save, docx download. NOT owner-confirmed.
 - Owner (2026-11-05): apps must not depend on each other. Approved incremental: fastest path first (done), THEN a shared tools/connections service. Hosting choice pending (recommended: new `eds-tools` Azure Functions service holding the Polish engine + Google/Microsoft connections).
@@ -134,7 +157,7 @@ index into a requirement list**.
 - Prototype (approval artifact): https://claude.ai/artifact/7MJkFX17io8FHmVWwSZCAn
 - Send sheet (`PolishSendSheet.tsx`): email = DRAFT only (never sends) via createGraphDraft, mailbox list from HUDDLE_EMAIL_FROM; Word = renderMarkdownToDocx + createArtifact(folder "Polish", status approved) + mirrorArtifactToOneDrive (NON-fatal; download still returned). Google Drive: PR #148 adds Save to Google Drive via Nexus /api/polish/gdrive (not deployed); until then the .docx download is the stopgap. Live Graph draft / OneDrive upload NOT exercised by any test yet.
 
-## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04, branch claude_context-and-confirm, NOT merged, NOT deployed, NOT owner-confirmed)
+## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04; MERGED #133 squash 1ddd9ec, deploy-swa run 41769512390 SUCCESS; NOT owner-confirmed, NOT live-harness-verified)
 - **Confirm-intent:** the pre-model `isPlainConfirmation` short-circuit is GONE. Block A of `runHuddleTurn` is
   READ-ONLY (looks up the last-asked pending confirm, also on chunk continuations). A typed "ok"/"great" is
   recorded ONLY when the agent calls `confirm_task_intent` after reading it; `confirmReplyDirective` carries
@@ -3893,3 +3916,8 @@ here as fact three times before being checked.)
   (reproduced offline on main 32f50e4): default limit 10 + scheduled view spans all days + starred items sort first.
 - Times were ALREADY localized on main (formatInTz + resolveJourneyIdentity tz). Edge: no profile + no browser zone → UTC.
 - Guard: `npm run test:status-answers` (23 checks, 7 mutations FIRED). Evidence: docs/qc-evidence/BUILD-status-answers.md.
+
+### 2026-11-08 — work-mailbox (Trinnex) via OneDrive files
+- Trinnex tenant refused Huddle's Graph app; owner's own Power Automate (CDM Smith dev env) publishes snapshots to von.ellis@enterpriseds.io OneDrive `/automation/email/emails.json` + `/automation/appointments/appointments.json`. Huddle's app key (Files.ReadWrite.All) reads them (proved, run 42436209509). dev@'s OneDrive does NOT have them.
+- Feed records: email `from` is a STRING, headers `[{name,value}]` (68), `body` string + `isHtml`; no inferenceClassification. Appointments: `startWithTimeZone`/`endWithTimeZone`, `location`/`organizer` strings.
+- Feed ids are `feed:<mailbox>:<original id>` — never pass one to Graph. Config = server-only HUDDLE_ONEDRIVE_FEEDS (deploy secret). Repo is PUBLIC: never commit tenant/flow/calendar ids or the cdmsmith login.

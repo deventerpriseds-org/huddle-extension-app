@@ -19,6 +19,7 @@
     "test:mode": "bun scripts/task-mode.test.mjs",
     "test:voice-tools": "bun scripts/voice-toolset-hidden.test.ts",
     "test:calendar-edit": "bun scripts/journey-calendar-edit-exposure.test.ts",
+    "test:onedrive-feed": "bun scripts/onedrive-feed.test.ts",
     "test:cross-app": "bun scripts/cross-app-turn-gate.test.ts",
     "test:uat-server-check": "bun scripts/uat-check-server-side.test.ts",
     "format": "prettier --write .",
@@ -68,7 +69,9 @@
     "test:inbox-read": "bun scripts/inbox-read.test.ts",
     "test:context-and-confirm": "bun scripts/context-and-confirm.test.ts",
     "test:reminder-tools": "bun scripts/reminder-tools.test.ts",
-    "test:polish": "bun scripts/polish-core.test.ts"
+    "test:polish": "bun scripts/polish-core.test.ts",
+    "test:job-check": "bun scripts/job-check.test.ts",
+    "test:schedule-today-band": "bun scripts/schedule-today-band.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

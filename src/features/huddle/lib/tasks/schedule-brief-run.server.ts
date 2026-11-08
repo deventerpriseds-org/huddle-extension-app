@@ -424,6 +424,7 @@ export async function runScheduleBrief(
       cadence: { tz },
       edition: opts.window ? "morning" : opts.edition, // a window is always TODAY
       mailbox,
+      caller,
       // The task mirror is keyed by the login email; getScheduledTasksBetween widens to every alias.
       taskEmail: caller.entra_email,
       window: opts.window,

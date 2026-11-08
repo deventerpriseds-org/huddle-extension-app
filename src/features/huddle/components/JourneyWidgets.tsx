@@ -590,6 +590,58 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** A section with a tappable header that collapses it. Open by default; the choice is remembered per
+ *  device (localStorage, best-effort -- private mode just means it opens again next time).
+ *  Owner, 2026-11-07: "they should all be collapsible". */
+function CollapsibleSection({
+  id,
+  label,
+  count,
+  children,
+}: {
+  id: string;
+  label: string;
+  count?: number;
+  children: React.ReactNode;
+}) {
+  const storageKey = `huddle.widget.section.${id}.open`;
+  const [open, setOpen] = useState<boolean>(() => {
+    try {
+      const v = typeof window !== "undefined" ? window.localStorage.getItem(storageKey) : null;
+      return v === null ? true : v === "1";
+    } catch {
+      return true;
+    }
+  });
+  const toggle = () => {
+    setOpen((o) => {
+      const next = !o;
+      try {
+        window.localStorage.setItem(storageKey, next ? "1" : "0");
+      } catch {
+        /* per-device convenience only */
+      }
+      return next;
+    });
+  };
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} ${label}`}
+        className="flex w-full items-center gap-1 px-3 pb-1 pt-2 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+      >
+        <ChevronRight size={12} className={cn("shrink-0 transition-transform", open && "rotate-90")} aria-hidden />
+        <span>{label}</span>
+        {typeof count === "number" && <span className="ml-1 tabular-nums normal-case">({count})</span>}
+      </button>
+      {open && children}
+    </section>
+  );
+}
+
 function EmptyLine({ children, band }: { children: React.ReactNode; band?: boolean }) {
   return (
     <div className="px-3 py-2.5 text-[12px] text-muted-foreground" style={band ? BAND_STYLE : undefined}>
@@ -601,9 +653,28 @@ function EmptyLine({ children, band }: { children: React.ReactNode; band?: boole
 /** Rows scroll rather than truncate — see the NO ROW CAP note at the top of this file. The cap is on
  *  HEIGHT (a viewport fraction), never on row count, so every row the query returned is reachable.
  *  In a full-page view there is no reason to constrain it at all. */
-function ScrollBand({ children, band, full }: { children: React.ReactNode; band?: boolean; full?: boolean }) {
+function ScrollBand({
+  children,
+  band,
+  full,
+  flow,
+}: {
+  children: React.ReactNode;
+  band?: boolean;
+  full?: boolean;
+  /** FLOW (full-page Schedule only): not a scroll container at all -- the page scrolls instead, so the
+   *  section keeps its natural height and pushes the sections below it down. A full-page
+   *  `overflow-y-auto` band inside the page's fixed-height flex column could shrink to ZERO: on
+   *  2026-11-07 the owner's TODAY'S SCHEDULE held 5 rows and rendered 0px tall under a long Up Next
+   *  (live phone probe, verify-uat run 42409814370, schedule-today-checks.mjs). Owner: "it should push
+   *  the sections below it down". */
+  flow?: boolean;
+}) {
   return (
-    <div className={cn("overflow-y-auto", full ? "" : "max-h-[min(22rem,45vh)]")} style={band ? BAND_STYLE : undefined}>
+    <div
+      className={cn(flow && full ? "" : "overflow-y-auto", full ? "" : "max-h-[min(22rem,45vh)]")}
+      style={band ? BAND_STYLE : undefined}
+    >
       {children}
     </div>
   );
@@ -1308,16 +1379,16 @@ export function ScheduleWidget({
   const doing = data.currentlyDoing[0];
 
   return (
-    <div className={widgetShell(chrome)}>
+    <div className={cn(widgetShell(chrome), chrome === "page" && "overflow-y-auto [&>*]:shrink-0")}>
       <div className="px-3 py-2">
         <WidgetComposeRow placeholder="What's next…" />
       </div>
 
       {!data.ok && <ReadError error={data.error} />}
 
-      <SectionLabel>Today’s schedule</SectionLabel>
+      <CollapsibleSection id="schedule-today" label="Today’s schedule" count={data.todaySchedule.length}>
       {data.todaySchedule.length > 0 ? (
-        <ScrollBand full={full}>
+        <ScrollBand full={full} flow>
           <ul className="border-t border-hairline">
             {data.todaySchedule.map((row) => (
               <ScheduleRowItem key={row.id} row={row} caller={caller} />
@@ -1329,8 +1400,9 @@ export function ScheduleWidget({
           <EmptyLine>Nothing scheduled for today.</EmptyLine>
         </div>
       )}
+      </CollapsibleSection>
 
-      <SectionLabel>Currently doing</SectionLabel>
+      <CollapsibleSection id="schedule-doing" label="Currently doing">
       <div className="flex items-center gap-2 border-t border-hairline px-3 py-2">
         {/* The spec puts this in BOLD and spells the empty state out. Lane B's contract is explicit
             that `currentlyDoing: []` is a NORMAL result, so this is a legitimate state, not an
@@ -1357,8 +1429,9 @@ export function ScheduleWidget({
           </div>
         )}
       </div>
+      </CollapsibleSection>
 
-      <SectionLabel>Up next</SectionLabel>
+      <CollapsibleSection id="schedule-upnext" label="Up next" count={data.upNext.length}>
       <div style={BAND_STYLE}>
         <div className="flex items-center gap-1.5 px-3 pt-2">
           <Star size={11} className="fill-current" style={{ color: "var(--warning)" }} aria-hidden />
@@ -1367,7 +1440,7 @@ export function ScheduleWidget({
           </span>
         </div>
         {data.upNext.length > 0 ? (
-          <ScrollBand full={full}>
+          <ScrollBand full={full} flow>
             <ul className="pb-1">
               {data.upNext.map((row) => (
                 <UpNextRowItem key={row.id} row={row} caller={caller} />
@@ -1378,6 +1451,7 @@ export function ScheduleWidget({
           <div className="px-3 pb-3 pt-1 text-[12px] text-muted-foreground">Nothing queued up.</div>
         )}
       </div>
+      </CollapsibleSection>
     </div>
   );
 }

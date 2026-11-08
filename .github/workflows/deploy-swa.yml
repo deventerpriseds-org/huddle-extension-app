@@ -392,6 +392,10 @@ jobs:
           echo "Assembled AZURE_PG_URL for $SRV/$DB."
 
       - name: Sync secrets → SWA app settings
+        env:
+          # Work-mailbox OneDrive feed config (external-feeds/onedrive-feed.ts). JSON, so it travels as
+          # an env var, never interpolated into the command. Empty/absent -> the feed stays OFF.
+          HUDDLE_ONEDRIVE_FEEDS_VALUE: ${{ secrets.HUDDLE_ONEDRIVE_FEEDS }}
         run: |
           if [ -z "${AZURE_PG_URL_RESOLVED:-}" ]; then
             echo "::error::AZURE_PG_URL_RESOLVED is empty — database not configured; aborting so the app isn't deployed half-wired."
@@ -441,7 +445,8 @@ jobs:
               UAT_BYPASS_TOKEN="${{ secrets.UAT_BYPASS_TOKEN }}" \
               AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
               UAT_BYPASS_TOKEN="${{ secrets.UAT_BYPASS_TOKEN }}" \
-              HUDDLE_APP_URL="https://${SWA_HOST}"
+              HUDDLE_APP_URL="https://${SWA_HOST}" \
+              HUDDLE_ONEDRIVE_FEEDS="${HUDDLE_ONEDRIVE_FEEDS_VALUE:-}"
 
       - name: Deploy to Static Web Apps
         uses: Azure/static-web-apps-deploy@v1

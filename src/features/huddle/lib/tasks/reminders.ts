@@ -171,6 +171,17 @@ export async function fireDueReminders(max = 25): Promise<number> {
   const { invokeJourneyTool } = await import("../journey/proxy.functions");
   await Promise.all(
     due.map(async (r) => {
+      // An internal follow-up check on a long-running job (tasks/job-check.ts) is NOT a user reminder:
+      // no push, no in-chat reminder row, no close-out — it runs the check turn and nothing else.
+      if (r.kind === "job-check") {
+        try {
+          const { fireJobCheck } = await import("./job-check.server");
+          await fireJobCheck(r);
+        } catch {
+          /* best-effort — the user can still ask the agent directly */
+        }
+        return;
+      }
       // A reminder linked to a board task that is already DONE has nothing left to say: no alarm, no
       // "did you get it done?" close-out. Cancel it instead of firing.
       if (r.task_id) {

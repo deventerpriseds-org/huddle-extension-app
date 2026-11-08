@@ -56,6 +56,15 @@ export const saveEmailReplyDraftFn = createServerFn({ method: "POST" })
       if (row.status === "replied" || row.status === "dismissed") {
         return { ok: true, alreadyDone: true };
       }
+      // A work-mailbox (OneDrive feed) email has no draft write path: its id is a feed id, never an EDS
+      // Graph id, so it must never be sent to Graph as one.
+      const { isFeedId } = await import("../external-feeds/onedrive-feed");
+      if (isFeedId(row.graph_message_id)) {
+        return {
+          ok: false,
+          error: "This email is in your work mailbox — Huddle can't save drafts there yet. Copy the reply into Outlook.",
+        };
+      }
       const body = (data.body ?? row.proposed_reply ?? "").trim();
       if (!body)
         return {
