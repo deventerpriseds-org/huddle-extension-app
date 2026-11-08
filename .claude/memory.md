@@ -10,6 +10,12 @@
 - Playwright `waitForFunction(fn, ARG, OPTIONS)`: an options object in the ARG slot is silently ignored (30s default).
 - Before trusting a UAT "pass", check which CHECKS_FILE the run used: 42452788195 / 42411015067 ran narrow check files, not the full suite (ledger corrected in #165).
 
+## Huddle exhausts the shared Azure PG connection limit (2026-11-08; ROOT CAUSE, fix pending owner A/B/C)
+- `eds-postgresql` allows 50 connections (10 reserved) and is SHARED with boost/nexus/obot MCP connectors (~16).
+  Huddle has 17 separate `new Pool()` (max 2-3 each). Busy bursts => "remaining connection slots are reserved
+  for roles with the SUPERUSER attribute" on loads, saves, turns. Self-clears after the 20s idle timeout.
+  Check idle connections too: a `state <> 'idle'` filter hides this (it did on 2026-11-08).
+
 ## Sign-in: MSAL hands back EXPIRED ID tokens — "history stuck loading" (2026-11-08; FIX SHIPPING, NOT owner-confirmed)
 - `getToken()` returns `result.idToken`; MSAL's silent flow checks only the ACCESS token's expiry before returning the
   cached ID token (msal-common `SilentFlowClient.mjs`). Access 60-90 min vs ID ~60 min => up to ~30 min of expired ID

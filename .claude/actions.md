@@ -5048,3 +5048,20 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
   (#178) is live to name it if it recurs. Re-apply paging only after the owner is working normally again.
 - Also open (owner, same message): "server connectivity has been an issue the past few weeks, even when I press
   some of the full screen alert buttons" -- investigate the alarm-overlay button path (android-bridge-template).
+
+### ACT:db-connection-exhaustion (2026-11-08) — ROOT CAUSE FOUND; decision pending (A/B/C)
+- **Owner's screenshot (16:3xZ):** save failed with `server error: remaining connection slots are reserved for roles
+  with the SUPERUSER attribute` -- the Azure PG server (`eds-postgresql`) ran out of connections.
+- **Measured (azure-pg-query run 42500451689):** `max_connections` 50, `superuser_reserved_connections` 10 => 40
+  usable; ~16 held by OTHER apps' MCP connectors (boost, nexus, obot) => ~24 left for Huddle. Huddle code creates
+  **17 separate `new Pool(...)`**, each `max` 2-3 (=> up to ~48 per server instance, more with scale-out), idle
+  timeout 20s, so exhaustion is BURSTY and self-clears (matches "fixed itself 20 minutes later"). Pools added
+  2026-10-15 (#87), 10-27 (#105), 11-07 (#159) -- matches "server connectivity issues the past few weeks".
+- **Corrections:** paging (#169) did NOT cause the load/save failures (its real bug was old alarms at the bottom,
+  fixed in #173; rolled back anyway in #183 at owner's request). The MSAL expired-ID-token defect is real (read
+  from msal-common source; fix #174) but the owner's sign-out/in "proof" may have coincided with freed connections.
+- **Alarm buttons (separate cause, journey activity_log android_alarm_trace, 21 days):** 5 SUCCESS (JWT_PATCH 200),
+  6 GIVE_UP `route=NONE http=0` -- the alarm push carried no action token/url and the app had no login, so the tap
+  was never sent anywhere. Not yet traced to which alarms lack the token.
+- **Pending owner decision:** A) one shared pool (~8) in Huddle -- free, recommended; B) bigger Azure DB tier
+  (~$35-50/mo more); C) both. Also pending go: trace alarm pushes missing the action token.
