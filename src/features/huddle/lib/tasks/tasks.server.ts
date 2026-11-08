@@ -1373,6 +1373,18 @@ export async function incrementApproachRevisionCount(taskId: string, userEmail: 
 }
 
 /** The approach gate passed — lock in the approach and make the task eligible for real DOING work. */
+/** Store the latest submitted approach without changing its status (the gate records every submission). */
+export async function recordProposedApproach(taskId: string, userEmail: string, approach: string): Promise<void> {
+  await ensureBootstrapped();
+  // Upsert: an UPDATE alone silently saved nothing when no row existed yet (VERIFY-wip-e2e-pickup-fit-1 C7).
+  await getPool().query(
+    `INSERT INTO tasks.task_engagement_state (task_id, user_email, proposed_approach)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (task_id) DO UPDATE SET proposed_approach = EXCLUDED.proposed_approach, updated_at = now()`,
+    [taskId, userEmail.toLowerCase(), approach],
+  );
+}
+
 export async function approveApproach(taskId: string, userEmail: string, approach: string): Promise<void> {
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");

@@ -24,7 +24,7 @@
 import { backlogSignature } from "./grooming.server";
 import { AGENT_BY_ID, type AgentId } from "../../data/agents";
 import type { BoardTaskRow } from "./tasks.server";
-import { classifyTaskMode, modeProposalHint } from "./workability";
+import { classifyTaskMode, modeProposalHint, isCoursework } from "./workability";
 
 type Caller = { entra_object_id?: string; entra_email?: string };
 
@@ -55,15 +55,46 @@ function agentRole(id: string | null): string {
 }
 
 /** The directive the assigned agent runs: research the task for real, save an artifact, report back. */
-function researchDirective(task: { id: string; title: string; category: string | null; assigned_agent: string | null }): string {
+/**
+ * What the user agreed to for this task — the confirmed Definition of Done and the approved approach. The
+ * work turn runs with an EMPTY history (turnPayload), so without this block every specific the user gave
+ * in their confirmation ("my zip is 21158", "focus on pricing") never reached the agent doing the work —
+ * measured 2026-11-05: researchDirective carried the task title only. Exported for the offline test.
+ */
+export function agreedBrief(agreed?: { dod?: string | null; approach?: string | null }): string {
+  // Capped so a very long plan cannot push the work turn past the internal message limit.
+  const dod = agreed?.dod?.trim().slice(0, 1500);
+  const approach = agreed?.approach?.trim().slice(0, 2500);
+  if (!dod && !approach) return "";
+  return (
+    `WHAT THE USER CONFIRMED — this is your brief. Deliver exactly this, and use every specific they gave ` +
+    `(a location or ZIP code, a budget, a preference, a scope limit):\n` +
+    (dod ? `Definition of Done: ${dod}\n` : "") +
+    (approach ? `Your approved approach: ${approach}\n` : "") +
+    `\n`
+  );
+}
+
+export function researchDirective(
+  task: { id: string; title: string; category: string | null; assigned_agent: string | null },
+  agreed?: { dod?: string | null; approach?: string | null },
+): string {
   const folder = task.category || "Research";
   return (
+    agreedBrief(agreed) +
     `You've been assigned this task on the board: "${task.title}". Do the work now, as the ` +
     `${agentRole(task.assigned_agent)} you are. Research it properly: use your web-search tool to gather ` +
     `current, credible information — plan your searches, prioritize authoritative and leading sources in ` +
     `this area, and think it through. Then:\n` +
     `1) You MUST call create_artifact to SAVE your full findings as a document — detailed, with ` +
-    `your analysis, the sources you used, and a clear recommendation or concrete next steps. Choose the ` +
+    `your analysis, the sources you used, and a clear recommendation or concrete next steps. When the ` +
+    `last step is the user's own (subscribe, sign up, buy, enroll), the document carries the EXACT links ` +
+    `they need (sign-up, subscription, product or course pages) so they are on the card and the user only ` +
+    `does the last click; any comparison includes reviews and forum feedback. Always include the relevant ` +
+    `links you found, and for any product, service, tool or provider a short plain summary of what it is, ` +
+    `so the user learns something from the card itself. If parts depend on facts only the user has ` +
+    `(company specifics, their own data), deliver what you could do with reasonable confidence under ` +
+    `"Here's what I was able to do", then "Here are my questions to fully satisfy what you may want". Choose the ` +
     `\`format\` that actually fits what you produced rather than defaulting blindly: 'md' for plain prose ` +
     `(still the right default), 'docx' when the user will send or print it, 'pptx' for a deck, and ` +
     `'mermaid'/'html'/'svg' when the finding is a diagram or a visual. Set task_id ` +
@@ -142,26 +173,34 @@ export function confirmIntentDirective(
   opts: { followUp?: boolean } = {},
 ): string {
   // Assist/produce router: shape the proposal so the user CONFIRMS a concrete assumed action rather than
-  // explaining from scratch, and so an assist task (e.g. "Go to church") proposes a reminder, not a
+  // explaining from scratch, and so an assist task (e.g. "Subscribe to Aha!") proposes the legwork (link, options) — not a
   // fabricated document. The mode hint also tells the agent to self-correct if the mode is wrong — the
   // user's confirmation is the final catch for a mis-classification.
   const mode = classifyTaskMode(task);
   const opener = opts.followUp
     ? `FOLLOW-UP: you already checked in with the user about this task earlier and haven't heard back. ` +
       `In ONE natural, brief message (not an interrogation, and not a guilt-trip): open by circling back ` +
-      `on your earlier check-in (e.g. "Circling back on this one —"), not with a fresh first-contact ` +
-      `greeting, then briefly restate what you believe they're trying to accomplish with this task, ` +
+      `on your earlier check-in BY NAMING THE TASK in plain words (e.g. "Circling back on the Verva ` +
+      `research —"), never "this one", not with a fresh first-contact greeting, then briefly restate what ` +
+      `you believe they're trying to accomplish with it, ` +
       `propose a concrete, testable Definition of Done, and ask them to confirm it, add to it, or correct it.\n`
     : `In ONE natural, brief message (not an interrogation): open with a brief, natural greeting that ` +
-      `frames what this is about (e.g. "Hi — before I get going on this, wanted to check something:"), ` +
-      `then say what you believe they're trying to accomplish with this task, propose a concrete, ` +
-      `testable Definition of Done, and ask them to confirm it, add to it, or correct it.\n`;
+      `NAMES THE TASK in plain words in the first sentence (e.g. "Hi — before I start on the Verva ` +
+      `research, wanted to check something:") — never "this" or "this task", because the user reads many ` +
+      `of these and must know the subject at a glance — then say what you believe they're trying to ` +
+      `accomplish with it, propose a concrete, testable Definition of Done, and ask them to confirm it, ` +
+      `add to it, or correct it.\n`;
   return (
     `This task is on the board for you: "${task.title}". Before starting (or continuing) the work, ` +
     `confirm with the user what they actually want to achieve here — ground your understanding in ` +
     `their Executive Profile and anything you remember about their goals (already in your context). ` +
     opener +
     `${modeProposalHint(mode)}\n` +
+    `ALWAYS include, in the message, the most relevant link(s) you can find right now with your web search ` +
+    `(the product or vendor page, the sign-up or subscription page, the course, the shop) and, for any ` +
+    `product, service, tool or provider, a one-to-two sentence summary of what it is — so the user learns ` +
+    `something from the ask itself, even before confirming. Only real links you actually found; never ` +
+    `invent a URL.\n` +
     `In this SAME message/turn, also call propose_task_intent with task_id "${task.id}", task_title ` +
     `"${task.title}", and the definition_of_done you just proposed — this records what you proposed ` +
     `immediately, before they've replied, so the user can act on it with one tap. This is separate from ` +
@@ -520,7 +559,8 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
         } catch {
           /* no reminder filter */
         }
-        const rows = allRows.filter((r) => r.assigned_agent && !inReminder.has(r.task_id));
+        // Coursework is never asked about, even while a stale assignee lingers until the next groom.
+        const rows = allRows.filter((r) => r.assigned_agent && !inReminder.has(r.task_id) && !isCoursework(r.title));
         if (!rows.length) continue;
 
         // Fire-time half of the spacing chain. If we cannot read when the user was last asked, we cannot prove
@@ -726,7 +766,7 @@ export async function runScheduledAutoWork(
   const { taskIdsInReminderWindow } = await import("./turns.server");
   const inReminderWindow = await taskIdsInReminderWindow(email);
   const assigned = (await getOpenAssignedTasks(email)).filter(
-    (t) => !(t.tags ?? []).includes("parking-lot") && !inReminderWindow.has(t.id),
+    (t) => !(t.tags ?? []).includes("parking-lot") && !inReminderWindow.has(t.id) && !isCoursework(t.title),
   );
   const signature = backlogSignature(assigned);
 
@@ -1060,7 +1100,9 @@ export async function runScheduledAutoWork(
     // Fresh turn id per run so a failed prior attempt retries; within a pass each task is unique.
     const id = `autowork-${runId}-${task.id}`;
     try {
-      await enqueueTurn(id, `dm-${task.assigned_agent}`, email, turnPayload(task, researchDirective(task), tz, caller));
+      const eng = engagementByTaskId.get(task.id);
+      const agreed = { dod: eng?.confirmed_dod ?? task.definition_of_done ?? null, approach: eng?.proposed_approach ?? null };
+      await enqueueTurn(id, `dm-${task.assigned_agent}`, email, turnPayload(task, researchDirective(task, agreed), tz, caller));
       enqueued++;
     } catch {
       /* enqueue failure is non-fatal — the task stays a candidate and is retried next pass */

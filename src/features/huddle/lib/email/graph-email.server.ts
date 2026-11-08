@@ -524,6 +524,9 @@ export interface CalendarEvent {
   location: string | null;
   isAllDay: boolean;
   organizer: string | null;
+  /** Set only on events from a second source (the work-mailbox OneDrive feed): that mailbox's address.
+   *  Absent on EDS Graph events, so every existing reader sees them exactly as before. */
+  source?: string;
 }
 
 export interface CalendarReadResult {
@@ -531,6 +534,59 @@ export interface CalendarReadResult {
   mailbox?: string;
   events?: CalendarEvent[];
   error?: string;
+  /** A second source that is not current / does not cover the window. Readers must pass it on rather
+   *  than report the day as complete. Absent when no second source is configured. */
+  warnings?: string[];
+}
+
+/**
+ * The owner's calendar for a window: the EDS Graph calendar EXACTLY as getGraphCalendarEvents reads it,
+ * plus -- only when HUDDLE_ONEDRIVE_FEEDS binds one to this owner -- the work calendar published as a
+ * OneDrive snapshot. The EDS read decides ok/error as before; the feed adds events and warnings and can
+ * never fail or empty the EDS answer. With no feed configured this returns the Graph result unchanged.
+ */
+export async function getOwnerCalendarEvents(input: {
+  caller: { entra_object_id?: string; entra_email?: string } | undefined;
+  mailbox?: string;
+  startISO: string;
+  endISO: string;
+  timeZone?: string;
+  top?: number;
+}): Promise<CalendarReadResult> {
+  const r = await getGraphCalendarEvents({
+    mailbox: input.mailbox,
+    startISO: input.startISO,
+    endISO: input.endISO,
+    timeZone: input.timeZone,
+    top: input.top,
+  });
+  let feed: { events: CalendarEvent[]; warnings: string[] } = { events: [], warnings: [] };
+  try {
+    const { feedCalendarEvents } = await import("../external-feeds/onedrive-feed.server");
+    feed = await feedCalendarEvents(
+      [input.caller?.entra_email, input.mailbox],
+      input.startISO,
+      input.endISO,
+      input.timeZone ?? "UTC",
+    );
+  } catch (err) {
+    console.error("[calendar] work-calendar feed failed", err instanceof Error ? err.message : err);
+    feed = { events: [], warnings: ["Work calendar feed could not be read; work meetings are NOT included."] };
+  }
+  if (!feed.events.length && !feed.warnings.length) return r;
+  // The EDS failure is still reported (ok:false + its error), but work meetings that DID load are not
+  // thrown away with it (verifier D3).
+  if (!r.ok) {
+    return {
+      ...r,
+      ...(feed.events.length ? { events: feed.events } : {}),
+      ...(feed.warnings.length ? { warnings: feed.warnings } : {}),
+    };
+  }
+  const events = [...(r.events ?? []), ...feed.events].sort((a, b) =>
+    String(a.start ?? "").localeCompare(String(b.start ?? "")),
+  );
+  return { ...r, events, ...(feed.warnings.length ? { warnings: feed.warnings } : {}) };
 }
 
 /**

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { MessageSquare, LayoutGrid, FolderOpen, Compass, Settings, ListChecks, CalendarDays } from "lucide-react";
+import { RailAppsButton } from "./AppsLauncher";
 import { cn } from "@/lib/utils";
 import { useHuddleStore, type View } from "../store";
 import { SettingsSheet } from "./SettingsSheet";
@@ -49,10 +50,11 @@ export function Rail() {
           const active = !it.neverActive && view === it.view;
           const Icon = it.icon;
           return (
+            <div key={it.id} className="flex flex-col items-center">
             <button
-              key={it.id}
               type="button"
               onClick={() => setView(it.view)}
+              aria-current={active ? "page" : undefined}
               className={cn(
                 "group relative flex size-10 items-center justify-center rounded-lg transition",
                 active
@@ -64,8 +66,12 @@ export function Rail() {
             >
               <Icon size={18} strokeWidth={1.8} />
             </button>
+            </div>
           );
         })}
+        {/* Tool apps (Polish, then Sidecar and Prompto) live behind ONE labelled Apps button. */}
+        <span aria-hidden className="my-1.5 h-px w-6 bg-primary-foreground/20" />
+        <RailAppsButton />
       </div>
       <div className="flex flex-col items-center gap-2">
         <button

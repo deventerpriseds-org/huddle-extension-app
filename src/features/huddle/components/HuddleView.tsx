@@ -54,6 +54,8 @@ import {
 } from "../lib/huddle.functions";
 import { uploadChatAttachmentFn } from "../lib/artifacts/attachments.functions";
 import { userTurnTs } from "../lib/turn-identity";
+import { noticeText, stripRepeatedDraft } from "../lib/chat-format";
+import { ChatText } from "./ChatText";
 import {
   anchoredScrollTop,
   createFollowState,
@@ -61,7 +63,12 @@ import {
   pinnedStartOnScroll,
   shouldRevealOlder,
   windowStart,
+  LOAD_OLDER_PX,
 } from "../lib/transcript-scroll";
+import { loadOlderMessages } from "../lib/identity/workspace.functions";
+import { getToken } from "@/lib/entra-auth";
+import { isRenderableMessage, isWorkspaceHydrated } from "../store";
+import { shouldAppendReminder } from "../lib/identity/workspace-window";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
@@ -75,6 +82,7 @@ import { useDictation } from "../hooks/useDictation";
 import { usePush } from "../hooks/usePush";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
 import { useAuth } from "@/hooks/useAuth";
+import { AttentionBell } from "./AttentionBell";
 import {
   confirmTaskFromButtonFn,
   overrideApproachFromButtonFn,
@@ -192,16 +200,23 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
         )}
       </div>
 
-      <div className="ml-auto flex items-center gap-2">
+      {/* min-w-0 + flex-wrap: when the middle column is too narrow for the five view tabs AND the
+          Meeting button (e.g. 1000px with both side panels open), the Meeting button drops to a
+          second row instead of overflowing under the right panel, where it could not be clicked
+          (verify-uat run 42443849250: "<ContextPanel button> intercepts pointer events"). At widths
+          where everything fits this renders exactly as before. */}
+      <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
         {/* The incumbent switcher, extended from three entries to five and lifted into ViewSwitcher
             so the header and the phone's bottom bar cannot drift apart. Hidden below `md`, which is
             exactly where the bottom bar takes over (HuddleApp) — the two are complementary, so
             precisely one is on screen at any width. They used to BOTH render at 390px, stacked. */}
-        <ViewSwitcher variant="inline" className="app-hidden md:inline-flex" />
+        <ViewSwitcher variant="inline" className="app-hidden max-w-full overflow-x-auto md:inline-flex" />
+
+        <AttentionBell />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">
+            <button className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">
               <Video size={14} />
               Meeting
               <ChevronDown size={12} />
@@ -307,14 +322,50 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
       .top;
   const lastId = messages[messages.length - 1]?.id;
 
+  // Paged history (workspace-window.ts): the app opens with the recent window only. When the reader has
+  // revealed every loaded message and scrolls to the top, fetch the next older page of THIS huddle from the
+  // server and prepend it -- "load more and more as I go indefinitely" (owner, 2026-11-08).
+  const [older, setOlder] = useState<"idle" | "loading" | "done">("idle");
+  const olderRef = useRef<"idle" | "loading" | "done">("idle");
+  const fetchOlder = useCallback(async () => {
+    if (olderRef.current !== "idle" || !isWorkspaceHydrated()) return;
+    olderRef.current = "loading";
+    setOlder("loading");
+    const first = messages[0];
+    const top = first ? rowTop(first.id) : undefined;
+    if (first && top !== undefined) anchorRef.current = { id: first.id, top };
+    let next: "idle" | "done" = "idle";
+    try {
+      const idToken = await getToken();
+      if (!idToken) throw new Error("not signed in");
+      const r = await loadOlderMessages({
+        data: { idToken, huddleId: huddle.id, beforeTs: first?.ts ?? Date.now() },
+      });
+      const page = (JSON.parse(r.messagesJson) as HuddleMessage[]).filter(isRenderableMessage);
+      if (page.length) useHuddleStore.getState().prependOlderMessages(page);
+      else anchorRef.current = null;
+      if (!r.hasMore) next = "done";
+    } catch (e) {
+      console.warn("[transcript] older history fetch failed", e);
+      anchorRef.current = null;
+    } finally {
+      olderRef.current = next;
+      setOlder(next);
+    }
+  }, [messages, huddle.id]);
+
   const revealOlder = useCallback(() => {
     const el = scrollRef.current;
-    if (!el || anchorRef.current || start <= 0) return;
+    if (!el || anchorRef.current) return;
+    if (start <= 0) {
+      void fetchOlder();
+      return;
+    }
     const id = messages[start]?.id;
     const top = id === undefined ? undefined : rowTop(id);
     if (id !== undefined && top !== undefined) anchorRef.current = { id, top };
     setPinnedStart(olderStart(start));
-  }, [start, messages]);
+  }, [start, messages, fetchOlder]);
 
   // Pin to the newest message when the list changes or a turn starts. Layout effect so the first paint
   // is already at the bottom; a second pin after paint catches rows that grow late (markdown, widgets).
@@ -345,8 +396,8 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
       const after = rowTop(before.id);
       if (after !== undefined) el.scrollTop = anchoredScrollTop(el.scrollTop, before.top, after);
     }
-    if (start > 0 && el.scrollHeight <= el.clientHeight) revealOlder();
-  }, [start, revealOlder]);
+    if (el.scrollHeight <= el.clientHeight) revealOlder();
+  }, [start, revealOlder, messages.length]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -360,6 +411,7 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
     const pinned = pinnedStartOnScroll(follow.following, pinnedStart, start);
     if (pinned !== pinnedStart) setPinnedStart(pinned);
     if (shouldRevealOlder(m, start)) revealOlder();
+    else if (start <= 0 && m.scrollTop < LOAD_OLDER_PX) void fetchOlder();
   };
 
   const dayLabel = useMemo(() => {
@@ -380,7 +432,12 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
         {/* Older history loads on its own as you scroll up, so there is no button for it. The day label
             marks the true start of the thread, so it shows only once the oldest message is rendered. */}
-        {start === 0 && (
+        {older === "loading" && (
+          <div className="flex justify-center" data-testid="older-loading">
+            <span className="text-[11px] text-muted-foreground">Loading earlier messages…</span>
+          </div>
+        )}
+        {start === 0 && older === "done" && (
           <div className="flex justify-center">
             <span className="rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground">
               {dayLabel}
@@ -969,10 +1026,10 @@ function EmailReplyRow({ m }: { m: HuddleMessage }) {
           Iris's prose having arrived (2026-10-15: her reply timed out and only the card survived). */}
       {ask.replyBody ? (
         <blockquote
-          className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap border-l-2 pl-2 text-xs text-muted-foreground"
+          className="mt-1.5 max-h-60 overflow-y-auto whitespace-pre-wrap border-l-2 pl-3 text-[13px] leading-relaxed text-foreground"
           data-testid="email-reply-body"
         >
-          {ask.replyBody}
+          {ask.replyBody /* exactly what Save puts in Drafts — never reformatted */}
         </blockquote>
       ) : (
         <p className="mt-1.5 text-[11px] text-muted-foreground">
@@ -980,16 +1037,36 @@ function EmailReplyRow({ m }: { m: HuddleMessage }) {
         </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <button
-          type="button"
-          disabled={!!busy}
-          onClick={save}
-          className={cn(CONFIRM_ASK_BTN, "font-semibold")}
-          data-testid="email-reply-save"
-        >
-          {busy === "save" ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
-          Save to Drafts
-        </button>
+        {ask.draftable === false ? (
+          // Work-mailbox email (OneDrive feed): Huddle has no way to write a draft there yet, so the card
+          // never offers a Save that cannot work — the reply is copied into Outlook by hand.
+          <button
+            type="button"
+            disabled={!!busy || !ask.replyBody}
+            onClick={() =>
+              navigator.clipboard
+                ?.writeText(ask.replyBody)
+                .then(() => toast.success("Reply copied — paste it into your work Outlook"))
+                .catch(() => toast.error("Couldn't copy — select the text above instead."))
+            }
+            className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+            data-testid="email-reply-copy"
+          >
+            <Check size={12} style={{ color: "var(--ai)" }} />
+            Copy reply
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={save}
+            className={cn(CONFIRM_ASK_BTN, "font-semibold")}
+            data-testid="email-reply-save"
+          >
+            {busy === "save" ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} style={{ color: "var(--ai)" }} />}
+            Save to Drafts
+          </button>
+        )}
         <button
           type="button"
           disabled={!!busy}
@@ -1067,7 +1144,16 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
     );
   }
   const agent = AGENT_BY_ID[m.author.agentId as AgentId] ?? AGENTS[0];
+  // A reply the RUNTIME wrote because the model failed (quota outage / model unreachable) is a system
+  // notice, not the agent speaking (owner, 2026-11-05) — its TEXT is shown as a grey notice. The row
+  // itself stays, because the runtime deliberately attaches the email card / nav button / confirm row
+  // to failure replies (2026-10-15: Amy's alert lost its buttons when Iris timed out).
+  const notice = noticeText(m.text);
   const isBriefing = m.isBriefing;
+  // The reply card under an email alert shows the draft itself; drop the copy from the prose.
+  const bodyText = m.emailReply?.replyBody
+    ? stripRepeatedDraft(m.text, m.emailReply.replyBody)
+    : m.text;
   return (
     <div className="flex gap-3">
       <AgentAvatar agent={agent} size="md" />
@@ -1087,7 +1173,7 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
         </div>
         <div
           className={cn(
-            "mt-1 whitespace-pre-wrap text-[14px] leading-relaxed text-foreground",
+            "mt-1 text-[14px] leading-relaxed text-foreground",
             isBriefing && "rounded-xl border border-hairline bg-surface p-4 shadow-soft",
           )}
         >
@@ -1108,7 +1194,16 @@ function MessageRow({ m, huddle }: { m: HuddleMessage; huddle: Huddle }) {
               </button>
             </div>
           )}
-          {m.text}
+          {notice ? (
+            <div
+              className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
+              data-testid="agent-notice"
+            >
+              {notice}
+            </div>
+          ) : (
+            <ChatText text={bodyText} />
+          )}
         </div>
         {m.artifacts && m.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1783,7 +1878,12 @@ function Composer({ huddle }: { huddle: Huddle }) {
       firedMs: number;
     }) => {
       const mid = `rem-${r.id}`;
-      if (useHuddleStore.getState().messages.some((m) => m.id === mid)) return;
+      const all = useHuddleStore.getState().messages;
+      if (all.some((m) => m.id === mid)) return;
+      // Paged history: a reminder older than this thread's oldest loaded message is already in the stored
+      // history and comes back with the older pages -- never append it to the bottom as if it were new.
+      const inThread = all.filter((m) => m.huddleId === huddle.id);
+      if (!shouldAppendReminder(r.firedMs, inThread)) return;
       const agentId = (
         r.agentId && AGENT_BY_ID[r.agentId as AgentId] ? r.agentId : huddle.members[0]
       ) as AgentId;
@@ -1795,8 +1895,21 @@ function Composer({ huddle }: { huddle: Huddle }) {
         ts: r.firedMs || Date.now(),
       });
     };
+    let hydrationRetry: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
       if (stopped) return;
+      // Wait for the history to load first: hydration REPLACES the message list, so anything appended
+      // before it is wiped while the cursor has already moved past it, and the skip rule above needs the
+      // loaded history to compare against.
+      if (!isWorkspaceHydrated()) {
+        if (!hydrationRetry) {
+          hydrationRetry = setTimeout(() => {
+            hydrationRetry = null;
+            void poll();
+          }, 2_000);
+        }
+        return;
+      }
       try {
         const { reminders } = await getReminderDeliveries({
           data: { huddleId: huddle.id, sinceMs: cursor },
@@ -1819,6 +1932,7 @@ function Composer({ huddle }: { huddle: Huddle }) {
     return () => {
       stopped = true;
       clearInterval(iv);
+      if (hydrationRetry) clearTimeout(hydrationRetry);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("pageshow", onVisible);
     };

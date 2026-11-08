@@ -51,6 +51,18 @@ CREATE TABLE IF NOT EXISTS chat.email_replies (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS email_replies_owner_status_idx ON chat.email_replies(owner_email, status);
+-- Attention bell (2026-11-08, owner option A): the SAME owed/settled list also holds meeting and
+-- appointment alerts. Existing rows are emails (default). Non-email rows use mailbox '' and
+-- graph_message_id = their source id; they have no conversation_id, so the Sent Items reconcile and
+-- the by-sender lookup never touch them. See lib/attention/attention.ts.
+ALTER TABLE chat.email_replies ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'email';
+ALTER TABLE chat.email_replies ADD COLUMN IF NOT EXISTS huddle_id TEXT;
+CREATE INDEX IF NOT EXISTS email_replies_owner_kind_status_idx ON chat.email_replies(owner_email, kind, status);
+CREATE TABLE IF NOT EXISTS chat.attention_settings (
+  owner_email  TEXT PRIMARY KEY,
+  urgent_kinds TEXT[] NOT NULL,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -142,7 +154,7 @@ export async function findOwedEmailReplyByFrom(
   await ensureBootstrapped();
   const r = await getPool().query<EmailReplyRow>(
     `SELECT * FROM chat.email_replies
-      WHERE owner_email = lower($1) AND lower(from_address) = lower($2) AND status IN ('owed','drafted')
+      WHERE owner_email = lower($1) AND kind = 'email' AND lower(from_address) = lower($2) AND status IN ('owed','drafted')
       ORDER BY received_at DESC NULLS LAST LIMIT 1`,
     [ownerEmail, fromAddress.trim()],
   );
@@ -193,7 +205,7 @@ export async function settleEmailReply(id: string, how: "replied" | "dismissed")
 export async function listOwedEmailReplies(ownerEmail: string): Promise<EmailReplyRow[]> {
   await ensureBootstrapped();
   const r = await getPool().query<EmailReplyRow>(
-    `SELECT * FROM chat.email_replies WHERE owner_email = lower($1) AND status IN ('owed','drafted')
+    `SELECT * FROM chat.email_replies WHERE owner_email = lower($1) AND kind = 'email' AND status IN ('owed','drafted')
       ORDER BY received_at ASC NULLS LAST`,
     [ownerEmail],
   );
@@ -226,7 +238,7 @@ export async function getEmailReplyCounts(
        count(*) FILTER (WHERE status IN ('replied','dismissed')
                           AND (settled_at AT TIME ZONE $2)::date = (now() AT TIME ZONE $2)::date) AS settled_today,
        count(*) FILTER (WHERE status IN ('replied','dismissed'))                               AS settled_total
-     FROM chat.email_replies WHERE owner_email = lower($1)`,
+     FROM chat.email_replies WHERE owner_email = lower($1) AND kind = 'email'`,
     [ownerEmail, tz],
   );
   const x = r.rows[0];
@@ -246,8 +258,11 @@ export async function reconcileRepliedFromSentItems(ownerEmail: string): Promise
     const owed = await listOwedEmailReplies(ownerEmail);
     if (!owed.length) return 0;
     const { hasSentReplyInConversation } = await import("./graph-email.server");
+    const { isFeedId } = await import("../external-feeds/onedrive-feed");
     for (const row of owed) {
       if (!row.conversation_id) continue;
+      // Work-mailbox (feed) rows cannot be checked against Sent Items with the EDS key; they settle by Dismiss.
+      if (isFeedId(row.graph_message_id)) continue;
       const replied = await hasSentReplyInConversation(
         row.mailbox,
         row.conversation_id,
@@ -259,4 +274,83 @@ export async function reconcileRepliedFromSentItems(ownerEmail: string): Promise
     console.error("[email-replies] reconcile failed", err instanceof Error ? err.message : err);
   }
   return settled;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Attention bell (owner option A, 2026-11-08). Same table, same open (owed/drafted) -> settled
+// (replied/dismissed) lifecycle; `kind` says what the item is.
+// ---------------------------------------------------------------------------------------------
+
+/** Record a meeting/appointment alert as OPEN. Idempotent on id (a retry never reopens a settled item). */
+export async function recordAttentionItem(r: {
+  id: string;
+  ownerEmail: string;
+  kind: "meeting" | "appointment";
+  huddleId: string;
+  title: string;
+  detail?: string | null;
+}): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO chat.email_replies
+       (id, owner_email, mailbox, graph_message_id, subject, from_name, received_at, kind, huddle_id)
+     VALUES ($1, lower($2), '', $1, $3, $4, now(), $5, $6)
+     ON CONFLICT (id) DO NOTHING`,
+    [r.id, r.ownerEmail, r.title.slice(0, 300), r.detail?.slice(0, 300) ?? null, r.kind, r.huddleId],
+  );
+}
+
+export interface AttentionRow {
+  id: string;
+  kind: string | null;
+  huddle_id: string | null;
+  subject: string | null;
+  from_name: string | null;
+  from_address: string | null;
+  received_at: string | null;
+  created_at: string | null;
+}
+
+/** Every OPEN item (any kind) for the owner, newest first. The bell filters by the owner's kinds. */
+export async function listOpenAttention(ownerEmail: string, limit = 50): Promise<AttentionRow[]> {
+  await ensureBootstrapped();
+  const r = await getPool().query<AttentionRow>(
+    `SELECT id, kind, huddle_id, subject, from_name, from_address, received_at, created_at
+       FROM chat.email_replies
+      WHERE owner_email = lower($1) AND status IN ('owed','drafted')
+      ORDER BY coalesce(received_at, created_at) DESC
+      LIMIT $2`,
+    [ownerEmail, limit],
+  );
+  return r.rows;
+}
+
+/** "Dealt with in the chat": the owner sent a message in `huddleId`, so that conversation's open
+ *  MEETING/APPOINTMENT items settle. Emails keep their own rules (reply detected / Dismiss). */
+export async function settleAttentionForHuddle(ownerEmail: string, huddleId: string): Promise<number> {
+  await ensureBootstrapped();
+  const r = await getPool().query(
+    `UPDATE chat.email_replies SET status = 'replied', settled_at = now(), updated_at = now()
+      WHERE owner_email = lower($1) AND huddle_id = $2 AND kind <> 'email' AND status IN ('owed','drafted')`,
+    [ownerEmail, huddleId],
+  );
+  return r.rowCount ?? 0;
+}
+
+export async function getUrgentKinds(ownerEmail: string): Promise<unknown> {
+  await ensureBootstrapped();
+  const r = await getPool().query<{ urgent_kinds: string[] }>(
+    `SELECT urgent_kinds FROM chat.attention_settings WHERE owner_email = lower($1)`,
+    [ownerEmail],
+  );
+  return r.rows[0]?.urgent_kinds ?? null;
+}
+
+export async function setUrgentKinds(ownerEmail: string, kinds: string[]): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO chat.attention_settings (owner_email, urgent_kinds, updated_at) VALUES (lower($1), $2, now())
+     ON CONFLICT (owner_email) DO UPDATE SET urgent_kinds = EXCLUDED.urgent_kinds, updated_at = now()`,
+    [ownerEmail, kinds],
+  );
 }

@@ -26,6 +26,7 @@ import { Route as ApiPublicRunGroomingRouteImport } from './routes/api/public/ru
 import { Route as ApiPublicRunCeremonyRouteImport } from './routes/api/public/run-ceremony'
 import { Route as ApiPublicRunAutoworkRouteImport } from './routes/api/public/run-autowork'
 import { Route as ApiPublicRunAgentTurnRouteImport } from './routes/api/public/run-agent-turn'
+import { Route as ApiPublicPolishRouteImport } from './routes/api/public/polish'
 import { Route as ApiPublicGraphMailNotifyRouteImport } from './routes/api/public/graph-mail-notify'
 import { Route as ApiPublicAuthTraceRouteImport } from './routes/api/public/auth-trace'
 
@@ -118,6 +119,11 @@ const ApiPublicRunAgentTurnRoute = ApiPublicRunAgentTurnRouteImport.update({
   path: '/api/public/run-agent-turn',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicPolishRoute = ApiPublicPolishRouteImport.update({
+  id: '/api/public/polish',
+  path: '/api/public/polish',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicGraphMailNotifyRoute =
   ApiPublicGraphMailNotifyRouteImport.update({
     id: '/api/public/graph-mail-notify',
@@ -136,6 +142,7 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
   '/api/public/graph-mail-notify': typeof ApiPublicGraphMailNotifyRoute
+  '/api/public/polish': typeof ApiPublicPolishRoute
   '/api/public/run-agent-turn': typeof ApiPublicRunAgentTurnRoute
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
@@ -156,6 +163,7 @@ export interface FileRoutesByTo {
   '/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
   '/api/public/graph-mail-notify': typeof ApiPublicGraphMailNotifyRoute
+  '/api/public/polish': typeof ApiPublicPolishRoute
   '/api/public/run-agent-turn': typeof ApiPublicRunAgentTurnRoute
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
@@ -178,6 +186,7 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
   '/api/public/graph-mail-notify': typeof ApiPublicGraphMailNotifyRoute
+  '/api/public/polish': typeof ApiPublicPolishRoute
   '/api/public/run-agent-turn': typeof ApiPublicRunAgentTurnRoute
   '/api/public/run-autowork': typeof ApiPublicRunAutoworkRoute
   '/api/public/run-ceremony': typeof ApiPublicRunCeremonyRoute
@@ -200,6 +209,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/api/public/auth-trace'
     | '/api/public/graph-mail-notify'
+    | '/api/public/polish'
     | '/api/public/run-agent-turn'
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
@@ -220,6 +230,7 @@ export interface FileRouteTypes {
     | '/'
     | '/api/public/auth-trace'
     | '/api/public/graph-mail-notify'
+    | '/api/public/polish'
     | '/api/public/run-agent-turn'
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
@@ -241,6 +252,7 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/api/public/auth-trace'
     | '/api/public/graph-mail-notify'
+    | '/api/public/polish'
     | '/api/public/run-agent-turn'
     | '/api/public/run-autowork'
     | '/api/public/run-ceremony'
@@ -262,6 +274,7 @@ export interface RootRouteChildren {
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiPublicAuthTraceRoute: typeof ApiPublicAuthTraceRoute
   ApiPublicGraphMailNotifyRoute: typeof ApiPublicGraphMailNotifyRoute
+  ApiPublicPolishRoute: typeof ApiPublicPolishRoute
   ApiPublicRunAgentTurnRoute: typeof ApiPublicRunAgentTurnRoute
   ApiPublicRunAutoworkRoute: typeof ApiPublicRunAutoworkRoute
   ApiPublicRunCeremonyRoute: typeof ApiPublicRunCeremonyRoute
@@ -398,6 +411,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicRunAgentTurnRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/polish': {
+      id: '/api/public/polish'
+      path: '/api/public/polish'
+      fullPath: '/api/public/polish'
+      preLoaderRoute: typeof ApiPublicPolishRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/graph-mail-notify': {
       id: '/api/public/graph-mail-notify'
       path: '/api/public/graph-mail-notify'
@@ -433,6 +453,7 @@ const rootRouteChildren: RootRouteChildren = {
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiPublicAuthTraceRoute: ApiPublicAuthTraceRoute,
   ApiPublicGraphMailNotifyRoute: ApiPublicGraphMailNotifyRoute,
+  ApiPublicPolishRoute: ApiPublicPolishRoute,
   ApiPublicRunAgentTurnRoute: ApiPublicRunAgentTurnRoute,
   ApiPublicRunAutoworkRoute: ApiPublicRunAutoworkRoute,
   ApiPublicRunCeremonyRoute: ApiPublicRunCeremonyRoute,

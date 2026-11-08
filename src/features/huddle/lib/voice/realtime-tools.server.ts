@@ -581,8 +581,9 @@ export async function executeRealtimeTool(
       const endRaw = typeof args.end === "string" && args.end.trim() ? args.end.trim() : startRaw;
       const startISO = startRaw.length > 10 ? startRaw : `${startRaw.slice(0, 10)}T00:00:00`;
       const endISO = endRaw.length > 10 ? endRaw : `${endRaw.slice(0, 10)}T23:59:59`;
-      const { getGraphCalendarEvents } = await import("../email/graph-email.server");
-      const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+      // The EDS calendar exactly as before, plus the work calendar feed when one is configured.
+      const { getOwnerCalendarEvents } = await import("../email/graph-email.server");
+      const r = await getOwnerCalendarEvents({ caller: ctx.caller, mailbox, startISO, endISO, timeZone: tz });
       return done(JSON.stringify(r));
     }
     if (name === "focus_on") {
@@ -927,6 +928,19 @@ export async function executeRealtimeTool(
         caller: ctx.caller ?? {},
         context: { source: "huddle", huddleId: ctx.huddleId, agentId: ctx.agentId },
       });
+      // Long-running journey job (rebuild_schedule): arm the delayed follow-up check in the agent's DM,
+      // exactly as the text paths do (tasks/job-check.ts). The voice call itself can end; the result
+      // still lands in the 1:1 as a normal reply.
+      if (r.ok) {
+        const { armJobCheck } = await import("../tasks/job-check.server");
+        await armJobCheck({
+          toolName: name,
+          output: r.output,
+          huddleId: ctx.huddleId ?? (ctx.agentId ? `dm-${ctx.agentId}` : null),
+          agentId: ctx.agentId,
+          caller: ctx.caller,
+        });
+      }
       return done(annotateRawCreateOutput(r.output, dedup));
     }
     return done(JSON.stringify({ error: `Tool not available on the voice path: ${name}` }));

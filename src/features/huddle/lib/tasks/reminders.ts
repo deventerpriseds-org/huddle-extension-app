@@ -171,6 +171,17 @@ export async function fireDueReminders(max = 25): Promise<number> {
   const { invokeJourneyTool } = await import("../journey/proxy.functions");
   await Promise.all(
     due.map(async (r) => {
+      // An internal follow-up check on a long-running job (tasks/job-check.ts) is NOT a user reminder:
+      // no push, no in-chat reminder row, no close-out — it runs the check turn and nothing else.
+      if (r.kind === "job-check") {
+        try {
+          const { fireJobCheck } = await import("./job-check.server");
+          await fireJobCheck(r);
+        } catch {
+          /* best-effort — the user can still ask the agent directly */
+        }
+        return;
+      }
       // A reminder linked to a board task that is already DONE has nothing left to say: no alarm, no
       // "did you get it done?" close-out. Cancel it instead of firing.
       if (r.task_id) {
@@ -222,6 +233,25 @@ export async function fireDueReminders(max = 25): Promise<number> {
           });
         } catch {
           /* journey push best-effort */
+        }
+      }
+      // Attention bell (owner option A, 2026-11-08): a fired reminder/alarm stays OPEN in the bell until
+      // the owner dismisses it there or replies in that conversation -- so a phone push that never shows
+      // is still caught in the app. Best-effort; never blocks the reminder itself.
+      if (r.user_email) {
+        try {
+          const { recordAttentionItem } = await import("../email/email-replies.server");
+          const { attentionId } = await import("../attention/attention");
+          await recordAttentionItem({
+            id: attentionId("appointment", r.id),
+            ownerEmail: r.user_email,
+            kind: "appointment",
+            huddleId: r.huddle_id || (r.agent_id ? `dm-${r.agent_id}` : "all-members"),
+            title: r.text.slice(0, 300),
+            detail: isAlarm ? "Alarm" : `Reminder from ${name}`,
+          });
+        } catch {
+          /* the bell is an extra; the reminder already went out */
         }
       }
       // Huddle's own Web Push (no-op until Huddle VAPID keys are set) — covers browser-only users.

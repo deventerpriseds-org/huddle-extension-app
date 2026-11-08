@@ -24,6 +24,54 @@ const VERDICT_SCHEMA = {
 const REVIEWER_MODEL = "gpt-4o-mini";
 
 /**
+ * TUNED 2026-11-05 (owner: "the autograder never passes... everything is pushed back to me. it needs to be
+ * tuned"). Measured: the test task 883bc5dc was graded revise three times in one turn and escalated, and the
+ * real tasks 3147559c, 7b1cb9f8 and 9e4c395d all escalated at the cap. ROOT CAUSE: this gate graded a PLAN
+ * with WORKERS["assignment-reviewer"], the charter written for a FINISHED deliverable ("grounded in
+ * evidence… decision-ready… do not rubber-stamp") — a bar a plan written before any research can never
+ * meet — and the model chose pass/revise freely, so any nitpick failed it.
+ *
+ * NOW: a plan-specific charter, and the model only LISTS problems, split into `blocking` and `suggestions`.
+ * The verdict is decided HERE, in code: pass iff nothing is blocking. Suggestions ride back to the agent on
+ * a pass so they improve the work instead of stalling it. The finished-deliverable charter is untouched and
+ * still used by the review gate (review-gate.server.ts).
+ */
+export const APPROACH_REVIEWER_CHARTER =
+  "You review an agent's PLANNED APPROACH for a task, before any work has started. It is a plan, not a " +
+  "deliverable: it will not contain findings, evidence or final answers yet, and that is never a problem. " +
+  "Your only question: if the agent follows this plan, will it realistically reach the Definition of Done " +
+  "the user confirmed? A problem is BLOCKING only if it would make the plan fail that — it misses a part of " +
+  "the Definition of Done, works on the wrong thing, ignores a constraint the user stated (budget, location, " +
+  "scope), or depends on access or information the agent cannot get. Everything else — more depth, extra " +
+  "sources, better structure, wording, nice-to-haves — is a SUGGESTION, never blocking. Most reasonable " +
+  "plans have zero blocking problems. Be specific and brief.";
+
+const APPROACH_VERDICT_SCHEMA = {
+  type: "object",
+  properties: {
+    blocking: { type: "array", items: { type: "string" } },
+    suggestions: { type: "array", items: { type: "string" } },
+  },
+  required: ["blocking", "suggestions"],
+  additionalProperties: false,
+} as const;
+
+/** The verdict rule, in code: a plan passes iff the reviewer found nothing BLOCKING. Exported for the test. */
+export function approachVerdict(raw: { blocking?: unknown; suggestions?: unknown } | null | undefined): {
+  verdict: "pass" | "revise";
+  deficiencies: string[];
+  suggestions: string[];
+} {
+  // A plain string is ONE item (VERIFY-wip-e2e-pickup-fit-1 C7: `blocking: "ignores the budget"` used to pass).
+  const list = (v: unknown) =>
+    (Array.isArray(v) ? v : typeof v === "string" ? [v] : [])
+      .map((x) => String(x ?? "").trim())
+      .filter((x) => x.length > 0);
+  const blocking = list(raw?.blocking);
+  return { verdict: blocking.length ? "revise" : "pass", deficiencies: blocking, suggestions: list(raw?.suggestions) };
+}
+
+/**
  * DID THE OWNER AUTHORISE PROCEEDING ON THIS TASK? — the verdict the turn-pair override rests on.
  *
  * This is the SAME grading path `runApproachGate` uses below (`callOpenAIRouter`, the same reviewer
@@ -100,6 +148,25 @@ export interface ApproachGateResult {
  * keyed on (taskId, approach_revision_count) so a second concurrent dispatch in the same turn can't
  * double-grade or double-increment the counter (mirrors runReviewGate exactly).
  */
+/**
+ * Run one auto-work pass for this user right after an approach is approved, so a confirmed + approved task
+ * moves to Doing and its work turn is enqueued immediately. Bounded (8s) and never throws: the approval is
+ * already saved, and the scheduled 9/13/17 pass remains the fallback if this one is slow or fails.
+ * `run` is injectable for the offline test.
+ */
+export async function kickAutoWorkAfterApproval(
+  email: string,
+  run: () => Promise<unknown> = async () =>
+    (await import("./autowork.server")).runScheduledAutoWork({ entra_email: email }, { force: true }),
+): Promise<boolean> {
+  try {
+    const done = await Promise.race([run().then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 8_000))]);
+    return done;
+  } catch {
+    return false;
+  }
+}
+
 export async function runApproachGate(opts: {
   taskId: string;
   agentId: string;
@@ -109,7 +176,9 @@ export async function runApproachGate(opts: {
   claim: (key: string) => boolean;
 }): Promise<ApproachGateResult> {
   const { isStructuredWorkflowRequired, getWorkflowCaps } = await import("../identity/agent-workflow-config.server");
-  const required = await isStructuredWorkflowRequired(opts.email, opts.agentId).catch(() => false);
+  // FAILS CLOSED (CLAUDE.md: the confirm-intent/DoD gate "MUST fail CLOSED"). A settings-read error used to
+  // read as "gate off" and approve the plan unseen (VERIFY-wip-e2e-pickup-fit-2, found outside the claims).
+  const required = await isStructuredWorkflowRequired(opts.email, opts.agentId).catch(() => true);
   if (!required) return { gated: false, approved: true, escalated: false, note: "" };
 
   const {
@@ -160,32 +229,50 @@ export async function runApproachGate(opts: {
     // is driven by the `revise` verdict below and must keep its existing meaning.
     if (wasEscalated) await incrementApproachRevisionCount(opts.taskId, opts.email).catch(() => {});
     const { callOpenAIRouter } = await import("../openai-responses.server");
-    const reviewer = WORKERS["assignment-reviewer"];
     const dod = state?.confirmed_dod?.trim();
-    const verdict = await callOpenAIRouter<{ verdict: "pass" | "revise"; deficiencies: string[] }>({
-      model: REVIEWER_MODEL,
-      system: reviewer.charter,
-      prompt:
-        "Grade this PLANNED APPROACH — no work has started yet, this is not a finished deliverable. Is " +
-        "it sound (will this method actually reach the Definition of Done?) and is it high-value (worth " +
-        "the effort, scoped at the right depth — not over-built, not superficial)? Call out anything " +
-        "that would waste the team's time if they proceeded on this plan as-is.\n\n" +
-        `Task: ${opts.taskTitle}\n\n` +
-        (dod
-          ? `Definition of Done it must reach:\n${dod}\n\n`
-          : "No Definition of Done was confirmed for this task — grade the approach's fit to the task alone.\n\n") +
-        `Proposed approach:\n${opts.approach.slice(0, 4000)}`,
-      schema: VERDICT_SCHEMA,
-      schemaName: "approach_review_verdict",
-    });
+    // Keep the latest submitted plan on the row whatever the outcome, so an escalation can be inspected.
+    const { recordProposedApproach } = await import("./tasks.server");
+    await recordProposedApproach(opts.taskId, opts.email, opts.approach).catch(() => {});
+    const verdict = approachVerdict(
+      await callOpenAIRouter<{ blocking: string[]; suggestions: string[] }>({
+        model: REVIEWER_MODEL,
+        system: APPROACH_REVIEWER_CHARTER,
+        prompt:
+          `Task: ${opts.taskTitle}\n\n` +
+          (dod
+            ? `Definition of Done the user confirmed:\n${dod}\n\n`
+            : "No Definition of Done was confirmed for this task — judge the plan's fit to the task alone.\n\n") +
+          `Planned approach:\n${opts.approach.slice(0, 4000)}\n\n` +
+          "List BLOCKING problems (would make the plan fail the Definition of Done) and SUGGESTIONS " +
+          "(everything else). Empty blocking is the expected answer for a reasonable plan.",
+        schema: APPROACH_VERDICT_SCHEMA,
+        schemaName: "approach_plan_review",
+      }),
+    );
+    const foldIn = verdict.suggestions.length
+      ? ` Fold these suggestions into the work (they do not block it): ${verdict.suggestions.slice(0, 4).join("; ")}.`
+      : "";
 
     if (verdict.verdict === "pass") {
       await approveApproach(opts.taskId, opts.email, opts.approach).catch(() => {});
+      // Start the work NOW, not at the next 9/13/17 auto-work pass. Owner 2026-11-05, after a confirmed +
+      // approved task sat in Up Next: "why would you as an agent follow my schedule instead of starting
+      // things as soon as they are confirmed?"
+      const kicked = await kickAutoWorkAfterApproval(opts.email);
       return {
         gated: true,
         approved: true,
         escalated: false,
-        note: wasEscalated ? "re-graded after escalation — approach approved" : "approach approved",
+        note:
+          (wasEscalated ? "re-graded after escalation — approach approved" : "approach approved") +
+          (kicked
+            ? ". The work is being started now: it moves to Doing immediately unless you already have a task in " +
+              "Doing (one at a time), in which case it is next."
+            : ". Starting it right now didn't go through, so the next automatic pass (within a few hours) starts " +
+              "it — nothing else is needed from the user.") +
+          " Tell the user exactly that — never that they need to authorize the start or that it waits for a " +
+          "calendar block." +
+          foldIn,
       };
     }
     // A failed RE-grade goes straight back to escalated rather than into the revise loop. The task is

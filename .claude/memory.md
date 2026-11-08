@@ -1,5 +1,23 @@
 # Project Memory — huddle-extension-app
 
+## Attention bell (2026-11-08) — one "needs you" list on chat.email_replies
+- `kind` column (email|meeting|appointment): ANY new query on chat.email_replies that means "emails" must filter `kind='email'` (findOwed*, listOwedEmailReplies, counts already do). Non-email rows: mailbox '', graph_message_id = own id, no conversation_id.
+- A push the server sent can still not show on the phone (FCM accepts data-only messages; the Huddle app does not report display). The bell is the in-app record that needs no push.
+
+## Hardening — 2026-11-08: a UAT "failure" that was the TEST, four ways (stand-up voice barges)
+- The ceremony mic starts MUTED by design; any voice-barge check must tap `button[aria-label="Unmute"]` (RoomControl is icon-only, the word is a sibling span) and assert "mic — listening" first.
+- Read barge answers by `data-turn-kind="answer"`, never by row position: the ceremony keeps speaking during a barge.
+- Playwright `waitForFunction(fn, ARG, OPTIONS)`: an options object in the ARG slot is silently ignored (30s default).
+- Before trusting a UAT "pass", check which CHECKS_FILE the run used: 42452788195 / 42411015067 ran narrow check files, not the full suite (ledger corrected in #165).
+
+## Sign-in: MSAL hands back EXPIRED ID tokens — "history stuck loading" (2026-11-08; FIX SHIPPING, NOT owner-confirmed)
+- `getToken()` returns `result.idToken`; MSAL's silent flow checks only the ACCESS token's expiry before returning the
+  cached ID token (msal-common `SilentFlowClient.mjs`). Access 60-90 min vs ID ~60 min => up to ~30 min of expired ID
+  tokens; every server fn that runs `verifyEntraIdToken` fails. Symptom: "Couldn't load your message history", Android
+  app only (the browser had a fresher sign-in), self-heals ~20 min later, instantly fixed by sign-out/in (owner-proven).
+- Fix: `src/lib/id-token-expiry.ts` + `getToken` refresh-ahead (5 min); load/save retry once with `forceRefresh`.
+  NOT caused by paging (#169) — that was a wrong lead; paging DID cause old alarms at the bottom (fixed #173).
+
 ## ▶ DATA MODEL INDEX — READ THIS BEFORE QUERYING ANYTHING (added 2026-10-15, owner-directed)
 
 <!-- WHAT:       One lookup table for every id, ref, table and scoping key in this system.
@@ -117,6 +135,48 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Chat message layout: rendered lists/bold/links + code-built brief lists (2026-11-05, branch claude/vibrant-allen-p52snq, NOT merged, NOT deployed, NOT owner-confirmed)
+- Agent bubbles render via `ChatText` (`lib/chat-format.ts` = the ONE set of layout rules: normalize whitespace, parse blocks, `noticeText`, `stripRepeatedDraft`, `joinOpenerAndBlock`). User bubbles unchanged.
+- Scheduled brief + priority check: the list is CODE-BUILT (`briefDeliveryPlan(...).appendBlock`, `priorityAppendBlock`) and attached by `ensureAppendBlockDelivered` at BOTH turn endings, before `ensureNavLinkDelivered`. The model writes one opener only. Do not move layout back into prompt prose — that is what made the same brief come out spaced two different ways.
+- Email alerts with a card: draft lives only in the card. D (research -> artifact) HELD by owner.
+
+## Message history load = ONE 2.6 MB workspace blob (2026-11-07; NOT changed; decision pending)
+`identity.workspace_state.state.messages` holds every message since Jul 10 (3,730, 2.55 MB; growing ~0.6 MB/month) and
+`useWorkspaceSync` downloads + parses all of it on every open. Right after a deploy the first open is slow (cold function +
+new bundle) — owner saw "Loading your message history…" for a while after the 11-07 deploys, then it recovered by itself.
+Hardening: when the owner says "it broke after your change", line the report up against deploy-swa run times FIRST — a
+deploy-time slowdown looks exactly like a regression. Paging options A/B/C put to owner. Huddle APK has no file chooser;
+fix = android-bridge-template#23 (CI green), not merged.
+
+## Schedule tab TODAY band collapsed to 0px (2026-11-07; FIXED IN CODE #156 e29d4a8 + live probe 7/7; NOT owner-confirmed)
+The full-page Schedule (widgetShell "page" = fixed-height flex column) lets an `overflow-y-auto` ScrollBand shrink to ZERO:
+5 today rows rendered 0px tall under a long Up Next (verify-uat 42409814370, probe `schedule-today-checks.mjs`). Data was fine.
+Fix (owner's design): Schedule page scrolls as a whole, bands flow at natural height (`ScrollBand flow`), all three sections are CollapsibleSection (open by default, per-device). Priorities page untouched. Hardening: "view looks empty" — check the band's rendered height
+in a real browser before blaming data; the empty-state line ("Nothing scheduled for today.") being ABSENT meant rows existed.
+rebuild_schedule v2 (journey#101 + huddle#155) is live: background start, one-at-a-time, follow-up job-check turn.
+
+## Agents can re-run the scheduling job — rebuild_schedule (2026-11-07; journey-voice#100 squash 5b67201 on journey main, Deploy Supabase Functions SUCCESS, live execute-tool v541 contains it; NOT owner-confirmed)
+Trigger: owner asked Iris "I want you to re run the scheduling job"; she said she couldn't. New journey execute-tool case
+`rebuild_schedule` (`_shared/rebuild-schedule.ts`) POSTs nightly-schedule-builder `{userId: <caller>, singleDay: scope==='today'}`
+— today = the app's Reschedule-today button body; week = the nightly 7-day run. Refuses unless `user_explicitly_requested:true`;
+userId never from args. Huddle needs NO change: it loads journey's tool catalog (`fetchJourneyToolDefinitions`, 60s TTL) for text
+AND voice. Evidence: npm test 649/649; mutate.sh 3/3 FIRED (consent, caller scope, dispatch). Live harness tests of 1:1 hand-offs
+are suspended until a harness flag suppresses `deliverOwnerFollowup` (accuracy-log 2026-11-04).
+
+## Polish — text cleanup tool (2026-11-05; #146 MERGED squash 08457bc, deploy-swa run 42110354027 SUCCESS; NOT owner-confirmed live)
+- ECOSYSTEM (owner chose Option A): contract `docs/polish/CONTRACT-polish-ecosystem.md`. LIVE since 2026-11-05: huddle #148 (8986387) + nexus-hub #176 (2560f21) merged + deployed; live UAT Nexus /polish 3/3 (run 42128580189) and Huddle 7/7 (run 42128584455). Huddle `/api/public/polish` (turn-gate auth); Huddle Send › Google Drive → Nexus `/api/polish/gdrive`; Nexus /polish → Huddle engine. Untested live: email draft, OneDrive, Drive save, docx download. NOT owner-confirmed.
+- Owner (2026-11-05): apps must not depend on each other. Approved incremental: fastest path first (done), THEN a shared tools/connections service. Hosting choice pending (recommended: new `eds-tools` Azure Functions service holding the Polish engine + Google/Microsoft connections).
+- SHARED TOOLS SERVICE (Option A, phase 1 LIVE 2026-11-08): repo `deventerpriseds-org/eds-tools`, Azure Function `eds-tools-fn` (Flex Consumption; the legacy Linux Consumption plan refuses new apps). Huddle `runPolish` calls `EDS_TOOLS_URL` (default https://eds-tools-fn.azurewebsites.net) `/api/polish` with `JOURNEY_PROXY_TOKEN` + `x-eds-app: huddle`; falls back to `runPolishLocal` on network/401/403/503/5xx-except-502. Phase 2 (profiles) shipped 2026-11-08: eds-tools GET/PUT `/api/polish/profiles` (headers x-webhook-secret + x-eds-app + x-eds-user=Entra email, lowercased) on Azure Table `polishprofiles`; Huddle `loadOwnPolishProfiles` (polish.server.ts) reads it first, seeds it ONCE from the workspace blob when eds-tools has nothing, falls back to the blob when unreachable. The blob still holds a copy. Phase 3 (Google/Microsoft connections) pending — see eds-tools `docs/PLAN.md`.
+- ENTRY POINT: tool apps live behind a labelled **Apps** launcher (`components/AppsLauncher.tsx` HUDDLE_APPS registry) — Rail popover on desktop, bottom-bar Apps sheet on phone. Owner could not find the earlier unlabelled pen icon.
+- Browser UAT: `.claude/skills/test-agent-serverfn/scripts/polish-checks.mjs` via verify-uat.yml (checks_file). LIVE RUN 42113529991 (390x844, deployed app): 7/7 PASS — real engine returned polished copy in 4s, Send sheet listed dev@ + von.ellis@, zero console/4xx errors. Still NOT owner-confirmed.
+- New view `polish` (store View union). Rail entry under a divider ("tools" group); phone bottom bar is now 6 columns. Sidebar + ContextPanel are hidden ONLY on this view (`FULL_WIDTH_VIEWS` in HuddleApp.tsx); every other view unchanged.
+- Model call: `lib/polish/polish.functions.ts` `polishTextFn` — client sends a STRUCTURED request (polish/revise/span/merge) + settings; prompt is built server-side from `lib/polish/polish-core.ts`. Reuses OPENAI_API_KEY; Fast = gpt-5.6-luna low, Best = gpt-5.6-terra medium; 40s abort under the 45s ceiling. No streaming (SWA buffers responses).
+- Storage: user's own profiles + last profile ride the EXISTING synced workspace blob (`polishProfiles`/`polishProfileId` in PERSISTED_KEYS + the useWorkspaceSync change check). Draft + versions are per-device localStorage (`huddle:polish:*`). No new table.
+- Live mode = polish 1.5s after typing stops; never overwrites a hand-edited version (banner offers "Update, keep my edits" / "Replace from draft").
+- Prototype (approval artifact): https://claude.ai/artifact/7MJkFX17io8FHmVWwSZCAn
+- Send sheet (`PolishSendSheet.tsx`): email = DRAFT only (never sends) via createGraphDraft, mailbox list from HUDDLE_EMAIL_FROM; Word = renderMarkdownToDocx + createArtifact(folder "Polish", status approved) + mirrorArtifactToOneDrive (NON-fatal; download still returned). Google Drive: PR #148 adds Save to Google Drive via Nexus /api/polish/gdrive (not deployed); until then the .docx download is the stopgap. Live Graph draft / OneDrive upload NOT exercised by any test yet.
+
+## Confirm AFTER the agent reads + agent sees 1:1 stream items (2026-11-04; MERGED #133 squash 1ddd9ec, deploy-swa run 41769512390 SUCCESS; NOT owner-confirmed, NOT live-harness-verified)
 ## Hand-off / confirm / start-now flow (2026-10-31 → 11-04, ACT:handoff-confirm-flow — branches only, NOT merged, NOT deployed, NOT owner-confirmed)
 - Root causes (observed in `chat.pending_turns` + task tables): (1) the 1:1 owner follow-up (`deliverOwnerFollowup`) fires from the user's TEXT alone, even after the addressed agent already delegated/produced the work and even on "do it now"; (2) the follow-up directive says "ask to confirm, do not act" and creates no task, so Confirm buttons can never render on a hand-off (buttons = a successful `propose_task_intent` in that reply; 46/46 in 30 days came from autowork turns); (3) `proposeTaskDod` never stamps `confirm_status='asked'`, so a typed confirm binds to an OLDER autowork ask; (4) confirming moves nothing until the 9/13/17 pass, and that pass may never stage a low-ranked task; (5) task mode = first-word regex + grooming's "when in doubt, tag reminder" — parks research AND turns errands into invented briefs; (6) agents claim board writes that never happened; (7) duplicate creates.
 - Container restarts killed in-session lanes twice; the autosave refs (`eds-wip/*`) were the only surviving copy. Push WIP to a real branch first thing in every lane brief.
@@ -1781,6 +1841,16 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+
+### Task pick-up fit (2026-11-04, branch `claude_task-pickup-fit`)
+- Owner rule: agents take tickets they can FINISH end to end; a reminder only when the user says "remind me to…"; research is just done; for user-last-click tasks (subscribe/sign up/order/start a course) do the legwork — exact link on the card, comparisons always with reviews + forum feedback.
+- Mechanism: grooming may return `assigned_agent:"none"` → `groomOwner` clears the owner (journey clears on ""), and the owner judge skips it. `reminder` tag is derived from the title (`asksForReminder`), never kept or taken from the model. REMIND mode keys off the title, not the tag.
+- Go-somewhere (go/attend/visit/pick up…) → REMIND mode = an alarm before leaving + hours/address (#135). Research-type titles (`isAgentWork`) can never be unassigned by grooming's "none" (#138) — the first live pass got that wrong twice. gpt-4o-mini's "none" judgement is unreliable in both directions; prefer code rules over prompt rules here.
+- "Just do research" never meant skipping the confirm gate: research still goes Up Next → DoD confirm → approach grade → Doing → review. Post-update (11-05): 10 asks, 0 reminder-only; misses = coursework drafted as the submission, a "fix" answered with a brief despite a write tool, Trinnex scope without asking for facts.
+- The autowork WORK turn runs with `history: []`; anything the user said in their confirmation reaches it only through `agreedBrief` (confirmed_dod + proposed_approach, #139). A typed DM reply finds the agent's latest 'asked' task via getPendingConfirmForAgent (#133).
+- Shipped + independently verified (loop 3 CONFIRMED) 2026-11-05: #139 work turn gets the confirmed brief, asks name the task + links; #140 work starts on approval, coursework never assigned, hybrid answers; #141 user text capped at 4,000 at client entry points only (internal directives up to 16,000 on the drain path; capUserText ignores the client-settable `internal`); #143 plan grader = plan charter + pass iff nothing blocking; #144/#145 verifier fixes incl. strict isCoursework (📚 or UPPERCASE code + academic word) and the approach gate failing CLOSED on a settings error.
+- RESEARCH NEVER COMPLETES (found 2026-11-05 by the e2e UAT): research runs time out at CHUNK_BUDGET_MS=30s each chunk (huddle.functions.ts ~714), abort, restart from scratch, and end "done" with no replies/toolUses/artifact after 6 chunks — 16/16 since >= Oct 31. Autowork then re-enqueues every pass (and can run duplicates concurrently). The plan grader and check-in length were fixed (#141/#143); this is the remaining break in the WIP flow.
+- Live finding that drove it: 7 tasks had reminder-only proposals (6 research tasks), several invented "evidence-based Trinnex" briefs. A Nexus WRITE tool exists (`write_nexus_assignments`) — I first said it didn't.
 - [2026-10-28] Iris scheduled pushes: `turnPushStyle` (lib/push/turn-push.ts) names the push per job via `payload.pushStyle`; priority check is STICKY ("Iris: confirm ... priorities"), briefs carry Open Schedule + "adjust anything?" and one item per line (owner reversed the 10-15 "NO bullet points"). #122 `8302cb6` live, NOT owner-confirmed.
 **ARTIFACTS ARE NOT MARKDOWN-ONLY — `create_artifact` takes a `format` (2026-09-13).**
 Owner: *"why is it saying we are limited to .md when full document, mermaid, d3 abilities etc were
@@ -3872,3 +3942,8 @@ here as fact three times before being checked.)
   (reproduced offline on main 32f50e4): default limit 10 + scheduled view spans all days + starred items sort first.
 - Times were ALREADY localized on main (formatInTz + resolveJourneyIdentity tz). Edge: no profile + no browser zone → UTC.
 - Guard: `npm run test:status-answers` (23 checks, 7 mutations FIRED). Evidence: docs/qc-evidence/BUILD-status-answers.md.
+
+### 2026-11-08 — work-mailbox (Trinnex) via OneDrive files
+- Trinnex tenant refused Huddle's Graph app; owner's own Power Automate (CDM Smith dev env) publishes snapshots to von.ellis@enterpriseds.io OneDrive `/automation/email/emails.json` + `/automation/appointments/appointments.json`. Huddle's app key (Files.ReadWrite.All) reads them (proved, run 42436209509). dev@'s OneDrive does NOT have them.
+- Feed records: email `from` is a STRING, headers `[{name,value}]` (68), `body` string + `isHtml`; no inferenceClassification. Appointments: `startWithTimeZone`/`endWithTimeZone`, `location`/`organizer` strings.
+- Feed ids are `feed:<mailbox>:<original id>` — never pass one to Graph. Config = server-only HUDDLE_ONEDRIVE_FEEDS (deploy secret). Repo is PUBLIC: never commit tenant/flow/calendar ids or the cdmsmith login.

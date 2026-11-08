@@ -6,7 +6,7 @@
 // the normal sync into Huddle's mirror. Gated to Terry (scrum master) at the call site.
 
 import { AGENTS, type AgentId } from "../../data/agents";
-import { REMINDER_TAG } from "./workability";
+import { REMINDER_TAG, alarmFits, isAgentWork, isCoursework } from "./workability";
 
 export const GROOM_BACKLOG_TOOL = {
   type: "function",
@@ -19,7 +19,7 @@ export const GROOM_BACKLOG_TOOL = {
     properties: {
       category: {
         type: "string",
-        description: "Optional: only groom tasks in this lane (LIFE, VENTURES, CAREER, EDUCATION, PERSONAL). Omit to groom everything.",
+        description: "Optional: only groom tasks in this lane (LIFE, VENTURES, JOB, CAREER, EDUCATION, PERSONAL; JOB = work for the user's employer; CAREER = getting their next role). Omit to groom everything.",
       },
       limit: { type: "number", description: "Max tasks to groom this pass (default 40)." },
     },
@@ -149,6 +149,36 @@ export function incumbentOwner(current: string | null | undefined, batchPick: st
   return current && AGENT_IDS.has(current as AgentId) ? current : batchPick;
 }
 
+/**
+ * The grooming model's "nobody can finish this" answer (owner, 2026-11-04: "it shouldn't be assigned to
+ * them during grooming otherwise"). Unlike every other pick it is NOT overridden by the incumbent — a
+ * task an agent cannot finish must come OFF that agent, or it keeps getting check-ins that propose a
+ * reminder or an invented deliverable. Returns "" (journey's batch_update_tasks clears assigned_agent on
+ * "") for NO_AGENT, else the usual incumbent-first owner.
+ */
+export const NO_AGENT = "none";
+export function groomOwner(current: string | null | undefined, batchPick: string, title = ""): string {
+  // The user's own coursework is never agent work, whatever the model picked (owner, 2026-11-05).
+  if (isCoursework(title)) return "";
+  // A model "none" on research-type work is overruled: the task keeps its owner (isAgentWork).
+  if (batchPick === NO_AGENT) return isAgentWork(title) ? incumbentOwner(current, "") : "";
+  return incumbentOwner(current, batchPick);
+}
+
+/**
+ * The tags grooming writes back. Model tags replace the old descriptive ones; `parking-lot` and
+ * `blocked` (user control state) are preserved. `reminder` is DERIVED, never preserved and never taken
+ * from the model: present iff the task itself asks to be reminded or is somewhere to GO (alarmFits). Before 2026-11-04 the model added it
+ * "when in doubt" and it was sticky, so "Research AI-assisted SDLC practices" and five other doable
+ * tasks got reminder-only check-ins — the agent kicking the work down the road.
+ */
+export function groomTags(llmTags: string[], currentTags: string[], title: string): string[] {
+  const keep = currentTags.filter((t) => t === "parking-lot" || t === "blocked");
+  const fresh = llmTags.filter((t) => t !== REMINDER_TAG);
+  const out = Array.from(new Set([...fresh, ...keep])).slice(0, 5);
+  return alarmFits(title) ? Array.from(new Set([...out.slice(0, 4), REMINDER_TAG])) : out;
+}
+
 /** Run `fn` over `items` with at most `limit` in flight (no dependency for one call site). */
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let i = 0;
@@ -221,17 +251,27 @@ export async function dispatchGroomBacklog(
 
     const system = `You are Terry Locke, the scrum master, grooming a backlog like in Jira. For each task: assign it to exactly ONE agent (the best fit by their domains/role), give it 0-3 short lowercase descriptive tags, set a priority (LOW|MEDIUM|HIGH|URGENT), and set an integer rank (1 = do first) reflecting the order to tackle things. You are ORGANIZING the backlog — assigning, tagging, prioritizing, ordering. You do NOT decide whether a task is "blocked" or un-doable; the assigned agent determines that by actually working it. Just route every task to its best owner and rank it.
 
-REMINDER TAG — the one judgement that is yours. Add the tag "${REMINDER_TAG}" when NO agent could finish
-anything real on this task using only what the team already has (the user's profile, memory, board,
-email/calendar, and their own tools). These are the user's own errands, purchases, payments, physical
-trips, and anything needing access or facts only they hold: "Order replacement tire" (nobody knows their
-car or tire size), "Go to church", "Transfer funds", "Investigate <third-party> issues" (the records are
-not reachable). Still assign an owner — that agent owns the FOLLOW-UP, not the doing.
-Do NOT tag genuine knowledge-work the team can complete alone: research, drafting, planning, analysis,
-specs, outlines, summaries. When in doubt, ADD the tag: a wrong "${REMINDER_TAG}" costs the user one
-correcting message, while a wrong omission makes an agent promise work it cannot do.
-If a task ALREADY carries "${REMINDER_TAG}" in its current tags, keep it unless it is now plainly
-agent-doable work.
+ASSIGNMENT FIT — the one judgement that is yours. Assign a task ONLY to an agent who can realistically
+FINISH something real on it, end to end, with as little help from the user as possible, using what the
+team already has (the web, the user's profile, memory, board, email/calendar, Nexus coursework, and the
+agents' own tools). Research is an AI strength: researching, finding, comparing, drafting, outlining,
+planning, templates and analysis are ALWAYS assignable — the agent just does them.
+A task whose final act is the user's (subscribe, sign up, buy, order, enroll, start a course, book) is
+STILL assignable when there is real legwork an agent can finish: "Subscribe to Aha!" → find the plan
+options and the exact subscription link and put them on the card; "Start AI certification course" →
+compare courses including reviews and forum feedback; "Order more fat burners" → find where to reorder
+and the price. The agent does that legwork; the user only does the last click.
+Somewhere the user has to GO ("Go to church", "Go to the mall Saturday", an appointment) IS assignable:
+the agent sets an alarm before they need to leave and adds the hours, address or travel time.
+Set "assigned_agent":"none" when NO agent can finish anything real: a pure act with no place, time or
+legwork ("Meditate", "Clean the garage"); fixing a bug or a broken section in an app or system ("Fix the
+Nexus assignments section" — that is a code change for the user, not agent work); the user's own
+coursework (anything marked 📚 or carrying a course code like MGT-702 — never assign it); or work that depends on private files, systems or facts no
+agent can reach (an internal company dataset nobody has been given, a system with no tool). Do not assign
+such a task just to have an owner — an unassigned task stays on the user's board and no agent pesters
+them about it.
+Never add the tag "${REMINDER_TAG}" — the system sets it only when the user explicitly asks to be
+reminded or has to go somewhere. A reminder is never an agent's substitute for doing the work.
 
 ASSIGNMENT STABILITY — if a task already has an assignee and that agent is still a reasonable fit, KEEP
 them. Do not reshuffle owners between passes for a marginal improvement: re-assigning resets the task's
@@ -241,7 +281,7 @@ them.
 AGENTS (id — name, role: domains):
 ${rosterForPrompt()}
 
-Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority","rank":<int>,"reason":"<=8 words"}]}. assigned_agent MUST be one of the agent ids above. Include every task id exactly once.`;
+Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority","rank":<int>,"reason":"<=8 words"}]}. assigned_agent MUST be one of the agent ids above, or "none" per ASSIGNMENT FIT. Include every task id exactly once.`;
 
     // Classification is output-token bound (one JSON object per task), so a single call over the whole
     // slice serializes ~1k tokens and takes ~13s. Split into small chunks classified CONCURRENTLY so
@@ -251,8 +291,8 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     for (let i = 0; i < slice.length; i += CHUNK) chunks.push(slice.slice(i, i + CHUNK));
     const _tClf0 = Date.now();
     const classifyChunk = async (chunkTasks: typeof slice): Promise<Assignment[]> => {
-      // `current_tags` and `current_agent` are sent because two rules above depend on the model SEEING
-      // today's state: keep an existing `reminder` tag, and keep an existing assignee rather than
+      // `current_tags` and `current_agent` are sent because the model needs to SEE today's state: it
+      // keeps descriptive tags stable, and keeps an existing assignee rather than
       // reshuffling (which resets confirmation state and re-pings the user). Without these fields both
       // instructions are unenforceable — the model would be guessing at state it was never shown.
       const taskLines = chunkTasks
@@ -291,7 +331,9 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     };
     const chunkResults = await Promise.all(chunks.map(classifyChunk));
     const _classifyMs = Date.now() - _tClf0;
-    const assignments = chunkResults.flat().filter((a) => a && a.id && AGENT_IDS.has(a.assigned_agent as AgentId));
+    const assignments = chunkResults
+      .flat()
+      .filter((a) => a && a.id && (AGENT_IDS.has(a.assigned_agent as AgentId) || a.assigned_agent === NO_AGENT));
     if (!assignments.length) {
       return JSON.stringify({ error: "groom_no_assignments", message: "Classification returned nothing — try again." });
     }
@@ -311,7 +353,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     const byId = new Map(slice.map((t) => [t.id, t]));
     for (const a of assignments) {
       const t = byId.get(a.id);
-      if (t) a.assigned_agent = incumbentOwner(t.assigned_agent, a.assigned_agent);
+      if (t) a.assigned_agent = groomOwner(t.assigned_agent, a.assigned_agent, t.title ?? "");
     }
     try {
       const { resolveOwnerLLM } = await import("../routing");
@@ -325,6 +367,8 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
         if (Date.now() - _tJ0 > JUDGE_BUDGET_MS) return;
         const t = byId.get(a.id);
         if (!t) return;
+        // "Nobody can finish this" is final — the owner judge picks WHICH agent, never WHETHER one.
+        if (!a.assigned_agent) return;
         const incumbent = a.assigned_agent;
         const judged = await withTimeout(
           resolveOwnerLLM(
@@ -370,7 +414,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     // alone below — no `rank`, no `unset_rank` — so journey touches neither field and a deliberate
     // star survives the next Monday pass. Without this, the cap would quietly un-star the user's own
     // choices once a week, which is the exact "automation clobbers a user's deliberate control
-    // state" failure the CONTROL_TAGS block below exists to prevent.
+    // state" failure the preserved control tags (groomTags) exist to prevent.
     let userPinned = new Set<string>();
     try {
       const { getWeekOrder } = await import("./tasks.server");
@@ -386,17 +430,15 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
     // tags the model doesn't know about (ACT-17 parity: an automation pass must never clobber a user's
     // deliberate control state). `parking-lot` is already filtered out above; keeping it here too — plus
     // `blocked` — makes the writeback safe even if a parked task ever reaches this point.
-    // `reminder` is a control tag too: grooming itself sets it (a task no agent can do alone), and it
-    // must survive the next pass or the mode silently reverts and the agent goes back to inventing a
-    // deliverable. Preserved here rather than left to the model's fresh descriptive tags, which are
-    // replaced wholesale. The user removes it in the UI (or tells an agent) to escalate the task back
-    // to real work — that removal must stick, so it is only preserved when already present, never re-added.
-    const CONTROL_TAGS = new Set(["parking-lot", "blocked", REMINDER_TAG]);
+    // `reminder` is NOT a preserved control tag any more (2026-11-04, owner: "I don't need to just be
+    // reminded unless I actually say remind me to xxx"). groomTags derives it from the task's own
+    // wording on every pass, so a reminder tag grooming added under the old "when in doubt" rule is
+    // removed here, and the task goes back to real work (or comes off the agent via NO_AGENT).
     const tagsById = new Map(slice.map((t) => [t.id, (t.tags ?? []).map((x) => String(x).toLowerCase())]));
+    const titleById = new Map(slice.map((t) => [t.id, t.title ?? ""]));
     const updates = assignments.map((a) => {
       const llmTags = Array.isArray(a.tags) ? a.tags.map((t) => String(t).toLowerCase()) : [];
-      const preserved = (tagsById.get(a.id) ?? []).filter((t) => CONTROL_TAGS.has(t));
-      const tags = Array.from(new Set([...llmTags, ...preserved])).slice(0, 5);
+      const tags = groomTags(llmTags, tagsById.get(a.id) ?? [], titleById.get(a.id) ?? "");
       const laneField = groomLaneField(a.id, rankById, userPinned);
       return { task_id: a.id, assigned_agent: a.assigned_agent, tags, priority: a.priority, ...laneField };
     });

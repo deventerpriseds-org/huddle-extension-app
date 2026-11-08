@@ -4,9 +4,14 @@
 // - On sign-out: reset store to seed defaults.
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { getToken, isAuthBypassActive } from "@/lib/entra-auth";
+import { getToken, isAuthBypassActive, signIn } from "@/lib/entra-auth";
 import { useAuth } from "@/hooks/useAuth";
 import { loadWorkspace, saveWorkspace } from "@/features/huddle/lib/identity/workspace.functions";
+import {
+  describeLoadFailure,
+  isSignInFailure,
+  RECENT_DAYS,
+} from "@/features/huddle/lib/identity/workspace-window";
 import {
   clearLegacyLocalWorkspace,
   getPersistablePayload,
@@ -43,11 +48,25 @@ export function useWorkspaceSync() {
     if (hydratedRef.current === oid) return;
 
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // Set when the server rejected the sign-in: the next try asks for a FRESH token instead of resending
+    // the same one 20 times (owner 2026-11-08: stuck until he signed out and back in).
+    let forceRefreshNext = false;
+    let signInFailed = false;
     const failed = (attempt: number, why: string) => {
       if (cancelled) return;
       if (attempt + 1 < LOAD_MAX_ATTEMPTS) {
-        if (attempt === 1) toast.loading("Loading your message history…", { id: LOAD_TOAST_ID });
-        retryTimer = setTimeout(() => void load(attempt + 1), LOAD_RETRY_MS);
+        // From the second failure on, say WHY it is retrying (owner option A, 2026-11-08).
+        if (attempt >= 1)
+          toast.loading(`Loading your message history… (retrying: ${why})`, { id: LOAD_TOAST_ID });
+        // A rejected sign-in retries at once with a fresh token; anything else waits as before.
+        const delay = forceRefreshNext && attempt === 0 ? 0 : LOAD_RETRY_MS;
+        retryTimer = setTimeout(() => void load(attempt + 1), delay);
+      } else if (signInFailed) {
+        toast.error("Your sign-in expired. Sign in again to load your message history.", {
+          id: LOAD_TOAST_ID,
+          duration: Infinity,
+          action: { label: "Sign in again", onClick: () => void signIn() },
+        });
       } else {
         toast.error(
           `Couldn't load your message history (${why}). Close and reopen Huddle to retry.`,
@@ -60,7 +79,7 @@ export function useWorkspaceSync() {
     };
     const load = async (attempt: number) => {
       try {
-        const idToken = await getToken();
+        const idToken = await getToken({ forceRefresh: forceRefreshNext });
         if (cancelled) return;
         if (!idToken) {
           // Neither bypass (E2E dev-only, production UAT) ever produces a real OAuth token, so there
@@ -80,7 +99,9 @@ export function useWorkspaceSync() {
           }
           return;
         }
-        const remote = await loadWorkspace({ data: { idToken } });
+        // Paged history: open with the recent window only; older pages load on scroll-up
+        // (Transcript -> loadOlderMessages). Saves then MERGE into the stored history (mergeMessages).
+        const remote = await loadWorkspace({ data: { idToken, recentDays: RECENT_DAYS } });
         if (cancelled) return;
         if (remote) {
           try {
@@ -111,7 +132,9 @@ export function useWorkspaceSync() {
         if (attempt > 0) toast.dismiss(LOAD_TOAST_ID);
       } catch (e) {
         console.error("[workspace-sync] load failed", e);
-        failed(attempt, "server error");
+        signInFailed = isSignInFailure(e);
+        forceRefreshNext = signInFailed;
+        failed(attempt, describeLoadFailure(e));
       }
     };
     void load(0);
@@ -135,7 +158,9 @@ export function useWorkspaceSync() {
         state.decisions === prev.decisions &&
         state.activeHuddleId === prev.activeHuddleId &&
         state.showDemoData === prev.showDemoData &&
-        state.journeyTasks === prev.journeyTasks
+        state.journeyTasks === prev.journeyTasks &&
+        state.polishProfiles === prev.polishProfiles &&
+        state.polishProfileId === prev.polishProfileId
       ) {
         return;
       }
@@ -145,12 +170,22 @@ export function useWorkspaceSync() {
         if (savingRef.current) return;
         savingRef.current = true;
         try {
-          const idToken = await getToken();
-          if (!idToken) return;
           const payload = getPersistablePayload();
-          await saveWorkspace({
-            data: { idToken, stateJson: JSON.stringify(payload) },
-          });
+          const save = async (forceRefresh: boolean) => {
+            const idToken = await getToken({ forceRefresh });
+            if (!idToken) return;
+            await saveWorkspace({
+              // The app holds only a WINDOW of history, so the server merges by id rather than replacing.
+              data: { idToken, stateJson: JSON.stringify(payload), mergeMessages: true },
+            });
+          };
+          try {
+            await save(false);
+          } catch (e) {
+            // A rejected sign-in is fixed by a fresh token, not by giving up: retry once with one.
+            if (!isSignInFailure(e)) throw e;
+            await save(true);
+          }
         } catch (e) {
           console.error("[workspace-sync] save failed", e);
           // Saves failed SILENTLY for 10 days once the workspace crossed the size cap (2026-10-18 to

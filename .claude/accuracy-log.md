@@ -514,3 +514,18 @@ is **loop 4**.
 | Source that would have settled it | `git show --stat 84b262c` in eds-claude-skills vs `c0e8c40` in huddle |
 | Root cause | PR numbers are per-repo; a multi-repo session that writes "#131" alone is ambiguous to any reader |
 | Guard implied | In a multi-repo session always write `<repo>#<n>`, never a bare `#<n>` |
+
+| 2026-11-04 | "Nexus tools only read — a fix is yours" (told the owner) | `write_nexus_assignments` exists (`scripts/nexus-write-tool.test.ts`); grep of `nexus.server.ts` alone missed it | grep the whole `src/` + `scripts/` tool surface, not one file | capability-absent claim from a single-file grep | corrected to the owner in the same session; sweep tool names across `src/**` before saying "no tool" |
+
+## 2026-11-04 — "journey:{enabled:false} makes a live harness side-effect-free" (wrong)
+| | |
+|---|---|
+| Claim | qa-plan-and-answer-first.mjs with journey disabled on every agent can touch nothing the owner sees |
+| Ground truth | Two 1:1 out-of-lane cases fired `deliverOwnerFollowup`, which enqueued REAL durable turns in the owner's `dm-finn-reid` / `dm-cole-blake` (push path). The owner answered one ("Yes", u-1793767145766, 04:39Z) and got a real Roth/traditional IRA answer. Rows `followup-…-test-qa-paf-5f7a74-…` deleted 2026-11-04 (azure-pg-query run 41859177872, 0 left). |
+| Source that would have settled it | `huddle.functions.ts` deliverOwnerFollowup — it enqueues into another DM regardless of the journey toggle |
+| Root cause | journey toggle gates BOARD writes only; cross-DM follow-ups are a separate side-effect channel no harness flag covers |
+| Guard implied | A harness-only turn flag that suppresses deliverOwnerFollowup (and push), pinned by a test; until then no live 1:1 hand-off case runs against the owner's identity |
+
+| 2026-11-05 | Typed `chat.pending_turns.attempts` and `artifacts.items.title` into live SQL | neither column exists (`artifacts.items` has `name`, not `title`) | `information_schema.columns` in the SAME query, before selecting | literal typed from memory into something not read this session | read `information_schema.columns` first in any query against a table not yet read this session |
+| 2026-11-05 | Read `net._http_response` going quiet as "pg_net/heartbeat outage" and told the owner | the DB clock showed only 2.5 min had passed; queue 0, cron ran at 18:46, worker present — responses lag | `SELECT now()` + `net.http_request_queue` + `cron.job_run_details` before declaring an outage | session clock assumed equal to DB clock; absence-of-log read as failure | check now() and the queue before calling anything down; retracted in the same turn |
+| 2026-11-05 | Treated the chat-format change (schedule brief / priority check / failure notices — what reaches the phone) as Tier 2 and wrote the ACs myself, then handed them to the verifier | It is Tier 1: it decides whether a scheduled brief is delivered at all (B1-a: an oversized block failed the whole turn). The gate requires an INDEPENDENT AC subagent before coding | the tier table in the global rules + the Stop gate | "ordinary UI formatting" framing hid that the code path feeds a delivery guarantee | Classify tier by what the code path can break (delivery), not by what the request sounds like (formatting); spawn the ac-writer before the first edit |

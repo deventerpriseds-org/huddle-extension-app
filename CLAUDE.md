@@ -292,6 +292,14 @@ only in Journey Voice; Huddle `schedule_reminder` alarms ring only in Huddle. Kn
 by the user's choice ("I'll see if it's an annoyance first"): a Huddle alarm set on a task journey already
 alarms for rings in both apps. The alarm's "Open task" follows the push's own `deepLink`, so a Huddle
 alarm opens the agent's 1:1 (`/?huddle=dm-<agent>`), not journey's `/calendar`.
+**How Huddle's phone registers for push (verified 2026-11-05): with the journey SERVER's own key, not the
+user's login.** Huddle web → Huddle server → journey `huddle-proxy` → journey `execute-tool`
+`register_push_token`, and `huddle-proxy` calls `execute-tool` with `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`.
+Huddle's web side never calls `secureStore`, so the native `FcmRegistrar` in the APK does nothing here.
+TaskOS registers differently (native, with the user's login). So a journey change that tightens who may
+register only touches Huddle if `register_push_token` stops accepting the service role. Full table:
+journey-voice `CLAUDE.md` → "Phone push registration — which app registers how".
+
 **Known gap — Huddle-only (no journey) has NO phone push at all.** Every phone push, alarm included,
 goes through journey's `send_push` and needs the Huddle device registered in journey
 (`register_push_token`); alarm task buttons act on journey `public.tasks`. Deferred by the user

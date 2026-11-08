@@ -44,6 +44,8 @@ export interface InboundEmailRunResult {
     delivered?: boolean;
   }[];
   delivered?: number;
+  /** The work-mailbox OneDrive feed (second source), when configured for this owner. Counts only. */
+  feed?: { eligible: number; warning?: string };
   /** The instant-alert subscription upkeep this run did. Action + status code only (public logs). */
   subscription?: { action: "create" | "renew" | "keep" | "skipped"; ok: boolean; status?: number };
   error?: string;
@@ -114,8 +116,23 @@ export async function runInboundEmailWatch(
       };
     }
 
+    // SECOND SOURCE: the owner's work mailbox, published as a OneDrive snapshot by his own flow (that
+    // tenant refused Huddle's Graph app). Off unless HUDDLE_ONEDRIVE_FEEDS binds it to this owner. It is
+    // read AFTER the EDS inbox and a feed problem never touches the EDS mail.
+    type FeedResult = Awaited<ReturnType<typeof import("../external-feeds/onedrive-feed.server").feedEmailMessages>>;
+    let feed: FeedResult = null;
+    try {
+      const { feedEmailMessages } = await import("../external-feeds/onedrive-feed.server");
+      feed = await feedEmailMessages([caller.entra_email, ownerEmail, mailbox], since);
+      if (feed?.warning) console.error("[inbound-email] work-mailbox feed:", feed.warning);
+    } catch (err) {
+      console.error("[inbound-email] work-mailbox feed failed", err instanceof Error ? err.message : err);
+      feed = null;
+    }
+    const { isFeedId } = await import("../external-feeds/onedrive-feed");
+
     // Oldest first, so the owner hears about them in the order they arrived.
-    const msgs = [...read.messages].sort((a, b) =>
+    const msgs = [...read.messages, ...(feed?.messages ?? [])].sort((a, b) =>
       String(a.receivedDateTime ?? "").localeCompare(String(b.receivedDateTime ?? "")),
     );
     const fmt = new Intl.DateTimeFormat("en-US", {
@@ -128,7 +145,14 @@ export async function runInboundEmailWatch(
     let delivered = 0;
 
     for (const m of msgs) {
-      const verdict = screenMessage(m, mode, mailbox);
+      // A feed record carries a "feed:" id, never an EDS Graph id, so its source is unambiguous.
+      const fromFeed = !!feed && isFeedId(m.id);
+      const msgMailbox = fromFeed && feed ? feed.mailbox : mailbox;
+      // The SAME screen for both sources. Owner, 2026-11-08: no extra cross-address "self" rule for
+      // feed mail ("unnecessary and complicates testing") -- mail from his EDS address INTO the work
+      // mailbox is screened like any sender. screenMessage's own rule (from === the mailbox it arrived
+      // in) still applies to both sources, unchanged.
+      const verdict: ScreenVerdict = screenMessage(m, mode, msgMailbox);
       const row: (typeof decisions)[number] = {
         received: m.receivedDateTime ?? null,
         fromDomain:
@@ -151,7 +175,7 @@ export async function runInboundEmailWatch(
       await ledger.recordOwedEmail({
         id: emailId,
         ownerEmail,
-        mailbox,
+        mailbox: msgMailbox,
         graphMessageId: m.id,
         conversationId: m.conversationId ?? null,
         fromAddress: m.fromAddress ?? null,
@@ -172,6 +196,7 @@ export async function runInboundEmailWatch(
         emailId,
         owed: counts.owed,
         settledToday: counts.settledToday,
+        ...(fromFeed ? { workMailbox: msgMailbox } : {}),
       });
 
       const owner = INBOUND_EMAIL_OWNER;
@@ -199,6 +224,8 @@ export async function runInboundEmailWatch(
           fromName: String(m.fromName ?? "").slice(0, 300),
           fromAddress: String(m.fromAddress ?? "").slice(0, 320),
           subject: String(m.subject ?? "").slice(0, 500),
+          // No write path into the work mailbox yet: the card offers Copy + Dismiss, never Save to Drafts.
+          ...(fromFeed ? { draftable: false } : {}),
         },
       };
       const { enqueueTurn } = await import("../tasks/turns.server");
@@ -219,6 +246,7 @@ export async function runInboundEmailWatch(
       decisions,
       delivered,
       subscription,
+      ...(feed ? { feed: { eligible: feed.messages.length, ...(feed.warning ? { warning: feed.warning } : {}) } } : {}),
     };
   } catch (err) {
     console.error("[inbound-email] run failed", err instanceof Error ? err.message : err);

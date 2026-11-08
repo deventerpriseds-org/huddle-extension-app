@@ -3,6 +3,7 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
+import { joinOpenerAndBlock } from "./chat-format";
 import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
 // The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
@@ -62,15 +63,23 @@ import {
 // journey date normalization and the honest outcome note. Shared with the VOICE executor
 // (voice/realtime-tools.server.ts) so the two surfaces cannot drift; see create-task-core.ts.
 import {
+  alreadyDispatchedResult,
   annotateRawCreateOutput,
   describeRawCreateSkip,
+  dispatchedToolUses,
+  journeyCreateContext,
   loadOpenTaskTitles,
   normalizeJourneyDate,
   normalizeTaskTitle,
   screenCapabilityMetaTask,
   screenRawJourneyCreate,
+  priorBatchDispatch,
+  priorDispatchDirective,
+  RAW_JOURNEY_CREATE_TOOLS,
+  recordDispatchedCreate,
   splitTaskEntries,
   summarizeQuickCreateOutcome,
+  type DispatchedCreate,
   type OpenTitleLoad,
 } from "./tasks/create-task-core";
 import {
@@ -210,8 +219,26 @@ const AgentBackendInput = z.object({
   webSearch: z.boolean().optional(),
 });
 
+// What the USER can type stays capped at 4,000 characters (enforced at the two client entry points by
+// capUserText). Server-originated directives (`internal: true` — auto-work confirm asks, work turns) may be
+// longer: on 2026-11-05 the confirm-ask directive grew past 4,000 and EVERY check-in failed this schema
+// inside drainQueuedTurns ("String must contain at most 4000 character(s)", turn
+// autowork-confirm-883bc5dc-…), silently, from the moment it deployed.
+export const USER_TEXT_MAX = 4000;
+export const INTERNAL_TEXT_MAX = 16000;
+// Applied ONLY at the two client entry points. It deliberately IGNORES `internal`: that field is
+// client-settable, so trusting it let a crafted request send 16,000 characters (VERIFY-wip-e2e-pickup-fit-1
+// C6). Server-originated directives never come through these entry points — they are enqueued server-side
+// and parsed by drainQueuedTurns, which applies only INTERNAL_TEXT_MAX.
+export function capUserText<T extends { text: string }>(d: T): T {
+  if (d.text.length > USER_TEXT_MAX) {
+    throw new Error(`String must contain at most ${USER_TEXT_MAX} character(s)`);
+  }
+  return d;
+}
+
 const Input = z.object({
-  text: z.string().min(1).max(4000),
+  text: z.string().min(1).max(INTERNAL_TEXT_MAX),
   huddleId: z.string(),
   scope: z.enum(["one-to-one", "group"]),
   members: z.array(z.enum(AgentIds)).min(1),
@@ -250,6 +277,12 @@ const Input = z.object({
   // and lane-deferral machinery must NOT run on it: doing so mis-reads the directive as "a user ask in
   // the wrong lane" and spawns follow-ups that re-trigger follow-ups (the notification-barrage loop).
   internal: z.boolean().optional(),
+  // A follow-up CHECK on a long-running journey job this DM started (tasks/job-check.ts): which tool, the
+  // started_at it returned, and which attempt this is. Lets a "still running" status arm the NEXT check,
+  // capped at MAX_JOB_CHECK_ATTEMPTS. Only fireJobCheck sets it.
+  jobCheck: z
+    .object({ tool: z.string().max(40), since: z.string().max(40), attempt: z.number().int().min(1).max(5) })
+    .optional(),
   // A new-email alert turn (inbound-email.server.ts): the email this turn is ABOUT, so the reply card
   // (Save to Drafts / Dismiss) is attached to the target agent's reply even if the model skips
   // propose_email_reply. Display-only; every button re-reads chat.email_replies by emailId.
@@ -259,6 +292,8 @@ const Input = z.object({
       fromName: z.string().max(300),
       fromAddress: z.string().max(320),
       subject: z.string().max(500),
+      // false = the email came from the work-mailbox feed, which has no draft write path: no Save button.
+      draftable: z.boolean().optional(),
     })
     .optional(),
   // A tab-switch button attached to the TARGET agent's reply (the priority check: "Open Priorities").
@@ -269,6 +304,12 @@ const Input = z.object({
       label: z.string().min(1).max(60),
     })
     .optional(),
+  // A CODE-BUILT block (the scheduled brief's / priority check's list) appended under the TARGET agent's
+  // opening line — so the list layout is identical every run instead of re-invented by the model
+  // (owner, 2026-11-05). See ensureAppendBlockDelivered.
+  // Capped exactly like internal text (INTERNAL_TEXT_MAX): a payload over the cap fails the WHOLE durable
+  // turn. The producers also bound their own sections (BLOCK_MAX_ITEMS), so a busy week stays well under.
+  appendBlock: z.string().max(INTERNAL_TEXT_MAX).optional(),
   // A live-ceremony BARGE-IN answered synchronously (the client's runBargeSequence, not the durable
   // ceremony queue). When set on a group turn, the responder the router picks gets the existing
   // bargeDirective() layered onto its scene — "the user just cut into a live stand-up, address them
@@ -602,6 +643,9 @@ type TurnResumeState = {
   remainingQueue: AgentId[];
   spoken: AgentId[];
   createdTaskTitles: string[];
+  /** Every task create sent to journey this turn, recorded AT DISPATCH (FIX-iris-timeout-no-rerun.md).
+   *  Optional so a resume row written before this field existed still loads. */
+  dispatchedCreates?: DispatchedCreate[];
   claimedActions: string[];
   handoffById: [AgentId, { fromName: string; ask: string }][];
   interjectors: AgentId[];
@@ -704,6 +748,23 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // by saveTurnChunk, NOT the mid-chunk streaming writes), so this is the execution count so far.
   const MAX_CHUNKS = 6;
   const turnStore = chunked ? await import("./tasks/turns.server") : null;
+
+  // ---- Attention bell (owner option A, 2026-11-08): "deal with them in the chat". A message the OWNER
+  // sends in a conversation settles that conversation's open meeting/appointment bell items. Emails keep
+  // their own rules (reply detected from Sent Items, or Dismiss). Fire-and-forget: never delays the turn.
+  if (!resume && !data.internal && !data.ceremonyBarge && typeof data.huddleId === "string" && (data.text ?? "").trim()) {
+    void (async () => {
+      try {
+        const owner =
+          (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ?? data.caller?.entra_email;
+        if (!owner) return;
+        const { settleAttentionForHuddle } = await import("./email/email-replies.server");
+        await settleAttentionForHuddle(owner, data.huddleId);
+      } catch {
+        /* best-effort */
+      }
+    })();
+  }
 
   // ---- A: confirm-intent CONTEXT (WIP gate). When the user REPLIES in a 1:1 DM that has a task at
   // confirm_status='asked' for that agent, this message is probably the confirmation response. The reply
@@ -1676,6 +1737,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
                     ])
                   : null;
               const a = await assignCreatedJourneyTasks({
+                title,
                 taskIds: (r.tasks ?? []).map((t) => t.id),
                 agentId: owner ?? agentId,
                 caller: (data.caller ?? {}) as Record<string, unknown>,
@@ -1903,6 +1965,15 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // re-run of the same turn) can't create duplicate board cards for one intent. See
   // createSuggestedTaskFromTool below, which claims a title here before writing.
   const createdTaskTitles = new Set<string>(resume?.createdTaskTitles ?? []);
+
+  // Task creates SENT to journey this turn, recorded before the await (tasks/create-task-core.ts
+  // DispatchedCreate). Round-trips in the resume state like createdTaskTitles. A timed-out attempt's
+  // result is built from it (runBounded), its re-run is told about it (priorDispatchDirective in the
+  // scene) and cannot send a second batch (priorBatchDispatch). 2026-11-07: without it a 23-task ask
+  // became 43 journey rows over 6 timed-out attempts and the turn ended with no record of any of them.
+  const dispatchedCreates: DispatchedCreate[] = resume?.dispatchedCreates
+    ? resume.dispatchedCreates.map((e) => ({ ...e, titles: [...e.titles] }))
+    : [];
 
   // Tasks whose approach gate ESCALATED during this turn, by the agent that hit it. Drives the
   // in-thread "Approve anyway" row (the same reply-chip channel as confirmAsk), because escalation had
@@ -2247,6 +2318,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // without it, which a later retry then discovers and misreports as pre-existing. Threaded into
     // both model backends so neither can zombie.
     signal?: AbortSignal,
+    // This invocation's id in the dispatched-create ledger. runBounded mints it so its timeout branch
+    // can name exactly this attempt's creates; a different id for the same agent = an EARLIER attempt.
+    attemptId: string = `${nextId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
   ): Promise<AgentTurnResult> => {
     const winner = AGENT_BY_ID[nextId]!;
     const agentBackend = agentsCfg[nextId] ?? { backend: "lovable" as const };
@@ -2451,6 +2525,9 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     const handoffDirective = handoff
       ? `\n\nYou were brought into this turn by ${handoff.fromName}, who handed this to you: "${handoff.ask}". Address exactly that in your lane — answer it directly or take the action they need. Do not re-ask what was already said or restate their message.`
       : "";
+    // A re-queued attempt after a timeout: name the creates its earlier attempt already sent, so it
+    // reports them instead of sending reworded copies (empty on every ordinary attempt).
+    const priorDispatchBlock = priorDispatchDirective(dispatchedCreates, nextId, attemptId);
     // Domain/theme lane hand-off (1:1 only — group turns already route to the right lane). If the
     // user's ask clearly belongs to another agent's lane (by domains/themes, e.g. "tighten my
     // budget" → Finn), tell THIS agent to defer and bring them in, even though that owner isn't in
@@ -2514,7 +2591,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       priorInThisTurn && !ceremonyDirective
         ? `\n\nOther agents ALREADY replied in this same turn:\n${priorInThisTurn}\nDo NOT restate, re-answer, paraphrase, or agree with what they said — the user already read it. Contribute ONLY the distinct piece your own lane owns that they did not cover. If you have nothing to add beyond what's been said, reply with a single short sentence deferring to them (e.g. "nothing to add — @finn-reid covered it"). Never repeat another agent's answer back.`
         : ""
-    }${interjectDirective}${ceremonyDirective}${selfRecallBlock}${ceremonyBoardBlock}${ceremonyPriorReact}${handoffDirective}${laneDirective}${captureDirective}${confirmReplyDirective}${
+    }${interjectDirective}${ceremonyDirective}${selfRecallBlock}${ceremonyBoardBlock}${ceremonyPriorReact}${handoffDirective}${priorDispatchBlock}${laneDirective}${captureDirective}${confirmReplyDirective}${
       data.huddleId === `dm-${winner.id}` ? unblockReplyDirective : ""
     }`;
 
@@ -2838,8 +2915,34 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       rawArgs: unknown,
     ): Promise<
       | { skipOutput: string }
-      | { args: unknown; decision: Awaited<ReturnType<typeof screenRawJourneyCreate>> }
+      | {
+          args: unknown;
+          decision: Awaited<ReturnType<typeof screenRawJourneyCreate>>;
+          /** Set for a create actually being sent: the caller stamps journey's answer on it. */
+          dispatch?: DispatchedCreate;
+        }
     > {
+      // Same no-re-send rule as create_huddle_task(s): an EARLIER attempt of this agent already sent a
+      // batch create this turn, so a raw create in the re-run is that request again (often reworded).
+      if (RAW_JOURNEY_CREATE_TOOLS.has(toolName)) {
+        const priorBatch = priorBatchDispatch(dispatchedCreates, winner.id, attemptId);
+        if (priorBatch) {
+          recordToolUse(
+            winner.id,
+            toolName,
+            `not re-sent — ${priorBatch.titles.length} task(s) already sent earlier this turn`,
+            true,
+            undefined,
+            rawArgs,
+          );
+          const a = (rawArgs && typeof rawArgs === "object" ? rawArgs : {}) as Record<string, unknown>;
+          const requested =
+            toolName === "parse_and_create_tasks"
+              ? splitTaskEntries(a)
+              : [String(a.title ?? a.task ?? a.name ?? "")];
+          return { skipOutput: JSON.stringify(alreadyDispatchedResult(priorBatch, requested)) };
+        }
+      }
       const decision = await screenRawJourneyCreate(toolName, rawArgs, {
         ledger: createdTaskTitles,
         loadTitles: loadExistingOpenTitles,
@@ -2850,7 +2953,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         recordToolUse(winner.id, toolName, describeRawCreateSkip(decision.skipped), true, undefined, rawArgs);
         return { skipOutput: JSON.stringify(decision.result) };
       }
-      return { args: decision.args, decision };
+      // Forwarding to journey: record the create AT DISPATCH (the caller awaits journey next).
+      const isBatch = toolName === "parse_and_create_tasks";
+      const titles = isBatch
+        ? splitTaskEntries(decision.args)
+        : [String(decision.args.title ?? decision.args.task ?? decision.args.name ?? "").trim()].filter(Boolean);
+      const dispatch = recordDispatchedCreate(dispatchedCreates, {
+        agentId: winner.id,
+        attemptId,
+        tool: toolName,
+        batch: isBatch,
+        titles,
+      });
+      return { args: decision.args, decision, dispatch };
     }
 
     function resolveTaskLane(value: unknown): TaskLane {
@@ -2923,6 +3038,18 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // don't create a second card. The first caller claims the title here.
       // Keyed by THE normalizer (not a local lowercase) so the raw-create interception, which shares
       // this ledger, collides with it whatever whitespace/punctuation either side used (AC-60).
+      // After an EARLIER attempt's batch create (then a timeout) a single create in the re-run is the
+      // same request reworded one item at a time — the same block as the batch path.
+      const priorBatchForSingle = priorBatchDispatch(dispatchedCreates, winner.id, attemptId);
+      if (priorBatchForSingle) {
+        recordToolUse(
+          winner.id,
+          "create_huddle_task",
+          `not re-sent — ${priorBatchForSingle.titles.length} task(s) already sent earlier this turn`,
+          true,
+        );
+        return alreadyDispatchedResult(priorBatchForSingle, [title]);
+      }
       const titleKey = normTitle(title);
       if (createdTaskTitles.has(titleKey)) {
         recordToolUse(
@@ -2997,12 +3124,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // "next Friday" — can't silently break the scheduling call; drop it and fall back to the
           // title-text NL parser, which handles those phrases correctly.
           const dateArg = normalizeJourneyDate(args.date);
+          const singleDispatch = recordDispatchedCreate(dispatchedCreates, {
+            agentId: winner.id,
+            attemptId,
+            tool: "create_huddle_task",
+            batch: false,
+            titles: [task.title],
+          });
           const r = await invokeJourneyTool({
             toolName: "quick_create_task",
             args: dateArg ? { title: task.title, date: dateArg } : { title: task.title },
             caller: data.caller ?? {},
             context: { source: "huddle", huddleId: data.huddleId, agentId: winner.id },
           });
+          singleDispatch.result = r.ok ? { ok: true, created: 1 } : { ok: false, error: r.error ?? "unknown" };
           if (r.ok) {
             if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
             else suggestedTasks.push(task); // journey didn't echo a row — keep a Huddle card
@@ -3026,6 +3161,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             });
             const assignment = assignee
               ? await assignCreatedJourneyTasks({
+                  title: task.title,
                   taskIds: (r.tasks ?? []).map((t) => t.id),
                   agentId: assignee,
                   caller: (data.caller ?? {}) as Record<string, unknown>,
@@ -3170,6 +3306,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         return { ok: false, error };
       }
 
+      // An EARLIER attempt of this agent in this turn already sent a batch create (and then timed out):
+      // the same request, typically reworded, which the exact-title checks below cannot catch. Do not
+      // send it again (FIX-iris-timeout-no-rerun.md; 6 re-sends on 2026-11-07).
+      const priorBatch = priorBatchDispatch(dispatchedCreates, winner.id, attemptId);
+      if (priorBatch) {
+        recordToolUse(
+          winner.id,
+          "create_huddle_tasks",
+          `not re-sent — ${priorBatch.titles.length} task(s) already sent earlier this turn`,
+          true,
+        );
+        return alreadyDispatchedResult(priorBatch, entries);
+      }
+
       // Per-entry guards (mirror the single path): exclusive-capability meta-task guard + dedup.
       const existing = await openTitlesForCreate("create_huddle_tasks");
       const survivors: string[] = [];
@@ -3206,16 +3356,32 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         try {
           const { invokeJourneyTool } = await import("./journey/proxy.functions");
           const target_date = normalizeJourneyDate(args.date);
+          // The user's own message, so journey's parser categorizes with the framing the owner gave
+          // ("priorities I need to work on today"), not only the bare titles. journey ignores an arg it
+          // does not read (parseAndCreateTasks reads text/target_date/auto_schedule/default_status/
+          // source_topic_id only, execute-tool/index.ts:1753), so this is safe before journey reads it.
+          const createContext = journeyCreateContext(data.text);
+          // Recorded BEFORE the await: if this attempt times out while journey is still parsing, the
+          // ledger is the only record that these were sent (journey writes them regardless).
+          const dispatch = recordDispatchedCreate(dispatchedCreates, {
+            agentId: winner.id,
+            attemptId,
+            tool: "create_huddle_tasks",
+            batch: true,
+            titles: survivors,
+          });
           const r = await invokeJourneyTool({
             toolName: "parse_and_create_tasks",
             args: {
               text: survivors.join("\n"),
               auto_schedule: true,
               ...(target_date ? { target_date } : {}),
+              ...(createContext ? { context: createContext } : {}),
             },
             caller: data.caller ?? {},
             context: { source: "huddle", huddleId: data.huddleId, agentId: winner.id },
           });
+          dispatch.result = r.ok ? { ok: true } : { ok: false, error: r.error ?? "unknown" };
           if (r.ok) {
             let created = 0;
             let createdTasks: unknown[] = [];
@@ -3236,6 +3402,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 created = survivors.length;
               }
             }
+            dispatch.result = { ok: true, created };
             recordToolUse(
               winner.id,
               "create_huddle_tasks",
@@ -4016,6 +4183,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   fromAddress: row.from_address ?? "",
                   subject: row.subject ?? "",
                   replyBody: body,
+                  // A work-mailbox (OneDrive feed) email has no draft write path: carry that on EVERY
+                  // card for it, not only the alert turn's (VERIFY-trinnex-onedrive-feed-1 D2).
+                  ...((await import("./external-feeds/onedrive-feed")).isFeedId(row.graph_message_id)
+                    ? { draftable: false }
+                    : {}),
                 }),
               );
               return JSON.stringify({ ok: true, email_id: emailId });
@@ -4781,8 +4953,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               const mailbox =
                 (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                 data.caller?.entra_email;
-              const { getGraphCalendarEvents } = await import("./email/graph-email.server");
-              const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+              // The EDS calendar exactly as before, plus the work calendar feed when one is configured.
+              const { getOwnerCalendarEvents } = await import("./email/graph-email.server");
+              const r = await getOwnerCalendarEvents({ caller: data.caller, mailbox, startISO, endISO, timeZone: tz });
               recordToolUse(
                 winner.id,
                 "get_external_calendar_events",
@@ -4889,7 +5062,23 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                   agentId: winner.id,
                 },
               });
+              if ("dispatch" in dedup && dedup.dispatch) {
+                dedup.dispatch.result = r.ok ? { ok: true } : { ok: false, error: r.error ?? "unknown" };
+              }
               if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+              // Long-running journey job (rebuild_schedule): its start returns before the work is done, so
+              // arm a delayed follow-up check in this DM (tasks/job-check.ts). No-op for every other tool.
+              if (r.ok) {
+                const { armJobCheck } = await import("./tasks/job-check.server");
+                await armJobCheck({
+                  toolName: c.name,
+                  output: r.output,
+                  huddleId: data.huddleId,
+                  agentId: winner.id,
+                  caller: data.caller,
+                  current: data.jobCheck ?? null,
+                });
+              }
               recordToolUse(
                 winner.id,
                 c.name,
@@ -6337,8 +6526,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 const mailbox =
                   (await (await import("./journey/identity")).resolveCalendarMailbox(data.caller)) ??
                   data.caller?.entra_email;
-                const { getGraphCalendarEvents } = await import("./email/graph-email.server");
-                const r = await getGraphCalendarEvents({ mailbox, startISO, endISO, timeZone: tz });
+                // The EDS calendar exactly as before, plus the work calendar feed when one is configured.
+                const { getOwnerCalendarEvents } = await import("./email/graph-email.server");
+                const r = await getOwnerCalendarEvents({ caller: data.caller, mailbox, startISO, endISO, timeZone: tz });
                 recordToolUse(
                   winner.id,
                   "get_external_calendar_events",
@@ -6553,7 +6743,22 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                         agentId: winner.id,
                       },
                     });
+                    if ("dispatch" in dedup && dedup.dispatch) {
+                      dedup.dispatch.result = r.ok ? { ok: true } : { ok: false, error: r.error ?? "unknown" };
+                    }
                     if (r.tasks && r.tasks.length > 0) journeyTaskUpdates.push(...r.tasks);
+                    // Same long-running job follow-up as the OpenAI path (tasks/job-check.ts).
+                    if (r.ok) {
+                      const { armJobCheck } = await import("./tasks/job-check.server");
+                      await armJobCheck({
+                        toolName: def.name,
+                        output: r.output,
+                        huddleId: data.huddleId,
+                        agentId: winner.id,
+                        caller: data.caller,
+                        current: data.jobCheck ?? null,
+                      });
+                    }
                     recordToolUse(
                       winner.id,
                       def.name,
@@ -6780,7 +6985,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   const emailCardFor = (agentId: AgentId, uses: readonly AgentTurnResult["toolUses"][number][]): EmailReplyAsk | undefined => {
     const use = [...uses].reverse().find((t) => t.agentId === agentId && t.tool === "propose_email_reply" && t.ok);
     const fromTool = use ? emailReplyAskFromDetail(use.detail) : undefined;
-    if (fromTool) return fromTool;
+    // The tool's card carries the body; the alert's ref carries whether Save is possible at all.
+    if (fromTool) return data.emailReplyRef?.draftable === false ? { ...fromTool, draftable: false } : fromTool;
     if (data.emailReplyRef && agentId === data.targetAgentId) return { ...data.emailReplyRef, replyBody: "" };
     return undefined;
   };
@@ -7142,7 +7348,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // cards" when 3 of the 4 had in fact just been created by his own earlier, timed-out attempt in
     // this exact turn, 40s before that reply.
     const controller = new AbortController();
-    const attempt = runAgentTurn(id, prior, userTextOverride, controller.signal);
+    const attemptId = `${id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const attempt = runAgentTurn(id, prior, userTextOverride, controller.signal, attemptId);
     // The abort() below makes this settle (usually reject with an AbortError) after the race has
     // already resolved via the timeout branch. Nobody awaits `attempt` past that point — swallow it
     // here so an aborted/failed zombie doesn't surface as an unhandled promise rejection.
@@ -7164,7 +7371,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 inline: "response timed out — deferred",
               },
             ],
-            toolUses: [],
+            // NOT []: the creates this attempt already sent to journey are still being written there.
+            // Dropping them is what made the 2026-11-07 turn end with no record of 43 created rows (no
+            // ensureNotSilentOnRealWork reply, nothing for the next turn's "what did you add").
+            toolUses: dispatchedToolUses(dispatchedCreates, id, attemptId) as AgentTurnResult["toolUses"],
             journeyTaskUpdates: [],
             suggestedTasks: [],
             reasoning: [],
@@ -7182,6 +7392,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     remainingQueue: [...queue],
     spoken: [...spoken],
     createdTaskTitles: [...createdTaskTitles],
+    dispatchedCreates: dispatchedCreates.map((e) => ({ ...e, titles: [...e.titles] })),
     claimedActions: [...turnActionLedger],
     handoffById: [...handoffById.entries()],
     interjectors: [...interjectorSet],
@@ -7250,6 +7461,23 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       text: `Hello Sir, I couldn't finish writing this one up just now — the "${link.label}" button below takes you straight there.`,
       navLink: link,
     });
+  };
+
+  // A turn whose payload carries an appendBlock (the scheduled brief / priority check) ends with that
+  // code-built list under the target agent's opening line. The model is told to write ONLY the opener;
+  // joinOpenerAndBlock keeps just its text before any list it wrote anyway, so nothing shows twice. If
+  // the model produced nothing (timeout, quota notice), the block still goes out under "Hello Sir,".
+  const ensureAppendBlockDelivered = () => {
+    const block = data.appendBlock?.trim();
+    const target = data.targetAgentId;
+    if (!block || !target) return;
+    const i = replies.findIndex((r) => r.agentId === target);
+    if (i >= 0) {
+      if (replies[i].text.includes(block)) return;
+      replies[i] = { ...replies[i], text: joinOpenerAndBlock(replies[i].text, block) };
+      return;
+    }
+    replies.push({ agentId: target, text: joinOpenerAndBlock("", block) });
   };
 
   // A deliverable answered now (the deep-1:1 hybrid) ends with the produce offer. Recorded as a pending
@@ -7511,6 +7739,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       return { ...finalResult(), partial: true };
     }
     ensureNotSilentOnRealWork();
+    ensureAppendBlockDelivered();
     ensureNavLinkDelivered();
     await ensureProduceOfferDelivered();
     try {
@@ -7523,6 +7752,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   }
 
   ensureNotSilentOnRealWork();
+  ensureAppendBlockDelivered();
   ensureNavLinkDelivered();
   await ensureProduceOfferDelivered();
   persistResearchedMemory();
@@ -7530,7 +7760,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
 }
 
 export const sendHuddleMessage = createServerFn({ method: "POST" })
-  .inputValidator((raw: unknown) => Input.parse(raw))
+  .inputValidator((raw: unknown) => capUserText(Input.parse(raw)))
   .handler(async ({ data }) => runHuddleTurn(data));
 
 // BARGE-IN: the user interjects during a live ceremony. Instead of a separate, uncoordinated turn,
@@ -8173,7 +8403,7 @@ export async function runDurableHuddleTurn(
 }
 
 export const enqueueHuddleTurn = createServerFn({ method: "POST" })
-  .inputValidator((raw: unknown) => EnqueueTurnInput.parse(raw))
+  .inputValidator((raw: unknown) => capUserText(EnqueueTurnInput.parse(raw)))
   .handler(async ({ data }) => runDurableHuddleTurn(data));
 
 /** The public VAPID key the browser needs to create a push subscription (null if push isn't set up). */
