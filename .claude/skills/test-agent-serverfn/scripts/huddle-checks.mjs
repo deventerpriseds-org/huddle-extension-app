@@ -254,6 +254,23 @@ export const checks = [
         check("Typed 'mhm' noise barge is IGNORED (no agent reply)", afterNoise - beforeNoise <= 1, `delta=${afterNoise - beforeNoise} (>1 ⇒ an agent wrongly answered the noise)`);
       }
     }
+    // UNMUTE FIRST. Since 2026-10-19 the ceremony starts with the barge mic MUTED by design
+    // (MeetingBar.tsx: "Muted (the default at ceremony start)"). Without this tap the fake-mic clips
+    // played below never reach the app: verify-uat runs 42452437543 / 42483232750 showed NO spoken turn
+    // in the transcript ("mic muted — tap the mic to talk" on screen), and voiceBarge then read the next
+    // scripted line as the "answer" -- a false HEARD pass and false hail/park failures.
+    {
+      const unmute = page.locator("button", { hasText: /^Unmute$/ }).first();
+      if (await unmute.count()) await unmute.click().catch(() => {});
+      const live = await page
+        .locator("text=/mic — (listening|hearing you)/")
+        .first()
+        .waitFor({ state: "visible", timeout: 8000 })
+        .then(() => true)
+        .catch(() => false);
+      const shown = live ? "" : await page.locator("text=/mic muted|mic —/").first().innerText().catch(() => "no mic indicator");
+      check("Ceremony barge mic unmuted and listening before voice barges", live, shown);
+    }
     // Stage 1 — bare hail: expect a brief ack ("yes?"), NOT a lane update, NOT a park.
     const hailReply = await voiceBarge({ page, check, screenshot }, { label: "1-hail", text: "Hey, Sam." });
     check("Hail 'Hey Sam' gets a short ready-ack, not a lane update", /\b(yes|go ahead|what'?s up|listening|sir)\b/i.test(hailReply) && hailReply.length < 90, `hailReply="${hailReply.slice(0, 120)}"`);
