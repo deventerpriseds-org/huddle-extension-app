@@ -4,8 +4,9 @@
 // WHY:        Option A (docs/polish/CONTRACT-polish-ecosystem.md): Huddle's own screen (polishTextFn)
 //             and Nexus (via /api/public/polish) must run the SAME engine, so it lives here once.
 // SUPERSEDES: the model-call body that lived inline in polish.functions.ts polishTextFn (moved, not changed).
-// SUPERSEDED-BY: nothing -- current
-// EVIDENCE:   scripts/polish-core.test.ts; reuses OPENAI_API_KEY (no new secret)
+// SUPERSEDED-BY: nothing -- current. (2026-11-08: runPolish now asks the shared eds-tools service first;
+//             the local engine below is the fallback — deventerpriseds-org/eds-tools docs/PLAN.md phase 1.)
+// EVIDENCE:   scripts/polish-core.test.ts; reuses OPENAI_API_KEY + JOURNEY_PROXY_TOKEN (no new secret)
 import {
   applyResult,
   BUILTIN_PROFILES,
@@ -23,7 +24,66 @@ const ENGINE_MODEL = {
 
 export type PolishResult = { ok: true; text: string; model: string } | { ok: false; error: string };
 
+/** The shared tools service (deventerpriseds-org/eds-tools, phase 1 of Option A). EDS_TOOLS_URL overrides. */
+export const EDS_TOOLS_DEFAULT_URL = "https://eds-tools-fn.azurewebsites.net";
+
+/** What the shared service's answer means for Huddle: use it, or fall back to the local engine. A
+ *  reachable service that REFUSED the request (4xx other than auth) is final, not a fallback trigger:
+ *  the local engine would refuse the same input, and retrying would hide a real defect. */
+export function edsToolsOutcome(status: number | "network", body: unknown): "use" | "fallback" {
+  if (status === "network") return "fallback";
+  const ok =
+    !!body && typeof body === "object" && typeof (body as { ok?: unknown }).ok === "boolean";
+  if (!ok) return "fallback";
+  if (status === 401 || status === 403 || status === 503 || status >= 500) {
+    // 502 with {ok:false} is the service's own MODEL failure — the same model would fail locally too.
+    return status === 502 ? "use" : "fallback";
+  }
+  return "use";
+}
+
+/** Phase 1 of the shared tools service: ask eds-tools first, fall back to Huddle's own engine when the
+ *  service is unreachable or misconfigured. Settings are coerced HERE (with the profile as base) so both
+ *  paths polish with exactly the same settings. */
 export async function runPolish(
+  profileName: string,
+  rawSettings: unknown,
+  req: PolishRequest,
+  base?: PolishProfile,
+  fetchImpl: typeof fetch = fetch,
+): Promise<PolishResult & { engine?: "eds-tools" | "local" }> {
+  const settings = normalizeSettings(rawSettings, base);
+  const secret = (process.env.JOURNEY_PROXY_TOKEN ?? "").trim();
+  const url = (process.env.EDS_TOOLS_URL ?? EDS_TOOLS_DEFAULT_URL).trim().replace(/\/+$/, "");
+  if (secret && url) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 42_000);
+    try {
+      const res = await fetchImpl(`${url}/api/polish`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-webhook-secret": secret,
+          "x-eds-app": "huddle",
+        },
+        body: JSON.stringify({ profileName, settings, request: req }),
+        signal: ctl.signal,
+      });
+      const body = (await res.json().catch(() => null)) as PolishResult | null;
+      if (edsToolsOutcome(res.status, body) === "use" && body)
+        return { ...body, engine: "eds-tools" };
+      console.warn("[polish] eds-tools fallback", res.status);
+    } catch (e) {
+      console.warn("[polish] eds-tools unreachable; local fallback", (e as Error)?.name);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return { ...(await runPolishLocal(profileName, settings, req, base)), engine: "local" };
+}
+
+/** Huddle's own copy of the engine — the fallback while eds-tools is phase 1. */
+export async function runPolishLocal(
   profileName: string,
   rawSettings: unknown,
   req: PolishRequest,

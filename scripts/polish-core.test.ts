@@ -193,12 +193,98 @@ const email = BUILTIN_PROFILES[0];
 // 10. The route authenticates BEFORE it reads the body, and keeps both identity guards.
 {
   const fs = await import("node:fs");
-  const src = fs.readFileSync(new URL("../src/routes/api/public/polish.ts", import.meta.url), "utf8");
+  const src = fs.readFileSync(
+    new URL("../src/routes/api/public/polish.ts", import.meta.url),
+    "utf8",
+  );
   const authAt = src.indexOf("authenticateCaller(request.headers)");
   const readAt = src.indexOf("request.json()");
-  check("route: authenticates first", authAt > -1 && readAt > -1 && authAt < readAt, `${authAt} vs ${readAt}`);
+  check(
+    "route: authenticates first",
+    authAt > -1 && readAt > -1 && authAt < readAt,
+    `${authAt} vs ${readAt}`,
+  );
   check("route: refuses asserted identity", src.includes("findCallerAssertedIdentity(payload)"));
   check("route: subject is server-held", src.includes("resolveActingSubject()"));
+}
+
+// 11. Phase 1 of the shared tools service: eds-tools first, local engine as fallback.
+{
+  const { runPolish, edsToolsOutcome } =
+    await import("../src/features/huddle/lib/polish/polish.server");
+  const saved = { t: process.env.JOURNEY_PROXY_TOKEN, k: process.env.OPENAI_API_KEY };
+  process.env.JOURNEY_PROXY_TOKEN = "tok";
+  delete process.env.OPENAI_API_KEY; // local engine answers "missing model key" -> proves which path ran
+  const req = { mode: "polish" as const, draft: "hi" };
+  const reply = (status: number, body: unknown) => async () =>
+    ({ status, json: async () => body }) as unknown as Response;
+  let sent: {
+    url: string;
+    headers: Record<string, string>;
+    body: { settings?: { formality?: number } };
+  } | null = null;
+  const capture = async (url: string | URL | Request, init?: RequestInit) => {
+    sent = {
+      url: String(url),
+      headers: init?.headers as Record<string, string>,
+      body: JSON.parse(String(init?.body)),
+    };
+    return {
+      status: 200,
+      json: async () => ({ ok: true, text: "Done", model: "m" }),
+    } as unknown as Response;
+  };
+  const a = await runPolish(
+    "Work email",
+    { formality: 2 },
+    req,
+    undefined,
+    capture as typeof fetch,
+  );
+  check("eds-tools: 200 used", a.ok === true && a.engine === "eds-tools", JSON.stringify(a));
+  check(
+    "eds-tools: token + app header sent",
+    sent?.headers["x-webhook-secret"] === "tok" && sent?.headers["x-eds-app"] === "huddle",
+  );
+  check(
+    "eds-tools: settings coerced before send",
+    sent?.body.settings?.formality === 2,
+    JSON.stringify(sent?.body),
+  );
+  const b = await runPolish("x", {}, req, undefined, (async () => {
+    throw new TypeError("fetch failed");
+  }) as typeof fetch);
+  check("eds-tools: network error -> local fallback", b.engine === "local", JSON.stringify(b));
+  const c = await runPolish(
+    "x",
+    {},
+    req,
+    undefined,
+    reply(401, { ok: false, error: "unauthorized" }) as typeof fetch,
+  );
+  check("eds-tools: 401 -> local fallback", c.engine === "local", JSON.stringify(c));
+  const d = await runPolish(
+    "x",
+    {},
+    req,
+    undefined,
+    reply(400, { ok: false, error: "draft is required" }) as typeof fetch,
+  );
+  check(
+    "eds-tools: 400 refusal is final (no fallback)",
+    d.engine === "eds-tools" && d.ok === false,
+    JSON.stringify(d),
+  );
+  check("outcome: non-JSON body -> fallback", edsToolsOutcome(200, null) === "fallback");
+  check(
+    "outcome: 502 model failure -> use",
+    edsToolsOutcome(502, { ok: false, error: "x" }) === "use",
+  );
+  delete process.env.JOURNEY_PROXY_TOKEN;
+  const e = await runPolish("x", {}, req, undefined, capture as typeof fetch);
+  check("no token configured -> local, never calls out", e.engine === "local");
+  if (saved.t !== undefined) process.env.JOURNEY_PROXY_TOKEN = saved.t;
+  if (saved.k !== undefined) process.env.OPENAI_API_KEY = saved.k;
 }
 
 console.log(fail ? `\n${fail} FAILED` : "\nall passed");
