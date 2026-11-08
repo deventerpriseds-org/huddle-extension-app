@@ -15,7 +15,8 @@ async function openIris(page) {
     await nav.click().catch(() => {});
     await page.waitForTimeout(500);
   }
-  const iris = page.getByText(/^Iris Chase$/).first();
+  // The agent channel is labelled "#iris-chase" (an unread badge may follow it).
+  const iris = page.getByText(/^#?iris-chase$/i).first();
   if (!(await iris.count())) return false;
   await iris.click().catch(() => {});
   await page.waitForTimeout(800);
@@ -26,7 +27,9 @@ export const checks = [
   async ({ page, check, screenshot }) => {
     await page.waitForTimeout(1000);
     const opened = await openIris(page);
-    check("opened Iris Chase's 1:1", opened, "no 'Iris Chase' entry found in the navigation");
+    check("opened Iris Chase's 1:1", opened, "no '#iris-chase' entry found in the navigation");
+    const header = await page.getByText(/^Iris Chase$/).count();
+    check("the Iris Chase channel is the one on screen", header > 0, `header matches: ${header}`);
     // Wait for rendered agent messages (paged history loads the most recent first).
     const deadline = Date.now() + 30000;
     let n = 0;
