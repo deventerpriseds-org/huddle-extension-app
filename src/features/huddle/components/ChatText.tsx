@@ -16,7 +16,7 @@ function Inlines({ parts }: { parts: Inline[] }) {
         if (p.t === "bold")
           return (
             <strong key={i} className="font-semibold">
-              {p.v}
+              {p.em ? <em className="italic">{p.v}</em> : p.v}
             </strong>
           );
         if (p.t === "em")

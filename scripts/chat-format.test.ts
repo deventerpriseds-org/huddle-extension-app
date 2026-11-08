@@ -136,6 +136,18 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   const cfSrc = readFileSync("src/features/huddle/lib/chat-format.ts", "utf8");
   check("AC-COMPAT no regex lookbehind (SyntaxError on iOS Safari < 16.4)", !/\(\?<[!=]/.test(cfSrc));
   check("AC-S12c text around italics is kept", JSON.stringify(parseInline("(see *this*)")) === JSON.stringify([{ t: "text", v: "(see" }, { t: "text", v: " " }, { t: "em", v: "this" }, { t: "text", v: ")" }]) || parseInline("(see *this*)").map((p) => ("v" in p ? p.v : "")).join("") === "(see this)", parseInline("(see *this*)"));
+  // verifier loop 5 (docs/qc-evidence/VERIFY-chat-format-5.md)
+  check("L5-S13 ***really*** is bold italic, no stray asterisks", JSON.stringify(parseInline("so ***really*** good")) === JSON.stringify([{ t: "text", v: "so " }, { t: "bold", v: "really", em: true }, { t: "text", v: " good" }]), parseInline("so ***really*** good"));
+  check("L5-S13b **_y_** is bold italic", JSON.stringify(parseInline("**_y_**")) === JSON.stringify([{ t: "bold", v: "y", em: true }]), parseInline("**_y_**"));
+  check("L5-S27 **https://x.com/a** is a clickable link", (parseInline("**https://x.com/a**")[0] as { t: string; href?: string }).href === "https://x.com/a");
+  const ang = parseInline("see <https://x.com> now");
+  check("L5-S26 <https://x.com> is a link with no visible angle brackets", JSON.stringify(ang) === JSON.stringify([{ t: "text", v: "see " }, { t: "link", href: "https://x.com", label: "x.com" }, { t: "text", v: " now" }]), ang);
+  check("L5-S32 'Note here.\n10. That's the deadline' stays a paragraph", JSON.stringify(parseChatBlocks("Note here.\n10. That's the deadline").map((b) => b.t)) === '["p"]');
+  check("L5-S32b 'Steps:\n2. a\n3. b' after a colon is still a list", parseChatBlocks("Steps:\n2. a\n3. b")[1]?.t === "ol");
+  check("L5-S32c 'Intro.\n1. a\n2. b' starting at 1 is still a list", parseChatBlocks("Intro.\n1. a\n2. b")[1]?.t === "ol");
+  const fz = parseChatBlocks("```\na\n\n\n\nb\n- x\n\n- y\n```");
+  check("L5-fence whitespace inside a fence is kept exactly", (fz[0] as { text: string }).text === "a\n\n\n\nb\n- x\n\n- y", fz);
+  check("L5-open-fence an opener cut inside a fence drops the open fence", openerOnly("Hello Sir, two tasks.\n```\n• 9:00 AM — A", "On your task list:\n• 9:00 AM — A") === "Hello Sir, two tasks.");
   const ct = readFileSync("src/features/huddle/components/ChatText.tsx", "utf8");
   check("V17 ChatText renders each <li> with its own value", /value=\{b\.t === "ol" \? b\.nums\[j\] : undefined\}/.test(ct));
   const blk2 = "Meetings and classes:\n• 9:00 AM — A\n\nWould you like to adjust anything today? The button below.";

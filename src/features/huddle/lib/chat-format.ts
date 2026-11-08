@@ -49,8 +49,15 @@ export function normalizeChatText(raw: string): string {
     .split("\n")
     .map((l) => l.replace(/[ \t\u00a0]+$/, ""));
   const out: string[] = [];
+  let inFence = false;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
+    // Inside a ``` fence nothing is tidied: the block is shown exactly as written.
+    if (/^\s*```/.test(l)) inFence = !inFence;
+    if (inFence || /^\s*```/.test(l)) {
+      out.push(l);
+      continue;
+    }
     if (l.trim() !== "") {
       out.push(l);
       continue;
@@ -86,14 +93,14 @@ function isGreeting(line: string): boolean {
 
 export type Inline =
   | { t: "text"; v: string }
-  | { t: "bold"; v: string }
+  | { t: "bold"; v: string; em?: boolean }
   | { t: "em"; v: string }
   | { t: "code"; v: string }
   | { t: "link"; href: string; label: string };
 
 /** Only http(s) ever becomes a link. Trailing sentence punctuation stays outside the URL. */
 const INLINE_RE =
-  /\*\*([^*\n]+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))*(?:[^\s<>().,;:!?'"’”*]|\([^\s<>()]*\)))|(^|[^\w*])\*([^\s*](?:[^*\n]*?[^\s*])?)\*(?![\w*])|(^|[^\w_])_([^\s_](?:[^_\n]*?[^\s_])?)_(?![\w_])/g;
+  /\*\*\*([^*\n]+?)\*\*\*|\*\*([^*\n]+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|<(https?:\/\/[^\s<>]+)>|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))*(?:[^\s<>().,;:!?'"’”*]|\([^\s<>()]*\)))|(^|[^\w*])\*([^\s*](?:[^*\n]*?[^\s*])?)\*(?![\w*])|(^|[^\w_])_([^\s_](?:[^_\n]*?[^\s_])?)_(?![\w_])/g;
 
 export function parseInline(s: string): Inline[] {
   const out: Inline[] = [];
@@ -102,18 +109,27 @@ export function parseInline(s: string): Inline[] {
     const at = m.index ?? 0;
     if (at > last) out.push({ t: "text", v: s.slice(last, at) });
     // "__x__" is deliberately NOT bold: it ate the underscores of names like __init__.
-    if (m[1] != null) out.push({ t: "bold", v: m[1] });
-    else if (m[2] != null) out.push({ t: "code", v: m[2] });
-    else if (m[3] != null && m[4] != null) out.push({ t: "link", href: m[4], label: m[3] });
-    else if (m[5] != null) out.push({ t: "link", href: m[5], label: shortUrlLabel(m[5]) });
+    if (m[1] != null)
+      out.push({ t: "bold", v: m[1], em: true }); // ***bold italic***
+    else if (m[2] != null) {
+      const v = m[2];
+      const inner = /^_([^_]+)_$/.exec(v) ?? /^\*([^*]+)\*$/.exec(v); // **_bold italic_**
+      if (/^https?:\/\/\S+$/.test(v))
+        out.push({ t: "link", href: v, label: shortUrlLabel(v) }); // **url**
+      else if (inner) out.push({ t: "bold", v: inner[1], em: true });
+      else out.push({ t: "bold", v });
+    } else if (m[3] != null) out.push({ t: "code", v: m[3] });
+    else if (m[4] != null && m[5] != null) out.push({ t: "link", href: m[5], label: m[4] });
+    else if (m[6] != null)
+      out.push({ t: "link", href: m[6], label: shortUrlLabel(m[6]) }); // <url>
+    else if (m[7] != null) out.push({ t: "link", href: m[7], label: shortUrlLabel(m[7]) });
     // *italic* / _italic_: only when the markers hug a word on both sides, so "2*3*4", "a_b_c",
-    // "__init__" and "* not a list" are left alone.
-    // (No lookbehind: it is a SyntaxError on iOS Safari < 16.4 and would break the whole chat module.
-    // The character before the marker is captured instead and kept as text.)
-    else if (m[7] != null || m[9] != null) {
-      const lead = (m[6] ?? m[8] ?? "") as string;
+    // "__init__" and "* not a list" are left alone. (No lookbehind: it is a SyntaxError on iOS
+    // Safari < 16.4 and would break the whole chat module. The lead character is kept as text.)
+    else if (m[9] != null || m[11] != null) {
+      const lead = (m[8] ?? m[10] ?? "") as string;
       if (lead) out.push({ t: "text", v: lead });
-      out.push({ t: "em", v: (m[7] ?? m[9]) as string });
+      out.push({ t: "em", v: (m[9] ?? m[11]) as string });
     }
     last = at + m[0].length;
   }
@@ -152,7 +168,11 @@ export function parseChatBlocks(raw: string): Block[] {
     cur = null;
   };
   let fence: string[] | null = null;
-  for (const line of lines) {
+  let prevLine = "";
+  for (const rawLine of lines) {
+    const line = rawLine;
+    const before = prevLine;
+    prevLine = line;
     // A ``` fence is shown as-is (monospace); nothing inside it is read as a list or heading.
     if (/^\s*```/.test(line)) {
       if (fence) {
@@ -177,7 +197,11 @@ export function parseChatBlocks(raw: string): Block[] {
       blocks.push({ t: "h", v: parseInline(line.replace(HEADING_RE, "").replace(/\s#+\s*$/, "")) });
       continue;
     }
-    if (LIST_RE.test(line)) {
+    // "Note here.\n10. That's the deadline" is a sentence, not a list: a numbered line straight after a
+    // paragraph line only starts a list when it is item 1 or the line before ends with ":".
+    const sentenceNumber =
+      ORDERED_RE.test(line) && cur?.t === "p" && listNumber(line) !== 1 && !/:\s*$/.test(before);
+    if (LIST_RE.test(line) && !sentenceNumber) {
       const kind = ORDERED_RE.test(line) ? "ol" : "ul";
       if (!cur || cur.t !== kind) {
         flush();
@@ -311,6 +335,9 @@ export function openerOnly(text: string, block = ""): string {
       break;
     out.push(line);
   }
+  // A ``` fence the cut left open would swallow the code-built list below it — drop the open part.
+  const fences = out.map((l, i) => (/^\s*```/.test(l) ? i : -1)).filter((i) => i >= 0);
+  if (fences.length % 2 === 1) out.length = fences[fences.length - 1];
   return out.join("\n").trim();
 }
 
