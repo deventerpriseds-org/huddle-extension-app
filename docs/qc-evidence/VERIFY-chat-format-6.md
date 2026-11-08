@@ -42,3 +42,21 @@ Perf S-42: 400 bullets / 55,549 chars rendered in 24.5 ms.
 | S-16, S-18, S-33 `-5°F`, S-34 emoji lines | literal text as specified |
 
 Noted, not a defect: X29 `Hi.\n\n10. That's` (blank line first) becomes `<ol start="10">`; CommonMark does the same after a blank line. X16 `1. a\nNote\n2. b` renders `2. b` as paragraph text, words intact.
+
+## Re-checks at reduced depth (scratch `scripts/zz-v6b.tsx`, not committed)
+
+- **A2 CONFIRMED.** `Pay $1,234.56 by 10/05 — 3 of 12 tasks, 7:00 PM, v2.3.1, 50% (≈ 0.5), O'Brien & Co.` plus a bullet and a numbered line, rendered through react-dom/server: every token present in the output text (`every token kept: true`).
+- **B1 CONFIRMED.** `briefDeliveryPlan` on 80 meetings with 200-char titles and 200-char locations: directive 3,902 chars, appendBlock 4,266 chars, 25 bullets plus `…and 55 more — the "Open Schedule" button below shows them all.` `joinOpenerAndBlock` given a model reply that copied the list: the opener is kept and `Meeting 1 ` appears on exactly 1 line. `priorityAppendBlock({count:9, top:6…})`: 3 bullets plus `9 open priorities (6 more not shown): 2 past due, 1 blocked, 3 not yet scheduled.`; count 0 gives `undefined`.
+- **B2 CONFIRMED.** Empty day -> kind `nothing-scheduled`, directive `Today (2026-10-05) — nothing is on the calendar…`. Window `after_work 17-22` -> `the after work window (5 PM–10 PM) — what is still ahead`.
+- **B3 CONFIRMED.** No items plus a 5,000-char `meetings: Graph 403…` error -> kind `read-error`, directive 765 chars (error clipped), text `the schedule brief could NOT read: meetings.`
+- **C1 CONFIRMED.** A full draft copy with a `**Suggested reply:**` label -> `"Here's a draft."`. A paraphrased middle -> text returned unchanged (`true`).
+- **E1 CONFIRMED.** `noticeText`: `(couldn't respond — quota)` and the curly-apostrophe form -> notice; `(fallback: gpt-4o (TPM): Limit) …` -> notice. Over-match negatives `(couldn't respond - quota)`, `I couldn't respond earlier — sorry`, `(fallback plan: Zoom)`, `Fallback: use Zoom` -> `null`. HuddleView at ca5c02e (lines 1148-1259): `notice` swaps ONLY the text body for the grey box. `ConfirmAskRow`, `EmailReplyRow`, `NavLinkButton` and artifact chips are rendered outside that ternary, so they stay on a failure row. `stripRepeatedDraft` is applied only when `m.emailReply.replyBody` exists. The main merge (#169/#173) did not change this path.
+
+## R1 suites -> CONFIRMED (build NOT REACHED)
+At ca5c02e after `npm ci --ignore-scripts`: all 63 `test:*` scripts PASS=63 FAIL=0 (chat-format 90 passed, 0 failed). `npx tsc --noEmit -p .` rc=0, 0 errors. `npm run build` was not re-run this loop because of the time budget.
+
+## R2 other consumers -> CONFIRMED at the HuddleView level
+The only renderer consumers are HuddleView MessageRow (`noticeText`, `stripRepeatedDraft`, `ChatText`) as read above. `CopyMessageButton` still copies the raw `m.text`. No new consumers were traced beyond loop 5 in this pass.
+
+## Verdict
+Overall verdict: FIX FIRST — A1: `**https://x.com/a**` link not bold (S-27 asks for bold AND clickable); `**bold *it* bold**` shows literal `**`; a URL inside bold with other words (`**see https://x.com/a now**`) is not clickable; `Best,\` backslash hard break shows the backslash (S-37b). Root cause: the bold body is never re-parsed for inline content.
