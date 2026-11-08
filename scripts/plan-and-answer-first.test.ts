@@ -118,7 +118,8 @@ check("A13 1:1 lane directive: only the first 3 domains are shown", d.includes("
 check("W1 scene reads outOfLaneSceneLine(scope)", /\$\{outOfLaneSceneLine\(\s*data\.scope === "group" \? "group" : "1:1",?\s*\)\}/.test(HF));
 check("W2 laneDirective reads laneAnswerFirstDirective", /laneDirective = laneAnswerFirstDirective\(AGENT_BY_ID\[owner\.id\]\)/.test(HF));
 check("W3 no inline 'Do NOT answer it yourself' literal survives in huddle.functions.ts", !/Do NOT answer it yourself/.test(HF));
-check("W4 deliverOwnerFollowup still fires after a 1:1 deferral", /void deliverOwnerFollowup\(ownerId, winner\.name, data\.text\)/.test(HF));
+check("W4 deliverOwnerFollowup still fires after a 1:1 deferral", // Lane A (BUILD-handoff-lane-a.md) added mode + addressedReply arguments; the guard is the call itself.
+  /void deliverOwnerFollowup\(ownerId, winner\.name, data\.text[,)]/.test(HF));
 check("W5 capabilityHandoffBlock still appended for group and 1:1", /capabilityHandoffBlock\("1:1", data\.members, winner\.id\)/.test(HF));
 check("W6 meta-task guard still in createSuggestedTaskFromTool", /async function createSuggestedTaskFromTool/.test(HF) && /capabilityOwnerFor\(/.test(HF));
 
