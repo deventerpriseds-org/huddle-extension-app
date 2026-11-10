@@ -112,3 +112,73 @@ PF performance, RT routing. "origin/main" column = my hypothesis of today's beha
 | AC-20 | A source that exceeds its time bound (see AC-41) is reported as "timed out" with the same wording rule as AC-14, and the other sources' items are returned | ER/PF | unit test with a reader that never resolves | FAILS (no timeout in `meetingsForDate`) |
 | AC-21 | Every failure in AC-14..AC-20 appears in `recordToolUse` detail, so the tool trace shows which source failed (today `ok` keys on top-level `error` only, `huddle.functions.ts:4757-4762`) | ER | tool trace in harness output | FAILS |
 | AC-22 | The model is instructed, in the tool result itself (not only the prompt), that a partial read is not an empty day: the JSON carries `complete: false` when any source failed | ER | unit test on JSON | FAILS |
+| AC-23 | "Today" is the owner's LOCAL day in the zone from `resolveJourneyIdentity`, bounded by `localDayBoundsUtc` (the brief's helper, not a new one). Asked at 00:30 ET on 11-10 (05:30Z), the answer is 11-10's items, not 11-09's | TZ | unit test with `nowMs` injected | FAILS today (no day filter at all) |
+| AC-24 | Asked at 23:30 ET on 11-10 (04:30Z on 11-11), "today" is still 11-10, and items already finished are still listed (or marked done), not dropped as "nothing left" | TZ | unit test | FAILS |
+| AC-25 | An event 23:00 11-10 to 01:00 11-11 appears on BOTH days' answers (it overlaps both local days), with its true start and end | TZ | unit test | FAILS |
+| AC-26 | An all-day event appears once, labelled "all day", sorted by one fixed rule (the same rule as the brief), and its date comes from Graph's date, not from a UTC midnight shifted into the previous day | TZ | unit test: an all-day event dated 11-10 must not show on 11-09 | FAILS |
+| AC-27 | "What do I have tomorrow?" and "What's on Thursday?" return that local day's merged list. The tool takes a `date` (yyyy-mm-dd) or relative-day argument; the model is not left to filter a multi-day list itself | TZ | unit test on the argument + harness turn | FAILS: the schema has no date (`tools.ts:23-45`) |
+| AC-28 | Across a DST change (2026-11-01, EST begins), a 09:30 local meeting on 11-02 shows 09:30, not 08:30 or 10:30 | TZ | unit test | unknown |
+| AC-29 | Cross-surface reconciliation: for the same owner and date, the chat item set (meetings + classes) equals the 8 AM brief's `items` set (by source id, after de-dup) | RG | unit test calling both on one fixture; live check on 11-11 comparing the brief text with an Iris answer | FAILS |
+| AC-30 | Extend, not duplicate: the fix calls `meetingsForDate` / `getOwnerCalendarEvents` and `classesForDate`. `grep` finds no new Graph `calendarView` call, no new feed parser, no new Nexus class read, and no read of journey `external_calendar_events` | RG | code review + grep | n/a |
+| AC-31 | Schedule tab "Today's schedule" (`getScheduleWidget`) shows the same merged list as AC-1 for INCIDENT-DAY: 8 rows, in time order, each with a visible text label "Meeting" / "Class" / "Task" (not colour alone) | UI | Playwright `verify-uat.yml` screenshot + DOM text | FAILS (`widgets.server.ts:410-412`, tasks only) |
+| AC-32 | The in-chat schedule widget (`show_schedule_widget`, `tools.ts:321-345`) renders the same today rows as the tab, since both call `buildScheduleSections` | UI | unit test | FAILS |
+| AC-33 | Meeting and class rows have no task controls (no Doing/Done/drag), because they are not tasks; task rows keep theirs | UI | Playwright DOM | n/a |
+| AC-34 | The section count badge (`count={data.todaySchedule.length}`, `JourneyWidgets.tsx:1389`) counts meetings + classes + tasks after de-dup (8 for INCIDENT-DAY) | UI | Playwright DOM | FAILS |
+| AC-35 | Empty-state wording: "Nothing scheduled for today." (`JourneyWidgets.tsx:1400`) shows ONLY when every source read OK and returned nothing. When any source failed, the tab instead shows "Couldn't load your meetings (reason). Tasks shown below." or equivalent | UI | Playwright with a stubbed failing source, or a unit test on the data | FAILS |
+| AC-36 | When meetings exist and 0 tasks are placed today, the tab shows one line explaining it (e.g. "No tasks placed today: your calendar is full"). The line comes from data (planner result or calendar fill), and is not printed whenever tasks = 0 | UI | Playwright + unit test | FAILS |
+| AC-37 | Currently Doing and Up Next / This Week are unchanged in content and order for the same task rows (snapshot of `buildScheduleSections` output for a task-only fixture, before and after) | RG | unit test snapshot | passes today; must keep passing |
+| AC-38 | The 8 AM / 8 PM brief output for a fixed fixture is byte-identical before and after. If de-dup is added inside `getOwnerCalendarEvents`, the brief changes too: then the only allowed difference is a removed exact duplicate, and that change goes to the owner first (repo hard rule on changing existing behaviour) | RG | snapshot test of `buildScheduleBrief` | must hold |
+| AC-39 | The `priorities`, `backlog`, `up_next`, `overdue` and `blocked` views return the same JSON as before for a task fixture (no calendar items mixed in). `scripts/status-answers.test.ts` stays green | RG | unit test | must hold |
+| AC-40 | `get_external_calendar_events` (the raw Outlook read) is unchanged in output and description | RG | diff + unit test | must hold |
+| AC-41 | Latency: the calendar and class reads run in parallel with the task read, and each is bounded (proposed: 8 s per source, 10 s total for the tool). A chat turn with every source at its bound still completes under the ~45 s ceiling | PF | unit test with slow stubs measuring wall time; harness turn time logged | FAILS (no bound) |
+| AC-42 | Normal case: on the live system the schedule tool adds no more than 2 s p50 to a turn (5 runs before, 5 after) | PF | harness timing | unknown |
+| AC-43 | Graph paging: a day with more than 50 events is either complete or marked cut (`truncated: true`) | ED | unit test | FAILS (`$top` 50, no nextLink, `graph-email.server.ts:608`) |
+| AC-44 | Voice: "what's my schedule" by voice speaks the same 8 items, and the voice tool result stays within the voice tool budget | RG | voice tool unit test | FAILS |
+| AC-45 | The two Lovable tool descriptions agree: both say `get_calendar_events` is the combined schedule and only `get_external_calendar_events` is the raw Outlook read (today `huddle.functions.ts:6183` says the opposite of `6207`) | RT | grep both strings | FAILS |
+| AC-46 | No test for this change writes to the owner's real board or calendar; harness turns use `journey:{enabled:false}` or `Test-` titles, and are cleaned up | RG | test code review | n/a |
+
+## Spelling table (routing)
+
+What it checks: a phrase in the first column, sent to a 1:1 with Iris (and once in the group), makes the
+model call a tool that returns the merged schedule (`get_calendar_events`, or `schedule_and_priorities`
+with `view:"scheduled"`). "Documented by" names the instruction text that makes the spelling a schedule
+question. This is LLM routing, so each row runs 3 times and must pass 3 of 3. Over-match negatives are
+S-11 to S-15.
+
+| # | Input spelling | Documented by | Expected verdict | Wrong answer would be |
+|---|---|---|---|---|
+| S-1 | "What is my schedule for today?" | the incident; `tools.ts:361` "schedule" | MERGED, today | FALSE "nothing scheduled" |
+| S-2 | "what's on today" | `tools.ts:361` "what's on my schedule/calendar/day today" | MERGED, today | FALSE "nothing scheduled" |
+| S-3 | "any meetings today?" | `tools.ts:361` "meetings" | MERGED, today; answers about meetings | FALSE "no meetings" |
+| S-4 | "am I free at 2?" | `tools.ts:361` "free/busy" | MERGED, today; for INCIDENT-DAY the answer is "No: Vendor call 14:00-15:00" | FALSE "yes, you're free" (the worst row) |
+| S-5 | "what's on my calendar" | `huddle.functions.ts:6207` | MERGED, today | FALSE "nothing scheduled" |
+| S-6 | "agenda" / "what's my agenda" | `tools.ts:361` "agenda" | MERGED, today | FALSE "nothing scheduled" |
+| S-7 | "what do I have tomorrow" | AC-27 | MERGED, 11-11 only | wrong day |
+| S-8 | "what's on Thursday" | AC-27 | MERGED, the coming Thursday | wrong day |
+| S-9 | "do I have class tonight" | `nexus.server.ts:308` | class tool or MERGED; must report MBA Strategy at 19:00 | FALSE "no class" |
+| S-10 | "what's my day look like" | `tools.ts:361` "day" | MERGED, today | FALSE "nothing scheduled" |
+| S-11 | "what's in my backlog" | `tools.ts` view `backlog` | NOT merged: `view:"backlog"`, no meetings in the answer | FALSE MERGED (over-match) |
+| S-12 | "what are my priorities" | view `priorities` | NOT merged: `view:"priorities"` | FALSE MERGED (over-match) |
+| S-13 | "what should I work on next" | views `up_next` / `priorities` | NOT merged | FALSE MERGED (over-match) |
+| S-14 | "schedule a meeting with Sam at 3" | write intent, not a read | the final action is a create/reminder tool, not a schedule read | FALSE MERGED: reads the day and stops |
+| S-15 | "show me my Outlook calendar" | `huddle.functions.ts:6510` | `get_external_calendar_events` | FALSE MERGED |
+| S-16 | "what was on my schedule yesterday" | AC-27 | MERGED for 11-09, or a stated "I can only show from today" | today shown silently as if it were yesterday |
+
+## Goal to AC coverage
+- "Never miss an appointment because the assistant said I was free": AC-1..5, AC-13..22, S-1..S-10
+- "Feed back both meetings and tasks": AC-1, AC-11, AC-12, AC-31..34
+- "The Schedule tab shows my real day": AC-31..36
+- "Don't break what works": AC-37..40, AC-44, AC-46
+- "Answer fast": AC-41, AC-42
+- Every AC traces to a goal. AC-43 and AC-45 trace to the first goal.
+
+## Gaps / open questions for the owner
+1. **Is de-dup of the duplicated 19:00-22:00 class in scope?** My view: YES. A doubled row is a wrong
+   count in the same answer this fix produces, and the brief has the same defect. But de-dup inside
+   `getOwnerCalendarEvents` also changes the brief's output, which is a change to existing behaviour
+   under the repo's hard rule, so that part needs the owner's thumbs-up (AC-38). De-dup applied only in
+   the new merge step avoids that.
+2. **Which copy wins when a class and a calendar block match?** Proposed: `class` (more specific).
+3. **Time bound per source:** 8 s per source, 10 s total is my proposal, not a measured number.
+4. **Live data not read.** I did not read journey `external_calendar_events` or the live Graph
+   calendar for 11-10. AC-29 settles whether the brief's readers return the same 9 items.
