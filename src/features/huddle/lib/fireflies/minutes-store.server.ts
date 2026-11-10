@@ -50,6 +50,19 @@ CREATE TABLE IF NOT EXISTS chat.fireflies_meetings (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Work queue (2026-11-10, verify loop 1): the webhook only RECORDS a delivery and answers fast (Fireflies
+-- gives an endpoint 30s and does not retry a timed-out request); the existing once-a-minute run-turn
+-- heartbeat (scheduler.server runDueScheduledJobs) does the work under a per-meeting LEASE, so two
+-- workers can never process one meeting at once and a crashed worker's lease simply expires.
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS pending_email BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS pending_onedrive BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS last_event TEXT;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS last_reprocessed_at BIGINT;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS fireflies_meetings_due_idx ON chat.fireflies_meetings(next_attempt_at)
+  WHERE pending_email OR pending_onedrive;
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -97,13 +110,14 @@ export async function setMinutesSettings(
 
 export interface MeetingRow {
   meeting_id: string;
+  owner_email: string;
   title: string | null;
   meeting_at: string | null;
   deliveries: number;
   minutes_source: string | null;
   summary_kind: string | null;
   content_hash: string | null;
-  email_status: string | null;
+  email_status: string | null; // NULL | sent | failed
   email_recipients: string[] | null;
   email_sent_at: string | null;
   email_error: string | null;
@@ -111,73 +125,130 @@ export interface MeetingRow {
   onedrive_status: string | null;
   onedrive_path: string | null;
   onedrive_error: string | null;
+  pending_email: boolean;
+  pending_onedrive: boolean;
+  last_event: string | null;
+  last_reprocessed_at: string | null;
+  attempts: number;
+  created_at: string;
   updated_at: string;
 }
 
-/** Record that a delivery arrived (creates the row on first sight). Returns the prior state. */
-export async function noteDelivery(
+/** Record one webhook delivery and queue the work it implies. Fast (one statement).
+ *  - a first delivery queues OneDrive + email
+ *  - a RESEND (reprocessed_at newer than stored) queues OneDrive again, and email again (the worker then
+ *    sends only if the owner's update-emails switch is on AND the content really changed)
+ *  - a retry / out-of-order copy (reprocessed_at not newer) only bumps the delivery count
+ *  - meeting.summarized re-queues the email when no minutes have been sent yet (Fireflies-summary mode
+ *    waits for it). */
+export async function recordWebhook(
   meetingId: string,
   owner: string,
-  title: string | null,
-  meetingAt: string | null,
-): Promise<MeetingRow> {
+  event: string,
+  reprocessedAt: number | null,
+): Promise<{ queued: boolean }> {
+  await ensureBootstrapped();
+  const r = await getPool().query<{ queued: boolean }>(
+    `INSERT INTO chat.fireflies_meetings (meeting_id, owner_email, deliveries, last_event, last_reprocessed_at,
+        pending_email, pending_onedrive, next_attempt_at)
+     VALUES ($1, lower($2), 1, $3, $4, true, true, now())
+     ON CONFLICT (meeting_id) DO UPDATE SET
+       deliveries = chat.fireflies_meetings.deliveries + 1,
+       last_event = EXCLUDED.last_event,
+       last_reprocessed_at = GREATEST(chat.fireflies_meetings.last_reprocessed_at, EXCLUDED.last_reprocessed_at),
+       pending_onedrive = chat.fireflies_meetings.pending_onedrive
+         OR (EXCLUDED.last_reprocessed_at IS NOT NULL
+             AND EXCLUDED.last_reprocessed_at > COALESCE(chat.fireflies_meetings.last_reprocessed_at, 0))
+         OR chat.fireflies_meetings.onedrive_status IS DISTINCT FROM 'saved'
+         OR EXCLUDED.last_event = 'meeting.summarized',   -- the file gains the summary once it exists
+       pending_email = chat.fireflies_meetings.pending_email
+         OR (EXCLUDED.last_reprocessed_at IS NOT NULL
+             AND EXCLUDED.last_reprocessed_at > COALESCE(chat.fireflies_meetings.last_reprocessed_at, 0))
+         OR chat.fireflies_meetings.email_status IS DISTINCT FROM 'sent',
+       attempts = 0,
+       next_attempt_at = now(),
+       updated_at = now()
+     RETURNING (pending_email OR pending_onedrive) AS queued`,
+    [meetingId, owner, event, reprocessedAt],
+  );
+  return { queued: !!r.rows[0]?.queued };
+}
+
+/** Lease up to `limit` meetings whose work is due. SKIP LOCKED + the lease mean a meeting is worked by
+ *  at most one heartbeat at a time; a crashed worker's lease lapses after 3 minutes. */
+export async function claimDueMeetings(limit: number, maxAttempts = 12): Promise<MeetingRow[]> {
   await ensureBootstrapped();
   const r = await getPool().query<MeetingRow>(
-    `INSERT INTO chat.fireflies_meetings (meeting_id, owner_email, title, meeting_at, deliveries)
-     VALUES ($1, lower($2), $3, $4, 1)
-     ON CONFLICT (meeting_id) DO UPDATE SET deliveries = chat.fireflies_meetings.deliveries + 1,
-       title = COALESCE(EXCLUDED.title, chat.fireflies_meetings.title),
-       meeting_at = COALESCE(EXCLUDED.meeting_at, chat.fireflies_meetings.meeting_at), updated_at = now()
-     RETURNING *`,
-    [meetingId, owner, title, meetingAt],
+    `UPDATE chat.fireflies_meetings m SET lease_until = now() + interval '3 minutes', attempts = m.attempts + 1,
+        updated_at = now()
+      WHERE m.meeting_id IN (
+        SELECT meeting_id FROM chat.fireflies_meetings
+         WHERE (pending_email OR pending_onedrive) AND next_attempt_at <= now()
+           AND (lease_until IS NULL OR lease_until < now()) AND attempts < $2
+         ORDER BY next_attempt_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+      RETURNING m.*`,
+    [limit, maxAttempts],
   );
-  return r.rows[0];
+  return r.rows;
 }
 
-/** ATOMIC claim of the right to email this meeting. Exactly one concurrent delivery wins:
- *  - first send: email_status is NULL or 'failed'
- *  - update send: already 'sent', content changed, and the caller passed allowUpdate
- *  A 'sending' row older than 10 minutes is treated as a crashed attempt and may be reclaimed. */
-export async function claimEmail(meetingId: string, hash: string, allowUpdate: boolean): Promise<boolean> {
+/** Release the lease; schedule the next attempt if anything is still pending. */
+export async function releaseMeeting(meetingId: string, retryInSec: number): Promise<void> {
   await ensureBootstrapped();
-  const r = await getPool().query(
-    `UPDATE chat.fireflies_meetings SET email_status = 'sending', updated_at = now()
-      WHERE meeting_id = $1 AND (
-        email_status IS NULL OR email_status = 'failed'
-        OR (email_status = 'sending' AND updated_at < now() - interval '10 minutes')
-        OR ($3::boolean AND email_status = 'sent' AND content_hash IS DISTINCT FROM $2)
-      )
-      RETURNING meeting_id`,
-    [meetingId, hash, allowUpdate],
+  await getPool().query(
+    `UPDATE chat.fireflies_meetings SET lease_until = NULL,
+        next_attempt_at = now() + make_interval(secs => $2), updated_at = now() WHERE meeting_id = $1`,
+    [meetingId, retryInSec],
   );
-  return (r.rowCount ?? 0) > 0;
 }
 
-export async function recordEmail(
+export async function recordMeetingInfo(meetingId: string, title: string | null, meetingAt: string | null): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE chat.fireflies_meetings SET title = COALESCE($2, title), meeting_at = COALESCE($3, meeting_at),
+        updated_at = now() WHERE meeting_id = $1`,
+    [meetingId, title, meetingAt],
+  );
+}
+
+export async function recordEmailSent(
   meetingId: string,
-  r: { ok: boolean; source: string; kind: string; hash: string; recipients: string[]; error?: string },
+  r: { source: string; kind: string; hash: string; recipients: string[] },
 ): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
-    `UPDATE chat.fireflies_meetings SET email_status = $2, minutes_source = $3, summary_kind = $4,
-       content_hash = CASE WHEN $2 = 'sent' THEN $5 ELSE content_hash END,
-       email_recipients = $6, email_error = $7,
-       email_sent_at = CASE WHEN $2 = 'sent' THEN now() ELSE email_sent_at END,
-       emails_sent = emails_sent + CASE WHEN $2 = 'sent' THEN 1 ELSE 0 END, updated_at = now()
-     WHERE meeting_id = $1`,
-    [meetingId, r.ok ? "sent" : "failed", r.source, r.kind, r.hash, r.recipients, r.ok ? null : (r.error ?? "failed").slice(0, 300)],
+    `UPDATE chat.fireflies_meetings SET email_status = 'sent', pending_email = false, minutes_source = $2,
+        summary_kind = $3, content_hash = $4, email_recipients = $5, email_error = NULL, email_sent_at = now(),
+        emails_sent = emails_sent + 1, updated_at = now() WHERE meeting_id = $1`,
+    [meetingId, r.source, r.kind, r.hash, r.recipients],
   );
 }
 
-/** A delivery that decided NOT to email (setting/data problem before any claim) still leaves a visible,
- *  actionable error on the row -- without touching a previous successful send. */
-export async function recordEmailSkipped(meetingId: string, source: string, error: string): Promise<void> {
+/** Nothing to email (a retry of sent minutes, or a resend while update emails are off). */
+export async function recordEmailNotNeeded(meetingId: string): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
-    `UPDATE chat.fireflies_meetings SET minutes_source = $2, email_error = $3, updated_at = now(),
-       email_status = CASE WHEN email_status = 'sent' THEN email_status ELSE 'failed' END
-     WHERE meeting_id = $1`,
-    [meetingId, source, error.slice(0, 300)],
+    `UPDATE chat.fireflies_meetings SET pending_email = false, updated_at = now() WHERE meeting_id = $1`,
+    [meetingId],
+  );
+}
+
+/** A failed or waiting attempt. `final` = stop trying (visible error stays). A previous successful send is
+ *  never overwritten. */
+export async function recordEmailProblem(
+  meetingId: string,
+  source: string,
+  error: string,
+  final: boolean,
+): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `UPDATE chat.fireflies_meetings SET minutes_source = $2, email_error = $3,
+        pending_email = CASE WHEN $4 THEN false ELSE pending_email END,
+        email_status = CASE WHEN email_status = 'sent' THEN email_status
+                            WHEN $4 THEN 'failed' ELSE email_status END,
+        updated_at = now() WHERE meeting_id = $1`,
+    [meetingId, source, error.slice(0, 200), final],
   );
 }
 
@@ -185,15 +256,16 @@ export async function recordOneDrive(meetingId: string, r: { ok: boolean; path?:
   await ensureBootstrapped();
   await getPool().query(
     `UPDATE chat.fireflies_meetings SET onedrive_status = $2, onedrive_path = COALESCE($3, onedrive_path),
-       onedrive_error = $4, updated_at = now() WHERE meeting_id = $1`,
-    [meetingId, r.ok ? "saved" : "failed", r.path ?? null, r.ok ? null : (r.error ?? "failed").slice(0, 300)],
+       onedrive_error = $4, pending_onedrive = CASE WHEN $2 = 'saved' THEN false ELSE pending_onedrive END,
+       updated_at = now() WHERE meeting_id = $1`,
+    [meetingId, r.ok ? "saved" : "failed", r.path ?? null, r.ok ? null : (r.error ?? "failed").slice(0, 200)],
   );
 }
 
 export async function listRecentMeetings(owner: string, limit = 10): Promise<MeetingRow[]> {
   await ensureBootstrapped();
   const r = await getPool().query<MeetingRow>(
-    `SELECT * FROM chat.fireflies_meetings WHERE owner_email = lower($1) ORDER BY updated_at DESC LIMIT $2`,
+    `SELECT * FROM chat.fireflies_meetings WHERE owner_email = lower($1) ORDER BY created_at DESC LIMIT $2`,
     [owner, limit],
   );
   return r.rows;

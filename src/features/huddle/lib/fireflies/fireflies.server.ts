@@ -1,18 +1,21 @@
-// WHAT:       The Fireflies -> Huddle pipeline: verify a signed Webhooks V2 delivery, fetch the meeting's
-//             transcript + summary, then INDEPENDENTLY (a) email meeting minutes in the owner's chosen
-//             mode (Fireflies summary | Luna from transcript) and (b) upsert the transcript Markdown into
-//             OneDrive /Automation/transcripts. Neither waits on, or fails because of, the other.
+// WHAT:       The Fireflies -> Huddle pipeline. handleFirefliesWebhook verifies a signed Webhooks V2
+//             delivery and only QUEUES it (one DB write, answers in ~1s). processDueFirefliesMeetings --
+//             run by the existing once-a-minute run-turn heartbeat -- then, per meeting under a lease,
+//             INDEPENDENTLY (a) emails meeting minutes in the owner's chosen mode (Fireflies summary |
+//             Luna from transcript) and (b) upserts the transcript Markdown into OneDrive
+//             /Automation/transcripts. Neither waits on, or fails because of, the other.
 // WHY:        Owner handoff 2026-11-10 (Fireflies Webhook to Huddle Meeting Minutes), extending draft PR
 //             #188, which saved transcripts to OneDrive but sent no minutes and was not retry-safe.
 // SUPERSEDES: PR #188's handleFirefliesWebhook (OneDrive-only, throws on any failure).
 // SUPERSEDED-BY: nothing -- current.
-// EVIDENCE:   scripts/fireflies-minutes.test.ts; .claude/actions.md ACT:fireflies-minutes.
+// EVIDENCE:   scripts/fireflies-minutes.test.ts; docs/qc-evidence/VERIFY-fireflies-minutes-1.md (why the
+//             work moved out of the request); Fireflies docs read 2026-11-10 (fireflies-docs-read.yml run
+//             42816565367): "respond with a 2xx within 30 seconds ... not retried" and meeting.summarized.
 //
 // Never logs or stores transcript text, summary text, API keys or Graph response bodies -- only ids,
 // statuses and short error codes.
 import { emailFromOptions, getAppToken, graphEmailConfigured } from "../email/graph-email.server";
 import {
-  decideDelivery,
   firefliesSummaryMarkdown,
   markdownToEmailHtml,
   meetingDateLabel,
@@ -20,11 +23,16 @@ import {
   meetingInputHash,
   minutesSubject,
   minutesUserPrompt,
+  stamp,
   missingTemplateSections,
   MINUTES_INSTRUCTIONS,
   parseMinutesSource,
   parseRecipients,
+  planEmail,
+  retryDelaySec,
   safeMeetingId,
+  SUMMARY_WAIT_MS,
+  TRANSCRIPT_WAIT_MS,
   STANDARD_SUMMARY_NOTICE,
   transcriptForModel,
   verifyFirefliesSignature,
@@ -43,6 +51,10 @@ type FirefliesWebhook = {
   reprocessed_at?: unknown;
 };
 
+/** The two Webhooks V2 events this pipeline acts on (docs: meeting.transcribed = transcript ready;
+ *  meeting.summarized = summary generated, which Fireflies-summary mode needs). */
+export const HANDLED_EVENTS = ["meeting.transcribed", "meeting.summarized"] as const;
+
 type FirefliesTranscript = {
   id?: string;
   title?: string;
@@ -57,8 +69,8 @@ type FirefliesTranscript = {
   sentences?: Array<{
     speaker_name?: string;
     text?: string;
-    start_time?: number;
-    end_time?: number;
+    start_time?: number | string;
+    end_time?: number | string;
   }>;
   summary?: {
     overview?: unknown;
@@ -88,6 +100,7 @@ async function ensureDriveFolder(token: string, mailbox: string, path: string): 
   const encoded = encodePath(path);
   const lookup = await fetch(GRAPH + graphUserPath(mailbox) + "/root:/" + encoded, {
     headers: { Authorization: "Bearer " + token },
+    signal: AbortSignal.timeout(10_000),
   });
   if (lookup.ok) return;
   if (lookup.status !== 404) throw new Error("onedrive_folder_lookup_" + lookup.status);
@@ -112,6 +125,7 @@ async function ensureDriveFolder(token: string, mailbox: string, path: string): 
       folder: {},
       "@microsoft.graph.conflictBehavior": "fail",
     }),
+    signal: AbortSignal.timeout(10_000),
   });
   if (create.ok || create.status === 409) return;
   throw new Error("onedrive_folder_create_" + create.status);
@@ -159,14 +173,8 @@ function formatTranscript(transcript: FirefliesTranscript): string {
   lines.push("## Transcript", "");
   for (const sentence of transcript.sentences ?? []) {
     const speaker = String(sentence.speaker_name ?? "Speaker").trim() || "Speaker";
-    const time =
-      typeof sentence.start_time === "number"
-        ? "[" +
-          String(Math.floor(sentence.start_time / 60)).padStart(2, "0") +
-          ":" +
-          String(Math.floor(sentence.start_time % 60)).padStart(2, "0") +
-          "] "
-        : "";
+    const at = stamp(sentence.start_time);
+    const time = at ? "[" + at + "] " : "";
     const spoken = String(sentence.text ?? "").trim();
     if (spoken) lines.push(time + speaker + ": " + spoken);
   }
@@ -189,7 +197,7 @@ async function firefliesQuery(meetingId: string, summaryFields: string) {
     summaryFields +
     " } } }";
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 15_000);
+  const timer = setTimeout(() => ctl.abort(), 12_000);
   try {
     const response = await fetch(FIREFLIES_GRAPHQL, {
       method: "POST",
@@ -256,6 +264,7 @@ async function saveTranscript(transcript: FirefliesTranscript, meetingId: string
     method: "PUT",
     headers: { Authorization: "Bearer " + token, "Content-Type": "text/markdown; charset=utf-8" },
     body: bytes,
+    signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error("onedrive_upload_" + response.status);
   return "/" + path;
@@ -292,7 +301,9 @@ export async function loadMinutesSettings(owner: string): Promise<MinutesSetting
 
 type Generated =
   | { ok: true; markdown: string; kind: "custom" | "standard" | "luna" }
-  | { ok: false; error: string; transient?: boolean };
+  /** `wait`: the data may still arrive (summary not generated yet / transcript not ready) -- try again
+   *  later until the wait window ends. `transient`: a model/network failure worth retrying. */
+  | { ok: false; error: string; transient?: boolean; wait?: boolean };
 
 /** Produce minutes in EXACTLY the selected mode. No fallback between modes, ever. */
 export async function generateMinutes(
@@ -302,7 +313,7 @@ export async function generateMinutes(
 ): Promise<Generated> {
   if (source === "fireflies") {
     const r = firefliesSummaryMarkdown(t);
-    if (!r.ok) return { ok: false, error: "fireflies_summary_missing" };
+    if (!r.ok) return { ok: false, error: "fireflies_summary_missing", wait: true };
     return {
       ok: true,
       kind: r.source,
@@ -310,7 +321,7 @@ export async function generateMinutes(
     };
   }
   const transcript = transcriptForModel(t);
-  if (!transcript.trim()) return { ok: false, error: "transcript_missing" };
+  if (!transcript.trim()) return { ok: false, error: "transcript_missing", wait: true };
   let text: string;
   try {
     text = await callModel(
@@ -332,7 +343,7 @@ export async function generateMinutes(
 async function callLuna(instructions: string, input: string): Promise<string> {
   const { callOpenAIResponses } = await import("../openai-responses.server");
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 32_000); // under the ~45s hosting ceiling
+  const timer = setTimeout(() => ctl.abort(), 25_000); // fetch(<=12s) + Luna(<=25s) stays under the ~45s ceiling
   try {
     const r = await callOpenAIResponses({
       model: "gpt-5.6-luna",
@@ -349,38 +360,60 @@ async function callLuna(instructions: string, input: string): Promise<string> {
   }
 }
 
-export type EmailOutcome =
-  | { status: "sent"; kind: string; recipients: string[]; update: boolean }
-  | { status: "skipped"; reason: "already_sent" | "in_flight" }
-  | { status: "failed"; error: string; transient: boolean };
 
-async function deliverMinutes(
-  meetingId: string,
+/** A Graph send error reduced to a short code -- never Graph's own message text (it can echo request
+ *  details). e.g. "Graph sendMail failed (403): ..." -> "graph_send_403". */
+export function safeSendError(err: string | undefined, gateRefused?: boolean): string {
+  if (gateRefused) return "email_refused_by_send_gate";
+  const m = String(err ?? "").match(/\((\d{3})\)/);
+  if (m) return "graph_send_" + m[1];
+  if (/token/i.test(String(err ?? ""))) return "graph_token_failed";
+  return "email_send_failed";
+}
+
+function errCode(e: unknown, fallback: string): string {
+  const m = e instanceof Error ? e.message : "";
+  return /^[a-z0-9_:|.-]{1,80}$/i.test(m) ? m : fallback;
+}
+
+export type EmailOutcome =
+  | { status: "sent"; kind: string; update: boolean }
+  | { status: "not_needed" }
+  | { status: "waiting"; reason: string }
+  | { status: "failed"; error: string; final: boolean };
+
+async function emailBranch(
+  row: { meeting_id: string; email_status: string | null; content_hash: string | null; created_at: string },
   t: FfTranscript,
-  settings: MinutesSettings,
   owner: string,
-  prior: { email_status: string | null; content_hash: string | null },
-  hash: string,
+  nowMs: number,
 ): Promise<EmailOutcome> {
   const store = await import("./minutes-store.server");
-  const decision = decideDelivery(prior, hash, settings.updateEmails);
-  if (decision === "skip_already_sent") return { status: "skipped", reason: "already_sent" };
-  if (decision === "skip_in_flight") return { status: "skipped", reason: "in_flight" };
-
+  const id = row.meeting_id;
+  const settings = await loadMinutesSettings(owner); // read at processing time, every pass
+  const hash = meetingInputHash(t);
+  const plan = planEmail(row, hash, settings.updateEmails);
+  if (plan === "not_needed") {
+    await store.recordEmailNotNeeded(id);
+    return { status: "not_needed" };
+  }
   if (!settings.recipients?.length) {
-    await store.recordEmailSkipped(meetingId, settings.source, "recipients_invalid");
-    return { status: "failed", error: "recipients_invalid", transient: false };
+    await store.recordEmailProblem(id, settings.source, "recipients_invalid", true);
+    return { status: "failed", error: "recipients_invalid", final: true };
   }
   const gen = await generateMinutes(settings.source, t);
   if (!gen.ok) {
-    await store.recordEmailSkipped(meetingId, settings.source, gen.error);
-    return { status: "failed", error: gen.error, transient: !!gen.transient };
+    const age = nowMs - (Date.parse(row.created_at) || nowMs);
+    const window = gen.error === "transcript_missing" ? TRANSCRIPT_WAIT_MS : SUMMARY_WAIT_MS;
+    if (gen.wait && age < window) {
+      await store.recordEmailProblem(id, settings.source, "waiting:" + gen.error, false);
+      return { status: "waiting", reason: gen.error };
+    }
+    const final = !gen.transient;
+    await store.recordEmailProblem(id, settings.source, gen.error, final);
+    return { status: "failed", error: gen.error, final };
   }
-  // Atomic: only one concurrent delivery for this meeting gets past here.
-  if (!(await store.claimEmail(meetingId, hash, decision === "send_update"))) {
-    return { status: "skipped", reason: "in_flight" };
-  }
-  const update = decision === "send_update";
+  const update = plan === "send_update";
   const dateLabel = meetingDateLabel(meetingDateMs(t));
   const heading = `# ${String(t.title ?? "Untitled meeting").trim() || "Untitled meeting"}${dateLabel ? `\n\n${dateLabel}` : ""}`;
   const sourceLine =
@@ -389,114 +422,121 @@ async function deliverMinutes(
       : gen.kind === "custom"
         ? "_Minutes from your Fireflies custom summary._"
         : "_Minutes from the Fireflies summary._";
-  const md = `${heading}\n\n${sourceLine}\n\n${gen.markdown}`;
   const { sendGraphEmail } = await import("../email/graph-email.server");
   const sent = await sendGraphEmail({
     to: settings.recipients,
     subject: minutesSubject(t.title, dateLabel, update),
-    body: markdownToEmailHtml(md),
+    body: markdownToEmailHtml(`${heading}\n\n${sourceLine}\n\n${gen.markdown}`),
     html: true,
     callerEmail: owner,
   });
-  const error = sent.ok
-    ? undefined
-    : sent.gateRefused
-      ? "email_send_refused_by_gate (recipients must be your own addresses, or sending must be enabled)"
-      : (sent.error ?? "email_send_failed").replace(/[\r\n]+/g, " ").slice(0, 200);
-  await store.recordEmail(meetingId, {
-    ok: sent.ok,
-    source: settings.source,
-    kind: gen.kind,
-    hash,
-    recipients: settings.recipients,
-    error,
-  });
-  if (!sent.ok) return { status: "failed", error: error!, transient: !sent.gateRefused };
-  return { status: "sent", kind: gen.kind, recipients: settings.recipients, update };
+  if (sent.ok) {
+    await store.recordEmailSent(id, { source: settings.source, kind: gen.kind, hash, recipients: settings.recipients });
+    return { status: "sent", kind: gen.kind, update };
+  }
+  const error = safeSendError(sent.error, sent.gateRefused);
+  const final = !!sent.gateRefused; // the gate will refuse again; a Graph/network failure may recover
+  await store.recordEmailProblem(id, settings.source, error, final);
+  return { status: "failed", error, final };
+}
+
+/** Work one leased meeting: fetch it once, then email and OneDrive side by side. Never throws. */
+export async function processMeeting(
+  row: import("./minutes-store.server").MeetingRow,
+  nowMs = Date.now(),
+): Promise<{ email?: EmailOutcome; onedrive?: { ok: boolean; path?: string; error?: string }; error?: string }> {
+  const store = await import("./minutes-store.server");
+  const id = row.meeting_id;
+  let t: FirefliesTranscript;
+  try {
+    t = (await fetchTranscript(id)).transcript;
+  } catch (e) {
+    const code = errCode(e, "fireflies_fetch_failed");
+    console.error("[fireflies] fetch failed", id, code);
+    await store.releaseMeeting(id, retryDelaySec(row.attempts)).catch(() => {});
+    return { error: code };
+  }
+  const ms = meetingDateMs(t as FfTranscript);
+  await store
+    .recordMeetingInfo(id, t.title ? String(t.title).slice(0, 300) : null, ms != null ? new Date(ms).toISOString() : null)
+    .catch(() => {});
+
+  const [emailR, driveR] = await Promise.allSettled([
+    row.pending_email ? emailBranch(row, t as FfTranscript, row.owner_email, nowMs) : Promise.resolve(undefined),
+    row.pending_onedrive
+      ? (async () => {
+          const path = await saveTranscript(t, id);
+          await store.recordOneDrive(id, { ok: true, path });
+          return { ok: true as const, path };
+        })()
+      : Promise.resolve(undefined),
+  ]);
+
+  const email: EmailOutcome | undefined =
+    emailR.status === "fulfilled" ? emailR.value : { status: "failed", error: errCode(emailR.reason, "email_branch_failed"), final: false };
+  let onedrive: { ok: boolean; path?: string; error?: string } | undefined;
+  if (driveR.status === "fulfilled") onedrive = driveR.value;
+  else {
+    onedrive = { ok: false, error: errCode(driveR.reason, "onedrive_failed") };
+    await store.recordOneDrive(id, onedrive).catch(() => {});
+  }
+  if (emailR.status === "rejected") {
+    await store.recordEmailProblem(id, "unknown", (email as { error: string }).error, false).catch(() => {});
+  }
+  if (email?.status === "failed") console.error("[fireflies] minutes email failed", id, email.error);
+  if (onedrive && !onedrive.ok) console.error("[fireflies] onedrive save failed", id, onedrive.error);
+
+  // Still-pending work comes back on the next due pass; waiting for a summary polls every 5 minutes.
+  const retry = email?.status === "waiting" ? 300 : retryDelaySec(row.attempts);
+  await store.releaseMeeting(id, retry).catch(() => {});
+  return { email, onedrive };
+}
+
+/** Called by the once-a-minute run-turn heartbeat (scheduler.server runDueScheduledJobs). One meeting
+ *  per tick keeps a pass well inside the ~45s hosting ceiling. Never throws. */
+export async function processDueFirefliesMeetings(limit = 1, nowMs = Date.now()): Promise<number> {
+  if (!env("FIREFLIES_API_KEY") || !process.env.AZURE_PG_URL) return 0;
+  try {
+    const store = await import("./minutes-store.server");
+    const rows = await store.claimDueMeetings(limit);
+    for (const row of rows) await processMeeting(row, nowMs);
+    return rows.length;
+  } catch (e) {
+    console.error("[fireflies] worker pass failed", errCode(e, "worker_failed"));
+    return 0;
+  }
 }
 
 export interface WebhookResult {
   accepted: boolean;
   ignored?: boolean;
   meetingId?: string;
-  minutesSource?: MinutesSource;
-  email?: EmailOutcome;
-  onedrive?: { ok: boolean; path?: string; error?: string };
-  /** true when something failed that a Fireflies retry could fix -> the route answers 503. */
-  retry?: boolean;
+  queued?: boolean;
 }
 
-/** Handle one Fireflies Webhooks V2 delivery. Email and OneDrive run side by side; each records its
- *  own result, and one failing never blocks the other. */
+/** Handle one Fireflies Webhooks V2 delivery: verify, validate, QUEUE. Fireflies allows 30s and does not
+ *  retry a request that timed out, so no Fireflies / model / Graph call happens here -- the heartbeat
+ *  worker does that. A queue write that fails throws, the route answers 503, and Fireflies retries. */
 export async function handleFirefliesWebhook(rawBody: string, signature: string | null): Promise<WebhookResult> {
   if (!(await verifyFirefliesSignature(rawBody, signature, env("FIREFLIES_WEBHOOK_SECRET")))) {
     throw new Error("invalid_webhook_signature");
   }
-
   let payload: FirefliesWebhook;
   try {
     payload = JSON.parse(rawBody) as FirefliesWebhook;
   } catch {
     throw new Error("invalid_webhook_json");
   }
-
-  if (payload.event !== "meeting.transcribed") return { accepted: true, ignored: true };
-  if (typeof payload.meeting_id !== "string" || !payload.meeting_id.trim()) {
-    throw new Error("missing_meeting_id");
-  }
-  const meetingId = payload.meeting_id.trim();
-  if (!safeMeetingId(meetingId)) throw new Error("invalid_meeting_id");
+  if (!(HANDLED_EVENTS as readonly unknown[]).includes(payload.event)) return { accepted: true, ignored: true };
+  if (typeof payload.meeting_id !== "string" || !payload.meeting_id.trim()) throw new Error("missing_meeting_id");
+  const meetingId = safeMeetingId(payload.meeting_id);
+  if (!meetingId) throw new Error("invalid_meeting_id");
+  const reprocessedAt =
+    typeof payload.reprocessed_at === "number" && Number.isFinite(payload.reprocessed_at) ? payload.reprocessed_at : null;
 
   const owner = minutesOwner();
   if (!owner) throw new Error("minutes_owner_not_configured");
-  const settings = await loadMinutesSettings(owner); // read at processing time, every delivery
-
-  const { transcript } = await fetchTranscript(meetingId);
   const store = await import("./minutes-store.server");
-  const ms = meetingDateMs(transcript as FfTranscript);
-  const prior = await store.noteDelivery(
-    meetingId,
-    owner,
-    transcript.title ? String(transcript.title).slice(0, 300) : null,
-    ms != null ? new Date(ms).toISOString() : null,
-  );
-  // noteDelivery returns the row AFTER the upsert; email/hash fields are untouched by it, so they are the
-  // prior delivery's state.
-  const hash = meetingInputHash(transcript as FfTranscript);
-
-  const [emailR, driveR] = await Promise.allSettled([
-    deliverMinutes(meetingId, transcript as FfTranscript, settings, owner, prior, hash),
-    (async () => {
-      const path = await saveTranscript(transcript, meetingId);
-      await store.recordOneDrive(meetingId, { ok: true, path });
-      return { ok: true as const, path };
-    })(),
-  ]);
-
-  const email: EmailOutcome =
-    emailR.status === "fulfilled"
-      ? emailR.value
-      : { status: "failed", error: errCode(emailR.reason, "email_pipeline_failed"), transient: true };
-  let onedrive: WebhookResult["onedrive"];
-  if (driveR.status === "fulfilled") onedrive = driveR.value;
-  else {
-    onedrive = { ok: false, error: errCode(driveR.reason, "onedrive_failed") };
-    await store.recordOneDrive(meetingId, onedrive).catch(() => {});
-  }
-  if (email.status === "failed") console.error("[fireflies] minutes email failed", meetingId, email.error);
-  if (!onedrive.ok) console.error("[fireflies] onedrive save failed", meetingId, onedrive.error);
-
-  return {
-    accepted: true,
-    meetingId,
-    minutesSource: settings.source,
-    email,
-    onedrive,
-    retry: (email.status === "failed" && email.transient) || !onedrive.ok,
-  };
-}
-
-function errCode(e: unknown, fallback: string): string {
-  const m = e instanceof Error ? e.message : "";
-  return /^[a-z0-9_:|. -]{1,120}$/i.test(m) ? m : fallback;
+  const { queued } = await store.recordWebhook(meetingId, owner, String(payload.event), reprocessedAt);
+  return { accepted: true, meetingId, queued };
 }

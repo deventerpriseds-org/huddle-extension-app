@@ -5,7 +5,7 @@
 //             two-option control, configurable recipients, and a visible failure state.
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   lib/fireflies/minutes.functions.ts; .claude/actions.md ACT:fireflies-minutes.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -13,6 +13,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
+import { getToken } from "@/lib/entra-auth";
 import { getMinutesSettingsFn, setMinutesSettingsFn } from "../lib/fireflies/minutes.functions";
 
 type Source = "fireflies" | "luna";
@@ -28,6 +29,7 @@ type Meeting = {
   onedrive: string | null;
   onedrivePath: string | null;
   onedriveError: string | null;
+  pending: boolean;
 };
 
 const KIND_LABEL: Record<string, string> = {
@@ -37,11 +39,7 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 export function MeetingMinutesPanel() {
-  const { user } = useAuth();
-  const caller = useMemo(
-    () => (user ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username } : undefined),
-    [user],
-  );
+  const { isAuthenticated } = useAuth();
   const [ready, setReady] = useState(false);
   const [denied, setDenied] = useState<string | null>(null);
   const [source, setSource] = useState<Source>("fireflies");
@@ -53,9 +51,11 @@ export function MeetingMinutesPanel() {
   const [draftRecipients, setDraftRecipients] = useState<string[]>([]);
 
   const load = useCallback(async () => {
-    if (!caller) return;
+    if (!isAuthenticated) return;
     try {
-      const r = await getMinutesSettingsFn({ data: { caller } });
+      const idToken = await getToken();
+      if (!idToken) throw new Error("not signed in");
+      const r = await getMinutesSettingsFn({ data: { idToken } });
       if (!r.ok) {
         setDenied(r.error ?? "Unavailable.");
       } else {
@@ -72,7 +72,7 @@ export function MeetingMinutesPanel() {
       setDenied("Couldn't load meeting-minutes settings.");
     }
     setReady(true);
-  }, [caller]);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     void load();
@@ -80,11 +80,15 @@ export function MeetingMinutesPanel() {
 
   const save = useCallback(
     async (next: { source: Source; recipients: string; updateEmails: boolean }) => {
-      if (!caller) return false;
+      const idToken = await getToken().catch(() => null);
+      if (!idToken) {
+        toast.error("Sign in again to change this.");
+        return false;
+      }
       const list = next.recipients.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
       try {
         const r = await setMinutesSettingsFn({
-          data: { caller, source: next.source, recipients: list, updateEmails: next.updateEmails },
+          data: { idToken, source: next.source, recipients: list, updateEmails: next.updateEmails },
         });
         if (!r.ok) {
           toast.error(r.error ?? "Couldn't save");
@@ -96,10 +100,10 @@ export function MeetingMinutesPanel() {
         return false;
       }
     },
-    [caller],
+    [],
   );
 
-  if (!caller || denied) return null;
+  if (!isAuthenticated || denied) return null;
 
   return (
     <div className="rounded-lg border p-4" data-testid="meeting-minutes-panel">
@@ -213,7 +217,11 @@ export function MeetingMinutesPanel() {
                     ? `sent${m.kind ? ` (${KIND_LABEL[m.kind] ?? m.kind})` : ""}`
                     : m.email === "failed"
                       ? `not sent — ${m.emailError ?? "error"}`
-                      : (m.email ?? "pending")}
+                      : m.emailError?.startsWith("waiting:")
+                        ? "waiting for Fireflies' summary"
+                        : m.emailError
+                          ? `retrying — ${m.emailError}`
+                          : "queued"}
                   {" · "}OneDrive: {m.onedrive === "saved" ? "saved" : m.onedrive === "failed" ? `failed — ${m.onedriveError ?? "error"}` : "pending"}
                 </p>
               </li>

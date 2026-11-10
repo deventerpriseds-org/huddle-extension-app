@@ -83,7 +83,7 @@ export async function verifyFirefliesSignature(
 export interface FfSentence {
   speaker_name?: string | null;
   text?: string | null;
-  start_time?: number | null;
+  start_time?: number | string | null; // the Fireflies schema types this as String (docs, 2026-11-10)
 }
 export interface FfSection {
   title?: string | null;
@@ -109,8 +109,9 @@ export interface FfTranscript {
   summary?: FfSummary | null;
 }
 
-export function stamp(seconds: number | null | undefined): string {
-  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "";
+export function stamp(raw: number | string | null | undefined): string {
+  const seconds = typeof raw === "string" ? Number(raw) : raw;
+  if (raw === "" || typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "";
   const s = Math.floor(seconds);
   const h = Math.floor(s / 3600);
   const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
@@ -236,27 +237,28 @@ export function minutesSubject(title: string | null | undefined, dateLabel: stri
   return `${isUpdate ? "Updated meeting minutes" : "Meeting minutes"}: ${clean}${dateLabel ? ` (${dateLabel})` : ""}`;
 }
 
-// ---------------------------------------------------------------- idempotency
+// ---------------------------------------------------------------- idempotency + retry policy
 
-export interface DeliveryState {
-  email_status: string | null; // null | 'sending' | 'sent' | 'failed'
-  content_hash: string | null;
+export type EmailPlan = "send" | "send_update" | "not_needed";
+
+/** Given what the ledger says was already emailed, should this pass email? Minutes already sent for the
+ *  SAME input are never sent again; changed input is emailed again only when the owner switched on update
+ *  emails. (Concurrency is handled by the per-meeting lease, not here.) */
+export function planEmail(prior: { email_status: string | null; content_hash: string | null }, hash: string, updateEmails: boolean): EmailPlan {
+  if (prior.email_status !== "sent") return "send";
+  if (prior.content_hash !== hash && updateEmails) return "send_update";
+  return "not_needed";
 }
 
-export type DeliveryDecision = "send" | "send_update" | "skip_already_sent" | "skip_in_flight";
+/** Fireflies-summary mode waits this long after the first delivery for meeting.summarized before it
+ *  gives up and records fireflies_summary_missing. */
+export const SUMMARY_WAIT_MS = 3 * 60 * 60 * 1000;
+/** Luna mode waits this long for transcript sentences to appear before giving up. */
+export const TRANSCRIPT_WAIT_MS = 60 * 60 * 1000;
 
-/** What a delivery for a meeting should do, given what the ledger already records. A retry of a sent
- *  meeting NEVER emails again; changed content emails again only when the owner switched on update
- *  emails. A 'sending' row is another delivery in flight (claimed atomically in SQL) -- skip it. */
-export function decideDelivery(
-  prior: DeliveryState | null,
-  contentHash: string,
-  updateEmails: boolean,
-): DeliveryDecision {
-  if (!prior || prior.email_status == null || prior.email_status === "failed") return "send";
-  if (prior.email_status === "sending") return "skip_in_flight";
-  if (prior.content_hash && prior.content_hash !== contentHash && updateEmails) return "send_update";
-  return "skip_already_sent";
+/** Backoff between worker attempts: 1, 2, 4, 8, 16, 30 (cap) minutes. */
+export function retryDelaySec(attempts: number): number {
+  return Math.min(60 * 2 ** Math.max(0, attempts - 1), 1800);
 }
 
 // ---------------------------------------------------------------- safe Markdown -> email HTML
@@ -342,12 +344,15 @@ export function contentHash(s: string): string {
   return h.toString(16).padStart(16, "0");
 }
 
-/** Safe filename stem for a meeting id (used for the stable OneDrive path). */
+/** Hash of the meeting INPUT (transcript + Fireflies summary) used for the "changed?" check. */
 export function meetingInputHash(t: FfTranscript): string {
   return contentHash(transcriptForModel(t) + "\n--summary--\n" + JSON.stringify(t.summary ?? null));
 }
 
+/** A Fireflies meeting id is used verbatim as the stable OneDrive filename, so it must already be safe:
+ *  anything outside [A-Za-z0-9_-] (or empty / over 120 chars) is REJECTED, never cleaned -- cleaning would
+ *  let two different ids share one file (verify loop 1, C2). */
 export function safeMeetingId(id: string): string | null {
-  const s = String(id ?? "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 120);
-  return s || null;
+  const s = String(id ?? "").trim();
+  return /^[A-Za-z0-9_-]{1,120}$/.test(s) ? s : null;
 }

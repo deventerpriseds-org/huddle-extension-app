@@ -19,6 +19,7 @@ const SECRET = "test-signing-secret";
 process.env.FIREFLIES_WEBHOOK_SECRET = SECRET;
 process.env.FIREFLIES_API_KEY = "test-api-key";
 process.env.FIREFLIES_ONEDRIVE_MAILBOX = "owner@example.com";
+process.env.AZURE_PG_URL = "postgres://fake/fake"; // the store is faked below; the worker only checks it is set
 
 // ---------------------------------------------------------------- fakes
 type Row = Record<string, any>;
@@ -30,42 +31,71 @@ let modelReply = "";
 const uploads: string[] = [];
 let uploadStatus = 201;
 
+let settingsDown = false;
+let clock = Date.parse("2026-11-10T15:00:00Z");
+const nowIso = () => new Date(clock).toISOString();
+// In-memory twin of minutes-store.server's SQL (same queue / lease semantics).
 mock.module("../src/features/huddle/lib/fireflies/minutes-store.server", () => ({
-  getMinutesSettings: async (o: string) => db.settings.get(o.toLowerCase()) ?? null,
+  getMinutesSettings: async (o: string) => {
+    if (settingsDown) throw new Error("settings_db_down");
+    return db.settings.get(o.toLowerCase()) ?? null;
+  },
   setMinutesSettings: async (o: string, s: Row) => void db.settings.set(o.toLowerCase(), s),
-  noteDelivery: async (id: string, owner: string, title: string | null) => {
-    const r = db.meetings.get(id) ?? { meeting_id: id, owner_email: owner, deliveries: 0, email_status: null, content_hash: null, emails_sent: 0 };
-    r.deliveries++;
-    r.title = title ?? r.title;
-    db.meetings.set(id, r);
-    return { ...r };
-  },
-  claimEmail: async (id: string, hash: string, allowUpdate: boolean) => {
-    const r = db.meetings.get(id)!;
-    const ok =
-      r.email_status == null || r.email_status === "failed" || (allowUpdate && r.email_status === "sent" && r.content_hash !== hash);
-    if (ok) r.email_status = "sending"; // synchronous check-and-set = atomic, like the SQL UPDATE
-    return ok;
-  },
-  recordEmail: async (id: string, x: Row) => {
-    const r = db.meetings.get(id)!;
-    r.email_status = x.ok ? "sent" : "failed";
-    r.summary_kind = x.kind;
-    r.email_error = x.ok ? null : x.error;
-    if (x.ok) {
-      r.content_hash = x.hash;
-      r.emails_sent++;
+  recordWebhook: async (id: string, owner: string, event: string, rep: number | null) => {
+    const r = db.meetings.get(id);
+    if (!r) {
+      db.meetings.set(id, {
+        meeting_id: id, owner_email: owner, deliveries: 1, last_event: event, last_reprocessed_at: rep,
+        pending_email: true, pending_onedrive: true, attempts: 0, next_attempt_at: clock, lease_until: null,
+        email_status: null, content_hash: null, emails_sent: 0, onedrive_status: null, created_at: nowIso(),
+      });
+      return { queued: true };
     }
+    const newer = rep != null && rep > (r.last_reprocessed_at ?? 0);
+    r.deliveries++;
+    r.last_event = event;
+    r.last_reprocessed_at = Math.max(r.last_reprocessed_at ?? 0, rep ?? 0) || null;
+    r.pending_onedrive = r.pending_onedrive || newer || r.onedrive_status !== "saved" || event === "meeting.summarized";
+    r.pending_email = r.pending_email || newer || r.email_status !== "sent";
+    r.attempts = 0;
+    r.next_attempt_at = clock;
+    return { queued: r.pending_email || r.pending_onedrive };
   },
-  recordEmailSkipped: async (id: string, _s: string, err: string) => {
+  claimDueMeetings: async (limit: number, max = 12) => {
+    const out: Row[] = [];
+    for (const r of db.meetings.values()) {
+      if (out.length >= limit) break;
+      if ((r.pending_email || r.pending_onedrive) && r.next_attempt_at <= clock && (r.lease_until == null || r.lease_until < clock) && r.attempts < max) {
+        r.lease_until = clock + 180_000; // synchronous check-and-set == the SQL's SKIP LOCKED + lease
+        r.attempts++;
+        out.push({ ...r });
+      }
+    }
+    return out;
+  },
+  releaseMeeting: async (id: string, sec: number) => {
+    const r = db.meetings.get(id)!;
+    r.lease_until = null;
+    r.next_attempt_at = clock + sec * 1000;
+  },
+  recordMeetingInfo: async (id: string, title: string | null) => void (db.meetings.get(id)!.title = title),
+  recordEmailSent: async (id: string, x: Row) => {
+    const r = db.meetings.get(id)!;
+    Object.assign(r, { email_status: "sent", pending_email: false, summary_kind: x.kind, content_hash: x.hash, email_error: null });
+    r.emails_sent++;
+  },
+  recordEmailNotNeeded: async (id: string) => void (db.meetings.get(id)!.pending_email = false),
+  recordEmailProblem: async (id: string, _s: string, err: string, final: boolean) => {
     const r = db.meetings.get(id)!;
     r.email_error = err;
-    if (r.email_status !== "sent") r.email_status = "failed";
+    if (final) r.pending_email = false;
+    if (r.email_status !== "sent" && final) r.email_status = "failed";
   },
   recordOneDrive: async (id: string, x: Row) => {
     const r = db.meetings.get(id)!;
     r.onedrive_status = x.ok ? "saved" : "failed";
     r.onedrive_path = x.path ?? r.onedrive_path;
+    if (x.ok) r.pending_onedrive = false;
   },
   listRecentMeetings: async () => [...db.meetings.values()],
 }));
@@ -141,8 +171,8 @@ const baseTranscript = (o: Row = {}) => ({
   title: "Launch sync",
   date: Date.parse("2026-11-09T15:00:00Z"),
   sentences: [
-    { speaker_name: "Sam", text: "Let's ship Friday.", start_time: 65 },
-    { speaker_name: "Ana", text: "Agreed.", start_time: 70 },
+    { speaker_name: "Sam", text: "Let's ship Friday.", start_time: "65.2" },
+    { speaker_name: "Ana", text: "Agreed.", start_time: "70" },
   ],
   summary: { overview: "Team agreed to ship Friday.", action_items: "Sam: draft notes" },
   ...o,
@@ -157,6 +187,7 @@ const reset = () => {
   sendOk = true;
   uploadStatus = 201;
   modelReply = LUNA_OK;
+  settingsDown = false;
 };
 
 // ---------------------------------------------------------------- A: signature
@@ -171,7 +202,7 @@ const reset = () => {
   reset();
   const r = (await deliver(b, `sha256=${"0".repeat(64)}`)) as Row;
   t("A7 handler: bad signature throws BEFORE any Fireflies/Graph call", [r.thrown, ffCalls, sent.length, uploads.length], ["invalid_webhook_signature", 0, 0, 0]);
-  const ig = (await deliver(evt("m1", "meeting.deleted"))) as Row;
+  const ig = (await deliver(evt("m1", "meeting.bot_joined"))) as Row;
   t("A8 unrelated event ignored safely, nothing fetched", [ig.ignored, ffCalls], [true, 0]);
   const bad = (await deliver(JSON.stringify({ event: "meeting.transcribed" }))) as Row;
   t("A9 missing meeting_id rejected", bad.thrown, "missing_meeting_id");
@@ -200,76 +231,143 @@ t("C4 explicit empty list rejected", M.parseRecipients([]), null);
   reset();
   const noSummary = baseTranscript({ summary: null });
   const g1 = await S.generateMinutes("fireflies", noSummary as any);
-  t("E1 Fireflies mode + missing summary -> error and Luna NOT called", [g1, modelCalls], [{ ok: false, error: "fireflies_summary_missing" }, 0]);
+  t("E1 Fireflies mode + missing summary -> error (may still arrive) and Luna NOT called", [g1, modelCalls], [{ ok: false, error: "fireflies_summary_missing", wait: true }, 0]);
   const g2 = await S.generateMinutes("fireflies", baseTranscript() as any);
   t("E2 Fireflies mode never calls Luna", [g2.ok && g2.kind, modelCalls], ["standard", 0]);
   t("E3 standard summary email carries the 'not your custom template' notice", g2.ok && g2.markdown.includes("not your custom summary template"), true);
   const g3 = await S.generateMinutes("luna", baseTranscript() as any);
   t("E4 Luna mode calls Luna once on the luna model with the full transcript", [g3.ok && g3.kind, modelCalls, lastModelInput.startsWith("gpt-5.6-luna"), lastModelInput.includes("[01:05] Sam: Let's ship Friday.")], ["luna", 1, true, true]);
   const g4 = await S.generateMinutes("luna", baseTranscript({ sentences: [] }) as any);
-  t("E5 Luna mode + missing transcript -> error, Luna NOT called, NO fallback to Fireflies summary", [g4, modelCalls], [{ ok: false, error: "transcript_missing" }, 1]);
+  t("E5 Luna mode + missing transcript -> error, Luna NOT called, NO fallback to Fireflies summary", [g4, modelCalls], [{ ok: false, error: "transcript_missing", wait: true }, 1]);
   modelReply = "## Agenda\n- x\n## Summary\nOne line.";
   const g5 = await S.generateMinutes("luna", baseTranscript() as any);
   t("E6 Luna reply missing template sections is not emailed", g5.ok ? "ok" : g5.error, "luna_template_incomplete:Questions|Decisions|Action Items");
 }
 
-// ---------------------------------------------------------------- F: delivery decision
-t("F1 first delivery -> send", M.decideDelivery(null, "h", false), "send");
-t("F2 retry of a sent meeting, same content -> skip", M.decideDelivery({ email_status: "sent", content_hash: "h" }, "h", true), "skip_already_sent");
-t("F3 changed content, update emails OFF -> skip", M.decideDelivery({ email_status: "sent", content_hash: "h" }, "h2", false), "skip_already_sent");
-t("F4 changed content, update emails ON -> send_update", M.decideDelivery({ email_status: "sent", content_hash: "h" }, "h2", true), "send_update");
-t("F5 in flight -> skip", M.decideDelivery({ email_status: "sending", content_hash: null }, "h", false), "skip_in_flight");
-t("F6 earlier failure -> send again", M.decideDelivery({ email_status: "failed", content_hash: null }, "h", false), "send");
+// ---------------------------------------------------------------- F: email plan + retry policy
+t("F1 never emailed -> send", M.planEmail({ email_status: null, content_hash: null }, "h", false), "send");
+t("F2 already sent, same input -> not needed (a retry never re-sends)", M.planEmail({ email_status: "sent", content_hash: "h" }, "h", true), "not_needed");
+t("F3 changed input, update emails OFF -> not needed", M.planEmail({ email_status: "sent", content_hash: "h" }, "h2", false), "not_needed");
+t("F4 changed input, update emails ON -> send_update", M.planEmail({ email_status: "sent", content_hash: "h" }, "h2", true), "send_update");
+t("F5 earlier failure -> send", M.planEmail({ email_status: "failed", content_hash: null }, "h", false), "send");
+t("F6 backoff 1,2,4..30 min", [1, 2, 3, 9].map(M.retryDelaySec), [60, 120, 240, 1800]);
 
-// ---------------------------------------------------------------- G: end-to-end through the handler
+// ---------------------------------------------------------------- G: webhook queues, heartbeat works
+const tick = () => S.processDueFirefliesMeetings(1, clock);
+const drain = async (n = 6) => {
+  for (let i = 0; i < n; i++) {
+    clock += 31 * 60 * 1000; // past any backoff
+    await tick();
+  }
+};
 {
   reset();
   ffTranscript = baseTranscript();
-  const r1 = (await deliver(evt("m1"))) as Row;
-  t("G1 first delivery: one email + OneDrive saved; default recipients = only the owner's SENDABLE addresses (a would-be-draft address is left out)", [r1.email?.status, sent.length, sent[0]?.to, r1.onedrive?.ok], ["sent", 1, ["owner@example.com"], true]);
+  const w = (await deliver(evt("m1"))) as Row;
+  t("G0 webhook only QUEUES: no Fireflies, Graph or model call inside the request (Fireflies allows 30s)", [w.queued, ffCalls, sent.length, uploads.length, modelCalls], [true, 0, 0, 0, 0]);
+  await tick();
+  t("G1 heartbeat: one email + OneDrive saved; default recipients = only the owner's SENDABLE addresses", [sent.length, sent[0]?.to, db.meetings.get("m1")?.onedrive_status], [1, ["owner@example.com"], "saved"]);
   t("G2 OneDrive path is stable and meeting-id keyed", uploads[0], "Automation/transcripts/fireflies-m1.md");
   t("G3 subject carries title and date", sent[0]?.subject, "Meeting minutes: Launch sync (Nov 9, 2026)");
-  const r2 = (await deliver(evt("m1"))) as Row;
-  t("G4 webhook RETRY: no second email, OneDrive updated again", [r2.email?.status, r2.email?.reason, sent.length, uploads.length], ["skipped", "already_sent", 1, 2]);
-  const both = await Promise.all([deliver(evt("m2")), deliver(evt("m2"))]);
-  t("G5 two CONCURRENT deliveries of a new meeting -> exactly one email", sent.length, 2);
-  t("G5b the loser reports skipped, not failed", both.map((x: Row) => x.email?.status).sort(), ["sent", "skipped"]);
+  await deliver(evt("m1"));
+  await drain(2);
+  t("G4 webhook RETRY (same delivery again) is a no-op: no second email, no re-upload", [sent.length, uploads.length], [1, 1]);
+
+  // two heartbeats at once on a new meeting: the lease lets exactly one work it
+  await deliver(evt("m2"));
+  await Promise.all([tick(), tick()]);
+  t("G5 two CONCURRENT heartbeats -> exactly one email for the meeting", sent.filter((x) => x.subject.includes("Launch")).length, 2);
 
   ffTranscript = baseTranscript({ summary: { overview: "Changed summary." } });
-  const r3 = (await deliver(evt("m1"))) as Row;
-  t("G6 Fireflies resend with changed content, update emails OFF -> no email", [r3.email?.status, sent.length], ["skipped", 2]);
+  await deliver(JSON.stringify({ event: "meeting.transcribed", meeting_id: "m1", timestamp: 2, reprocessed_at: 1000 }));
+  await drain(2);
+  t("G6 Fireflies resend (newer reprocessed_at), update emails OFF -> file updated, no email", [sent.length, db.meetings.get("m1")?.pending_email], [2, false]);
   db.settings.set("owner@example.com", { minutes_source: "fireflies", recipients: ["owner@example.com"], update_emails: true });
-  const r4 = (await deliver(evt("m1"))) as Row;
-  t("G7 same resend with update emails ON -> one 'Updated meeting minutes' email", [r4.email?.status, r4.email?.update, sent.at(-1)?.subject.startsWith("Updated meeting minutes")], ["sent", true, true]);
+  await deliver(JSON.stringify({ event: "meeting.transcribed", meeting_id: "m1", timestamp: 3, reprocessed_at: 1000 }));
+  await drain(2);
+  t("G7 a RETRY of that resend (same reprocessed_at) does not re-queue an email even with update emails ON", sent.length, 2);
+  ffTranscript = baseTranscript({ summary: { overview: "Changed again." } });
+  await deliver(JSON.stringify({ event: "meeting.transcribed", meeting_id: "m1", timestamp: 4, reprocessed_at: 2000 }));
+  await drain(2);
+  t("G8 a NEWER resend with update emails ON -> one 'Updated meeting minutes' email", [sent.length, sent.at(-1)?.subject.startsWith("Updated meeting minutes")], [3, true]);
+}
+{
+  // Fireflies-summary mode: transcribed arrives before the summary exists
+  reset();
+  ffTranscript = baseTranscript({ summary: null });
+  await deliver(evt("m3"));
+  await tick();
+  t("G9 transcribed with no summary yet: no email, WAITING (not failed), OneDrive saved", [sent.length, db.meetings.get("m3")?.email_error, db.meetings.get("m3")?.pending_email, db.meetings.get("m3")?.onedrive_status], [0, "waiting:fireflies_summary_missing", true, "saved"]);
+  ffTranscript = baseTranscript();
+  await deliver(evt("m3", "meeting.summarized"));
+  await tick();
+  t("G10 meeting.summarized arrives -> one email from the Fireflies summary", [sent.length, db.meetings.get("m3")?.summary_kind], [1, "standard"]);
+  await deliver(evt("m3", "meeting.summarized"));
+  await drain(2);
+  t("G11 a retry of meeting.summarized does not email again", sent.length, 1);
 
   reset();
   ffTranscript = baseTranscript({ summary: null });
-  const r5 = (await deliver(evt("m3"))) as Row;
-  t("G8 Fireflies mode, no summary: no email, visible error recorded, OneDrive STILL saved, no retry asked", [sent.length, db.meetings.get("m3")?.email_error, r5.onedrive?.ok, r5.retry], [0, "fireflies_summary_missing", true, false]);
-
+  await deliver(evt("m4"));
+  await tick();
+  clock += 3 * 60 * 60 * 1000 + 60_000; // past the 3h summary wait
+  await tick();
+  t("G12 summary never arrives: after 3h a FINAL visible error, never a fall back to Luna", [sent.length, modelCalls, db.meetings.get("m4")?.email_status, db.meetings.get("m4")?.email_error, db.meetings.get("m4")?.pending_email], [0, 0, "failed", "fireflies_summary_missing", false]);
+}
+{
   reset();
   ffTranscript = baseTranscript();
   uploadStatus = 403;
-  const r6 = (await deliver(evt("m4"))) as Row;
-  t("G9 OneDrive fails -> email still sent; retry requested for OneDrive", [r6.email?.status, r6.onedrive?.ok, r6.retry], ["sent", false, true]);
-  const r6b = (await deliver(evt("m4"))) as Row;
-  t("G10 ...and that retry does NOT send the email again", [r6b.email?.status, sent.length], ["skipped", 1]);
+  await deliver(evt("m5"));
+  await tick();
+  t("G13 OneDrive fails -> email still sent; OneDrive stays queued", [sent.length, db.meetings.get("m5")?.pending_onedrive], [1, true]);
+  uploadStatus = 201;
+  await drain(1);
+  t("G14 ...the retry saves OneDrive and does NOT send the email again", [sent.length, db.meetings.get("m5")?.onedrive_status], [1, "saved"]);
+
+  reset();
+  ffTranscript = baseTranscript();
+  settingsDown = true;
+  await deliver(evt("m6"));
+  await tick();
+  settingsDown = false;
+  t("G15 settings DB down -> OneDrive STILL saved (verify loop 1, D3); email retried later", [uploads.length, sent.length, db.meetings.get("m6")?.pending_email], [1, 0, true]);
+  await drain(1);
+  t("G16 ...and the retry sends the email once", sent.length, 1);
 
   reset();
   ffTranscript = baseTranscript();
   sendOk = false;
-  const r7 = (await deliver(evt("m5"))) as Row;
-  t("G11 Graph send failure -> recorded failed, retry requested", [r7.email?.status, db.meetings.get("m5")?.email_status, r7.retry], ["failed", "failed", true]);
+  await deliver(evt("m7"));
+  await tick();
+  t("G17 Graph send failure -> short code only (no Graph text), still queued", [db.meetings.get("m7")?.email_error, db.meetings.get("m7")?.pending_email], ["graph_send_500", true]);
   sendOk = true;
-  await deliver(evt("m5"));
-  t("G12 the retry after a failed send DOES send (once)", [db.meetings.get("m5")?.email_status, db.meetings.get("m5")?.emails_sent], ["sent", 1]);
+  await drain(1);
+  t("G18 the retry after a failed send sends exactly once", [db.meetings.get("m7")?.email_status, db.meetings.get("m7")?.emails_sent], ["sent", 1]);
+
+  // crashed worker: lease taken, process died before release -> lease lapses, meeting is picked up again
+  reset();
+  ffTranscript = baseTranscript();
+  await deliver(evt("m8"));
+  const leaked = await (await import("../src/features/huddle/lib/fireflies/minutes-store.server")).claimDueMeetings(1);
+  t("G19 a crashed worker holds the lease: the next tick skips the meeting", [leaked.length, await tick(), sent.length], [1, 0, 0]);
+  clock += 4 * 60 * 1000; // lease (3 min) lapsed
+  await tick();
+  t("G20 ...after the lease lapses the meeting is processed and emailed once (verify loop 1, D1)", sent.length, 1);
 
   reset();
   ffTranscript = baseTranscript();
   db.settings.set("owner@example.com", { minutes_source: "luna", recipients: null, update_emails: false });
-  const r8 = (await deliver(evt("m6"))) as Row;
-  t("G13 Luna mode end to end: Luna called, email says Luna wrote it", [r8.email?.kind, modelCalls, sent[0]?.body.includes("Minutes written by Luna")], ["luna", 1, true]);
-  t("G14 setting is read per delivery (switching to Luna took effect without redeploy)", r8.minutesSource, "luna");
+  await deliver(evt("m9"));
+  await tick();
+  t("G21 Luna mode end to end: Luna called once, email says Luna wrote it", [db.meetings.get("m9")?.summary_kind, modelCalls, sent[0]?.body.includes("Minutes written by Luna")], ["luna", 1, true]);
+  t("G22 transcript timestamps arrive as STRINGS in Fireflies' schema and still render", lastModelInput.includes("[01:05] Sam:"), true);
+}
+{
+  reset();
+  const bad = (await deliver(evt("ab/../c"))) as Row;
+  t("G23 a meeting id with path characters is REJECTED, not cleaned (verify loop 1, C2)", [bad.thrown, db.meetings.size], ["invalid_meeting_id", 0]);
+  t("G24 safeSendError never carries Graph's message text", [S.safeSendError("Graph sendMail failed (403): user x@y.io blocked"), S.safeSendError("x", true)], ["graph_send_403", "email_refused_by_send_gate"]);
 }
 
 // ---------------------------------------------------------------- H: safe HTML + misc
@@ -282,8 +380,8 @@ t("F6 earlier failure -> send again", M.decideDelivery({ email_status: "failed",
     M.meetingInputHash(baseTranscript() as any) === M.meetingInputHash(baseTranscript() as any),
     M.meetingInputHash(baseTranscript() as any) === M.meetingInputHash(baseTranscript({ summary: { overview: "x" } }) as any),
   ], [true, false]);
-  t("H5 meeting ids are sanitised for the file path", [M.safeMeetingId("ab/../c d"), M.safeMeetingId("///")], ["abcd", null]);
-  t("H6 timestamps", [M.stamp(65), M.stamp(3725)], ["01:05", "1:02:05"]);
+  t("H5 meeting ids are accepted verbatim or rejected", [M.safeMeetingId("ASxwZxCstx"), M.safeMeetingId("01KTXMH9V8RPY1B4DTYKB27WYR"), M.safeMeetingId("ab/../c d"), M.safeMeetingId("")], ["ASxwZxCstx", "01KTXMH9V8RPY1B4DTYKB27WYR", null, null]);
+  t("H6 timestamps (number or Fireflies' string form)", [M.stamp(65), M.stamp(3725), M.stamp("65.4"), M.stamp(""), M.stamp("x")], ["01:05", "1:02:05", "01:05", "", ""]);
 }
 
 if (fail) {

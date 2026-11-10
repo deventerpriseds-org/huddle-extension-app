@@ -10,7 +10,8 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-// WHAT: Fireflies Webhooks V2 endpoint -> meeting minutes email + OneDrive transcript (fireflies.server.ts).
+// WHAT: Fireflies Webhooks V2 endpoint. Verifies and QUEUES a delivery; the run-turn heartbeat emails the
+//       minutes and saves the transcript (fireflies.server.ts processDueFirefliesMeetings).
 // Fireflies Webhooks V2 sends a signed POST. The raw body is passed untouched to the
 // HMAC verifier; transcript content is fetched server-to-server from Fireflies by meeting_id.
 export const Route = createFileRoute("/api/public/fireflies-webhook")({
@@ -43,14 +44,8 @@ export const Route = createFileRoute("/api/public/fireflies-webhook")({
             rawBody,
             request.headers.get("x-hub-signature"),
           );
-          // 503 only for failures a Fireflies retry could fix (Graph/Luna/network). The ledger makes a
-          // retry safe: an email already sent is never sent again. Permanent problems (no summary,
-          // bad recipients setting) answer 200 with the error in the body and on the ledger row.
-          const email =
-            result.email?.status === "sent"
-              ? { status: "sent", kind: result.email.kind, recipients: result.email.recipients.length, update: result.email.update }
-              : result.email;
-          return json({ ok: !result.retry, ...result, email }, result.retry ? 503 : 200);
+          // The delivery is recorded; the once-a-minute heartbeat does the work (Fireflies allows 30s).
+          return json({ ok: true, ...result }, 200);
         } catch (err) {
           const code = err instanceof Error ? err.message : "webhook_failed";
           if (code === "invalid_webhook_signature") {
@@ -63,8 +58,9 @@ export const Route = createFileRoute("/api/public/fireflies-webhook")({
           ) {
             return json({ ok: false, error: "invalid_payload" }, 400);
           }
-          // Do not log webhook bodies, transcript text, API keys, or Graph response bodies.
-          console.error("[fireflies-webhook] processing failed", code);
+          // Do not log webhook bodies, transcript text, API keys, or Graph response bodies. A failed queue
+          // write answers 503 so Fireflies retries (5xx is retried 5 times with backoff).
+          console.error("[fireflies-webhook] queue write failed", /^[a-z0-9_]{1,80}$/.test(code) ? code : "webhook_failed");
           return json({ ok: false, error: "processing_failed", code: /^[a-z0-9_]{1,80}$/.test(code) ? code : "webhook_failed" }, 503);
         }
       },
