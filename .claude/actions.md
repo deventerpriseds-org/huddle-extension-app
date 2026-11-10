@@ -5071,3 +5071,18 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - Reverted the rollback (#183): the app again opens with the recent window (30 days + newest 40 per huddle), loads
   older pages on scroll-up, and saves MERGE by id. The load/save failures were DB connection exhaustion
   (ACT:db-connection-exhaustion, fixed by one shared pool #185), not paging. #173's alarm skip stays.
+
+### ACT:db-connection-exhaustion — option A SHIPPED (#185, deployed 2026-11-08 16:46Z); paging re-applied (#187, 20:23Z)
+- One shared pool (max 8) replaces 17 per-module pools; guard `scripts/shared-pool.test.ts` P1-P5, mutations P1/P3 FIRED.
+- Live check 2026-11-10 12:23Z (azure-pg-query run 42815329470): workspace saves landing (last 12:07Z, 3,899 msgs
+  vs 3,824 on 11-08); server total 27/50 connections. NOT yet owner-confirmed that load/save errors are gone.
+
+### ACT:alarm-buttons-trace (2026-11-10) — CAUSE FOUND; already restored on journey 2026-11-05 (not owner-confirmed)
+- journey activity_log `android_alarm_trace`, FCM_RX lines on calendar_events: alarm pushes carried the action
+  token every day through 10-14; from 10-15 to 11-05 21:45Z they carried NONE (0 with / ~15-25 without per day);
+  from 11-05 21:45Z on, all carry it again (journey 63debcea "restore(J13+J14): phone alarm actions via signed
+  action token", merged 11-04, deployed 11-05).
+- Without the token the app falls back to its own login, which only supports DONE/DOING. Every one of the 6 failed
+  taps (10-19..11-02) was PARK or BACKLOG -> `GIVE_UP route=NONE http=0`, i.e. never sent. The 5 DONE taps in the same
+  window succeeded via the fallback. Since 11-05 no PARK/BACKLOG tap has been traced yet, so "fixed" is inferred
+  from token presence, not observed.
