@@ -86,9 +86,18 @@ export const getScheduleWidget = createServerFn({ method: "POST" })
       const timeZone = safeTimeZone(await resolveTimeZone(data.caller, data.timeZone));
       if (!email) return empty(false, timeZone, "Could not resolve your account.");
       const { getBoardTasks } = await import("./tasks.server");
-      const rows = await getBoardTasks(email);
-      const sections = buildScheduleSections(rows, timeZone, Date.now());
-      return { ok: true, timeZone, ...sections };
+      const ds = await import("./day-schedule.server");
+      const { localDate } = await import("./schedule-brief.server");
+      const nowMs = Date.now();
+      // Meetings + classes are read alongside the tasks (2026-11-10: the tab showed tasks only, so a
+      // day of 8 meetings read "Nothing scheduled for today"). The calendar read never throws.
+      const [rows, cal] = await Promise.all([
+        getBoardTasks(email),
+        ds.readTodayCalendar(localDate(nowMs, timeZone), timeZone, data.caller, email),
+      ]);
+      const sections = buildScheduleSections(rows, timeZone, nowMs);
+      const today = ds.composeTodayItems({ todayKey: sections.todayKey, tz: timeZone, cal, todaySchedule: sections.todaySchedule });
+      return { ok: true, timeZone, ...sections, ...today };
     } catch (err) {
       return empty(false, data.timeZone ?? "UTC", err instanceof Error ? err.message : String(err));
     }

@@ -16,7 +16,7 @@ export const PRIORITIZE_TOOL = {
   // `view`. The JS const stays PRIORITIZE_TOOL and the dispatcher stays dispatchPrioritize (internal).
   name: "schedule_and_priorities",
   description:
-    "Read and rank the user's real SCHEDULE and tasks from their live schedule data — their nightly-planned schedule (the scheduled items for a day) plus their open tasks/backlog, scored by priority, due dates, and staleness. This is the source of truth and the ONLY way to answer ANY question about the user's schedule, calendar, agenda, day, \"what's on my calendar/plate/today\", meetings, appointments, free/busy, tasks, backlog, priorities, or what's next — never answer those from memory or a guess. For \"what's on my schedule/calendar/day today\" use view 'scheduled'. Use `view` to pick the slice, optionally scoped to a `category`. (ONLY an explicit \"external calendar\" / \"Outlook calendar\" ask should use get_external_calendar_events instead.) Returns a scored, ordered list.",
+    "Read and rank the user's real SCHEDULE and tasks from their live schedule data — their nightly-planned schedule (the scheduled items for a day) plus their open tasks/backlog, scored by priority, due dates, and staleness. This is the source of truth and the ONLY way to answer ANY question about the user's schedule, calendar, agenda, day, \"what's on my calendar/plate/today\", meetings, appointments, free/busy, tasks, backlog, priorities, or what's next — never answer those from memory or a guess. For \"what's on my schedule/calendar/day today\" use view 'scheduled' — it returns that ONE day's meetings, classes AND tasks together, merged in time order and labelled (pass `date` for another day). Use `view` to pick the slice, optionally scoped to a `category`. (ONLY an explicit \"external calendar\" / \"Outlook calendar\" ask should use get_external_calendar_events instead.) Returns a scored, ordered list.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -36,6 +36,11 @@ export const PRIORITIZE_TOOL = {
         type: "string",
         description:
           "Optional domain to scope to, e.g. LIFE, VENTURES, JOB, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION (JOB = work for the user's employer; CAREER = getting their next role). Omit to span everything. Composes with any view (e.g. view='priorities', category='CAREER').",
+      },
+      date: {
+        type: "string",
+        description:
+          "For view 'scheduled' only: which day. Omit (or 'today') for today, 'tomorrow', a weekday name like 'thursday' (the next one, today included), yyyy-mm-dd, or 'all' for every scheduled TASK on every day (tasks only, no calendar).",
       },
       limit: {
         type: "number",
@@ -323,6 +328,7 @@ export async function dispatchScheduleWidget(
   userEmail: string | undefined,
   _args: Record<string, unknown>,
   timeZone?: string,
+  ctx?: { caller?: { entra_object_id?: string; entra_email?: string } },
 ): Promise<string> {
   if (!userEmail) {
     return JSON.stringify({
@@ -334,18 +340,26 @@ export async function dispatchScheduleWidget(
     const { getBoardTasks } = await import("./tasks.server");
     const { safeTimeZone, buildScheduleSections } = await import("./widgets.server");
     const tz = safeTimeZone(timeZone);
-    const rows = await getBoardTasks(userEmail);
-    const sections = buildScheduleSections(rows, tz, Date.now());
+    const ds = await import("./day-schedule.server");
+    const { localDate } = await import("./schedule-brief.server");
+    const nowMs = Date.now();
+    // Same merged Today as the Schedule tab (getScheduleWidget) — meetings + classes + tasks.
+    const [rows, cal] = await Promise.all([
+      getBoardTasks(userEmail),
+      ds.readTodayCalendar(localDate(nowMs, tz), tz, ctx?.caller, userEmail),
+    ]);
+    const sections = buildScheduleSections(rows, tz, nowMs);
+    const today = ds.composeTodayItems({ todayKey: sections.todayKey, tz, cal, todaySchedule: sections.todaySchedule });
     // Annotated for the same reason as the priorities payload above — see that comment.
-    const schedule: ScheduleWidgetData = { ok: true, timeZone: tz, ...sections };
+    const schedule: ScheduleWidgetData = { ok: true, timeZone: tz, ...sections, ...today };
     console.info(
-      `[schedule-widget] rendered today=${sections.todaySchedule.length} doing=${sections.currentlyDoing.length} upNext=${sections.upNext.length} tz=${tz}`,
+      `[schedule-widget] rendered today=${today.todayItems.length} (tasks=${sections.todaySchedule.length}) problems=${today.todayProblems.length} doing=${sections.currentlyDoing.length} upNext=${sections.upNext.length} tz=${tz}`,
     );
     return JSON.stringify({
       rendered: true,
       // `schedule` is the key the reply-assembly looks for.
       schedule,
-      message: `Schedule widget rendered (${sections.todaySchedule.length} today, ${sections.currentlyDoing.length} in progress, ${sections.upNext.length} up next). Do not repeat the items in your reply.`,
+      message: `Schedule widget rendered (${today.todayItems.length} today${today.todayProblems.length ? ` — NOTE: ${today.todayProblems.join(" ")}` : ""}, ${sections.currentlyDoing.length} in progress, ${sections.upNext.length} up next). Do not repeat the items in your reply.`,
     });
   } catch (err) {
     console.info(`[schedule-widget] SKIPPED reason=exception`);
@@ -358,7 +372,7 @@ export async function dispatchScheduleWidget(
 
 
 export const PRIORITIZE_SYSTEM_HINT =
-  "For ANY question about the user's schedule, calendar, agenda, day, tasks, backlog, priorities, meetings, appointments, free/busy, or what to do next — including 'what's on my schedule/calendar/day today', 'what's on my plate', 'what's in my backlog', 'what's up next', 'what's overdue', 'what are my <area> priorities' — call the `schedule_and_priorities` tool and answer from its ranked results. It is the user's nightly-planned schedule + tasks, the source of truth. Use view 'scheduled' for 'what's on my schedule/calendar/day today'; otherwise pick the matching `view` (backlog / up_next / overdue / priorities) and the relevant `category`. Only an EXPLICIT 'external calendar' / 'Outlook calendar' request should use get_external_calendar_events instead. The start/due times it returns are ALREADY in the user's local timezone (each carries its zone abbreviation, e.g. '10:00 AM EDT') — state them exactly as given; do NOT convert or shift them. For a schedule question, list EVERY item it returns for the day asked about — do not shorten the day to a few highlights — and if `truncated` is true, say the list is partial. BLOCKED tasks are never in the ranked list: for ANY blocker or status question ('anything blocking me?', 'what's stuck?', 'where do things stand?') pass `include_blocked: true` (or use view 'blocked') and name every task in `blocked` with its `blocker_reason`; only say there are no blockers when you did that and `blocked_count` is 0. Never invent an ordering, and never tell the user their tasks/schedule aren't in your files or ask them to upload anything. If it returns an error, say you couldn't reach their schedule and offer to retry.";
+  "For ANY question about the user's schedule, calendar, agenda, day, tasks, backlog, priorities, meetings, appointments, free/busy, or what to do next — including 'what's on my schedule/calendar/day today', 'what's on my plate', 'what's in my backlog', 'what's up next', 'what's overdue', 'what are my <area> priorities' — call the `schedule_and_priorities` tool and answer from its ranked results. It is the user's nightly-planned schedule + tasks, the source of truth. Use view 'scheduled' for 'what's on my schedule/calendar/day today' (it returns that day's meetings, classes and tasks together; pass `date` for another day, e.g. 'tomorrow' or 'thursday'). Follow its `answer_rule`: if `complete` is false a source could not be read, so say which one and NEVER call the day empty, clear or free; otherwise pick the matching `view` (backlog / up_next / overdue / priorities) and the relevant `category`. Only an EXPLICIT 'external calendar' / 'Outlook calendar' request should use get_external_calendar_events instead. The start/due times it returns are ALREADY in the user's local timezone (each carries its zone abbreviation, e.g. '10:00 AM EDT') — state them exactly as given; do NOT convert or shift them. For a schedule question, list EVERY item it returns for the day asked about — do not shorten the day to a few highlights — and if `truncated` is true, say the list is partial. BLOCKED tasks are never in the ranked list: for ANY blocker or status question ('anything blocking me?', 'what's stuck?', 'where do things stand?') pass `include_blocked: true` (or use view 'blocked') and name every task in `blocked` with its `blocker_reason`; only say there are no blockers when you did that and `blocked_count` is 0. Never invent an ordering, and never tell the user their tasks/schedule aren't in your files or ask them to upload anything. If it returns an error, say you couldn't reach their schedule and offer to retry.";
 
 /**
  * Execute a `prioritize` (schedule_and_priorities) tool call. Returns a JSON string (the model reads
@@ -369,6 +383,8 @@ export async function dispatchPrioritize(
   userEmail: string | undefined,
   args: Record<string, unknown>,
   timeZone?: string,
+  /** The signed-in caller, so the day view can read THEIR calendar (mailbox + work feed). */
+  ctx?: { caller?: { entra_object_id?: string; entra_email?: string } },
 ): Promise<string> {
   if (!userEmail) {
     return JSON.stringify({
@@ -402,6 +418,42 @@ export async function dispatchPrioritize(
   // (memory.md "Blocker DESYNC", 2026-08-06). Blocked tasks come back in a SEPARATE `blocked` array and
   // never enter `ranked`, so priority ranking and the priority widget are untouched.
   const wantBlocked = view === "blocked" || args.include_blocked === true;
+
+  // ONE DAY = MEETINGS + CLASSES + TASKS (2026-11-10 incident: "no items scheduled for today" on a day
+  // with 8 meetings and a class, because this view read tasks only and had no day filter, so it also
+  // offered Wednesday's task as today's). The 'scheduled' view now answers ONE local day from the merged
+  // reader the brief's sources feed. `date: "all"` keeps the old every-day task list; a `category` keeps
+  // the old task-only path, because calendar items carry no category.
+  if (view === "scheduled" && !category) {
+    const tz = timeZone || "UTC";
+    const ds = await import("./day-schedule.server");
+    const date = ds.resolveDayArg(args.date, Date.now(), tz);
+    if (date === null) {
+      return JSON.stringify({
+        error: "bad_date",
+        message: `date must be "today", "tomorrow", a weekday name, "all" or yyyy-mm-dd (got ${JSON.stringify(args.date)}).`,
+      });
+    }
+    if (date !== "all") {
+      const day = await ds.readDaySchedule(date, tz, {
+        ...ds.realCalendarDeps({ caller: ctx?.caller, fallbackMailbox: userEmail }),
+        tasks: ds.realTaskReader(userEmail),
+      });
+      const out = ds.dayScheduleToolJson({ date, tz, ...day });
+      if (wantBlocked) {
+        try {
+          const b = JSON.parse(await dispatchPrioritize(userEmail, { ...args, view: "blocked" }, timeZone, ctx)) as Record<string, unknown>;
+          if (!b.error) Object.assign(out, { blocked_count: b.blocked_count, blocked: b.blocked });
+        } catch {
+          /* blockers are an add-on to the day answer */
+        }
+      }
+      console.info(
+        `[day-schedule] date=${date} tz=${tz} items=${day.items.length} complete=${String(out.complete)} sources=${JSON.stringify(out.sources)}`,
+      );
+      return JSON.stringify(out);
+    }
+  }
 
   try {
     const { getTasksForUser, getTaskBlockers } = await import("./tasks.server");

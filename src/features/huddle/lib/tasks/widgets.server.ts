@@ -82,7 +82,30 @@ export interface ScheduleWidgetData {
    * never rendered twice in one widget.
    */
   upNext: WidgetTaskRow[];
+  /**
+   * `TODAY'S SCHEDULE` as the owner sees it since 2026-11-10: meetings + classes + today's tasks,
+   * merged, de-duplicated and time-ordered (day-schedule.server.ts). OPTIONAL so a widget snapshot
+   * saved in an older chat message still renders from `todaySchedule`.
+   */
+  todayItems?: ScheduleDayEntry[];
+  /** Sources that could not be read for today, in plain words. Non-empty => the list may be missing items. */
+  todayProblems?: string[];
+  /** A one-line explanation drawn from the data, e.g. why no tasks are placed today. */
+  todayNote?: string;
 }
+
+/** One row of the merged Today's schedule. Calendar rows are read-only (no task controls). */
+export type ScheduleDayEntry =
+  | { kind: "task"; task: WidgetTaskRow; conflict?: boolean }
+  | {
+      kind: "meeting" | "class";
+      title: string;
+      /** Raw ISO; null for an all-day item. */
+      startTime: string | null;
+      endTime: string | null;
+      allDay: boolean;
+      location: string | null;
+    };
 
 /** One node of journey's priorities topic tree. */
 export interface TopicNode {

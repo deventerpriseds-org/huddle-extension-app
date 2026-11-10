@@ -12,6 +12,7 @@
     "test:router": "bun scripts/router-winners.test.ts",
     "test:priority-check": "bun scripts/priority-check.test.ts",
     "test:chat-format": "bun scripts/chat-format.test.ts",
+    "test:day-schedule": "bun scripts/day-schedule.test.ts",
     "test:blocked": "bun scripts/blocked-line.test.mjs",
     "test:standup-ranking": "bun scripts/standup-ranking.test.ts",
     "test:standup-deliver": "bun scripts/standup-deliver-mode.test.ts",
