@@ -5086,3 +5086,9 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
   taps (10-19..11-02) was PARK or BACKLOG -> `GIVE_UP route=NONE http=0`, i.e. never sent. The 5 DONE taps in the same
   window succeeded via the fallback. Since 11-05 no PARK/BACKLOG tap has been traced yet, so "fixed" is inferred
   from token presence, not observed.
+
+## ACT:download-tab — latest Huddle + TaskOS APK links in Settings -> "Download" (2026-11-10) — LIVE, owner NOT yet confirmed
+- **Asked (owner 2026-11-10):** "Like nexus add the latest huddle and TaskOS apk download links in a settings tab of those apps" -> approved option A, tab labelled "Download".
+- **Shipped:** huddle-extension-app #189 (d0ac835, deploy-swa success); bridge-builder #2 (getLatestApk); journey-voice #110 (TaskOS tab + edge fn + token sync run 42812484523: 200 with token, 401 without).
+- **Evidence:** `bun scripts/app-downloads.test.ts` 9/9; `tsc --noEmit` clean; link-filter mutation FIRED. Browser UAT against the deployed SWA: see the verify-uat run dispatched from branch claude_download-tab-uat.
+- **Open:** owner to open Settings -> Download and try a download on the phone.

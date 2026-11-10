@@ -1,5 +1,14 @@
 # Project Memory — huddle-extension-app
 
+
+## Settings "Download" tab (2026-11-10) — LIVE; owner NOT yet confirmed in the app
+- `components/AppDownloadsPanel.tsx` (tab "Download" in SettingsSheet) -> `lib/downloads/app-downloads.functions.ts`
+  `getAppDownloadsFn` -> bridge-builder `GET https://bridge-builder-api.azurewebsites.net/api/getLatestApk` with
+  `JOURNEY_PROXY_TOKEN` in `x-journey-proxy-token`. Returns the newest Huddle + TaskOS APK with a fresh 30-day link.
+- The token reaches bridge-builder via journey-voice `sync-bridge-builder-token.yml`. **Rotating JOURNEY_PROXY_TOKEN
+  => re-dispatch that workflow**, or this tab shows "did not answer" (bridge_401).
+- Only signed https `*.blob.core.windows.net` links reach the page (`shapeDownloads`; mutation FIRED).
+- Browser UAT: `verify-uat.yml` with `checks_file=.claude/skills/test-agent-serverfn/scripts/download-tab-checks.mjs`.
 ## Attention bell (2026-11-08) — one "needs you" list on chat.email_replies
 - `kind` column (email|meeting|appointment): ANY new query on chat.email_replies that means "emails" must filter `kind='email'` (findOwed*, listOwedEmailReplies, counts already do). Non-email rows: mailbox '', graph_message_id = own id, no conversation_id.
 - A push the server sent can still not show on the phone (FCM accepts data-only messages; the Huddle app does not report display). The bell is the in-app record that needs no push.
