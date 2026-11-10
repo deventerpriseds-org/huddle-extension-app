@@ -39,6 +39,7 @@ import { ExecutiveProfilePanel } from "./ExecutiveProfilePanel";
 import { AgentWorkflowPanel } from "./AgentWorkflowPanel";
 import { ArtifactMirroringPanel } from "./ArtifactMirroringPanel";
 import { SchedulingPanel } from "./SchedulingPanel";
+import { AppDownloadsPanel } from "./AppDownloadsPanel";
 
 interface SettingsSheetProps {
   open: boolean;
@@ -148,6 +149,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
             <TabsTrigger value="memory">Memory</TabsTrigger>
             <TabsTrigger value="platforms">Platforms</TabsTrigger>
             <TabsTrigger value="batch">Batch</TabsTrigger>
+            <TabsTrigger value="download">Download</TabsTrigger>
           </TabsList>
 
           {/* ---- Account ---- */}
@@ -156,6 +158,11 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
             <ExecutiveProfilePanel />
             <AgentWorkflowPanel />
             <ArtifactMirroringPanel />
+          </TabsContent>
+
+          {/* ---- Download ---- */}
+          <TabsContent value="download" className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+            <AppDownloadsPanel />
           </TabsContent>
 
           {/* ---- Scheduling ---- */}
