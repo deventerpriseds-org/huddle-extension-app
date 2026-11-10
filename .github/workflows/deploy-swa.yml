@@ -51,7 +51,7 @@ jobs:
         run: |
           for k in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID \
                    ELEVENLABS_API_KEY ELEVENLABS_DEFAULT_VOICE_ID OPENAI_API_KEY LOVABLE_API_KEY \
-                   TAVILY_API_KEY AZURE_PG_URL JOURNEY_PROXY_TOKEN; do
+                   TAVILY_API_KEY AZURE_PG_URL JOURNEY_PROXY_TOKEN FIREFLIES_API_KEY FIREFLIES_WEBHOOK_SECRET; do
             if [ -n "${!k}" ]; then echo "$k: present"; else echo "$k: MISSING"; fi
           done
           # Web Push is optional — absence just disables notify-while-away (durable turns still work).
@@ -77,6 +77,8 @@ jobs:
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
           AZURE_PG_URL: ${{ secrets.AZURE_PG_URL }}
           JOURNEY_PROXY_TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          FIREFLIES_API_KEY: ${{ secrets.FIREFLIES_API_KEY }}
+          FIREFLIES_WEBHOOK_SECRET: ${{ secrets.FIREFLIES_WEBHOOK_SECRET }}
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -446,7 +448,9 @@ jobs:
               AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
               UAT_BYPASS_TOKEN="${{ secrets.UAT_BYPASS_TOKEN }}" \
               HUDDLE_APP_URL="https://${SWA_HOST}" \
-              HUDDLE_ONEDRIVE_FEEDS="${HUDDLE_ONEDRIVE_FEEDS_VALUE:-}"
+              HUDDLE_ONEDRIVE_FEEDS="${HUDDLE_ONEDRIVE_FEEDS_VALUE:-}" \
+              FIREFLIES_API_KEY="${{ secrets.FIREFLIES_API_KEY }}" \
+              FIREFLIES_WEBHOOK_SECRET="${{ secrets.FIREFLIES_WEBHOOK_SECRET }}"
 
       - name: Deploy to Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
