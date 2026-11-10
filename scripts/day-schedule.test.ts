@@ -200,6 +200,9 @@ check("date 'all' keeps the old every-day path", resolveDayArg("all", NOW, TZ) =
   const d10 = mergeDayItems({ date: DATE, tz: TZ, meetings: [late], classes: [], tasks: [] });
   const d11 = mergeDayItems({ date: "2026-11-11", tz: TZ, meetings: [late], classes: [], tasks: [] });
   check("AC-25 an event crossing midnight shows on both days", d10.length === 1 && d11.length === 1);
+  const wed: BriefItem = { sourceId: "wed", kind: "meeting", title: "Wednesday meeting", startIso: at("10:00", "2026-11-11"), endIso: at("11:00", "2026-11-11"), location: null };
+  const tue = mergeDayItems({ date: DATE, tz: TZ, meetings: [wed], classes: [], tasks: [] });
+  check("AC-1 a timed item on another day never lands on today", tue.length === 0, JSON.stringify(tue));
   const allDay: BriefItem = { sourceId: "ad", kind: "meeting", title: "Holiday", startIso: null, endIso: null, location: null, day: DATE };
   const prev = mergeDayItems({ date: "2026-11-09", tz: TZ, meetings: [allDay], classes: [], tasks: [] });
   const same = mergeDayItems({ date: DATE, tz: TZ, meetings: [allDay], classes: [], tasks: [] });
