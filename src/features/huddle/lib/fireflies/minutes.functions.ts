@@ -10,14 +10,15 @@ import { z } from "zod";
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   scripts/fireflies-minutes.test.ts; .claude/actions.md ACT:fireflies-minutes.
 
-const Caller = z
-  .object({ entra_object_id: z.string().optional(), entra_email: z.string().optional() })
-  .optional();
+// Identity comes ONLY from a verified Entra ID token (same check as profile.functions.ts) -- never from
+// an email the browser sends, which anyone could spoof (verify loop 1, D5).
+const Auth = z.object({ idToken: z.string().min(20) });
 
-/** The minutes owner, if (and only if) the signed-in caller IS that owner (any of his linked addresses). */
-async function authorisedOwner(caller: z.infer<typeof Caller>): Promise<string | null> {
-  const { resolveTaskEmail } = await import("../journey/identity");
-  const me = ((await resolveTaskEmail(caller)) ?? caller?.entra_email ?? "").toLowerCase();
+/** The minutes owner, if (and only if) the token's verified user IS that owner (any linked address). */
+async function authorisedOwner(idToken: string): Promise<string | null> {
+  const { verifyEntraIdToken } = await import("@/lib/entra-verify.server");
+  const claims = await verifyEntraIdToken(idToken);
+  const me = String(claims.email ?? "").toLowerCase();
   if (!me) return null;
   const { minutesOwner } = await import("./fireflies.server");
   const owner = minutesOwner();
@@ -29,10 +30,10 @@ async function authorisedOwner(caller: z.infer<typeof Caller>): Promise<string |
 }
 
 export const getMinutesSettingsFn = createServerFn({ method: "POST" })
-  .inputValidator((raw: unknown) => z.object({ caller: Caller }).parse(raw))
+  .inputValidator((raw: unknown) => Auth.parse(raw))
   .handler(async ({ data }) => {
     try {
-      const owner = await authorisedOwner(data.caller);
+      const owner = await authorisedOwner(data.idToken);
       if (!owner) return { ok: false as const, error: "Meeting minutes belong to another account." };
       const { loadMinutesSettings } = await import("./fireflies.server");
       const { listRecentMeetings } = await import("./minutes-store.server");
@@ -47,6 +48,7 @@ export const getMinutesSettingsFn = createServerFn({ method: "POST" })
         kind: m.summary_kind,
         email: m.email_status,
         emailError: m.email_error,
+        pending: m.pending_email || m.pending_onedrive,
         emailedAt: m.email_sent_at,
         emailsSent: m.emails_sent,
         onedrive: m.onedrive_status,
@@ -76,18 +78,15 @@ export const getMinutesSettingsFn = createServerFn({ method: "POST" })
 
 export const setMinutesSettingsFn = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) =>
-    z
-      .object({
-        caller: Caller,
+    Auth.extend({
         source: z.enum(["fireflies", "luna"]),
         recipients: z.array(z.string().max(254)).max(10),
         updateEmails: z.boolean(),
-      })
-      .parse(raw),
+      }).parse(raw),
   )
   .handler(async ({ data }) => {
     try {
-      const owner = await authorisedOwner(data.caller);
+      const owner = await authorisedOwner(data.idToken);
       if (!owner) return { ok: false, error: "Meeting minutes belong to another account." };
       const { parseRecipients } = await import("./minutes");
       const recipients = parseRecipients(data.recipients);
