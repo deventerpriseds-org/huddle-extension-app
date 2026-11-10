@@ -28,6 +28,7 @@ import { Route as ApiPublicRunAutoworkRouteImport } from './routes/api/public/ru
 import { Route as ApiPublicRunAgentTurnRouteImport } from './routes/api/public/run-agent-turn'
 import { Route as ApiPublicPolishRouteImport } from './routes/api/public/polish'
 import { Route as ApiPublicGraphMailNotifyRouteImport } from './routes/api/public/graph-mail-notify'
+import { Route as ApiPublicFirefliesWebhookRouteImport } from './routes/api/public/fireflies-webhook'
 import { Route as ApiPublicAuthTraceRouteImport } from './routes/api/public/auth-trace'
 
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
@@ -130,6 +131,12 @@ const ApiPublicGraphMailNotifyRoute =
     path: '/api/public/graph-mail-notify',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicFirefliesWebhookRoute =
+  ApiPublicFirefliesWebhookRouteImport.update({
+    id: '/api/public/fireflies-webhook',
+    path: '/api/public/fireflies-webhook',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicAuthTraceRoute = ApiPublicAuthTraceRouteImport.update({
   id: '/api/public/auth-trace',
   path: '/api/public/auth-trace',
@@ -141,6 +148,7 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/fireflies-webhook': typeof ApiPublicFirefliesWebhookRoute
   '/api/public/graph-mail-notify': typeof ApiPublicGraphMailNotifyRoute
   '/api/public/polish': typeof ApiPublicPolishRoute
   '/api/public/run-agent-turn': typeof ApiPublicRunAgentTurnRoute
@@ -162,6 +170,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/fireflies-webhook': typeof ApiPublicFirefliesWebhookRoute
   '/api/public/graph-mail-notify': typeof ApiPublicGraphMailNotifyRoute
   '/api/public/polish': typeof ApiPublicPolishRoute
   '/api/public/run-agent-turn': typeof ApiPublicRunAgentTurnRoute
@@ -185,6 +194,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/api/public/auth-trace': typeof ApiPublicAuthTraceRoute
+  '/api/public/fireflies-webhook': typeof ApiPublicFirefliesWebhookRoute
   '/api/public/graph-mail-notify': typeof ApiPublicGraphMailNotifyRoute
   '/api/public/polish': typeof ApiPublicPolishRoute
   '/api/public/run-agent-turn': typeof ApiPublicRunAgentTurnRoute
@@ -208,6 +218,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/sitemap.xml'
     | '/api/public/auth-trace'
+    | '/api/public/fireflies-webhook'
     | '/api/public/graph-mail-notify'
     | '/api/public/polish'
     | '/api/public/run-agent-turn'
@@ -229,6 +240,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/'
     | '/api/public/auth-trace'
+    | '/api/public/fireflies-webhook'
     | '/api/public/graph-mail-notify'
     | '/api/public/polish'
     | '/api/public/run-agent-turn'
@@ -251,6 +263,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/_authenticated/'
     | '/api/public/auth-trace'
+    | '/api/public/fireflies-webhook'
     | '/api/public/graph-mail-notify'
     | '/api/public/polish'
     | '/api/public/run-agent-turn'
@@ -273,6 +286,7 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiPublicAuthTraceRoute: typeof ApiPublicAuthTraceRoute
+  ApiPublicFirefliesWebhookRoute: typeof ApiPublicFirefliesWebhookRoute
   ApiPublicGraphMailNotifyRoute: typeof ApiPublicGraphMailNotifyRoute
   ApiPublicPolishRoute: typeof ApiPublicPolishRoute
   ApiPublicRunAgentTurnRoute: typeof ApiPublicRunAgentTurnRoute
@@ -425,6 +439,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicGraphMailNotifyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/fireflies-webhook': {
+      id: '/api/public/fireflies-webhook'
+      path: '/api/public/fireflies-webhook'
+      fullPath: '/api/public/fireflies-webhook'
+      preLoaderRoute: typeof ApiPublicFirefliesWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/auth-trace': {
       id: '/api/public/auth-trace'
       path: '/api/public/auth-trace'
@@ -452,6 +473,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiPublicAuthTraceRoute: ApiPublicAuthTraceRoute,
+  ApiPublicFirefliesWebhookRoute: ApiPublicFirefliesWebhookRoute,
   ApiPublicGraphMailNotifyRoute: ApiPublicGraphMailNotifyRoute,
   ApiPublicPolishRoute: ApiPublicPolishRoute,
   ApiPublicRunAgentTurnRoute: ApiPublicRunAgentTurnRoute,

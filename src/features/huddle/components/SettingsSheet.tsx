@@ -38,6 +38,7 @@ import { AccountSettingsPanel } from "./AccountSettingsPanel";
 import { ExecutiveProfilePanel } from "./ExecutiveProfilePanel";
 import { AgentWorkflowPanel } from "./AgentWorkflowPanel";
 import { ArtifactMirroringPanel } from "./ArtifactMirroringPanel";
+import { MeetingMinutesPanel } from "./MeetingMinutesPanel";
 import { SchedulingPanel } from "./SchedulingPanel";
 
 interface SettingsSheetProps {
@@ -156,6 +157,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
             <ExecutiveProfilePanel />
             <AgentWorkflowPanel />
             <ArtifactMirroringPanel />
+            <MeetingMinutesPanel />
           </TabsContent>
 
           {/* ---- Scheduling ---- */}
