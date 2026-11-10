@@ -37,6 +37,8 @@ export const getMinutesSettingsFn = createServerFn({ method: "POST" })
       const { loadMinutesSettings } = await import("./fireflies.server");
       const { listRecentMeetings } = await import("./minutes-store.server");
       const s = await loadMinutesSettings(owner);
+      const { sendableTiers } = await import("./recipient-check.server");
+      const recipientStatus = s.recipients?.length ? await sendableTiers(owner, s.recipients) : [];
       const meetings = (await listRecentMeetings(owner, 8)).map((m) => ({
         id: m.meeting_id,
         title: m.title,
@@ -57,6 +59,8 @@ export const getMinutesSettingsFn = createServerFn({ method: "POST" })
         source: s.source,
         recipients: s.recipients ?? [],
         recipientsValid: !!s.recipients?.length,
+        // Recipients the existing send gate would NOT auto-send to (the whole email would become a draft).
+        draftRecipients: recipientStatus.filter((r) => !r.sends).map((r) => r.address),
         updateEmails: s.updateEmails,
         configured: {
           webhookSecret: !!(process.env.FIREFLIES_WEBHOOK_SECRET ?? "").trim(),

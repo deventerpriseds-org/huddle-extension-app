@@ -50,6 +50,7 @@ export function MeetingMinutesPanel() {
   const [updateEmails, setUpdateEmails] = useState(false);
   const [configured, setConfigured] = useState<{ webhookSecret: boolean; apiKey: boolean } | null>(null);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [draftRecipients, setDraftRecipients] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     if (!caller) return;
@@ -65,6 +66,7 @@ export function MeetingMinutesPanel() {
         setUpdateEmails(!!r.updateEmails);
         setConfigured(r.configured);
         setMeetings(r.meetings as Meeting[]);
+        setDraftRecipients((r.draftRecipients as string[]) ?? []);
       }
     } catch {
       setDenied("Couldn't load meeting-minutes settings.");
@@ -157,6 +159,12 @@ export function MeetingMinutesPanel() {
           onChange={(e) => setRecipients(e.target.value)}
           placeholder="name@example.com, other@example.com"
         />
+        {draftRecipients.length > 0 && (
+          <p className="mt-1 rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-400" data-testid="minutes-draft-warning">
+            Huddle's email safety setting only sends straight to your own linked addresses. Because of{" "}
+            {draftRecipients.join(", ")}, minutes will NOT be sent — the email is refused and recorded as not sent.
+          </p>
+        )}
         <div className="mt-1 flex items-center justify-between gap-2">
           <p className="text-[11px] text-muted-foreground">Separate addresses with commas.</p>
           <Button

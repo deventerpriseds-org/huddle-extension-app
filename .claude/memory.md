@@ -1,5 +1,19 @@
 # Project Memory — huddle-extension-app
 
+## Fireflies meeting minutes (2026-11-10; BUILT on claude_fireflies-minutes, NOT merged, NOT deployed)
+- Route `POST /api/public/fireflies-webhook` (from #188) -> `lib/fireflies/fireflies.server.ts` handleFirefliesWebhook:
+  verify `X-Hub-Signature: sha256=<hex>` -> fetch transcript+summary (asks for `summary.extended_sections`, retries
+  without it if the API rejects the field) -> email minutes AND OneDrive upsert in parallel (Promise.allSettled).
+- Pure rules in `lib/fireflies/minutes.ts`; ledger + settings in `minutes-store.server.ts`
+  (`chat.fireflies_meetings`, `chat.meeting_minutes_settings`); Settings UI `components/MeetingMinutesPanel.tsx`.
+- "Luna" in Huddle = the `gpt-5.6-luna` model tier, called via `callOpenAIResponses` (no separate Luna service).
+- Idempotency keys on a hash of the meeting INPUT (transcript+summary), never on generated text (Luna wording varies).
+- Email goes through `sendGraphEmail`, so the D4b recipient gate applies: only AUTO-tier own addresses send.
+  As of 2026-11-10 the owner's profile links two enterpriseds.io addresses (entra=auto, manual=on-request) and
+  NO trinnex.io address -> a minutes email to the work address is refused. Default recipients = auto-tier only.
+- FIREFLIES_* secrets were MISSING on 2026-11-10 (probe run 42813708365). docs.fireflies.ai does not resolve from
+  CCR; Tavily plan was over its limit (HTTP 432). The live schema probe is `fireflies-api-check.yml`.
+
 ## Attention bell (2026-11-08) — one "needs you" list on chat.email_replies
 - `kind` column (email|meeting|appointment): ANY new query on chat.email_replies that means "emails" must filter `kind='email'` (findOwed*, listOwedEmailReplies, counts already do). Non-email rows: mailbox '', graph_message_id = own id, no conversation_id.
 - A push the server sent can still not show on the phone (FCM accepts data-only messages; the Huddle app does not report display). The bell is the in-app record that needs no push.

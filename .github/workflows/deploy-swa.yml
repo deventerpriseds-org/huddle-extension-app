@@ -450,7 +450,8 @@ jobs:
               HUDDLE_APP_URL="https://${SWA_HOST}" \
               HUDDLE_ONEDRIVE_FEEDS="${HUDDLE_ONEDRIVE_FEEDS_VALUE:-}" \
               FIREFLIES_API_KEY="${{ secrets.FIREFLIES_API_KEY }}" \
-              FIREFLIES_WEBHOOK_SECRET="${{ secrets.FIREFLIES_WEBHOOK_SECRET }}"
+              FIREFLIES_WEBHOOK_SECRET="${{ secrets.FIREFLIES_WEBHOOK_SECRET }}" \
+              FIREFLIES_ONEDRIVE_MAILBOX="von.ellis@enterpriseds.io"
 
       - name: Deploy to Static Web Apps
         uses: Azure/static-web-apps-deploy@v1

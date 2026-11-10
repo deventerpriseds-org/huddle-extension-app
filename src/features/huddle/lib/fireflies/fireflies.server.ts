@@ -261,12 +261,13 @@ async function saveTranscript(transcript: FirefliesTranscript, meetingId: string
   return "/" + path;
 }
 
-/** The owner's own linked addresses (identity.profile_emails) -- the default recipients. */
+/** The default recipients: the owner's own linked addresses (identity.profile_emails) that Huddle's
+ *  existing send gate will AUTO-send to (lib/email/self-send-gate.ts resolveTier). An address the gate
+ *  would turn into a draft is left out of the default, so the default can never produce a refused send. */
 async function ownerAddresses(owner: string): Promise<string[]> {
   try {
-    const { getSelfEmailRows } = await import("../identity/identity.server");
-    const rows = await getSelfEmailRows(owner);
-    const list = rows.map((r) => r.email);
+    const { sendableTiers } = await import("./recipient-check.server");
+    const list = (await sendableTiers(owner)).filter((r) => r.sends).map((r) => r.address);
     return list.length ? list : [owner];
   } catch {
     return [owner];

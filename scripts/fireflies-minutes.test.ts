@@ -85,6 +85,15 @@ mock.module("../src/features/huddle/lib/identity/identity.server", () => ({
     { email: "owner@work.example", source: "linked" },
   ],
 }));
+// The existing send gate's verdict per address: the Entra address auto-sends, the other one would draft.
+mock.module("../src/features/huddle/lib/fireflies/recipient-check.server", () => ({
+  sendableTiers: async (_o: string, list?: string[]) =>
+    (list ?? ["owner@example.com", "owner@work.example"]).map((address) => ({
+      address,
+      tier: address === "owner@example.com" ? "auto" : "on-request",
+      sends: address === "owner@example.com",
+    })),
+}));
 mock.module("../src/features/huddle/lib/openai-responses.server", () => ({
   callOpenAIResponses: async (i: { model: string; transcript: Array<{ content: string }> }) => {
     modelCalls++;
@@ -217,7 +226,7 @@ t("F6 earlier failure -> send again", M.decideDelivery({ email_status: "failed",
   reset();
   ffTranscript = baseTranscript();
   const r1 = (await deliver(evt("m1"))) as Row;
-  t("G1 first delivery: one email to the owner's linked addresses + OneDrive saved", [r1.email?.status, sent.length, sent[0]?.to, r1.onedrive?.ok], ["sent", 1, ["owner@example.com", "owner@work.example"], true]);
+  t("G1 first delivery: one email + OneDrive saved; default recipients = only the owner's SENDABLE addresses (a would-be-draft address is left out)", [r1.email?.status, sent.length, sent[0]?.to, r1.onedrive?.ok], ["sent", 1, ["owner@example.com"], true]);
   t("G2 OneDrive path is stable and meeting-id keyed", uploads[0], "Automation/transcripts/fireflies-m1.md");
   t("G3 subject carries title and date", sent[0]?.subject, "Meeting minutes: Launch sync (Nov 9, 2026)");
   const r2 = (await deliver(evt("m1"))) as Row;

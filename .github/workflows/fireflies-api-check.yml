@@ -53,7 +53,7 @@ jobs:
           TYPEQ = ("query($n:String!){__type(name:$n){name kind fields{name description "
                    "type{kind name ofType{kind name ofType{kind name ofType{kind name}}}}}}}")
           schema = {}
-          for name in ["Summary", "MeetingSummary", "Sentence", "Transcript", "ExtendedSection", "AIFilter", "MeetingAttendee"]:
+          for name in ["Summary", "MeetingSummary", "Sentence", "Transcript", "SummarySection", "AIFilter", "MeetingAttendee"]:
               st, d = gql(TYPEQ, {"n": name})
               t = (d.get("data") or {}).get("__type")
               if not t:
