@@ -1,0 +1,41 @@
+{
+  "results": [
+    {
+      "name": "Settings button present",
+      "pass": true
+    },
+    {
+      "name": "Settings has a 'Download' tab",
+      "pass": true
+    },
+    {
+      "name": "Two signed Download links (Huddle + TaskOS)",
+      "pass": true,
+      "detail": "links=2"
+    },
+    {
+      "name": "Huddle row shown with a version",
+      "pass": true,
+      "detail": "Download Latest Android builds. Each link is fresh for 30 days. Huddle v1.0.17 Built 11/8/2026 · 4.2 MB Download TaskOS v1.0.18 Built 11/5/2026 · 4.1 MB Download On the phone, the download open"
+    },
+    {
+      "name": "TaskOS row shown with a version",
+      "pass": true
+    },
+    {
+      "name": "No error message",
+      "pass": true
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
