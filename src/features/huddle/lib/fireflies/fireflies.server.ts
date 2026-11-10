@@ -4,7 +4,7 @@ const FIREFLIES_GRAPHQL = "https://api.fireflies.ai/graphql";
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const MAX_WEBHOOK_BYTES = 16_384;
 const MAX_TRANSCRIPT_BYTES = 10 * 1024 * 1024;
-const TRANSCRIPT_FOLDER = "automation/transcripts";
+const TRANSCRIPT_FOLDER = "Automation/transcripts";
 
 type FirefliesWebhook = {
   event?: unknown;
