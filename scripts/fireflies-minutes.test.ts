@@ -74,6 +74,7 @@ mock.module("../src/features/huddle/lib/email/graph-email.server", () => ({
   graphEmailConfigured: () => true,
   getAppToken: async () => "graph-token",
   sendGraphEmail: async (i: { to: string[]; subject: string; body: string }) => {
+    await new Promise((r) => setTimeout(r, 15)); // real Graph latency: lets concurrent deliveries overlap
     sent.push({ to: i.to, subject: i.subject, body: i.body });
     return sendOk ? { ok: true, to: i.to } : { ok: false, error: "Graph sendMail failed (500)" };
   },
@@ -99,6 +100,7 @@ globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
   const u = String(url);
   if (u.includes("api.fireflies.ai")) {
     ffCalls++;
+    await new Promise((r) => setTimeout(r, 10)); // both concurrent deliveries are mid-fetch together
     return new Response(JSON.stringify({ data: { transcript: ffTranscript } }), { status: 200 });
   }
   if (u.includes("graph.microsoft.com")) {
