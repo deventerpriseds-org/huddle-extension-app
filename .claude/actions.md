@@ -14,7 +14,12 @@ gate refuses #188's `feature/` branch name; the new PR supersedes #188).
       (fireflies-api-check run 42813708365). Do not merge until present -- the route would 503 every delivery.
 - [ ] DECISION (owner): the work address is not linked to the owner's profile, so the existing send gate refuses
       a minutes email that includes it. Options in the PR / chat.
-- [ ] Live schema check of summary.extended_sections (re-runs on push once the key exists).
+- [x] Fireflies docs read with Playwright on a runner (owner: "Use playwright if Tavily fails"), run 42816565367:
+      30s response limit, no retry after timeout, meeting.summarized, start_time is a String.
+- [x] Verify loop 1 (VERIFY-fireflies-minutes-1, branch claude_verify-fireflies-minutes-1): 4 REFUTED (C7 D1/D2,
+      C8 D3, C9 D4/D5, C11 D6) + C2. All fixed by the queue rework 7036d9eb; 62 checks; 5 new guards mutation-proved.
+- [ ] Verify loop 2.
+- [ ] Live schema check of summary fields (re-runs on push once the key exists).
 - [ ] Deploy, configure Fireflies webhook, test event, then one real meeting in EACH mode.
 
 ## ACT:polish-tool — Polish text cleanup tool in Huddle (first tool module; Sidecar + Prompto later) (2026-11-05)

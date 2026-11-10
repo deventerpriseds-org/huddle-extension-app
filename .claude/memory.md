@@ -1,9 +1,17 @@
 # Project Memory — huddle-extension-app
 
 ## Fireflies meeting minutes (2026-11-10; BUILT on claude_fireflies-minutes, NOT merged, NOT deployed)
-- Route `POST /api/public/fireflies-webhook` (from #188) -> `lib/fireflies/fireflies.server.ts` handleFirefliesWebhook:
-  verify `X-Hub-Signature: sha256=<hex>` -> fetch transcript+summary (asks for `summary.extended_sections`, retries
-  without it if the API rejects the field) -> email minutes AND OneDrive upsert in parallel (Promise.allSettled).
+- Route `POST /api/public/fireflies-webhook` (from #188) only VERIFIES + QUEUES (`recordWebhook`). Fireflies docs:
+  a 2xx is due within 30s and a timed-out request is NOT retried -- so no work happens in the request.
+  The worker `processDueFirefliesMeetings` runs inside `runDueScheduledJobs` (started first, awaited last, so
+  existing jobs never wait), one meeting per tick under a 3-min lease; email + OneDrive via Promise.allSettled.
+- Fireflies events: `meeting.transcribed` (transcript ready) and `meeting.summarized` (summary, LATER). Fireflies-
+  summary mode waits up to 3h for the summary. `reprocessed_at` (ms) marks a resend; a retry keeps the same value.
+- `sentences.start_time` is a STRING in Fireflies' schema. `summary.extended_sections[{title,content}]` = the
+  dashboard-customised summary. Docs are readable only from a runner: `fireflies-docs-read.yml` (Playwright),
+  branch `claude_fireflies-docs-read`, run 42816565367.
+- `cross-app-turn-gate` G7 requires every existing public route file to be byte-identical to main -- so the
+  worker hooks into scheduler.server, not run-turn.ts.
 - Pure rules in `lib/fireflies/minutes.ts`; ledger + settings in `minutes-store.server.ts`
   (`chat.fireflies_meetings`, `chat.meeting_minutes_settings`); Settings UI `components/MeetingMinutesPanel.tsx`.
 - "Luna" in Huddle = the `gpt-5.6-luna` model tier, called via `callOpenAIResponses` (no separate Luna service).

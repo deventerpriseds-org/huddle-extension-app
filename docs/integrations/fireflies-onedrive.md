@@ -31,22 +31,22 @@ hard-coded in client code.
 
 ## Retries and resends (idempotency)
 
-`chat.fireflies_meetings` holds one row per meeting: deliveries seen, minutes source, email status,
-recipients, error, OneDrive path and status, and a hash of the meeting **input**
-(transcript + summary).
+`chat.fireflies_meetings` is both the work queue and the record: deliveries seen, minutes source, email
+status / recipients / error, OneDrive path / status, a hash of the meeting **input** (transcript + summary),
+`pending_email` / `pending_onedrive`, attempts and a per-meeting **lease**.
 
-- **A retry of a meeting already emailed** sends nothing. The OneDrive file is still re-upserted.
-- **Concurrent deliveries** race for an atomic `UPDATE … SET email_status='sending'` claim. Exactly
-  one of them emails.
-- **A Fireflies resend with changed content** updates the OneDrive file. It emails an
-  "Updated meeting minutes" message only when **Email again when Fireflies updates a meeting** is on.
-  That setting is off by default.
-- **A failed send** (Graph, Luna or network) answers 503 so Fireflies retries, and the retry sends
-  once. Permanent problems, such as no summary in Fireflies-summary mode, answer 200 with the error
-  in the body.
+- **One worker per meeting.** A heartbeat leases a meeting for 3 minutes (`FOR UPDATE SKIP LOCKED`), so two
+  heartbeats never work the same meeting; a crashed worker's lease simply lapses and the meeting is retried.
+- **Retry of a delivery** (same or no `reprocessed_at`) queues nothing new: no second email, no re-upload.
+- **Resend** (`reprocessed_at` newer than stored, Fireflies' documented rule) re-queues OneDrive, and the
+  email only if *Email again when Fireflies updates a meeting* is on AND the input hash changed.
+- **Failures** retry with backoff (1, 2, 4 … 30 min, 12 attempts). A refusal by the send gate or bad
+  recipients is final. A failed queue write answers 503, which Fireflies retries (5 times).
+- Remaining window: a worker killed after Graph accepted the email but before the row was written would
+  send once more when the lease lapses. The row is written immediately after the send to keep this small.
 
-Nothing logs or stores transcript text, summary text, keys or Graph bodies. Only ids, statuses and
-short error codes are kept.
+Nothing logs or stores transcript text, summary text, keys or Graph bodies — only ids, statuses and short
+error codes.
 
 ## Server configuration
 
@@ -69,7 +69,8 @@ only, never content.
 
 1. URL: the deployed Huddle origin + `/api/public/fireflies-webhook`.
 2. Signing secret: the same value as `FIREFLIES_WEBHOOK_SECRET`.
-3. Event: `meeting.transcribed`.
-4. Resend on changes: safe to enable (see idempotency above).
+3. Events: `meeting.transcribed` **and** `meeting.summarized` (Fireflies-summary mode needs the second;
+   Fireflies' own docs list it as a separate, later event).
+4. *Resend when a meeting's notes change*: safe to enable (see idempotency above).
 5. Send the test event. Then verify a real meeting end to end in each mode: one email, the OneDrive
    file, and a "sent" row under *Recent meetings*.
