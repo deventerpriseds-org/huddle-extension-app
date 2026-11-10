@@ -1,0 +1,60 @@
+name: Fireflies docs read (Playwright, read-only)
+
+# WHAT:       Opens public Fireflies developer-docs pages in headless Chromium and prints their visible
+#             text to this log, between markers, for the dev session to read.
+# WHY:        docs.fireflies.ai is unreachable from the Claude dev session (DNS / proxy tunnel refused,
+#             2026-11-10) and the Tavily fallback is over its plan limit (HTTP 432). The meeting-minutes
+#             work (PR #191) needs the exact Webhooks V2 signature/payload and Summary schema. Owner:
+#             "Use playwright if Tavily fails".
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/actions.md ACT:fireflies-minutes.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude_fireflies-docs-read]
+    paths: [".github/workflows/fireflies-docs-read.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Playwright Chromium
+        run: |
+          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null
+          npm i playwright@1.49.1 >/dev/null 2>&1
+          npx playwright install --with-deps chromium >/dev/null 2>&1
+      - name: Read pages
+        working-directory: /tmp/pw
+        run: |
+          cat > read.cjs <<'JS'
+          const { chromium } = require('playwright');
+          const pages = [
+            'https://docs.fireflies.ai/graphql-api/webhooks-v2',
+            'https://docs.fireflies.ai/schema/summary',
+            'https://docs.fireflies.ai/schema/summary-section',
+            'https://docs.fireflies.ai/schema/sentence',
+            'https://docs.fireflies.ai/graphql-api/query/transcript',
+          ];
+          (async () => {
+            const b = await chromium.launch();
+            const p = await b.newPage();
+            for (const u of pages) {
+              console.log(`\n===== PAGE ${u} =====`);
+              try {
+                const r = await p.goto(u, { waitUntil: 'networkidle', timeout: 45000 });
+                console.log(`HTTP ${r && r.status()}`);
+                const main = (await p.locator('main').count()) ? p.locator('main').first() : p.locator('body');
+                console.log((await main.innerText()).slice(0, 14000));
+              } catch (e) {
+                console.log('ERROR', String(e.message).split('\n')[0]);
+              }
+              console.log(`===== END ${u} =====`);
+            }
+            await b.close();
+          })();
+          JS
+          node read.cjs
