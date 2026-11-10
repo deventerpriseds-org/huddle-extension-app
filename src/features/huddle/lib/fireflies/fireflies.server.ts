@@ -84,7 +84,9 @@ function graphUserPath(mailbox: string): string {
 
 async function ensureDriveFolder(token: string, mailbox: string, path: string): Promise<void> {
   const encoded = encodePath(path);
-  const lookup = await fetch(GRAPH + graphUserPath(mailbox) + "/root:/" + encoded, {\n    headers: { Authorization: "Bearer " + token },\n  });
+  const lookup = await fetch(GRAPH + graphUserPath(mailbox) + "/root:/" + encoded, {
+    headers: { Authorization: "Bearer " + token },
+  });
   if (lookup.ok) return;
   if (lookup.status !== 404) throw new Error("onedrive_folder_lookup_" + lookup.status);
 
