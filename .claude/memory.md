@@ -1,6 +1,6 @@
 # Project Memory — huddle-extension-app
 
-## Fireflies meeting minutes (2026-11-10; BUILT on claude_fireflies-minutes, NOT merged, NOT deployed)
+## Fireflies meeting minutes (2026-11-10; #191 MERGED + DEPLOYED 2026-11-11 9c31f538; queue fixes D7/D8 follow; NOT owner-confirmed live)
 - Route `POST /api/public/fireflies-webhook` (from #188) only VERIFIES + QUEUES (`recordWebhook`). Fireflies docs:
   a 2xx is due within 30s and a timed-out request is NOT retried -- so no work happens in the request.
   The worker `processDueFirefliesMeetings` runs inside `runDueScheduledJobs` (started first, awaited last, so
@@ -17,8 +17,12 @@
 - "Luna" in Huddle = the `gpt-5.6-luna` model tier, called via `callOpenAIResponses` (no separate Luna service).
 - Idempotency keys on a hash of the meeting INPUT (transcript+summary), never on generated text (Luna wording varies).
 - Email goes through `sendGraphEmail`, so the D4b recipient gate applies: only AUTO-tier own addresses send.
-  As of 2026-11-10 the owner's profile links two enterpriseds.io addresses (entra=auto, manual=on-request) and
-  NO trinnex.io address -> a minutes email to the work address is refused. Default recipients = auto-tier only.
+  2026-11-11: the work (trinnex.io) address is linked to the owner's profile (manual) with tier 'auto' in
+  email_self_tiers, so minutes and self-digests can send there. Default recipients = auto-tier own addresses.
+- FIREFLIES_* secrets: MISSING 2026-11-10, PRESENT from the 2026-11-11 deploy. Live probe: summary.extended_sections
+  returns the owner's custom sections; sentences.start_time is Float live (String in the docs) -- code accepts both.
+- Queue invariants (real-SQL test scripts/fireflies-queue-sql.test.ts): every delivery bumps queue_version; a worker
+  clears pending only for its claimed version; attempts count FAILED passes only; giveUpIfExhausted makes it visible.
 - FIREFLIES_* secrets were MISSING on 2026-11-10 (probe run 42813708365). docs.fireflies.ai does not resolve from
   CCR; Tavily plan was over its limit (HTTP 432). The live schema probe is `fireflies-api-check.yml`.
 

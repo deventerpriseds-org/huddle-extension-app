@@ -18,8 +18,17 @@ gate refuses #188's `feature/` branch name; the new PR supersedes #188).
       30s response limit, no retry after timeout, meeting.summarized, start_time is a String.
 - [x] Verify loop 1 (VERIFY-fireflies-minutes-1, branch claude_verify-fireflies-minutes-1): 4 REFUTED (C7 D1/D2,
       C8 D3, C9 D4/D5, C11 D6) + C2. All fixed by the queue rework 7036d9eb; 62 checks; 5 new guards mutation-proved.
-- [ ] Verify loop 2.
-- [ ] Live schema check of summary fields (re-runs on push once the key exists).
+- [x] PR #191 merged by the owner 2026-11-11 05:21 (9c31f538); deploy-swa run 42965201198 SUCCESS, both FIREFLIES_*
+      secrets present; live route answers 401 to unsigned / bad-signed posts.
+- [x] Live API probe (fireflies-api-check run 42965412249): newest meeting returns 391 sentences and
+      summary.extended_sections x6 {title,content} -> the custom summary IS exposed. start_time is Float live.
+- [x] Work address linked to the owner's profile (manual, 05:32 UTC) + email_self_tiers auto (existing config row
+      updated in place; confirm gate unchanged). Default recipients now = both addresses.
+- [x] Verify loop 2 (VERIFY-fireflies-minutes-2, branch claude_verify-fireflies-minutes-2): D7 lost mid-lease
+      delivery, D8 summary wait exhausted attempts after 60 min. Fixed on claude_fireflies-queue-fixes (7624bf2a);
+      real-SQL test scripts/fireflies-queue-sql.test.ts 11/11, both guards mutation-proved. 7 claims NOT REACHED.
+- [ ] Owner configures the Fireflies Webhooks V2 entry (URL, secret, BOTH events, resend on), test event, real meeting.
+- [ ] Verify loop 3 (incl. loop 2's NOT REACHED claims C1 C5 C6 C9 C10 C11 C14).
 - [ ] Deploy, configure Fireflies webhook, test event, then one real meeting in EACH mode.
 
 ## ACT:polish-tool — Polish text cleanup tool in Huddle (first tool module; Sidecar + Prompto later) (2026-11-05)
@@ -5003,10 +5012,13 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - **After-work window answer (read from journey `activity_log` run 9cdc1f1c PLACEMENT_2026-11-10, 2026-11-11):** Tue capacities at plan time = morning 180/180 free, business_hours 30/480, after_work 120/120, evening 0/180 (class). All 48 candidates were VENTURES (23, evening only), JOB (21, business_hours only) or PROF_EDUCATION (4, evening only) -> `no_window_capacity`. after_work is mapped ONLY to LIFE/CAREER/PERSONAL (`user_scheduling_prefs.config.categoryMappings`), and at the 00:00 run every such open task was parked or a Test- row; the two LIFE tasks due 11-10 (401(k), word cloud) were created AFTER the run. So 5-7 PM stayed empty by the owner's own window settings, not a planner fault. Not changed.
 - **Verifier loop 1 F1 (fixed on branch):** a multi-day all-day event (arrives with its START date) was dropped on its 2nd+ day and the day reported complete/empty. `onDay` now keeps an all-day item dated on or before the read day; test F1 added.
 - **Verifier loop 1 verdict PARTIAL (docs/qc-evidence/VERIFY-schedule-meetings-1.md on `claude_verify-schedule-meetings` @ 8b23bd9d).** D1 = F1 above. D2 (a `category` fell back to the tasks-only, every-day path): the day path now always runs, the category narrows TASKS only. D3 (a failed task read on the tab/widget hid meetings): tasks failure now keeps calendar rows + "couldn't read your task list". D4 ("tonight", "this/next thursday", "thurs", "Nov 12"...) now resolve. Tests: day-schedule 83/83, status-answers 28/28 (B9-B11), all suites + tsc + build green. Loop 2 verifier next.
+- **MERGED + DEPLOYED 2026-11-11** (PR #193 -> main 16b6d4b0, deploy run 42966577638 success). Live: agent-serverfn-uat run 42966843939 PASS -- Iris "What's on my schedule today?" listed Wed's meetings (9:00 Mark Zito, 10:30 Anthony/BT, 11:00 Jayson Brennan, 1:00 Travis Wagner...) via schedule_and_priorities; "tomorrow" listed Thu's tasks + meetings. Browser UAT run 42966839730: Today's schedule showed 5 meeting + 5 task rows (10), no "Nothing scheduled"; one check failed only on the test's own label regex (fixed). Times in that run read in UTC because the runner browser is UTC (widget formats in the viewer's zone). NOT owner-confirmed.
+- **Verifier loop 2 PARTIAL (VERIFY-schedule-meetings-2.md):** D5 "jan 3" asked late Dec -> last year; D6 "junk 5"/"mayday 3" read as months; D7 a category that filtered out the day's tasks let the tool say "nothing scheduled". Fixed (nearest-year rule, whole-month-prefix match, category narrowing after counting + "other tasks" note); day-schedule 103/103.
 - **PR:** https://github.com/deventerpriseds-org/huddle-extension-app/pull/193 (subscribed). Live checks ready for after deploy: `schedule-calendar-checks.mjs` (verify-uat.yml, 390x844 — Today lists labelled Meeting/Class rows, no "Nothing scheduled" beside them) and `iris-day-schedule.mjs` (agent-serverfn-uat.yml — Iris runs the schedule tool and never calls a day with meetings empty).
 - **Open:** verifier verdict (three verifiers killed by container restarts 2026-11-11 — each time the session went idle after a backgrounded spawn; the fourth runs while the session stays busy); merge + deploy; live check of Iris's answer and the tab; owner confirmation.
 
 ## ACT:chat-format — clean, consistent chat message layout (owner-approved A, B, C, E; D held, 2026-11-05) — DEPLOYED 2026-11-08, NOT owner-confirmed
+- **2026-11-11 owner approved the run-on list fix ("Go ahead with your crammed messages fix").** `splitRunOnList` in `lib/chat-format.ts`: "intro: a; b; c" (3+ items after the last ": ", each <=200 chars) renders as intro + bullets, so messages stored before the list rule also read cleanly. Tests RUNON-1..8 (chat-format 106/106); UAT check `runOnParas` added to chat-format-checks.mjs. Shipped with PR #193.
 - [x] Diagnosis: Iris's 29 messages 11-03..05 (azure-pg-query run 42105101844). Same brief spaced two ways; raw `**bold**`; four "N more" phrasings; draft + tally in prose; quota error as Iris. Cause: HuddleView rendered `{m.text}` raw + layout delegated to the model.
 - [x] A renderer (`lib/chat-format.ts`, `components/ChatText.tsx`); B code-built + bounded brief/priority lists (`appendBlock`, `capFacts`); C draft only in the card; E failure replies as grey notices (row buttons kept).
 - [x] Independent verification loops 1-6 + late independent ACs (`docs/qc-evidence/VERIFY-chat-format-*.md`, `AC-chat-format.md`); every fix mutation-proved FIRED.

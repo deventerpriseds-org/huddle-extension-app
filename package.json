@@ -79,7 +79,8 @@
     "test:attention": "tsx scripts/attention.test.ts",
     "test:id-token-expiry": "bun scripts/id-token-expiry.test.ts",
     "test:shared-pool": "bun scripts/shared-pool.test.ts",
-    "test:fireflies-minutes": "bun scripts/fireflies-minutes.test.ts"
+    "test:fireflies-minutes": "bun scripts/fireflies-minutes.test.ts",
+    "test:fireflies-queue-sql": "bun scripts/fireflies-queue-sql.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
