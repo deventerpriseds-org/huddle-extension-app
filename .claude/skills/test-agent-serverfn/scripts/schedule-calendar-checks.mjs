@@ -34,7 +34,7 @@ export const checks = [
       const cal = [...document.querySelectorAll('[data-testid="schedule-calendar-row"]')];
       const tasks = [...document.querySelectorAll('[data-testid="schedule-task-row"]')];
       const header = [...document.querySelectorAll("button")].find((b) => /^today.s schedule/i.test((b.textContent || "").trim()));
-      const count = header ? Number(((header.textContent || "").match(/(\d+)\s*$/) || [])[1] ?? NaN) : NaN;
+      const count = header ? Number(((header.textContent || "").match(/\(?(\d+)\)?\s*$/) || [])[1] ?? NaN) : NaN;
       const body = document.body.innerText || "";
       return {
         calendarRows: cal.length,
