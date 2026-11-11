@@ -95,7 +95,9 @@ export function resolveDayArg(arg: unknown, nowMs: number, tz: string): string |
       // ~6 months behind today is read as next year's.
       let iso = `${thisYear}-${mm}-${dd}`;
       const back = Date.parse(`${today}T12:00:00Z`) - Date.parse(`${iso}T12:00:00Z`);
+      // Both directions (verifier loop 3 D8): "dec 25" asked on Jan 2 is the Christmas just past.
       if (back > 183 * 86_400_000) iso = `${thisYear + 1}-${mm}-${dd}`;
+      else if (-back > 183 * 86_400_000) iso = `${thisYear - 1}-${mm}-${dd}`;
       return resolveDayArg(iso, nowMs, tz);
     }
   }
@@ -407,13 +409,14 @@ export function dayScheduleToolJson(input: {
   const otherNote = outside.length
     ? ` ${outside.length} other task(s) outside ${want} are also scheduled that day (not listed) — say so; never call the day empty or free.`
     : "";
+  // An incomplete read is checked FIRST: with no items and a failed source, the answer may never open with
+  // "no meetings" -- even when a category hid some tasks (verifier loop 3 D9).
   const answer_rule = !items.length
-    ? outside.length
-      ? `No meetings or classes, and no ${want} tasks, on ${weekday} ${date}.${otherNote}` +
-        (complete ? "" : ` ALSO say: ${problems.join(" ")}`)
-      : complete
-      ? `Every source was read and ${weekday} ${date} has nothing scheduled: no meetings, classes or tasks. You may say so.`
-      : `NOT an empty day: ${problems.join(" ")} Say plainly which source you couldn't read and that items may be missing. NEVER say the day is empty, clear or free.`
+    ? !complete
+      ? `NOT an empty day: ${problems.join(" ")} Say plainly which source you couldn't read and that items may be missing. NEVER say the day is empty, clear or free.${otherNote}`
+      : outside.length
+      ? `No meetings or classes, and no ${want} tasks, on ${weekday} ${date}.${otherNote}`
+      : `Every source was read and ${weekday} ${date} has nothing scheduled: no meetings, classes or tasks. You may say so.`
     : `List EVERY item below for ${weekday} ${date}, in this order, with its time and whether it is a meeting, class or task. Times are already local (${tzAbbr || tz}) — state them as given.` +
       otherNote +
       (complete ? "" : ` ALSO say: ${problems.join(" ")} Never imply the list is complete.`);
