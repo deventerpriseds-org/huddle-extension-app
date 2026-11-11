@@ -167,6 +167,15 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
+## Schedule answers = ONE local day of meetings + classes + tasks (2026-11-10 incident; DEPLOYED 2026-11-11 via #193 + #194, live UAT green, NOT owner-confirmed)
+- `lib/tasks/day-schedule.server.ts` is the ONE "what's on my day" reader: `readDaySchedule` (chat/voice) and `readTodayCalendar`+`composeTodayItems` (Schedule tab, in-chat widget). It reuses the brief's `meetingsForDate` (Graph + work feed) and `classesForDate` (Nexus); never add a second calendar read.
+- The `schedule_and_priorities` 'scheduled' view (and its alias `get_calendar_events`, voice + Lovable) answers ONE day; `date` = today/tomorrow/tonight/this|next weekday/abbrev/"Nov 12"/yyyy-mm-dd (nearest occurrence; a word must BE a month or its prefix); `date:"all"` = the old every-day TASK list.
+- A `category` narrows TASK rows only, AFTER counting (`dayScheduleToolJson({category})` -> `other_tasks_outside_category`). Filtering tasks before the count let a day read as empty (verifier loop 2 D7).
+- A failed/timed-out source sets `complete:false` and the tool's `answer_rule` forbids calling the day empty. "Nothing scheduled" is only allowed when every source read OK. A failed task read on the tab keeps the meetings and says so.
+- Callers must pass `{ caller }` so the OWNER's calendar mailbox is resolved (`resolveCalendarMailbox`), not the app's sending mailbox.
+- The Schedule tab formats times in the VIEWER's browser zone: a GHA browser run shows UTC (5 h ahead of ET) -- the test browser, not a bug.
+- Live checks: `iris-day-schedule.mjs` (agent-serverfn-uat.yml) and `schedule-calendar-checks.mjs` (verify-uat.yml, 390x844).
+
 ## Chat message layout: rendered lists/bold/links + code-built brief lists (2026-11-05; #149 ca5c02e + #180 bbc1df5 DEPLOYED 2026-11-08, live UAT 10/10 run 42498817299; NOT owner-confirmed)
 - Agent bubbles render via `ChatText` (`lib/chat-format.ts` = the ONE set of layout rules: normalize whitespace, parse blocks, `noticeText`, `stripRepeatedDraft`, `joinOpenerAndBlock`). User bubbles unchanged.
 - Scheduled brief + priority check: the list is CODE-BUILT (`briefDeliveryPlan(...).appendBlock`, `priorityAppendBlock`) and attached by `ensureAppendBlockDelivered` at BOTH turn endings, before `ensureNavLinkDelivered`. The model writes one opener only. Do not move layout back into prompt prose — that is what made the same brief come out spaced two different ways.
