@@ -1,6 +1,27 @@
 # Action Tracker — huddle-extension-app
 Last updated: 2026-10-27
 
+## ACT:fireflies-minutes — Fireflies webhook -> meeting-minutes email + OneDrive transcript (2026-11-10)
+Owner handoff (uploaded doc, "O" = go). Extends draft PR #188 on branch `claude_fireflies-minutes` (the push
+gate refuses #188's `feature/` branch name; the new PR supersedes #188).
+- [x] Read #188: signed route + Fireflies fetch + OneDrive upsert existed; no email, settings or idempotency.
+- [x] Graph app holds Files.ReadWrite.All + Mail.Send (graph-permission-check run 42813217097).
+- [x] Minutes source setting (Fireflies summary default | Luna), recipients, update-email switch; no cross-mode fallback.
+- [x] chat.fireflies_meetings ledger + atomic email claim; retries never re-send (tests G4/G5/G10, mutation-proved).
+- [x] Email and OneDrive independent (G8/G9). Safe Markdown->HTML (H1). 45 offline checks: `bun scripts/fireflies-minutes.test.ts`.
+- [x] Settings -> Account -> Meeting minutes panel with recent-meeting results and a would-be-draft recipient warning.
+- [ ] BLOCKED (owner): FIREFLIES_API_KEY + FIREFLIES_WEBHOOK_SECRET are MISSING from the repo's secrets
+      (fireflies-api-check run 42813708365). Do not merge until present -- the route would 503 every delivery.
+- [ ] DECISION (owner): the work address is not linked to the owner's profile, so the existing send gate refuses
+      a minutes email that includes it. Options in the PR / chat.
+- [x] Fireflies docs read with Playwright on a runner (owner: "Use playwright if Tavily fails"), run 42816565367:
+      30s response limit, no retry after timeout, meeting.summarized, start_time is a String.
+- [x] Verify loop 1 (VERIFY-fireflies-minutes-1, branch claude_verify-fireflies-minutes-1): 4 REFUTED (C7 D1/D2,
+      C8 D3, C9 D4/D5, C11 D6) + C2. All fixed by the queue rework 7036d9eb; 62 checks; 5 new guards mutation-proved.
+- [ ] Verify loop 2.
+- [ ] Live schema check of summary fields (re-runs on push once the key exists).
+- [ ] Deploy, configure Fireflies webhook, test event, then one real meeting in EACH mode.
+
 ## ACT:polish-tool — Polish text cleanup tool in Huddle (first tool module; Sidecar + Prompto later) (2026-11-05)
 - [x] Read the owner's design (claude.ai artifact 283e7883, "Refine" screens) and blended it into Huddle's Compass look.
 - [x] Interactive prototype for approval: https://claude.ai/artifact/7MJkFX17io8FHmVWwSZCAn (polishes real text via Claude in the preview).
@@ -4980,7 +5001,10 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - **Fix (commit ca4a1bde on `claude/vibrant-allen-p52snq`):** `lib/tasks/day-schedule.server.ts` — one reader for a local day, reusing the brief's `meetingsForDate`/`classesForDate`; merged, de-duplicated (class beats its calendar copy; a task that IS a block shows as the task), labelled, 8s bound per source; a failed source → `complete:false` + `problems` + an `answer_rule` forbidding "empty/free". 'scheduled' view = one day (`date`: today/tomorrow/weekday/yyyy-mm-dd; `all` = the old every-day task list). Schedule tab + in-chat widget render meetings/classes with Meeting/Class/Task labels.
 - **Evidence so far:** ACs `docs/qc-evidence/AC-schedule-meetings.md` (branch `claude_ac-schedule-meetings`, independent, 46 ACs); `bun scripts/day-schedule.test.ts` 61/61; all 67 `test:*` suites green; tsc + build clean; mutations FIRED (controlled) on the complete-flag rule, class de-dup, and the day filter (the last one was INERT first — a new test closed it). Independent verifier running.
 - **After-work window answer (read from journey `activity_log` run 9cdc1f1c PLACEMENT_2026-11-10, 2026-11-11):** Tue capacities at plan time = morning 180/180 free, business_hours 30/480, after_work 120/120, evening 0/180 (class). All 48 candidates were VENTURES (23, evening only), JOB (21, business_hours only) or PROF_EDUCATION (4, evening only) -> `no_window_capacity`. after_work is mapped ONLY to LIFE/CAREER/PERSONAL (`user_scheduling_prefs.config.categoryMappings`), and at the 00:00 run every such open task was parked or a Test- row; the two LIFE tasks due 11-10 (401(k), word cloud) were created AFTER the run. So 5-7 PM stayed empty by the owner's own window settings, not a planner fault. Not changed.
-- **Open:** verifier verdict (first verifier killed by container restart 2026-11-11, relaunched); merge + deploy; live check of Iris's answer and the tab; owner confirmation.
+- **Verifier loop 1 F1 (fixed on branch):** a multi-day all-day event (arrives with its START date) was dropped on its 2nd+ day and the day reported complete/empty. `onDay` now keeps an all-day item dated on or before the read day; test F1 added.
+- **Verifier loop 1 verdict PARTIAL (docs/qc-evidence/VERIFY-schedule-meetings-1.md on `claude_verify-schedule-meetings` @ 8b23bd9d).** D1 = F1 above. D2 (a `category` fell back to the tasks-only, every-day path): the day path now always runs, the category narrows TASKS only. D3 (a failed task read on the tab/widget hid meetings): tasks failure now keeps calendar rows + "couldn't read your task list". D4 ("tonight", "this/next thursday", "thurs", "Nov 12"...) now resolve. Tests: day-schedule 83/83, status-answers 28/28 (B9-B11), all suites + tsc + build green. Loop 2 verifier next.
+- **PR:** https://github.com/deventerpriseds-org/huddle-extension-app/pull/193 (subscribed). Live checks ready for after deploy: `schedule-calendar-checks.mjs` (verify-uat.yml, 390x844 — Today lists labelled Meeting/Class rows, no "Nothing scheduled" beside them) and `iris-day-schedule.mjs` (agent-serverfn-uat.yml — Iris runs the schedule tool and never calls a day with meetings empty).
+- **Open:** verifier verdict (three verifiers killed by container restarts 2026-11-11 — each time the session went idle after a backgrounded spawn; the fourth runs while the session stays busy); merge + deploy; live check of Iris's answer and the tab; owner confirmation.
 
 ## ACT:chat-format — clean, consistent chat message layout (owner-approved A, B, C, E; D held, 2026-11-05) — DEPLOYED 2026-11-08, NOT owner-confirmed
 - [x] Diagnosis: Iris's 29 messages 11-03..05 (azure-pg-query run 42105101844). Same brief spaced two ways; raw `**bold**`; four "N more" phrasings; draft + tally in prose; quota error as Iris. Cause: HuddleView rendered `{m.text}` raw + layout delegated to the model.

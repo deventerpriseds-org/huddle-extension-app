@@ -71,21 +71,41 @@ export function resolveDayArg(arg: unknown, nowMs: number, tz: string): string |
   const today = localDate(nowMs, tz);
   if (arg === undefined || arg === null) return today;
   if (typeof arg !== "string") return null;
-  const s = arg.trim().toLowerCase();
-  if (!s || s === "today") return today;
+  let s = arg.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,!?]+$/, "");
+  if (!s || /^(today|now|tonight|this (morning|afternoon|evening)|later today)$/.test(s)) return today;
   if (s === "all") return "all";
-  if (s === "tomorrow") return addDays(today, 1);
+  if (s === "tomorrow" || s === "tomorrow morning" || s === "tomorrow night") return addDays(today, 1);
   if (s === "yesterday") return addDays(today, -1);
+  // "Nov 12" / "November 12" / "12 Nov" -> this year's date (the user names days near now).
+  const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const md = s.match(/^([a-z]{3,9})\.? (\d{1,2})(?:st|nd|rd|th)?$/) || s.match(/^(\d{1,2})(?:st|nd|rd|th)? ([a-z]{3,9})$/);
+  if (md) {
+    const [mon, day] = /^\d/.test(md[1]) ? [md[2], md[1]] : [md[1], md[2]];
+    const mi = MONTHS.findIndex((m) => mon.startsWith(m) && (mon.length === 3 || mon.startsWith(m)));
+    if (mi >= 0) {
+      const iso = `${today.slice(0, 4)}-${String(mi + 1).padStart(2, "0")}-${String(Number(day)).padStart(2, "0")}`;
+      return resolveDayArg(iso, nowMs, tz);
+    }
+  }
+  // "this thursday" = the coming one (today included); "next thursday" = the coming one AFTER today.
+  let strictlyAfter = false;
+  if (s.startsWith("this ")) s = s.slice(5);
+  else if (s.startsWith("next ")) {
+    s = s.slice(5);
+    strictlyAfter = true;
+  }
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
     const [y, m, d] = s.split("-").map(Number);
     const dt = new Date(Date.UTC(y, m - 1, d, 12));
     return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d ? s : null;
   }
-  const wd = WEEKDAYS.findIndex((w) => w === s || w.slice(0, 3) === s.replace(/\.$/, ""));
+  // A weekday, full or abbreviated ("thu", "thur", "thurs", "tues", "weds").
+  const wd = s.length >= 3 ? WEEKDAYS.findIndex((w) => w === s || (w.startsWith(s) && s.length >= 3) || (s === "weds" && w === "wednesday")) : -1;
   if (wd >= 0) {
     const [y, m, d] = today.split("-").map(Number);
     const todayWd = new Date(Date.UTC(y, m - 1, d, 12)).getUTCDay();
-    return addDays(today, (wd - todayWd + 7) % 7);
+    const ahead = (wd - todayWd + 7) % 7;
+    return addDays(today, strictlyAfter && ahead === 0 ? 7 : ahead);
   }
   return null;
 }
@@ -114,7 +134,12 @@ function ms(iso: string | null | undefined): number | null {
 /** Does a calendar item belong on local `date`? Timed items overlap the local day; all-day items match their date. */
 function onDay(item: { startIso: string | null; endIso: string | null; day?: string }, date: string, tz: string): boolean {
   const s = ms(item.startIso);
-  if (s === null) return item.day ? item.day === date : true; // an all-day item read for this one day
+  // An all-day item carries only its START date (Graph/feed give no end day here), and every reader is
+  // scoped to one local day, so an all-day item returned for `date` overlaps it. A multi-day one (a
+  // conference 11-09..11-11 read for 11-10) arrives with day 11-09 and MUST still show on 11-10 -- an
+  // equality test dropped it and the day was then declared empty (VERIFY-schedule-meetings-1 F1).
+  // Only an all-day item dated AFTER this day cannot belong to it.
+  if (s === null) return !item.day || item.day <= date;
   const { startIso, endIso } = localDayBoundsUtc(date, tz);
   const dayStart = Date.parse(startIso);
   const dayEnd = Date.parse(endIso);
@@ -422,11 +447,14 @@ export async function readDaySchedule(
 }
 
 /** The real task reader for one local day — the brief's own query (open, non-parked, start_time in the day). */
-export function realTaskReader(userEmail: string): (date: string, tz: string) => Promise<TaskForDay[]> {
+export function realTaskReader(userEmail: string, category?: string): (date: string, tz: string) => Promise<TaskForDay[]> {
   return async (date, tz) => {
     const { getScheduledTasksBetween } = await import("./tasks.server");
     const { startIso, endIso } = localDayBoundsUtc(date, tz);
-    const rows = await getScheduledTasksBetween(userEmail, startIso, endIso);
+    const want = category?.trim().toUpperCase();
+    const rows = (await getScheduledTasksBetween(userEmail, startIso, endIso)).filter(
+      (r) => !want || String(r.category ?? "").toUpperCase() === want,
+    );
     return rows.map((r) => ({
       id: r.id,
       title: String(r.title ?? "").trim() || "(untitled)",
@@ -445,8 +473,10 @@ export function composeTodayItems(input: {
   tz: string;
   cal: CalendarDayRead;
   todaySchedule: WidgetTaskRow[];
+  /** The task read failed: meetings still list, and the tab says tasks are missing (AC-19/35). */
+  tasksError?: string;
 }): { todayItems: ScheduleDayEntry[]; todayProblems: string[]; todayNote?: string } {
-  const { todayKey, tz, cal, todaySchedule } = input;
+  const { todayKey, tz, cal, todaySchedule, tasksError } = input;
   const byId = new Map(todaySchedule.map((r) => [r.id, r]));
   const merged = mergeDayItems({
     date: todayKey,
@@ -471,11 +501,14 @@ export function composeTodayItems(input: {
       location: it.location,
     });
   }
-  const todayProblems = sourceProblems(cal.sources, cal.meetingsMayBeCut);
+  const todayProblems = sourceProblems(
+    { ...cal.sources, ...(tasksError ? { tasks: { ok: false, error: tasksError, count: 0 } } : {}) },
+    cal.meetingsMayBeCut,
+  );
   const calCount = todayItems.filter((i) => i.kind !== "task").length;
   const taskCount = todayItems.length - calCount;
   const todayNote =
-    taskCount === 0 && calCount > 0
+    !tasksError && taskCount === 0 && calCount > 0
       ? `No tasks are placed today — today has ${calCount} ${calCount === 1 ? "meeting or class" : "meetings and classes"}.`
       : undefined;
   return { todayItems, todayProblems, ...(todayNote ? { todayNote } : {}) };

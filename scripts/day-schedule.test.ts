@@ -195,6 +195,16 @@ check("AC-27 tuesday today counts", resolveDayArg("tue", NOW, TZ) === "2026-11-1
 check("AC-27 explicit date", resolveDayArg("2026-11-13", NOW, TZ) === "2026-11-13");
 check("AC-27 bad date rejected", resolveDayArg("2026-02-30", NOW, TZ) === null && resolveDayArg("someday", NOW, TZ) === null);
 check("date 'all' keeps the old every-day path", resolveDayArg("all", NOW, TZ) === "all");
+// D4 (verifier loop 1): common phrasings. NOW = Tue 2026-11-10.
+for (const [arg, want] of [
+  ["tonight", "2026-11-10"], ["this morning", "2026-11-10"], ["now", "2026-11-10"], ["Today.", "2026-11-10"],
+  ["this thursday", "2026-11-12"], ["next thursday", "2026-11-12"], ["thurs", "2026-11-12"], ["tues", "2026-11-10"],
+  ["next tuesday", "2026-11-17"], ["weds", "2026-11-11"], ["Nov 12", "2026-11-12"], ["November 13th", "2026-11-13"],
+  ["12 nov", "2026-11-12"], ["tomorrow morning", "2026-11-11"],
+] as const) {
+  check(`D4 '${arg}' -> ${want}`, resolveDayArg(arg, NOW, TZ) === want, String(resolveDayArg(arg, NOW, TZ)));
+}
+check("D4 nonsense is still rejected (never read as an empty day)", resolveDayArg("someday soon", NOW, TZ) === null && resolveDayArg("Foo 12", NOW, TZ) === null);
 {
   const late: BriefItem = { sourceId: "late", kind: "meeting", title: "Late call", startIso: at("23:00"), endIso: at("01:00", "2026-11-11"), location: null };
   const d10 = mergeDayItems({ date: DATE, tz: TZ, meetings: [late], classes: [], tasks: [] });
@@ -207,6 +217,12 @@ check("date 'all' keeps the old every-day path", resolveDayArg("all", NOW, TZ) =
   const prev = mergeDayItems({ date: "2026-11-09", tz: TZ, meetings: [allDay], classes: [], tasks: [] });
   const same = mergeDayItems({ date: DATE, tz: TZ, meetings: [allDay], classes: [], tasks: [] });
   check("AC-26 all-day event stays on its own date", prev.length === 0 && same.length === 1 && same[0].allDay);
+  // F1 (verifier loop 1): a multi-day all-day event read for its 2nd day arrives with its START date.
+  const conf: BriefItem = { sourceId: "conf", kind: "meeting", title: "Conference", startIso: null, endIso: null, location: null, day: "2026-11-09" };
+  const day2 = await readDaySchedule(DATE, TZ, { meetings: async () => ({ items: [conf] }), classes: async () => ({ items: [] }), tasks: async () => [] });
+  const j2 = dayScheduleToolJson({ date: DATE, tz: TZ, ...day2 }) as Record<string, any>;
+  check("F1 a multi-day all-day event still shows on its second day", j2.count === 1 && j2.items[0].all_day === true, JSON.stringify(j2.items));
+  check("F1 that day is not declared empty", !/nothing scheduled/.test(j2.answer_rule), j2.answer_rule);
   const j = dayScheduleToolJson({
     date: DATE, tz: TZ, items: same,
     sources: { meetings: { ok: true, count: 1 }, classes: { ok: true, count: 0 }, tasks: { ok: true, count: 0 } },
@@ -248,6 +264,17 @@ const wrow = (id: string, title: string, start: string): WidgetTaskRow => ({
   check("AC-35 tab states a failed calendar read", t.todayProblems.some((p) => /Couldn't read your calendar/.test(p)), JSON.stringify(t.todayProblems));
 }
 
+{
+  // D3 (verifier loop 1): a failed TASK read on the tab keeps the meetings and says tasks are missing.
+  const cal = await readCalendarDay(DATE, TZ, okDeps());
+  const t = composeTodayItems({ todayKey: DATE, tz: TZ, cal, todaySchedule: [], tasksError: "pg pool down" });
+  check("D3 tab keeps the 8 calendar rows when the task read fails", t.todayItems.length === 8, String(t.todayItems.length));
+  check("D3 tab says the task list could not be read", t.todayProblems.some((p) => /task list/.test(p) && /pg pool down/.test(p)), JSON.stringify(t.todayProblems));
+  check("D3 no 'no tasks placed' note when tasks were not read", !t.todayNote, String(t.todayNote));
+  const src = readFileSync("src/features/huddle/lib/tasks/widgets.functions.ts", "utf8") + readFileSync("src/features/huddle/lib/tasks/tools.ts", "utf8");
+  check("D3 both widget paths pass tasksError through", (src.match(/tasksError: rowsR\.error/g) ?? []).length === 2);
+}
+
 // --- AC-30: extend, don't duplicate ------------------------------------------------------------------------
 {
   const src = readFileSync("src/features/huddle/lib/tasks/day-schedule.server.ts", "utf8");
@@ -258,7 +285,8 @@ const wrow = (id: string, title: string, start: string): WidgetTaskRow => ({
 // --- AC-2..4 / AC-45: every chat path reaches the same day reader ------------------------------------------
 {
   const tools = readFileSync("src/features/huddle/lib/tasks/tools.ts", "utf8");
-  check("AC-2 the 'scheduled' view runs the day reader", /view === "scheduled" && !category[\s\S]{0,600}readDaySchedule/.test(tools));
+  check("AC-2 the 'scheduled' view runs the day reader", /if \(view === "scheduled"\) \{[\s\S]{0,600}readDaySchedule/.test(tools));
+  check("D2 a category narrows the day's tasks, never falls back to the old path", /realTaskReader\(userEmail, category\)/.test(tools));
   const fns = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
   const starts = [...fns.matchAll(/(?<!function )dispatchPrioritize\(/g)].map((m) => m.index ?? 0);
   const withCaller = starts.filter((i) => fns.slice(i, i + 400).includes("{ caller: data.caller }"));

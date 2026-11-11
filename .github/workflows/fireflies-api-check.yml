@@ -1,0 +1,99 @@
+name: Fireflies API check (read-only)
+
+# WHAT:       Reports (1) whether FIREFLIES_API_KEY / FIREFLIES_WEBHOOK_SECRET exist as secrets, (2) the
+#             LIVE Fireflies GraphQL schema for the Summary / Sentence / Transcript types (field names and
+#             types only), and (3) for the newest transcript on the account, which summary fields come back
+#             filled -- as null / length / item-count ONLY. Never prints a key, a meeting id, a title, or any
+#             transcript or summary text: this repo's Actions logs are public.
+# WHY:        The meeting-minutes handoff says "Confirm the API fields actually return the summary format
+#             needed; do not assume the custom-template result is present." docs.fireflies.ai does not
+#             resolve from the dev session, so the live schema is the ground truth, read with the real key.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/actions.md ACT:fireflies-minutes.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude_fireflies-minutes]
+    paths: [".github/workflows/fireflies-api-check.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Secret presence + live schema + field fill
+        env:
+          FIREFLIES_API_KEY: ${{ secrets.FIREFLIES_API_KEY }}
+          FIREFLIES_WEBHOOK_SECRET: ${{ secrets.FIREFLIES_WEBHOOK_SECRET }}
+        run: |
+          set -uo pipefail
+          for k in FIREFLIES_API_KEY FIREFLIES_WEBHOOK_SECRET; do
+            if [ -n "${!k}" ]; then echo "$k: present (value hidden)"; else echo "$k: MISSING"; fi
+          done
+          if [ -z "$FIREFLIES_API_KEY" ]; then echo "::error::FIREFLIES_API_KEY is not available to this repo"; exit 1; fi
+          python3 - <<'PY'
+          import json, os, urllib.request
+          KEY = os.environ["FIREFLIES_API_KEY"]
+          def gql(query, variables=None):
+              req = urllib.request.Request("https://api.fireflies.ai/graphql",
+                  data=json.dumps({"query": query, "variables": variables or {}}).encode(),
+                  headers={"Authorization": "Bearer " + KEY, "Content-Type": "application/json",
+                           "User-Agent": "huddle-api-check"})
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      return r.status, json.load(r)
+              except urllib.error.HTTPError as e:
+                  return e.code, {}
+          def unwrap(t):
+              while t and t.get("ofType"): t = t["ofType"] if t["kind"] in ("NON_NULL", "LIST") else t
+              return t
+          TYPEQ = ("query($n:String!){__type(name:$n){name kind fields{name description "
+                   "type{kind name ofType{kind name ofType{kind name ofType{kind name}}}}}}}")
+          schema = {}
+          for name in ["Summary", "MeetingSummary", "Sentence", "Transcript", "SummarySection", "AIFilter", "MeetingAttendee"]:
+              st, d = gql(TYPEQ, {"n": name})
+              t = (d.get("data") or {}).get("__type")
+              if not t:
+                  print(f"type {name}: not in schema (HTTP {st})"); continue
+              schema[name] = t
+              print(f"=== type {name} ===")
+              for f in t["fields"] or []:
+                  u = unwrap(f["type"])
+                  desc = (f.get("description") or "").replace("\n", " ")[:140]
+                  print(f"  {f['name']}: {u.get('kind')} {u.get('name')}  -- {desc}")
+          # Which summary fields are actually filled on the newest transcript (shape only).
+          st, d = gql("query{transcripts(limit:1){id}}")
+          rows = ((d.get("data") or {}).get("transcripts") or [])
+          print(f"=== newest transcript lookup: HTTP {st}, rows {len(rows)} ===")
+          summ = schema.get("Summary") or schema.get("MeetingSummary")
+          if rows and summ:
+              def sel(typ, depth=0):
+                  out = []
+                  for f in typ["fields"] or []:
+                      u = unwrap(f["type"])
+                      if u["kind"] in ("SCALAR", "ENUM"): out.append(f["name"])
+                      elif u["kind"] == "OBJECT" and depth < 1:
+                          st2, d2 = gql(TYPEQ, {"n": u["name"]})
+                          sub = (d2.get("data") or {}).get("__type")
+                          if sub:
+                              inner = sel(sub, depth + 1)
+                              if inner: out.append(f["name"] + "{" + " ".join(inner) + "}")
+                  return out
+              q = "query($id:String!){transcript(id:$id){summary{" + " ".join(sel(summ)) + "} sentences{index}}}"
+              st, d = gql(q, {"id": rows[0]["id"]})
+              tr = ((d.get("data") or {}).get("transcript") or {})
+              errs = d.get("errors") or []
+              print(f"field-fill probe HTTP {st}, errors: {[e.get('message','')[:120] for e in errs]}")
+              print(f"sentences: {len(tr.get('sentences') or [])}")
+              def shape(v):
+                  if v is None: return "null"
+                  if isinstance(v, str): return f"string len {len(v)}"
+                  if isinstance(v, list): return f"list x{len(v)}" + (f" of {sorted(v[0].keys())}" if v and isinstance(v[0], dict) else "")
+                  if isinstance(v, dict): return "object keys " + str(sorted(v.keys()))
+                  return type(v).__name__
+              for k, v in (tr.get("summary") or {}).items():
+                  print(f"  summary.{k}: {shape(v)}")
+          PY

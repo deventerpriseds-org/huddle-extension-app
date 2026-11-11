@@ -343,15 +343,19 @@ export async function dispatchScheduleWidget(
     const ds = await import("./day-schedule.server");
     const { localDate } = await import("./schedule-brief.server");
     const nowMs = Date.now();
-    // Same merged Today as the Schedule tab (getScheduleWidget) — meetings + classes + tasks.
-    const [rows, cal] = await Promise.all([
-      getBoardTasks(userEmail),
+    // Same merged Today as the Schedule tab (getScheduleWidget) — meetings + classes + tasks. A failed
+    // task read must not hide meetings that were read fine (verifier loop 1 D3).
+    const [rowsR, cal] = await Promise.all([
+      getBoardTasks(userEmail).then(
+        (rows) => ({ rows, error: undefined as string | undefined }),
+        (err) => ({ rows: [] as Awaited<ReturnType<typeof getBoardTasks>>, error: err instanceof Error ? err.message : String(err) }),
+      ),
       ds.readTodayCalendar(localDate(nowMs, tz), tz, ctx?.caller, userEmail),
     ]);
-    const sections = buildScheduleSections(rows, tz, nowMs);
-    const today = ds.composeTodayItems({ todayKey: sections.todayKey, tz, cal, todaySchedule: sections.todaySchedule });
+    const sections = buildScheduleSections(rowsR.rows, tz, nowMs);
+    const today = ds.composeTodayItems({ todayKey: sections.todayKey, tz, cal, todaySchedule: sections.todaySchedule, tasksError: rowsR.error });
     // Annotated for the same reason as the priorities payload above — see that comment.
-    const schedule: ScheduleWidgetData = { ok: true, timeZone: tz, ...sections, ...today };
+    const schedule: ScheduleWidgetData = { ok: !rowsR.error, ...(rowsR.error ? { error: rowsR.error } : {}), timeZone: tz, ...sections, ...today };
     console.info(
       `[schedule-widget] rendered today=${today.todayItems.length} (tasks=${sections.todaySchedule.length}) problems=${today.todayProblems.length} doing=${sections.currentlyDoing.length} upNext=${sections.upNext.length} tz=${tz}`,
     );
@@ -422,9 +426,10 @@ export async function dispatchPrioritize(
   // ONE DAY = MEETINGS + CLASSES + TASKS (2026-11-10 incident: "no items scheduled for today" on a day
   // with 8 meetings and a class, because this view read tasks only and had no day filter, so it also
   // offered Wednesday's task as today's). The 'scheduled' view now answers ONE local day from the merged
-  // reader the brief's sources feed. `date: "all"` keeps the old every-day task list; a `category` keeps
-  // the old task-only path, because calendar items carry no category.
-  if (view === "scheduled" && !category) {
+  // reader the brief's sources feed. `date: "all"` keeps the old every-day task list. A `category` narrows
+  // the TASKS only -- meetings and classes carry no category and are still listed, so a category can never
+  // bring back the tasks-only, every-day answer (verifier loop 1 D2).
+  if (view === "scheduled") {
     const tz = timeZone || "UTC";
     const ds = await import("./day-schedule.server");
     const date = ds.resolveDayArg(args.date, Date.now(), tz);
@@ -437,9 +442,13 @@ export async function dispatchPrioritize(
     if (date !== "all") {
       const day = await ds.readDaySchedule(date, tz, {
         ...ds.realCalendarDeps({ caller: ctx?.caller, fallbackMailbox: userEmail }),
-        tasks: ds.realTaskReader(userEmail),
+        tasks: ds.realTaskReader(userEmail, category),
       });
       const out = ds.dayScheduleToolJson({ date, tz, ...day });
+      if (category) {
+        out.category = category;
+        out.category_note = `Tasks are limited to ${category}; meetings and classes carry no category, so all of them are listed.`;
+      }
       if (wantBlocked) {
         try {
           const b = JSON.parse(await dispatchPrioritize(userEmail, { ...args, view: "blocked" }, timeZone, ctx)) as Record<string, unknown>;
