@@ -84,3 +84,41 @@ transient errors (S8: 12 attempts / ~241 min of backoff, then `es NULL`, `err gr
 returns `fireflies_summary_missing` (no send) and has no Luna branch for source='fireflies'
 (fireflies.server.ts:314-322).
 
+## C12 suites + typecheck -- CONFIRMED (re-run by this verifier at f34bb1eb)
+
+`bun scripts/fireflies-minutes.test.ts` 62 PASS / 0 FAIL ("all passed"); `cross-app-turn-gate` 92 passed 0 failed;
+`scheduler-one-user` 7/0; `schedule-brief-dedupe` 21/0; `priority-check` 47/0; `npx tsc --noEmit -p .` rc=0, no
+output. Note: none of these suites caught D7 or D8. The suites test `planEmail` and similar pure functions;
+they do not run the queue SQL.
+
+## Reduced-depth re-checks (code read at f34bb1eb)
+
+- **C3 CONFIRMED.** `emailBranch` calls `loadMinutesSettings(owner)` on every pass (fireflies.server.ts:393).
+  `parseMinutesSource` returns 'luna' only for exactly "luna" and the Fireflies default for anything else
+  (minutes.ts:24-26).
+- **C4 CONFIRMED.** `generateMinutes` (fireflies.server.ts:309-340): the fireflies branch returns either a
+  summary or `fireflies_summary_missing`. The luna branch returns Luna output or an error. Neither branch
+  falls back to the other mode.
+- **C8 CONFIRMED (loop-1 D3 fixed).** Settings load only inside `emailBranch`. Email and OneDrive run under
+  `Promise.allSettled` (:464), and a rejection in one branch is recorded separately (:475-485).
+- **C2 CONFIRMED, with one small caveat.** `safeMeetingId` returns null outside `^[A-Za-z0-9_-]{1,120}$`
+  (minutes.ts:355-358), and the webhook throws `invalid_meeting_id` (:532-533). Caveat: it calls `.trim()`
+  first, so `" abc "` is accepted as `abc`. The id is otherwise unchanged, so this is harmless.
+
+## NOT REACHED (budget)
+
+C1 signature (I read the header parse and the HMAC computation, but not the comparison), C5 custom sections,
+C6 Luna template, C9 (I read `safeSendError`, which returns only short codes, but did NOT check the Entra ID
+token check or that a non-owner token is refused), C10 (I confirmed the subject includes title and date,
+but did not grep for hard-coded addresses or PDF), C11 time budget, C14 scheduler, and the re-run of the
+loop-1 adversarial test `scripts/fireflies-minutes.verify.test.ts`.
+Flagged for C11, inference only and not measured: the worker's email path can take one Fireflies fetch
+(<=12s), plus the schema-retry fetch (<=12s), plus Luna (<=25s), plus the send, which is more than 45s.
+If the heartbeat request is killed at the hosting ceiling after the Graph send but before
+`recordEmailSent`, the email is sent again once the lease lapses.
+
+## Verdict
+
+C7 REFUTED (D7 lost update), C13 REFUTED (D8 abandoned after 12 attempts / 60 min, never `failed`).
+C2, C3, C4, C8, C12 CONFIRMED. C1, C5, C6, C9, C10, C11, C14 NOT REACHED. Verdict: **FIX FIRST**.
+Per the coordinator, PR #191 is already merged and deploying, so D7 and D8 become a follow-up fix PR.
