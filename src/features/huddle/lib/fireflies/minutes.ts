@@ -212,7 +212,7 @@ export function minutesUserPrompt(title: string, dateLabel: string, transcript: 
 
 /** The five sections the template requires, so a model reply that skipped one is caught, not emailed. */
 export function missingTemplateSections(md: string): string[] {
-  const want = ["Agenda", "Summary", "Questions", "Decisions", "Action Items"];
+  const want = ["Focus", "Summary", "Questions", "Decisions", "Action Items"];
   return want.filter((h) => !new RegExp(`^##\\s+${h}\\s*$`, "im").test(md));
 }
 
