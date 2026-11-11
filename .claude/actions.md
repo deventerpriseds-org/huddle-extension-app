@@ -18,8 +18,17 @@ gate refuses #188's `feature/` branch name; the new PR supersedes #188).
       30s response limit, no retry after timeout, meeting.summarized, start_time is a String.
 - [x] Verify loop 1 (VERIFY-fireflies-minutes-1, branch claude_verify-fireflies-minutes-1): 4 REFUTED (C7 D1/D2,
       C8 D3, C9 D4/D5, C11 D6) + C2. All fixed by the queue rework 7036d9eb; 62 checks; 5 new guards mutation-proved.
-- [ ] Verify loop 2.
-- [ ] Live schema check of summary fields (re-runs on push once the key exists).
+- [x] PR #191 merged by the owner 2026-11-11 05:21 (9c31f538); deploy-swa run 42965201198 SUCCESS, both FIREFLIES_*
+      secrets present; live route answers 401 to unsigned / bad-signed posts.
+- [x] Live API probe (fireflies-api-check run 42965412249): newest meeting returns 391 sentences and
+      summary.extended_sections x6 {title,content} -> the custom summary IS exposed. start_time is Float live.
+- [x] Work address linked to the owner's profile (manual, 05:32 UTC) + email_self_tiers auto (existing config row
+      updated in place; confirm gate unchanged). Default recipients now = both addresses.
+- [x] Verify loop 2 (VERIFY-fireflies-minutes-2, branch claude_verify-fireflies-minutes-2): D7 lost mid-lease
+      delivery, D8 summary wait exhausted attempts after 60 min. Fixed on claude_fireflies-queue-fixes (7624bf2a);
+      real-SQL test scripts/fireflies-queue-sql.test.ts 11/11, both guards mutation-proved. 7 claims NOT REACHED.
+- [ ] Owner configures the Fireflies Webhooks V2 entry (URL, secret, BOTH events, resend on), test event, real meeting.
+- [ ] Verify loop 3 (incl. loop 2's NOT REACHED claims C1 C5 C6 C9 C10 C11 C14).
 - [ ] Deploy, configure Fireflies webhook, test event, then one real meeting in EACH mode.
 
 ## ACT:polish-tool — Polish text cleanup tool in Huddle (first tool module; Sidecar + Prompto later) (2026-11-05)
