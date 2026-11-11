@@ -4669,7 +4669,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const args = (c.arguments ?? {}) as Record<string, unknown>;
             const out = isPriorities
               ? await dispatchPrioritiesWidget(email, args, tz)
-              : await dispatchScheduleWidget(email, args, tz);
+              : await dispatchScheduleWidget(email, args, tz, { caller: data.caller });
             let ok = true;
             let detail = "";
             try {
@@ -4750,15 +4750,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               c.name === "get_calendar_events"
                 ? { view: "scheduled", ...c.arguments }
                 : c.arguments;
-            const out = await dispatchPrioritize(email, pArgs, tz);
+            const out = await dispatchPrioritize(email, pArgs, tz, { caller: data.caller });
             // Record it like every other tool (this was the ONE tool missing recordToolUse, which is
             // why it never showed in the tool trace / UAT even though it ran).
             let ok = true,
               detail = "";
             try {
-              const p = JSON.parse(out) as { error?: string; view?: string; count?: number };
+              const p = JSON.parse(out) as { error?: string; view?: string; count?: number; date?: string; complete?: boolean; problems?: string[] };
               ok = !p.error;
-              detail = p.error ? String(p.error) : `view=${p.view ?? "?"} count=${p.count ?? "?"}`;
+              // A partial day (a source failed or timed out) is shown in the trace by name (AC-21).
+              detail = p.error
+                ? String(p.error)
+                : `view=${p.view ?? "?"}${p.date ? ` date=${p.date}` : ""} count=${p.count ?? "?"}` +
+                  (p.complete === false ? ` INCOMPLETE: ${(p.problems ?? []).join(" | ").slice(0, 300)}` : "");
             } catch {
               /* keep defaults */
             }
@@ -6180,11 +6184,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           const { dispatchPrioritize } = await import("./tasks/tools");
           lovableTools.schedule_and_priorities = tool({
             description:
-              "The user's schedule + tasks: their nightly-planned schedule (scheduled items for a day) plus their open tasks/backlog, ranked by priority, due dates, and staleness. Call it for ANY question about the user's schedule, calendar, agenda, day, meetings, tasks, backlog, priorities, or what's next. Use view 'scheduled' for 'what's on my schedule/calendar/day today'. (Only an explicit 'external/Outlook calendar' ask uses get_calendar_events instead.)",
+              "The user's schedule + tasks: their nightly-planned schedule (scheduled items for a day) plus their open tasks/backlog, ranked by priority, due dates, and staleness. Call it for ANY question about the user's schedule, calendar, agenda, day, meetings, tasks, backlog, priorities, or what's next. Use view 'scheduled' for 'what's on my schedule/calendar/day today' — it returns that ONE day's meetings, classes AND tasks together (pass `date` for another day: 'tomorrow', a weekday name, or yyyy-mm-dd). (Only an explicit 'external/Outlook calendar' ask uses get_external_calendar_events instead.)",
             inputSchema: z.object({
               view: z.enum(["priorities", "backlog", "up_next", "scheduled", "overdue", "blocked"]).optional(),
               category: z.string().optional(),
               limit: z.number().optional(),
+              // Mirrors PRIORITIZE_TOOL.date — the day the 'scheduled' view answers.
+              date: z.string().optional(),
               // Mirrors PRIORITIZE_TOOL. Without it zod strips the key and this backend could never
               // see a BLOCKED task (status-answers.test.ts L1 pins the parity).
               include_blocked: z.boolean().optional(),
@@ -6197,6 +6203,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 ident.email ?? data.caller?.entra_email,
                 args as Record<string, unknown>,
                 ident.timeZone || data.timeZone || "UTC",
+                { caller: data.caller },
               );
             },
           });
@@ -6204,8 +6211,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // to update; "what's on my calendar" returns the combined schedule, never raw Outlook.
           lovableTools.get_calendar_events = tool({
             description:
-              "The user's calendar / day / schedule — their COMBINED nightly schedule (tasks + calendar), the source of truth. Use for 'what's on my calendar/schedule/agenda/day', meetings, or appointments. (For the RAW external Outlook calendar specifically, use get_external_calendar_events.)",
-            inputSchema: z.object({ category: z.string().optional() }),
+              "The user's calendar / day / schedule — ONE day's meetings, classes and scheduled tasks together, merged and in time order, the source of truth. Use for 'what's on my calendar/schedule/agenda/day', meetings, or appointments. Pass `date` for another day ('tomorrow', a weekday name, or yyyy-mm-dd); omit it for today. (For the RAW external Outlook calendar specifically, use get_external_calendar_events.)",
+            inputSchema: z.object({ category: z.string().optional(), date: z.string().optional() }),
             execute: async (args) => {
               const ident = await (
                 await import("./journey/identity")
@@ -6214,6 +6221,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 ident.email ?? data.caller?.entra_email,
                 { view: "scheduled", ...(args as Record<string, unknown>) },
                 ident.timeZone || data.timeZone || "UTC",
+                { caller: data.caller },
               );
             },
           });
@@ -6326,7 +6334,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const tz = ident.timeZone || data.timeZone || "UTC";
             const out = isPriorities
               ? await dispatchPrioritiesWidget(email, args, tz)
-              : await dispatchScheduleWidget(email, args, tz);
+              : await dispatchScheduleWidget(email, args, tz, { caller: data.caller });
             let ok = true;
             let detail = "";
             try {

@@ -56,6 +56,7 @@ import { CATEGORY_ROOT_PREFIX, UNCATEGORISED_CATEGORY } from "../lib/tasks/widge
 import type {
   PushView,
   PrioritiesWidgetData,
+  ScheduleDayEntry,
   ScheduleWidgetData,
   TopicNode,
   TopicTreeResult,
@@ -1319,12 +1320,54 @@ export function PrioritiesWidget({
 
 /* ── SCHEDULE ───────────────────────────────────────────────────────────────────────────────────── */
 
-function ScheduleRowItem({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
+/** A text kind label ("Meeting" / "Class" / "Task") — words, not colour alone (AC-31). */
+function KindTag({ label }: { label: string }) {
+  return (
+    <span className="shrink-0 rounded-sm border border-hairline px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      {label}
+    </span>
+  );
+}
+
+/** A meeting or class in Today's schedule. Read-only: it is not a task, so it has no task controls. */
+function CalendarRowItem({ item }: { item: Extract<ScheduleDayEntry, { kind: "meeting" | "class" }> }) {
+  const start = item.allDay ? "All day" : shortTime(item.startTime);
+  const end = item.allDay ? null : shortTime(item.endTime);
+  return (
+    <li className="flex items-center gap-2 border-b border-hairline px-3 py-2 last:border-b-0" data-testid="schedule-calendar-row">
+      <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        {start && (
+          <span className="shrink-0 text-[12px] font-semibold tabular-nums text-foreground">
+            {start}
+            {end ? `–${end}` : ""}
+          </span>
+        )}
+        <span className="min-w-0 truncate text-[13px] leading-snug text-foreground" title={item.location ? `${item.title} · ${item.location}` : item.title}>
+          {item.title}
+        </span>
+      </div>
+      <KindTag label={item.kind === "class" ? "Class" : "Meeting"} />
+    </li>
+  );
+}
+
+function ScheduleRowItem({
+  row,
+  caller,
+  label,
+  conflict,
+}: {
+  row: WidgetTaskRow;
+  caller: Caller;
+  /** Shown only in the merged Today list, where meetings and tasks sit side by side. */
+  label?: string;
+  conflict?: boolean;
+}) {
   const { status } = useRowState(row);
   const done = status === "DONE";
   const time = shortTime(row.startTime);
   return (
-    <li className="flex items-center gap-2 border-b border-hairline px-3 py-2 last:border-b-0">
+    <li className="flex items-center gap-2 border-b border-hairline px-3 py-2 last:border-b-0" data-testid={label ? "schedule-task-row" : undefined}>
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
         {time && <span className="shrink-0 text-[12px] font-semibold tabular-nums text-foreground">{time}</span>}
         <span
@@ -1334,6 +1377,8 @@ function ScheduleRowItem({ row, caller }: { row: WidgetTaskRow; caller: Caller }
           {row.title}
         </span>
       </div>
+      {conflict && <span className="shrink-0 text-[10px] font-medium text-destructive">Clash</span>}
+      {label && <KindTag label={label} />}
       <div className="flex shrink-0 items-center gap-0.5">
         <StartButton row={row} caller={caller} />
         <DoneButton row={row} caller={caller} />
@@ -1386,6 +1431,41 @@ export function ScheduleWidget({
 
       {!data.ok && <ReadError error={data.error} />}
 
+      {data.todayItems ? (
+        // MERGED TODAY (2026-11-10): meetings + classes + tasks. Calendar rows are read-only; task rows
+        // keep their controls. "Nothing scheduled" only when every source read cleanly (AC-35).
+        <CollapsibleSection id="schedule-today" label="Today’s schedule" count={data.todayItems.length}>
+          {(data.todayProblems ?? []).length > 0 && (
+            <div className="border-t border-hairline px-3 py-2 text-[12px] leading-snug text-destructive" role="status">
+              {(data.todayProblems ?? []).map((p) => (
+                <div key={p}>{p}</div>
+              ))}
+            </div>
+          )}
+          {data.todayNote && (
+            <div className="border-t border-hairline px-3 py-1.5 text-[12px] leading-snug text-muted-foreground">{data.todayNote}</div>
+          )}
+          {data.todayItems.length > 0 ? (
+            <ScrollBand full={full} flow>
+              <ul className="border-t border-hairline">
+                {data.todayItems.map((it, i) =>
+                  it.kind === "task" ? (
+                    <ScheduleRowItem key={it.task.id} row={it.task} caller={caller} label="Task" conflict={it.conflict} />
+                  ) : (
+                    <CalendarRowItem key={`${it.kind}-${i}-${it.title}`} item={it} />
+                  ),
+                )}
+              </ul>
+            </ScrollBand>
+          ) : (
+            <div className="border-t border-hairline">
+              <EmptyLine>
+                {(data.todayProblems ?? []).length > 0 ? "No items loaded — see the note above." : "Nothing scheduled for today."}
+              </EmptyLine>
+            </div>
+          )}
+        </CollapsibleSection>
+      ) : (
       <CollapsibleSection id="schedule-today" label="Today’s schedule" count={data.todaySchedule.length}>
       {data.todaySchedule.length > 0 ? (
         <ScrollBand full={full} flow>
@@ -1401,6 +1481,7 @@ export function ScheduleWidget({
         </div>
       )}
       </CollapsibleSection>
+      )}
 
       <CollapsibleSection id="schedule-doing" label="Currently doing">
       <div className="flex items-center gap-2 border-t border-hairline px-3 py-2">
