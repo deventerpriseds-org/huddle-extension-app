@@ -278,6 +278,12 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
  */
 export async function runDueScheduledJobs(): Promise<number> {
   const now = new Date();
+  // Fireflies meeting minutes (2026-11-10): the webhook only queues a meeting; this heartbeat emails the
+  // minutes and saves the transcript. STARTED here and awaited only at the very end, so it runs ALONGSIDE
+  // the existing jobs and a slow Luna call can never delay them. One meeting per tick; never throws.
+  const fireflies = import("../fireflies/fireflies.server")
+    .then((m) => m.processDueFirefliesMeetings(1))
+    .catch(() => 0);
   try {
     await ensureGroomJobs(now);
   } catch {
@@ -297,6 +303,7 @@ export async function runDueScheduledJobs(): Promise<number> {
   try {
     claimed = await claimDueScheduledJobs(20);
   } catch {
+    await fireflies;
     return 0;
   }
   let fired = 0;
@@ -341,5 +348,6 @@ export async function runDueScheduledJobs(): Promise<number> {
     void fireJob({ ...job, cadence }, `${job.id}-${slotKey}`);
     fired++;
   }
+  await fireflies; // keep the request alive until the minutes pass finishes (it never throws)
   return fired;
 }

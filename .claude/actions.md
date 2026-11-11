@@ -1,6 +1,27 @@
 # Action Tracker — huddle-extension-app
 Last updated: 2026-10-27
 
+## ACT:fireflies-minutes — Fireflies webhook -> meeting-minutes email + OneDrive transcript (2026-11-10)
+Owner handoff (uploaded doc, "O" = go). Extends draft PR #188 on branch `claude_fireflies-minutes` (the push
+gate refuses #188's `feature/` branch name; the new PR supersedes #188).
+- [x] Read #188: signed route + Fireflies fetch + OneDrive upsert existed; no email, settings or idempotency.
+- [x] Graph app holds Files.ReadWrite.All + Mail.Send (graph-permission-check run 42813217097).
+- [x] Minutes source setting (Fireflies summary default | Luna), recipients, update-email switch; no cross-mode fallback.
+- [x] chat.fireflies_meetings ledger + atomic email claim; retries never re-send (tests G4/G5/G10, mutation-proved).
+- [x] Email and OneDrive independent (G8/G9). Safe Markdown->HTML (H1). 45 offline checks: `bun scripts/fireflies-minutes.test.ts`.
+- [x] Settings -> Account -> Meeting minutes panel with recent-meeting results and a would-be-draft recipient warning.
+- [ ] BLOCKED (owner): FIREFLIES_API_KEY + FIREFLIES_WEBHOOK_SECRET are MISSING from the repo's secrets
+      (fireflies-api-check run 42813708365). Do not merge until present -- the route would 503 every delivery.
+- [ ] DECISION (owner): the work address is not linked to the owner's profile, so the existing send gate refuses
+      a minutes email that includes it. Options in the PR / chat.
+- [x] Fireflies docs read with Playwright on a runner (owner: "Use playwright if Tavily fails"), run 42816565367:
+      30s response limit, no retry after timeout, meeting.summarized, start_time is a String.
+- [x] Verify loop 1 (VERIFY-fireflies-minutes-1, branch claude_verify-fireflies-minutes-1): 4 REFUTED (C7 D1/D2,
+      C8 D3, C9 D4/D5, C11 D6) + C2. All fixed by the queue rework 7036d9eb; 62 checks; 5 new guards mutation-proved.
+- [ ] Verify loop 2.
+- [ ] Live schema check of summary fields (re-runs on push once the key exists).
+- [ ] Deploy, configure Fireflies webhook, test event, then one real meeting in EACH mode.
+
 ## ACT:polish-tool — Polish text cleanup tool in Huddle (first tool module; Sidecar + Prompto later) (2026-11-05)
 - [x] Read the owner's design (claude.ai artifact 283e7883, "Refine" screens) and blended it into Huddle's Compass look.
 - [x] Interactive prototype for approval: https://claude.ai/artifact/7MJkFX17io8FHmVWwSZCAn (polishes real text via Claude in the preview).
