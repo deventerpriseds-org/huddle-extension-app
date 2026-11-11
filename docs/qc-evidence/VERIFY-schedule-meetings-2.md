@@ -36,3 +36,51 @@ WRONG DATE: `junk 5`->2026-06-05, `mayday 3`->2026-05-03, `marvel 3`->2026-03-03
 Asked Wed 2026-12-30: `jan 3`/`3 jan`/`january 3`->2026-01-03, `jan 1`->2026-01-01 (D5); `friday`/`next friday`->2027-01-01 (correct).
 Observations (not defects, judgement calls): `next thursday` asked on a Wednesday -> TOMORROW (11-12), not the week after; the test pins this
 reading deliberately. `tomorrow afternoon`/`tomorrow evening` -> null while `tomorrow morning`/`tomorrow night` resolve -- an error, not a wrong date.
+
+### D1 fix (multi-day all-day event) -- CONFIRMED
+Probe `mergeDayItems` with a Conference all-day item `day: 2026-11-09`, an all-day item `day: 2026-11-11`, one with no day, and a timed 11-09 meeting:
+```
+2026-11-09 Yesterday 10am | Conference | No day all-day
+2026-11-10 Conference | No day all-day
+2026-11-11 Conference | No day all-day | Tomorrow all-day
+```
+Loop-1 F1 repro end to end (`readDaySchedule` + `dayScheduleToolJson`, day 2, conference only): `count: 1`, item `Conference all_day:true`,
+answer_rule "List EVERY item ..." -- the day is no longer declared empty. An all-day item dated AFTER the read day is still excluded.
+Observation O1 (inference, NOT reproduced against real Graph, confidence low): `meetingsForDate` sets `endIso: null` for all-day events and
+keeps only the start date, so `onDay` cannot tell a multi-day event from a single-day one dated the day before. The readers only return
+items overlapping the window (Graph calendarView; feed `mapFeedAppointments` overlap test), so this only matters if a reader returns a
+single-day all-day event for the NEXT local day (event zone west of the user's zone). Then it now shows on that next day too. That is an
+extra row, never a hidden one; Graph's `e.end` is available in `meetingsForDate` if a precise end date is ever wanted.
+
+### D2 fix (category keeps the day answer) -- PARTIAL (D7 above)
+Read `tools.ts` 'scheduled' branch: `if (view === "scheduled")` with no category condition; `ds.realTaskReader(userEmail, category)`;
+`date: "all"` still takes the old every-day list. `tasks.server.ts` `getScheduledTasksBetween` now selects `category`; the column exists in
+the mirror DDL (`tasks.server.ts:32 category TEXT`), so the extra column cannot break the read. The 8 AM/8 PM brief
+(`schedule-brief.server.ts:433-438`) maps `id/title/start_time` field by field, so it is unaffected. status-answers B9-B11 pass.
+D7 probe (`probe-cat.ts`, tasks.server boundary-stubbed to one PERSONAL task on Thu 11-12, meetings/classes ok-empty):
+```
+category=undefined {"count":1,"complete":true,"sources":{...,"tasks":"ok (1)"},"answer_rule":"List EVERY item below for Thursday 2026-11-12 ..."}
+category=WORK      {"count":0,"complete":true,"sources":{...,"tasks":"ok (0)"},"answer_rule":"Every source was read and Thursday 2026-11-12 has nothing scheduled: no meetings, classes or tasks. You may say so."}
+```
+
+### D3 fix (failed task read keeps meetings) -- CONFIRMED (server + client code); UI render NOT RUN live
+`widgets.functions.ts` getScheduleWidget and `tools.ts` dispatchScheduleWidget both catch `getBoardTasks` and pass `tasksError` to
+`composeTodayItems`; payload `ok:false` + `error`. day-schedule D3 checks pass: 8 calendar rows kept, problem text names "task list" and the
+cause, no "No tasks are placed today" note. Client `components/JourneyWidgets.tsx` ScheduleWidget: line 1432 renders `<ReadError>` when
+`!data.ok`, then line 1434 renders `data.todayItems` independently of `ok`, and the empty line says "No items loaded - see the note above"
+when problems exist (1463). Not observed in a browser: the branch is not deployed (MERGE-PENDING-UAT).
+
+### Previously confirmed claims -- RE-CONFIRMED at reduced depth
+day-schedule.test.ts 83/83 (AC-1/6-12 merge, AC-23/24 late-night, AC-25 midnight crossing, AC-28 DST, AC-14..22 source statements,
+AC-19 chat path) and status-answers.test.ts 28/28 (priorities/backlog/up_next/overdue/blocked views, date:"all" every-day list) pass.
+
+### Blast radius challenged
+- Fireflies merge `8f74eea2`: `git diff --name-only 8f74eea2^1 8f74eea2` touches none of day-schedule/tools/widgets.functions/tasks.server/
+  schedule-brief/JourneyWidgets. No conflict.
+- `origin/main...origin/claude/vibrant-allen-p52snq` = 0 behind / 9 ahead; `git merge-tree` writes a clean tree.
+- INSIDE the radius and not excluded by the builder: the `answer_rule` text when a category is set (D7). The category reaches
+  `dayScheduleToolJson` only as a filtered count, so the empty-day wording is wrong for that path.
+
+### Live ACs
+AC-5, AC-29, AC-42, AC-44: NOT RUN -- branch not deployed. UI claims (Schedule tab and in-chat widget showing meetings, incl. when the task
+read fails) are owed a browser UAT after deploy: MERGE-PENDING-UAT.
