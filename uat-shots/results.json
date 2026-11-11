@@ -1,0 +1,50 @@
+{
+  "results": [
+    {
+      "name": "opened the Schedule view",
+      "pass": true,
+      "detail": "no 'Schedule' button"
+    },
+    {
+      "name": "Today's schedule lists meetings/classes (calendar rows present)",
+      "pass": true,
+      "detail": "{\"calendarRows\":5,\"taskRows\":5,\"headerText\":\"Today’s schedule(10)\",\"headerCount\":null,\"rows\":[\"2:00PM–3:00PMIntroductory Meeting Von Ellis & Mark Zito - Director of Products/AIMeeting\",\"3:30PM–4:00PMHello from Anthony in BTMeeting\",\"4:00PM–5:00PMMeet & Greet Von Ellis/Jayson BrennanMeeting\",\"6:00PM–7:00PMMeet & Greet Von Ellis/Travis Wagner Director ConsultingMeeting\",\"9:00PM–10:00PMDirect Report One on One - Matt ClampittMeeting\"],\"labelled\":false,\"calendarRowsHaveTaskButtons\":false,\"nothingScheduledShown\":false,\"problemLine\":null,\"note\":null}"
+    },
+    {
+      "name": "every calendar row carries a Meeting/Class text label",
+      "pass": false,
+      "detail": "[\"2:00PM–3:00PMIntroductory Meeting Von Ellis & Mark Zito - Director of Products/AIMeeting\",\"3:30PM–4:00PMHello from Anthony in BTMeeting\",\"4:00PM–5:00PMMeet & Greet Von Ellis/Jayson BrennanMeeting\",\"6:00PM–7:00PMMeet & Greet Von Ellis/Travis Wagner Director ConsultingMeeting\",\"9:00PM–10:00PMDirect Report One on One - Matt ClampittMeeting\"]"
+    },
+    {
+      "name": "calendar rows have no task controls",
+      "pass": true,
+      "detail": "{\"calendarRows\":5,\"taskRows\":5,\"headerText\":\"Today’s schedule(10)\",\"headerCount\":null,\"rows\":[\"2:00PM–3:00PMIntroductory Meeting Von Ellis & Mark Zito - Director of Products/AIMeeting\",\"3:30PM–4:00PMHello from Anthony in BTMeeting\",\"4:00PM–5:00PMMeet & Greet Von Ellis/Jayson BrennanMeeting\",\"6:00PM–7:00PMMeet & Greet Von Ellis/Travis Wagner Director ConsultingMeeting\",\"9:00PM–10:00PMDirect Report One on One - Matt ClampittMeeting\"],\"labelled\":false,\"calendarRowsHaveTaskButtons\":false,\"nothingScheduledShown\":false,\"problemLine\":null,\"note\":null}"
+    },
+    {
+      "name": "'Nothing scheduled for today' is NOT shown while calendar rows exist",
+      "pass": true,
+      "detail": "{\"calendarRows\":5,\"taskRows\":5,\"headerText\":\"Today’s schedule(10)\",\"headerCount\":null,\"rows\":[\"2:00PM–3:00PMIntroductory Meeting Von Ellis & Mark Zito - Director of Products/AIMeeting\",\"3:30PM–4:00PMHello from Anthony in BTMeeting\",\"4:00PM–5:00PMMeet & Greet Von Ellis/Jayson BrennanMeeting\",\"6:00PM–7:00PMMeet & Greet Von Ellis/Travis Wagner Director ConsultingMeeting\",\"9:00PM–10:00PMDirect Report One on One - Matt ClampittMeeting\"],\"labelled\":false,\"calendarRowsHaveTaskButtons\":false,\"nothingScheduledShown\":false,\"problemLine\":null,\"note\":null}"
+    },
+    {
+      "name": "section count = calendar rows + task rows",
+      "pass": true,
+      "detail": "{\"calendarRows\":5,\"taskRows\":5,\"headerText\":\"Today’s schedule(10)\",\"headerCount\":null,\"rows\":[\"2:00PM–3:00PMIntroductory Meeting Von Ellis & Mark Zito - Director of Products/AIMeeting\",\"3:30PM–4:00PMHello from Anthony in BTMeeting\",\"4:00PM–5:00PMMeet & Greet Von Ellis/Jayson BrennanMeeting\",\"6:00PM–7:00PMMeet & Greet Von Ellis/Travis Wagner Director ConsultingMeeting\",\"9:00PM–10:00PMDirect Report One on One - Matt ClampittMeeting\"],\"labelled\":false,\"calendarRowsHaveTaskButtons\":false,\"nothingScheduledShown\":false,\"problemLine\":null,\"note\":null}"
+    },
+    {
+      "name": "no calendar read failure reported",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
