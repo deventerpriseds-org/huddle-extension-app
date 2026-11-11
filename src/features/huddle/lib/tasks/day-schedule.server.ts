@@ -9,7 +9,7 @@
 //             rather than adding a second Graph / Nexus read (AC-30).
 // SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   docs/qc-evidence/AC-schedule-meetings.md (46 ACs, independent), scripts/day-schedule.test.ts.
-import { addDays, localDate, localDayBoundsUtc, type BriefItem } from "./schedule-brief.server";
+import { addDays, localDate, localDayBoundsUtc, localHour, type BriefItem } from "./schedule-brief.server";
 import type { ScheduleDayEntry, WidgetTaskRow } from "./widgets.server";
 
 export type DayItemKind = "meeting" | "class" | "task";
@@ -77,7 +77,11 @@ export function resolveDayArg(arg: unknown, nowMs: number, tz: string): string |
   let s = arg.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,!?]+$/, "");
   if (!s || /^(today|now|tonight|this (morning|afternoon|evening)|later today)$/.test(s)) return today;
   if (s === "all") return "all";
-  if (s === "tomorrow" || s === "tomorrow morning" || s === "tomorrow night") return addDays(today, 1);
+  // Up past midnight, "tomorrow" means the day that has just started (owner, 2026-11-11 00:39 ET: he asked
+  // for tomorrow, got Thursday, while the Schedule tab showed Wednesday). See LATE_NIGHT_END_HOUR.
+  if (s === "tomorrow" || s === "tomorrow morning" || s === "tomorrow night") {
+    return isLateNight(nowMs, tz) ? today : addDays(today, 1);
+  }
   if (s === "yesterday") return addDays(today, -1);
   // "Nov 12" / "November 12" / "12 Nov" -> this year's date (the user names days near now).
   const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
@@ -122,6 +126,14 @@ export function resolveDayArg(arg: unknown, nowMs: number, tz: string): string |
     return addDays(today, strictlyAfter && ahead === 0 ? 7 : ahead);
   }
   return null;
+}
+
+/** Before this local hour, the user has not slept yet: "tomorrow" is the calendar day that just began. */
+export const LATE_NIGHT_END_HOUR = 4;
+
+/** True between local midnight and LATE_NIGHT_END_HOUR. */
+export function isLateNight(nowMs: number, tz: string): boolean {
+  return localHour(nowMs, tz) < LATE_NIGHT_END_HOUR;
 }
 
 /** Weekday name of a local yyyy-mm-dd. */
