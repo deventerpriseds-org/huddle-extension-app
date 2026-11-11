@@ -211,6 +211,11 @@ for (const [arg, want] of [
     check(`D5 '${arg}' asked 2026-12-30 -> ${want}`, resolveDayArg(arg, DEC30, TZ) === want, String(resolveDayArg(arg, DEC30, TZ)));
   }
   check("D5 'nov 1' asked 2026-11-10 stays this year (recent past)", resolveDayArg("nov 1", NOW, TZ) === "2026-11-01");
+  // D8 (verifier loop 3): the nearest date works in both directions.
+  const JAN2 = Date.parse("2027-01-02T15:00:00Z");
+  check("D8 'dec 25' asked 2027-01-02 is the Christmas just past", resolveDayArg("dec 25", JAN2, TZ) === "2026-12-25", String(resolveDayArg("dec 25", JAN2, TZ)));
+  check("D8 'dec 31' asked 2027-01-02 -> 2026-12-31", resolveDayArg("dec 31", JAN2, TZ) === "2026-12-31", String(resolveDayArg("dec 31", JAN2, TZ)));
+  check("D8 'jan 15' asked 2027-01-02 stays this year", resolveDayArg("jan 15", JAN2, TZ) === "2027-01-15", String(resolveDayArg("jan 15", JAN2, TZ)));
 }
 // D6 (verifier loop 2): a word that merely STARTS with a month is not a month.
 for (const arg of ["junk 5", "mayday 3", "marvel 3", "decade 3", "augury 2", "ja 3"]) {
@@ -299,6 +304,9 @@ const wrow = (id: string, title: string, start: string): WidgetTaskRow => ({
   check("D7 answer_rule never says nothing is scheduled", !/nothing scheduled/.test(j.answer_rule) && /other task/.test(j.answer_rule), j.answer_rule);
   const all = dayScheduleToolJson({ date: "2026-11-12", tz: TZ, items, sources: { meetings: ok, classes: ok, tasks: { ok: true, count: 1 } }, category: "personal" }) as Record<string, any>;
   check("D7 a matching category keeps the task", all.count === 1 && all.other_tasks_outside_category === 0, JSON.stringify(all));
+  // D9 (verifier loop 3): calendar read FAILED + a category hid the only task -> never "no meetings".
+  const bad = dayScheduleToolJson({ date: "2026-11-12", tz: TZ, items, sources: { meetings: { ok: false, error: "Graph 503", count: 0 }, classes: ok, tasks: { ok: true, count: 1 } }, category: "WORK" }) as Record<string, any>;
+  check("D9 failed calendar + category: answer never claims 'no meetings'", !/No meetings/i.test(bad.answer_rule) && /NOT an empty day/.test(bad.answer_rule) && /other task/.test(bad.answer_rule), bad.answer_rule);
 }
 
 // --- AC-30: extend, don't duplicate ------------------------------------------------------------------------
