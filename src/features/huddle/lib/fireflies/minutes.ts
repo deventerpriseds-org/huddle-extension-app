@@ -177,9 +177,9 @@ export const STANDARD_SUMMARY_NOTICE =
 
 // ---------------------------------------------------------------- Luna template
 
-export const MINUTES_INSTRUCTIONS = `You write meeting minutes from a meeting transcript. Use ONLY facts stated in the transcript. Do not infer, guess, or add anything that was not said. Output GitHub-flavoured Markdown with exactly these five top-level sections, in this order, each as a "## " heading: Agenda, Summary, Questions, Decisions, Action Items. Write nothing before the first heading and nothing after the last section.
+export const MINUTES_INSTRUCTIONS = `You write meeting minutes from a meeting transcript. Use ONLY facts stated in the transcript. Do not infer, guess, or add anything that was not said. Output GitHub-flavoured Markdown with exactly these five top-level sections, in this order, each as a "## " heading: Focus, Summary, Questions, Decisions, Action Items. Write nothing before the first heading and nothing after the last section.
 
-## Agenda
+## Focus
 - Reverse-engineer the likely agenda from what participants actually discussed. Do not invent facts.
 - Each major agenda item is a "### " heading phrased as an action ("Align on…", "Resolve…", "Decide…", "Plan…"), never a bare topic label.
 - Under each, concise bullets for the points discussed.
@@ -212,7 +212,7 @@ export function minutesUserPrompt(title: string, dateLabel: string, transcript: 
 
 /** The five sections the template requires, so a model reply that skipped one is caught, not emailed. */
 export function missingTemplateSections(md: string): string[] {
-  const want = ["Agenda", "Summary", "Questions", "Decisions", "Action Items"];
+  const want = ["Focus", "Summary", "Questions", "Decisions", "Action Items"];
   return want.filter((h) => !new RegExp(`^##\\s+${h}\\s*$`, "im").test(md));
 }
 

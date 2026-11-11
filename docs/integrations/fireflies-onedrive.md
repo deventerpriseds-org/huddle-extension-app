@@ -10,7 +10,7 @@ independent things at the same time; either one can fail without stopping the ot
      (`summary.extended_sections`) when present. Otherwise it uses Fireflies' standard summary, and the
      email says so at the top, so it never claims the custom template was used.
    - **Luna from transcript.** Sends the full timestamped transcript to the `gpt-5.6-luna` tier through
-     `callOpenAIResponses`, with the five-section minutes template (Agenda / Summary / Questions /
+     `callOpenAIResponses`, with the five-section minutes template (Focus / Summary / Questions /
      Decisions / Action Items, `lib/fireflies/minutes.ts` `MINUTES_INSTRUCTIONS`). A reply missing any
      section is not emailed.
 

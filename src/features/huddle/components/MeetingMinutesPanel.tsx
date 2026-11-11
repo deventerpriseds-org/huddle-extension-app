@@ -147,7 +147,7 @@ export function MeetingMinutesPanel() {
           <span>
             Luna from transcript
             <span className="block text-xs text-muted-foreground">
-              Luna reads the full transcript and writes Agenda, Summary, Questions, Decisions and Action Items.
+              Luna reads the full transcript and writes Focus, Summary, Questions, Decisions and Action Items.
             </span>
           </span>
         </label>
