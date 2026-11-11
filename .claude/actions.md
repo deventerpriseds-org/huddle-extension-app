@@ -5007,6 +5007,7 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - **Open:** verifier verdict (three verifiers killed by container restarts 2026-11-11 — each time the session went idle after a backgrounded spawn; the fourth runs while the session stays busy); merge + deploy; live check of Iris's answer and the tab; owner confirmation.
 
 ## ACT:chat-format — clean, consistent chat message layout (owner-approved A, B, C, E; D held, 2026-11-05) — DEPLOYED 2026-11-08, NOT owner-confirmed
+- **2026-11-11 owner approved the run-on list fix ("Go ahead with your crammed messages fix").** `splitRunOnList` in `lib/chat-format.ts`: "intro: a; b; c" (3+ items after the last ": ", each <=200 chars) renders as intro + bullets, so messages stored before the list rule also read cleanly. Tests RUNON-1..8 (chat-format 106/106); UAT check `runOnParas` added to chat-format-checks.mjs. Shipped with PR #193.
 - [x] Diagnosis: Iris's 29 messages 11-03..05 (azure-pg-query run 42105101844). Same brief spaced two ways; raw `**bold**`; four "N more" phrasings; draft + tally in prose; quota error as Iris. Cause: HuddleView rendered `{m.text}` raw + layout delegated to the model.
 - [x] A renderer (`lib/chat-format.ts`, `components/ChatText.tsx`); B code-built + bounded brief/priority lists (`appendBlock`, `capFacts`); C draft only in the card; E failure replies as grey notices (row buttons kept).
 - [x] Independent verification loops 1-6 + late independent ACs (`docs/qc-evidence/VERIFY-chat-format-*.md`, `AC-chat-format.md`); every fix mutation-proved FIRED.

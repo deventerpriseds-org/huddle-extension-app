@@ -60,7 +60,10 @@ export function normalizeChatText(raw: string): string {
     }
     if (l.trim() !== "") {
       // A Markdown "\\" hard break at line end: the line break is already real, drop the backslash.
-      out.push(i < lines.length - 1 ? l.replace(/(^|[^\\])\\$/, "$1") : l);
+      const line = i < lines.length - 1 ? l.replace(/(^|[^\\])\\$/, "$1") : l;
+      // A list crammed into one sentence ("…shows: 11:00 AM A; 12:00 PM B; 1:00 PM C.") becomes the intro
+      // plus one bullet per item — this also cleans up messages stored before agents were told to bullet.
+      out.push(...splitRunOnList(line));
       continue;
     }
     let j = i + 1;
@@ -84,6 +87,30 @@ export function normalizeChatText(raw: string): string {
     out.push("");
   }
   return out.join("\n");
+}
+
+/**
+ * "Intro: item; item; item." -> ["Intro:", "• item", "• item", "• item"]. Owner, 2026-11-08: "The rebuild
+ * is done; 8 tasks were placed. Today's schedule now shows: 11:00 AM … ; 12:00 PM … ; …" was one block.
+ * Only the text after the LAST ": " (a colon followed by a space, so times like 11:00 never count) is
+ * split, and only when it holds 3+ items separated by "; ", none longer than 200 characters. Anything
+ * else is returned unchanged.
+ */
+export function splitRunOnList(line: string): string[] {
+  if (isListLine(line) || /^\s{0,3}(#|>)/.test(line)) return [line];
+  const colons = [...line.matchAll(/:\s+/g)];
+  const last = colons[colons.length - 1];
+  if (!last || last.index == null) return [line];
+  const intro = line.slice(0, last.index + 1).trimEnd();
+  const rest = line.slice(last.index + last[0].length).trim();
+  const items = rest
+    .split(/;\s+/)
+    .map((x) => x.trim().replace(/^and\s+/i, ""))
+    .filter(Boolean);
+  if (items.length < 3 || !intro.replace(/:$/, "").trim()) return [line];
+  if (items.some((x) => x.length > 200)) return [line];
+  items[items.length - 1] = items[items.length - 1].replace(/\.$/, "");
+  return [intro, ...items.map((x) => `• ${x}`)];
 }
 
 function isGreeting(line: string): boolean {

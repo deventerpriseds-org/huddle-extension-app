@@ -7,7 +7,9 @@
 // Run: bun scripts/chat-format.test.ts   (npm run test:chat-format)
 import {
   bulletSection,
+  splitRunOnList,
   inlineText,
+  type Inline,
   joinOpenerAndBlock,
   noticeText,
   normalizeChatText,
@@ -214,6 +216,20 @@ const EMAIL_BODY = "Hi Terra Team,\n\nThanks for the heads-up. I’ll stop by fo
   check("STYLE-1 house style no longer forbids bullet lists", house.length > 0 && !/no long bullet dumps/.test(house), house.slice(0, 200));
   check("STYLE-2 house style asks for 3+ item lists one per line as bullets", /list of three or more items[^"]*own line starting/.test(house));
   check("STYLE-3 the operating contract no longer says 'not headings or long lists'", !/not headings or " \+\s*"long lists/.test(hf));
+}
+
+// Owner, 2026-11-08: "You didn't run uat so you didn't catch that this block format was never cleaned up"
+{
+  const owner = "The rebuild is done; 8 tasks were placed. Today’s schedule now shows: 11:00 AM EST Subscribe to Aha! Product Management; 12:00 PM Research Slack AI Agents; 1:00 PM Research The Art of CTO Playbooks; 3:00 PM Fix the Nexus assignments section; 4:00 PM Create versioned paper workflow using Word Online or Google Docs; 5:15 PM Start AI certification course; 6:30 PM Test reading a repository and generating diagrams.";
+  const bl = parseChatBlocks(owner);
+  check("RUNON-1 the owner's run-on schedule renders as intro + one 7-item list", bl.map((b) => b.t).join(",") === "p,ul" && (bl[1] as { items: unknown[] }).items.length === 7, bl.map((b) => b.t));
+  check("RUNON-2 the intro keeps its own text (incl. its earlier semicolon)", inlineText((bl[0] as { lines: Inline[][] }).lines[0]) === "The rebuild is done; 8 tasks were placed. Today’s schedule now shows:");
+  check("RUNON-3 items keep their times; the last item loses only its final period", inlineText((bl[1] as { items: Inline[][] }).items[0]) === "11:00 AM EST Subscribe to Aha! Product Management" && inlineText((bl[1] as { items: Inline[][] }).items[6]) === "6:30 PM Test reading a repository and generating diagrams");
+  check("RUNON-4 two items stay a sentence", JSON.stringify(splitRunOnList("Two things: A; B.")) === JSON.stringify(["Two things: A; B."]));
+  check("RUNON-5 semicolons without a colon intro stay prose", JSON.stringify(splitRunOnList("I did A; then B; then C.")) === JSON.stringify(["I did A; then B; then C."]));
+  check("RUNON-6 times alone never count as the colon", JSON.stringify(splitRunOnList("Meet at 11:00; lunch at 12:30; done by 3:00.")) === JSON.stringify(["Meet at 11:00; lunch at 12:30; done by 3:00."]));
+  check("RUNON-7 '; and' on the last item is dropped", JSON.stringify(splitRunOnList("Today: A; B; and C.")) === JSON.stringify(["Today:", "• A", "• B", "• C"]));
+  check("RUNON-8 a very long clause is not split", splitRunOnList(`Note: ${"x".repeat(250)}; b; c`).length === 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

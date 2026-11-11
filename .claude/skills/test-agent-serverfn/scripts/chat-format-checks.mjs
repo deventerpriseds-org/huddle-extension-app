@@ -54,6 +54,9 @@ export const checks = [
       const paras = nodes.flatMap((n) => [...n.querySelectorAll(":scope > p")]);
       const lists = nodes.flatMap((n) => [...n.querySelectorAll(":scope > ul, :scope > ol")]);
       const rawBulletParas = paras.filter((p) => /^\s*[•·]\s/.test(p.textContent || "")).length;
+      // A list crammed into one sentence ("…shows: 11:00 AM A; 12:00 PM B; 1:00 PM C.") — the gap the first
+      // UAT missed (owner, 2026-11-08). Any paragraph with an "intro: a; b; c" shape fails.
+      const runOnParas = paras.filter((p) => /:\s(?:(?:[^;:]|:(?=\S)){1,200};\s+){2,}[^;]+$/.test((p.textContent || "").trim())).length;
       const literalBold = nodes.filter((n) => /\*\*[^*\s][^*]*\*\*/.test(n.textContent || "")).length;
       // A "blank line between items" would show as a list holding one item each, back to back.
       let singleItemListRuns = 0;
@@ -71,6 +74,7 @@ export const checks = [
         lists: lists.length,
         listItems: lists.reduce((s, l) => s + l.children.length, 0),
         rawBulletParas,
+        runOnParas,
         literalBold,
         singleItemListRuns,
         preWrapBubbles,
@@ -81,6 +85,7 @@ export const checks = [
     check("agent messages render through the new formatter (chat-text present)", m.chatText > 0, JSON.stringify(m));
     check("bullets render as real lists (at least one <ul>/<ol>)", m.lists > 0 && m.listItems > 0, JSON.stringify(m));
     check("no raw '• ' bullet paragraphs left", m.rawBulletParas === 0, JSON.stringify(m));
+    check("no list crammed into one sentence (intro: a; b; c)", m.runOnParas === 0, JSON.stringify(m));
     check("no literal **bold** markers visible", m.literalBold === 0, JSON.stringify(m));
     check("no blank line between list items (no back-to-back one-item lists)", m.singleItemListRuns === 0, JSON.stringify(m));
     check("agent bubble is no longer pre-wrap raw text", m.preWrapBubbles === 0, JSON.stringify(m));
