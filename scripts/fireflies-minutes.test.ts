@@ -179,7 +179,7 @@ async function deliver(body: string, header?: string) {
   return S.handleFirefliesWebhook(body, header ?? `sha256=${await sign(body)}`).catch((e: Error) => ({ thrown: e.message }));
 }
 const LUNA_OK =
-  "## Agenda\n### Align on launch\n- Dates\n## Summary\nThe team aligned on launch.\n### Launch plan\n- Ship Friday\n## Questions\n- When?\n  - Friday\n## Decisions\n### Launch\n- Ship Friday\n## Action Items\n### Next 2 weeks\n- Draft notes — Owner: **Sam** [01:05]\n### Beyond\n- None recorded.";
+  "## Focus\n### Align on launch\n- Dates\n## Summary\nThe team aligned on launch.\n### Launch plan\n- Ship Friday\n## Questions\n- When?\n  - Friday\n## Decisions\n### Launch\n- Ship Friday\n## Action Items\n### Next 2 weeks\n- Draft notes — Owner: **Sam** [01:05]\n### Beyond\n- None recorded.";
 const baseTranscript = (o: Row = {}) => ({
   id: "m1",
   title: "Launch sync",
@@ -253,9 +253,9 @@ t("C4 explicit empty list rejected", M.parseRecipients([]), null);
   t("E4 Luna mode calls Luna once on the luna model with the full transcript", [g3.ok && g3.kind, modelCalls, lastModelInput.startsWith("gpt-5.6-luna"), lastModelInput.includes("[01:05] Sam: Let's ship Friday.")], ["luna", 1, true, true]);
   const g4 = await S.generateMinutes("luna", baseTranscript({ sentences: [] }) as any);
   t("E5 Luna mode + missing transcript -> error, Luna NOT called, NO fallback to Fireflies summary", [g4, modelCalls], [{ ok: false, error: "transcript_missing", wait: true }, 1]);
-  modelReply = "## Agenda\n- x\n## Summary\nOne line.";
+  modelReply = "## Focus\n- x\n## Summary\nOne line.";
   const g5 = await S.generateMinutes("luna", baseTranscript() as any);
-  t("E6 Luna reply missing template sections is not emailed", g5.ok ? "ok" : g5.error, "luna_template_incomplete:Questions|Decisions|Action Items");
+  t("E6 Luna reply missing template sections is not emailed", g5.ok ? "ok" : g5.error, "luna_template_incomplete:Focus|Questions|Decisions|Action Items");
 }
 
 // ---------------------------------------------------------------- F: email plan + retry policy
