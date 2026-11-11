@@ -46,7 +46,7 @@ mock.module("../src/features/huddle/lib/fireflies/minutes-store.server", () => (
     if (!r) {
       db.meetings.set(id, {
         meeting_id: id, owner_email: owner, deliveries: 1, last_event: event, last_reprocessed_at: rep,
-        pending_email: true, pending_onedrive: true, attempts: 0, next_attempt_at: clock, lease_until: null,
+        pending_email: true, pending_onedrive: true, attempts: 0, next_attempt_at: clock, lease_until: null, queue_version: "1",
         email_status: null, content_hash: null, emails_sent: 0, onedrive_status: null, created_at: nowIso(),
       });
       return { queued: true };
@@ -58,6 +58,7 @@ mock.module("../src/features/huddle/lib/fireflies/minutes-store.server", () => (
     r.pending_onedrive = r.pending_onedrive || newer || r.onedrive_status !== "saved" || event === "meeting.summarized";
     r.pending_email = r.pending_email || newer || r.email_status !== "sent";
     r.attempts = 0;
+    r.queue_version = String(Number(r.queue_version) + 1);
     r.next_attempt_at = clock;
     return { queued: r.pending_email || r.pending_onedrive };
   },
@@ -67,35 +68,48 @@ mock.module("../src/features/huddle/lib/fireflies/minutes-store.server", () => (
       if (out.length >= limit) break;
       if ((r.pending_email || r.pending_onedrive) && r.next_attempt_at <= clock && (r.lease_until == null || r.lease_until < clock) && r.attempts < max) {
         r.lease_until = clock + 180_000; // synchronous check-and-set == the SQL's SKIP LOCKED + lease
-        r.attempts++;
         out.push({ ...r });
       }
     }
     return out;
   },
-  releaseMeeting: async (id: string, sec: number) => {
+  releaseMeeting: async (id: string, v: string, sec: number, failed: boolean) => {
     const r = db.meetings.get(id)!;
+    const cur = r.queue_version === v;
     r.lease_until = null;
-    r.next_attempt_at = clock + sec * 1000;
+    if (failed && cur) r.attempts++;
+    r.next_attempt_at = cur ? clock + sec * 1000 : clock;
+  },
+  giveUpIfExhausted: async (id: string, max = 12) => {
+    const r = db.meetings.get(id)!;
+    if (r.attempts < max || !(r.pending_email || r.pending_onedrive)) return false;
+    if (r.pending_email && r.email_status !== "sent") r.email_status = "failed";
+    if (r.pending_email) r.email_error = "gave_up:" + (r.email_error ?? "unknown");
+    r.pending_email = r.pending_onedrive = false;
+    return true;
   },
   recordMeetingInfo: async (id: string, title: string | null) => void (db.meetings.get(id)!.title = title),
-  recordEmailSent: async (id: string, x: Row) => {
+  recordEmailSent: async (id: string, v: string, x: Row) => {
     const r = db.meetings.get(id)!;
-    Object.assign(r, { email_status: "sent", pending_email: false, summary_kind: x.kind, content_hash: x.hash, email_error: null });
+    Object.assign(r, { email_status: "sent", summary_kind: x.kind, content_hash: x.hash, email_error: null });
+    if (r.queue_version === v) r.pending_email = false;
     r.emails_sent++;
   },
-  recordEmailNotNeeded: async (id: string) => void (db.meetings.get(id)!.pending_email = false),
-  recordEmailProblem: async (id: string, _s: string, err: string, final: boolean) => {
+  recordEmailNotNeeded: async (id: string, v: string) => {
+    const r = db.meetings.get(id)!;
+    if (r.queue_version === v) r.pending_email = false;
+  },
+  recordEmailProblem: async (id: string, v: string, _s: string, err: string, final: boolean) => {
     const r = db.meetings.get(id)!;
     r.email_error = err;
-    if (final) r.pending_email = false;
+    if (final && r.queue_version === v) r.pending_email = false;
     if (r.email_status !== "sent" && final) r.email_status = "failed";
   },
-  recordOneDrive: async (id: string, x: Row) => {
+  recordOneDrive: async (id: string, v: string, x: Row) => {
     const r = db.meetings.get(id)!;
     r.onedrive_status = x.ok ? "saved" : "failed";
     r.onedrive_path = x.path ?? r.onedrive_path;
-    if (x.ok) r.pending_onedrive = false;
+    if (x.ok && r.queue_version === v) r.pending_onedrive = false;
   },
   listRecentMeetings: async () => [...db.meetings.values()],
 }));

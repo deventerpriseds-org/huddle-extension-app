@@ -383,22 +383,23 @@ export type EmailOutcome =
   | { status: "failed"; error: string; final: boolean };
 
 async function emailBranch(
-  row: { meeting_id: string; email_status: string | null; content_hash: string | null; created_at: string },
+  row: { meeting_id: string; email_status: string | null; content_hash: string | null; created_at: string; queue_version: string },
   t: FfTranscript,
   owner: string,
   nowMs: number,
 ): Promise<EmailOutcome> {
   const store = await import("./minutes-store.server");
   const id = row.meeting_id;
+  const v = String(row.queue_version);
   const settings = await loadMinutesSettings(owner); // read at processing time, every pass
   const hash = meetingInputHash(t);
   const plan = planEmail(row, hash, settings.updateEmails);
   if (plan === "not_needed") {
-    await store.recordEmailNotNeeded(id);
+    await store.recordEmailNotNeeded(id, v);
     return { status: "not_needed" };
   }
   if (!settings.recipients?.length) {
-    await store.recordEmailProblem(id, settings.source, "recipients_invalid", true);
+    await store.recordEmailProblem(id, v, settings.source, "recipients_invalid", true);
     return { status: "failed", error: "recipients_invalid", final: true };
   }
   const gen = await generateMinutes(settings.source, t);
@@ -406,11 +407,11 @@ async function emailBranch(
     const age = nowMs - (Date.parse(row.created_at) || nowMs);
     const window = gen.error === "transcript_missing" ? TRANSCRIPT_WAIT_MS : SUMMARY_WAIT_MS;
     if (gen.wait && age < window) {
-      await store.recordEmailProblem(id, settings.source, "waiting:" + gen.error, false);
+      await store.recordEmailProblem(id, v, settings.source, "waiting:" + gen.error, false);
       return { status: "waiting", reason: gen.error };
     }
     const final = !gen.transient;
-    await store.recordEmailProblem(id, settings.source, gen.error, final);
+    await store.recordEmailProblem(id, v, settings.source, gen.error, final);
     return { status: "failed", error: gen.error, final };
   }
   const update = plan === "send_update";
@@ -431,12 +432,12 @@ async function emailBranch(
     callerEmail: owner,
   });
   if (sent.ok) {
-    await store.recordEmailSent(id, { source: settings.source, kind: gen.kind, hash, recipients: settings.recipients });
+    await store.recordEmailSent(id, v, { source: settings.source, kind: gen.kind, hash, recipients: settings.recipients });
     return { status: "sent", kind: gen.kind, update };
   }
   const error = safeSendError(sent.error, sent.gateRefused);
   const final = !!sent.gateRefused; // the gate will refuse again; a Graph/network failure may recover
-  await store.recordEmailProblem(id, settings.source, error, final);
+  await store.recordEmailProblem(id, v, settings.source, error, final);
   return { status: "failed", error, final };
 }
 
@@ -447,13 +448,19 @@ export async function processMeeting(
 ): Promise<{ email?: EmailOutcome; onedrive?: { ok: boolean; path?: string; error?: string }; error?: string }> {
   const store = await import("./minutes-store.server");
   const id = row.meeting_id;
+  const v = String(row.queue_version);
+  const release = async (retrySec: number, failed: boolean) => {
+    await store.releaseMeeting(id, v, retrySec, failed).catch(() => {});
+    if (failed) await store.giveUpIfExhausted(id).catch(() => false);
+  };
   let t: FirefliesTranscript;
   try {
     t = (await fetchTranscript(id)).transcript;
   } catch (e) {
     const code = errCode(e, "fireflies_fetch_failed");
     console.error("[fireflies] fetch failed", id, code);
-    await store.releaseMeeting(id, retryDelaySec(row.attempts)).catch(() => {});
+    await store.recordEmailProblem(id, v, "unknown", code, false).catch(() => {});
+    await release(retryDelaySec(row.attempts + 1), true);
     return { error: code };
   }
   const ms = meetingDateMs(t as FfTranscript);
@@ -466,7 +473,7 @@ export async function processMeeting(
     row.pending_onedrive
       ? (async () => {
           const path = await saveTranscript(t, id);
-          await store.recordOneDrive(id, { ok: true, path });
+          await store.recordOneDrive(id, v, { ok: true, path });
           return { ok: true as const, path };
         })()
       : Promise.resolve(undefined),
@@ -478,17 +485,20 @@ export async function processMeeting(
   if (driveR.status === "fulfilled") onedrive = driveR.value;
   else {
     onedrive = { ok: false, error: errCode(driveR.reason, "onedrive_failed") };
-    await store.recordOneDrive(id, onedrive).catch(() => {});
+    await store.recordOneDrive(id, v, onedrive).catch(() => {});
   }
   if (emailR.status === "rejected") {
-    await store.recordEmailProblem(id, "unknown", (email as { error: string }).error, false).catch(() => {});
+    await store.recordEmailProblem(id, v, "unknown", (email as { error: string }).error, false).catch(() => {});
   }
   if (email?.status === "failed") console.error("[fireflies] minutes email failed", id, email.error);
   if (onedrive && !onedrive.ok) console.error("[fireflies] onedrive save failed", id, onedrive.error);
 
-  // Still-pending work comes back on the next due pass; waiting for a summary polls every 5 minutes.
-  const retry = email?.status === "waiting" ? 300 : retryDelaySec(row.attempts);
-  await store.releaseMeeting(id, retry).catch(() => {});
+  // Still-pending work comes back on the next due pass. Waiting for Fireflies' summary polls every 5
+  // minutes and is NOT a failure (the 3h window decides when it gives up); a real failure backs off and
+  // counts toward the attempt cap, after which the row records a visible final failure.
+  const failed = (email?.status === "failed" && !email.final) || (onedrive ? !onedrive.ok : false);
+  const retry = failed ? retryDelaySec(row.attempts + 1) : 300;
+  await release(retry, failed);
   return { email, onedrive };
 }
 
