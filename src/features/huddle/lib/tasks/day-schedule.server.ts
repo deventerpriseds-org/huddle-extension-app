@@ -114,7 +114,12 @@ function ms(iso: string | null | undefined): number | null {
 /** Does a calendar item belong on local `date`? Timed items overlap the local day; all-day items match their date. */
 function onDay(item: { startIso: string | null; endIso: string | null; day?: string }, date: string, tz: string): boolean {
   const s = ms(item.startIso);
-  if (s === null) return item.day ? item.day === date : true; // an all-day item read for this one day
+  // An all-day item carries only its START date (Graph/feed give no end day here), and every reader is
+  // scoped to one local day, so an all-day item returned for `date` overlaps it. A multi-day one (a
+  // conference 11-09..11-11 read for 11-10) arrives with day 11-09 and MUST still show on 11-10 -- an
+  // equality test dropped it and the day was then declared empty (VERIFY-schedule-meetings-1 F1).
+  // Only an all-day item dated AFTER this day cannot belong to it.
+  if (s === null) return !item.day || item.day <= date;
   const { startIso, endIso } = localDayBoundsUtc(date, tz);
   const dayStart = Date.parse(startIso);
   const dayEnd = Date.parse(endIso);

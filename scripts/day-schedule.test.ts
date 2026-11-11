@@ -207,6 +207,12 @@ check("date 'all' keeps the old every-day path", resolveDayArg("all", NOW, TZ) =
   const prev = mergeDayItems({ date: "2026-11-09", tz: TZ, meetings: [allDay], classes: [], tasks: [] });
   const same = mergeDayItems({ date: DATE, tz: TZ, meetings: [allDay], classes: [], tasks: [] });
   check("AC-26 all-day event stays on its own date", prev.length === 0 && same.length === 1 && same[0].allDay);
+  // F1 (verifier loop 1): a multi-day all-day event read for its 2nd day arrives with its START date.
+  const conf: BriefItem = { sourceId: "conf", kind: "meeting", title: "Conference", startIso: null, endIso: null, location: null, day: "2026-11-09" };
+  const day2 = await readDaySchedule(DATE, TZ, { meetings: async () => ({ items: [conf] }), classes: async () => ({ items: [] }), tasks: async () => [] });
+  const j2 = dayScheduleToolJson({ date: DATE, tz: TZ, ...day2 }) as Record<string, any>;
+  check("F1 a multi-day all-day event still shows on its second day", j2.count === 1 && j2.items[0].all_day === true, JSON.stringify(j2.items));
+  check("F1 that day is not declared empty", !/nothing scheduled/.test(j2.answer_rule), j2.answer_rule);
   const j = dayScheduleToolJson({
     date: DATE, tz: TZ, items: same,
     sources: { meetings: { ok: true, count: 1 }, classes: { ok: true, count: 0 }, tasks: { ok: true, count: 0 } },
