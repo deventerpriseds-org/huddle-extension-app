@@ -190,6 +190,12 @@ check("AC-43 a full Graph page marks meetings possibly cut", !isComplete({ m: { 
 check("AC-23 00:30 ET is that day, not yesterday", resolveDayArg(undefined, Date.parse("2026-11-10T05:30:00Z"), TZ) === "2026-11-10");
 check("AC-24 23:30 ET is still that day", resolveDayArg("today", Date.parse("2026-11-11T04:30:00Z"), TZ) === "2026-11-10");
 check("AC-27 tomorrow", resolveDayArg("tomorrow", NOW, TZ) === "2026-11-11");
+// Owner 2026-11-11 00:39 ET: "What is my schedule for tomorrow?" got Thursday while the tab showed Wednesday.
+check("LATE-1 'tomorrow' at 00:39 ET is the day that just started", resolveDayArg("tomorrow", Date.parse("2026-11-11T05:39:00Z"), TZ) === "2026-11-11", String(resolveDayArg("tomorrow", Date.parse("2026-11-11T05:39:00Z"), TZ)));
+check("LATE-2 'tomorrow' at 03:59 ET still the same day", resolveDayArg("tomorrow", Date.parse("2026-11-11T08:59:00Z"), TZ) === "2026-11-11");
+check("LATE-3 'tomorrow' at 04:00 ET is the next day", resolveDayArg("tomorrow", Date.parse("2026-11-11T09:00:00Z"), TZ) === "2026-11-12");
+check("LATE-4 'tomorrow' at 23:30 ET is the next day", resolveDayArg("tomorrow", Date.parse("2026-11-11T04:30:00Z"), TZ) === "2026-11-11");
+check("LATE-5 'today' at 00:39 ET is unchanged", resolveDayArg("today", Date.parse("2026-11-11T05:39:00Z"), TZ) === "2026-11-11");
 check("AC-27 thursday (next one)", resolveDayArg("Thursday", NOW, TZ) === "2026-11-12");
 check("AC-27 tuesday today counts", resolveDayArg("tue", NOW, TZ) === "2026-11-10");
 check("AC-27 explicit date", resolveDayArg("2026-11-13", NOW, TZ) === "2026-11-13");
