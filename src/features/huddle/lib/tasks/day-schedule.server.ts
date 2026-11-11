@@ -25,6 +25,8 @@ export interface DayItem {
   location: string | null;
   /** The journey task id — set on task rows only, so task actions (done, doing, checklist) still work. */
   taskId?: string;
+  /** Task rows only: the task's category, so a category question can narrow tasks without hiding them. */
+  category?: string | null;
   status?: string | null;
   /** Calendar source id (Graph event id / class session id). */
   sourceId?: string;
@@ -54,6 +56,7 @@ export interface TaskForDay {
   startIso: string | null;
   endIso?: string | null;
   status?: string | null;
+  category?: string | null;
 }
 
 /** Per-source time bound (AC-20/41). The three sources run in parallel, so this is also the tool's bound. */
@@ -77,13 +80,22 @@ export function resolveDayArg(arg: unknown, nowMs: number, tz: string): string |
   if (s === "tomorrow" || s === "tomorrow morning" || s === "tomorrow night") return addDays(today, 1);
   if (s === "yesterday") return addDays(today, -1);
   // "Nov 12" / "November 12" / "12 Nov" -> this year's date (the user names days near now).
-  const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
   const md = s.match(/^([a-z]{3,9})\.? (\d{1,2})(?:st|nd|rd|th)?$/) || s.match(/^(\d{1,2})(?:st|nd|rd|th)? ([a-z]{3,9})$/);
   if (md) {
     const [mon, day] = /^\d/.test(md[1]) ? [md[2], md[1]] : [md[1], md[2]];
-    const mi = MONTHS.findIndex((m) => mon.startsWith(m) && (mon.length === 3 || mon.startsWith(m)));
+    // The word must BE a month or a prefix of one ("nov", "sept", "november") -- never merely start with
+    // one ("junk", "mayday", "marvel" are rejected; verifier loop 2 D6).
+    const mi = mon.length >= 3 ? MONTHS.findIndex((m) => m.startsWith(mon)) : -1;
     if (mi >= 0) {
-      const iso = `${today.slice(0, 4)}-${String(mi + 1).padStart(2, "0")}-${String(Number(day)).padStart(2, "0")}`;
+      const mm = String(mi + 1).padStart(2, "0");
+      const dd = String(Number(day)).padStart(2, "0");
+      const thisYear = Number(today.slice(0, 4));
+      // The NEAREST such date: "jan 3" asked on Dec 30 is next January, not last (D5). A date more than
+      // ~6 months behind today is read as next year's.
+      let iso = `${thisYear}-${mm}-${dd}`;
+      const back = Date.parse(`${today}T12:00:00Z`) - Date.parse(`${iso}T12:00:00Z`);
+      if (back > 183 * 86_400_000) iso = `${thisYear + 1}-${mm}-${dd}`;
       return resolveDayArg(iso, nowMs, tz);
     }
   }
@@ -212,6 +224,7 @@ export function mergeDayItems(input: {
       location: null,
       taskId: t.id,
       status: t.status ?? null,
+      category: t.category ?? null,
     };
     // The task IS the calendar block -> replace the block with the task (keeps the location).
     const twin = ts === null ? -1 : out.findIndex(
@@ -371,8 +384,13 @@ export function dayScheduleToolJson(input: {
   items: DayItem[];
   sources: { meetings: SourceStatus; classes: SourceStatus; tasks: SourceStatus };
   meetingsMayBeCut?: boolean;
+  /** Narrow TASK rows to this category. Meetings and classes are always kept; hidden tasks are counted. */
+  category?: string;
 }): Record<string, unknown> {
-  const { date, tz, items, sources } = input;
+  const { date, tz, sources } = input;
+  const want = input.category?.trim().toUpperCase();
+  const outside = want ? input.items.filter((i) => i.kind === "task" && String(i.category ?? "").toUpperCase() !== want) : [];
+  const items = want ? input.items.filter((i) => !outside.includes(i)) : input.items;
   const complete = isComplete(sources, input.meetingsMayBeCut);
   const problems = sourceProblems(sources, input.meetingsMayBeCut);
   const weekday = weekdayOf(date);
@@ -386,15 +404,23 @@ export function dayScheduleToolJson(input: {
     /* zone label is cosmetic */
   }
   const label = (k: DayItemKind) => (k === "meeting" ? "Meeting" : k === "class" ? "Class" : "Task");
+  const otherNote = outside.length
+    ? ` ${outside.length} other task(s) outside ${want} are also scheduled that day (not listed) — say so; never call the day empty or free.`
+    : "";
   const answer_rule = !items.length
-    ? complete
+    ? outside.length
+      ? `No meetings or classes, and no ${want} tasks, on ${weekday} ${date}.${otherNote}` +
+        (complete ? "" : ` ALSO say: ${problems.join(" ")}`)
+      : complete
       ? `Every source was read and ${weekday} ${date} has nothing scheduled: no meetings, classes or tasks. You may say so.`
       : `NOT an empty day: ${problems.join(" ")} Say plainly which source you couldn't read and that items may be missing. NEVER say the day is empty, clear or free.`
     : `List EVERY item below for ${weekday} ${date}, in this order, with its time and whether it is a meeting, class or task. Times are already local (${tzAbbr || tz}) — state them as given.` +
+      otherNote +
       (complete ? "" : ` ALSO say: ${problems.join(" ")} Never imply the list is complete.`);
   return {
     view: "scheduled",
     date,
+    ...(want ? { category: input.category, other_tasks_outside_category: outside.length } : {}),
     weekday,
     timezone: tz,
     complete,
@@ -447,19 +473,19 @@ export async function readDaySchedule(
 }
 
 /** The real task reader for one local day — the brief's own query (open, non-parked, start_time in the day). */
-export function realTaskReader(userEmail: string, category?: string): (date: string, tz: string) => Promise<TaskForDay[]> {
+export function realTaskReader(userEmail: string): (date: string, tz: string) => Promise<TaskForDay[]> {
   return async (date, tz) => {
     const { getScheduledTasksBetween } = await import("./tasks.server");
     const { startIso, endIso } = localDayBoundsUtc(date, tz);
-    const want = category?.trim().toUpperCase();
-    const rows = (await getScheduledTasksBetween(userEmail, startIso, endIso)).filter(
-      (r) => !want || String(r.category ?? "").toUpperCase() === want,
-    );
+    // ALL the day's tasks, with their category. A category question is narrowed in dayScheduleToolJson,
+    // AFTER counting, so a filtered-out task can never make the day read as empty (verifier loop 2 D7).
+    const rows = await getScheduledTasksBetween(userEmail, startIso, endIso);
     return rows.map((r) => ({
       id: r.id,
       title: String(r.title ?? "").trim() || "(untitled)",
       startIso: r.start_time ? new Date(r.start_time).toISOString() : null,
       status: r.status,
+      category: r.category ?? null,
     }));
   };
 }
