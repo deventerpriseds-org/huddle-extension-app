@@ -309,7 +309,11 @@ jobs:
                   value: "${ENC_KEY}"
                 ${GHCR_SECRET_YAML}
             template:
-              scale: { minReplicas: 1, maxReplicas: 1 }
+              # minReplicas 0 = scale to zero when idle (owner-approved 2026-11-11). At 1 each connector
+              # billed ~$18.50/mo, 94% of it IDLE time (Oct-2026 Cost Management, nexus-hub
+              # docs/azure-cost/REPORT-2026-10.md). Sign-in state lives in Postgres (obot-dsn), so a
+              # scale-down does not log anyone out; the cost is a cold start on the first call after idle.
+              scale: { minReplicas: 0, maxReplicas: 1 }
               containers:
                 - name: pgmcp
                   image: crystaldba/postgres-mcp:latest
