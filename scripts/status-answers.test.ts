@@ -54,7 +54,7 @@ mock.module("../src/features/huddle/lib/tasks/tasks.server.ts", () => ({
   // The day view's task read (2026-11-10): same rows, filtered to the local day like the SQL does.
   getScheduledTasksBetween: async (_email: string, startIso: string, endIso: string) =>
     ALL.filter((r) => r.status !== "DONE" && r.status !== "BLOCKED" && r.start_time && r.start_time >= startIso && r.start_time < endIso)
-      .map((r) => ({ id: r.id, title: r.title, start_time: r.start_time, status: r.status })),
+      .map((r) => ({ id: r.id, title: r.title, start_time: r.start_time, status: r.status, category: r.category })),
   getTaskBlockers: async () => new Map([["blocked-cert", { reason: "Waiting on employer reimbursement approval", agentId: "elle-rowan" }]]),
 }));
 mock.module("../src/features/huddle/lib/tasks/turns.server.ts", () => ({
@@ -96,6 +96,14 @@ const run = async (args: Record<string, unknown>, tz = "America/New_York") =>
   t("B7 the day view returns today's 6 tasks and no later-day task",
     today.every((x) => ids.includes(x.id)) && !ids.some((id: string) => String(id).startsWith("later-")), JSON.stringify(ids));
   t("B8 calendar not readable here, so the day is NOT claimed complete", out.complete === false, String(out.complete));
+  // D2 (verifier loop 1): a category must never bring back the tasks-only, every-day answer.
+  const cat = await run({ view: "scheduled", date: "2026-11-04", category: "NOPE" });
+  t("B9 a category keeps the one-day answer (items + complete flag, no every-day ranking)",
+    Array.isArray(cat.items) && typeof cat.complete === "boolean" && cat.category === "NOPE" && !(cat.ranked as any[] | undefined)?.length,
+    JSON.stringify({ items: cat.items, ranked: cat.ranked, complete: cat.complete }));
+  t("B10 the category narrows the day's TASKS", (cat.items as any[]).every((i) => i.kind !== "Task"), JSON.stringify(cat.items));
+  const work = await run({ view: "scheduled", date: "2026-11-04", category: "work" });
+  t("B11 a matching category keeps that day's tasks (6 WORK tasks)", (work.items as any[]).filter((i) => i.kind === "Task").length === 6, JSON.stringify(work.items));
 }
 
 // ── Ranking must NOT change (regression: priorities view, default limit) ────────────────────────

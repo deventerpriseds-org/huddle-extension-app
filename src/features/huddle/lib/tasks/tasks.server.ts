@@ -558,12 +558,12 @@ export async function getScheduledTasksBetween(
   userEmail: string,
   startIso: string,
   endIso: string,
-): Promise<{ id: string; title: string; start_time: string | null; status: string | null }[]> {
+): Promise<{ id: string; title: string; start_time: string | null; status: string | null; category?: string | null }[]> {
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { emails } = await resolveScopeByEmail(userEmail);
-  const { rows } = await getPool().query<{ id: string; title: string; start_time: string | null; status: string | null }>(
-    `SELECT id, title, start_time, status
+  const { rows } = await getPool().query<{ id: string; title: string; start_time: string | null; status: string | null; category: string | null }>(
+    `SELECT id, title, start_time, status, category
        FROM tasks.journey_tasks
       WHERE lower(user_email) = ANY($1)
         AND start_time >= $2 AND start_time < $3
