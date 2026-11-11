@@ -80,8 +80,11 @@ function fakeMicInit() {
       ? ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
       : [],
   });
+  // The app renders clock times in the VIEWER's zone. A GitHub runner is UTC, so without this every
+  // screenshot read 5 hours off the owner's phone (2026-11-11, run 42966839730). UAT_TIMEZONE overrides.
   const context = await browser.newContext({
     viewport: VIEWPORT,
+    timezoneId: process.env.UAT_TIMEZONE || "America/New_York",
     ...(FAKE_MIC ? { permissions: ["microphone"] } : {}),
   });
   if (FAKE_MIC) await context.addInitScript(fakeMicInit);
