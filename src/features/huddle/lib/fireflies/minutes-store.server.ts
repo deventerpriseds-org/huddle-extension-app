@@ -61,6 +61,12 @@ ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS last_reprocessed_at
 ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
 ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
+-- Verify loop 2 (2026-11-11). D7: a delivery that arrived WHILE a worker held the lease was wiped when the
+-- worker cleared the pending flags. queue_version is bumped by every delivery; a worker clears a flag only
+-- if the version it claimed is still current, otherwise the meeting is simply worked again. D8: attempts
+-- now count FAILED passes only (a "waiting for the summary" poll is not a failure), and running out of
+-- attempts records a final, visible failure instead of leaving the row stuck.
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS queue_version BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS fireflies_meetings_due_idx ON chat.fireflies_meetings(next_attempt_at)
   WHERE pending_email OR pending_onedrive;
 `;
@@ -130,6 +136,7 @@ export interface MeetingRow {
   last_event: string | null;
   last_reprocessed_at: string | null;
   attempts: number;
+  queue_version: string; // BIGINT comes back as a string from pg
   created_at: string;
   updated_at: string;
 }
@@ -166,6 +173,7 @@ export async function recordWebhook(
              AND EXCLUDED.last_reprocessed_at > COALESCE(chat.fireflies_meetings.last_reprocessed_at, 0))
          OR chat.fireflies_meetings.email_status IS DISTINCT FROM 'sent',
        attempts = 0,
+       queue_version = chat.fireflies_meetings.queue_version + 1,
        next_attempt_at = now(),
        updated_at = now()
      RETURNING (pending_email OR pending_onedrive) AS queued`,
@@ -179,8 +187,7 @@ export async function recordWebhook(
 export async function claimDueMeetings(limit: number, maxAttempts = 12): Promise<MeetingRow[]> {
   await ensureBootstrapped();
   const r = await getPool().query<MeetingRow>(
-    `UPDATE chat.fireflies_meetings m SET lease_until = now() + interval '3 minutes', attempts = m.attempts + 1,
-        updated_at = now()
+    `UPDATE chat.fireflies_meetings m SET lease_until = now() + interval '3 minutes', updated_at = now()
       WHERE m.meeting_id IN (
         SELECT meeting_id FROM chat.fireflies_meetings
          WHERE (pending_email OR pending_onedrive) AND next_attempt_at <= now()
@@ -192,14 +199,42 @@ export async function claimDueMeetings(limit: number, maxAttempts = 12): Promise
   return r.rows;
 }
 
-/** Release the lease; schedule the next attempt if anything is still pending. */
-export async function releaseMeeting(meetingId: string, retryInSec: number): Promise<void> {
+/** Release the lease. `failed` = this pass hit a failure worth retrying (counts toward the attempt cap);
+ *  a pass that is only WAITING for Fireflies (summary not generated yet) passes failed=false. If a new
+ *  delivery arrived while the lease was held (queue_version moved), the meeting is due again at once. */
+export async function releaseMeeting(
+  meetingId: string,
+  claimedVersion: string,
+  retryInSec: number,
+  failed: boolean,
+): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
     `UPDATE chat.fireflies_meetings SET lease_until = NULL,
-        next_attempt_at = now() + make_interval(secs => $2), updated_at = now() WHERE meeting_id = $1`,
-    [meetingId, retryInSec],
+        attempts = attempts + CASE WHEN $4 AND queue_version = $2::bigint THEN 1 ELSE 0 END,
+        next_attempt_at = CASE WHEN queue_version = $2::bigint THEN now() + make_interval(secs => $3) ELSE now() END,
+        updated_at = now()
+      WHERE meeting_id = $1`,
+    [meetingId, claimedVersion, retryInSec, failed],
   );
+}
+
+/** Out of attempts: stop retrying and leave a VISIBLE final failure (never a silently stuck row). A
+ *  delivery that arrived meanwhile reset attempts, so this only fires when nothing new came in. */
+export async function giveUpIfExhausted(meetingId: string, maxAttempts = 12): Promise<boolean> {
+  await ensureBootstrapped();
+  const r = await getPool().query(
+    `UPDATE chat.fireflies_meetings SET
+        email_status = CASE WHEN pending_email AND email_status IS DISTINCT FROM 'sent' THEN 'failed' ELSE email_status END,
+        email_error = CASE WHEN pending_email THEN 'gave_up:' || COALESCE(email_error, 'unknown') ELSE email_error END,
+        onedrive_status = CASE WHEN pending_onedrive THEN 'failed' ELSE onedrive_status END,
+        onedrive_error = CASE WHEN pending_onedrive THEN 'gave_up:' || COALESCE(onedrive_error, 'unknown') ELSE onedrive_error END,
+        pending_email = false, pending_onedrive = false, updated_at = now()
+      WHERE meeting_id = $1 AND attempts >= $2 AND (pending_email OR pending_onedrive)
+      RETURNING meeting_id`,
+    [meetingId, maxAttempts],
+  );
+  return (r.rowCount ?? 0) > 0;
 }
 
 export async function recordMeetingInfo(meetingId: string, title: string | null, meetingAt: string | null): Promise<void> {
@@ -213,23 +248,26 @@ export async function recordMeetingInfo(meetingId: string, title: string | null,
 
 export async function recordEmailSent(
   meetingId: string,
+  claimedVersion: string,
   r: { source: string; kind: string; hash: string; recipients: string[] },
 ): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
-    `UPDATE chat.fireflies_meetings SET email_status = 'sent', pending_email = false, minutes_source = $2,
+    `UPDATE chat.fireflies_meetings SET email_status = 'sent',
+        pending_email = CASE WHEN queue_version = $6::bigint THEN false ELSE pending_email END, minutes_source = $2,
         summary_kind = $3, content_hash = $4, email_recipients = $5, email_error = NULL, email_sent_at = now(),
         emails_sent = emails_sent + 1, updated_at = now() WHERE meeting_id = $1`,
-    [meetingId, r.source, r.kind, r.hash, r.recipients],
+    [meetingId, r.source, r.kind, r.hash, r.recipients, claimedVersion],
   );
 }
 
 /** Nothing to email (a retry of sent minutes, or a resend while update emails are off). */
-export async function recordEmailNotNeeded(meetingId: string): Promise<void> {
+export async function recordEmailNotNeeded(meetingId: string, claimedVersion: string): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
-    `UPDATE chat.fireflies_meetings SET pending_email = false, updated_at = now() WHERE meeting_id = $1`,
-    [meetingId],
+    `UPDATE chat.fireflies_meetings SET pending_email = CASE WHEN queue_version = $2::bigint THEN false ELSE pending_email END,
+        updated_at = now() WHERE meeting_id = $1`,
+    [meetingId, claimedVersion],
   );
 }
 
@@ -237,6 +275,7 @@ export async function recordEmailNotNeeded(meetingId: string): Promise<void> {
  *  never overwritten. */
 export async function recordEmailProblem(
   meetingId: string,
+  claimedVersion: string,
   source: string,
   error: string,
   final: boolean,
@@ -244,21 +283,26 @@ export async function recordEmailProblem(
   await ensureBootstrapped();
   await getPool().query(
     `UPDATE chat.fireflies_meetings SET minutes_source = $2, email_error = $3,
-        pending_email = CASE WHEN $4 THEN false ELSE pending_email END,
+        pending_email = CASE WHEN $4 AND queue_version = $5::bigint THEN false ELSE pending_email END,
         email_status = CASE WHEN email_status = 'sent' THEN email_status
                             WHEN $4 THEN 'failed' ELSE email_status END,
         updated_at = now() WHERE meeting_id = $1`,
-    [meetingId, source, error.slice(0, 200), final],
+    [meetingId, source, error.slice(0, 200), final, claimedVersion],
   );
 }
 
-export async function recordOneDrive(meetingId: string, r: { ok: boolean; path?: string; error?: string }): Promise<void> {
+export async function recordOneDrive(
+  meetingId: string,
+  claimedVersion: string,
+  r: { ok: boolean; path?: string; error?: string },
+): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
     `UPDATE chat.fireflies_meetings SET onedrive_status = $2, onedrive_path = COALESCE($3, onedrive_path),
-       onedrive_error = $4, pending_onedrive = CASE WHEN $2 = 'saved' THEN false ELSE pending_onedrive END,
+       onedrive_error = $4,
+       pending_onedrive = CASE WHEN $2 = 'saved' AND queue_version = $5::bigint THEN false ELSE pending_onedrive END,
        updated_at = now() WHERE meeting_id = $1`,
-    [meetingId, r.ok ? "saved" : "failed", r.path ?? null, r.ok ? null : (r.error ?? "failed").slice(0, 200)],
+    [meetingId, r.ok ? "saved" : "failed", r.path ?? null, r.ok ? null : (r.error ?? "failed").slice(0, 200), claimedVersion],
   );
 }
 
