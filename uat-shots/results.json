@@ -1,0 +1,60 @@
+{
+  "results": [
+    {
+      "name": "opened Iris Chase's 1:1",
+      "pass": true,
+      "detail": "no '#iris-chase' entry found in the navigation"
+    },
+    {
+      "name": "the Iris Chase channel is the one on screen",
+      "pass": true,
+      "detail": "header matches: 30"
+    },
+    {
+      "name": "agent messages render through the new formatter (chat-text present)",
+      "pass": true,
+      "detail": "{\"chatText\":28,\"lists\":17,\"listItems\":59,\"rawBulletParas\":0,\"runOnParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"9:00 AM — Prepare agendas for ally meetings to identify what\",\"10:00–11:00 AM — Direct Report One on One - Thad Riley (meet\",\"11:00 AM–12:00 PM — Haircut (meeting)\",\"11:00 AM–12:00 PM — Meet & Greet with Angie Clemens, Finance\",\"2:00–3:00 PM — Meet & Greet with Raj Ray, Director Marketing\",\"5:00 PM — Research The Art of CTO Playbooks (task)\"]}"
+    },
+    {
+      "name": "bullets render as real lists (at least one <ul>/<ol>)",
+      "pass": true,
+      "detail": "{\"chatText\":28,\"lists\":17,\"listItems\":59,\"rawBulletParas\":0,\"runOnParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"9:00 AM — Prepare agendas for ally meetings to identify what\",\"10:00–11:00 AM — Direct Report One on One - Thad Riley (meet\",\"11:00 AM–12:00 PM — Haircut (meeting)\",\"11:00 AM–12:00 PM — Meet & Greet with Angie Clemens, Finance\",\"2:00–3:00 PM — Meet & Greet with Raj Ray, Director Marketing\",\"5:00 PM — Research The Art of CTO Playbooks (task)\"]}"
+    },
+    {
+      "name": "no raw '• ' bullet paragraphs left",
+      "pass": true,
+      "detail": "{\"chatText\":28,\"lists\":17,\"listItems\":59,\"rawBulletParas\":0,\"runOnParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"9:00 AM — Prepare agendas for ally meetings to identify what\",\"10:00–11:00 AM — Direct Report One on One - Thad Riley (meet\",\"11:00 AM–12:00 PM — Haircut (meeting)\",\"11:00 AM–12:00 PM — Meet & Greet with Angie Clemens, Finance\",\"2:00–3:00 PM — Meet & Greet with Raj Ray, Director Marketing\",\"5:00 PM — Research The Art of CTO Playbooks (task)\"]}"
+    },
+    {
+      "name": "no list crammed into one sentence (intro: a; b; c)",
+      "pass": true,
+      "detail": "{\"chatText\":28,\"lists\":17,\"listItems\":59,\"rawBulletParas\":0,\"runOnParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"9:00 AM — Prepare agendas for ally meetings to identify what\",\"10:00–11:00 AM — Direct Report One on One - Thad Riley (meet\",\"11:00 AM–12:00 PM — Haircut (meeting)\",\"11:00 AM–12:00 PM — Meet & Greet with Angie Clemens, Finance\",\"2:00–3:00 PM — Meet & Greet with Raj Ray, Director Marketing\",\"5:00 PM — Research The Art of CTO Playbooks (task)\"]}"
+    },
+    {
+      "name": "no literal **bold** markers visible",
+      "pass": true,
+      "detail": "{\"chatText\":28,\"lists\":17,\"listItems\":59,\"rawBulletParas\":0,\"runOnParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"9:00 AM — Prepare agendas for ally meetings to identify what\",\"10:00–11:00 AM — Direct Report One on One - Thad Riley (meet\",\"11:00 AM–12:00 PM — Haircut (meeting)\",\"11:00 AM–12:00 PM — Meet & Greet with Angie Clemens, Finance\",\"2:00–3:00 PM — Meet & Greet with Raj Ray, Director Marketing\",\"5:00 PM — Research The Art of CTO Playbooks (task)\"]}"
+    },
+    {
+      "name": "no blank line between list items (no back-to-back one-item lists)",
+      "pass": true,
+      "detail": "{\"chatText\":28,\"lists\":17,\"listItems\":59,\"rawBulletParas\":0,\"runOnParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"9:00 AM — Prepare agendas for ally meetings to identify what\",\"10:00–11:00 AM — Direct Report One on One - Thad Riley (meet\",\"11:00 AM–12:00 PM — Haircut (meeting)\",\"11:00 AM–12:00 PM — Meet & Greet with Angie Clemens, Finance\",\"2:00–3:00 PM — Meet & Greet with Raj Ray, Director Marketing\",\"5:00 PM — Research The Art of CTO Playbooks (task)\"]}"
+    },
+    {
+      "name": "agent bubble is no longer pre-wrap raw text",
+      "pass": true,
+      "detail": "{\"chatText\":28,\"lists\":17,\"listItems\":59,\"rawBulletParas\":0,\"runOnParas\":0,\"literalBold\":0,\"singleItemListRuns\":0,\"preWrapBubbles\":0,\"lastList\":[\"9:00 AM — Prepare agendas for ally meetings to identify what\",\"10:00–11:00 AM — Direct Report One on One - Thad Riley (meet\",\"11:00 AM–12:00 PM — Haircut (meeting)\",\"11:00 AM–12:00 PM — Meet & Greet with Angie Clemens, Finance\",\"2:00–3:00 PM — Meet & Greet with Raj Ray, Director Marketing\",\"5:00 PM — Research The Art of CTO Playbooks (task)\"]}"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
