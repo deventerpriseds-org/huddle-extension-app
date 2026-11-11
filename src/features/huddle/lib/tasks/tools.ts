@@ -450,6 +450,11 @@ export async function dispatchPrioritize(
       if (category) {
         out.category_note = `Tasks are limited to ${category}; meetings and classes carry no category, so all of them are listed.`;
       }
+      // "Tomorrow" asked between midnight and 4 AM is the day that just started -- say so, so the answer and
+      // the Schedule tab's Today name the same day.
+      if (typeof args.date === "string" && /^tomorrow/i.test(args.date.trim()) && date === ds.resolveDayArg("today", Date.now(), tz)) {
+        out.date_note = `It is just after midnight, so "tomorrow" means ${ds.weekdayOf(date)} ${date}, the day that has just started (the same day as the Schedule tab's Today). Name that day in your answer and mention you read "tomorrow" that way.`;
+      }
       if (wantBlocked) {
         try {
           const b = JSON.parse(await dispatchPrioritize(userEmail, { ...args, view: "blocked" }, timeZone, ctx)) as Record<string, unknown>;
