@@ -63,6 +63,14 @@ describe("F1 urgency: classifyAsk().urgency spelling table", () => {
     ["neg", "now's not a good time", "default"],
     ["pos", "don't wait, do it now", "now"],
     ["pos", "research Agentforce right now", "now"],
+    // verify loop 1 C2 (VERIFY-handoff-confirm-flow-1.md): a negated non-"now" urgency word is NOT urgent
+    ["v1-C2", "don't do it right away", "default"],
+    ["v1-C2", "don't do it immediately", "default"],
+    ["v1-C2", "not immediately", "default"],
+    ["v1-C2", "not asap", "default"],
+    ["v1-C2", "no rush, asap is fine whenever", "default"],
+    ["pos", "do it right away", "now"],
+    ["pos", "don't wait, do it immediately", "now"],
   ];
   for (const [id, text, want] of ROWS) {
     test(`${id}: ${JSON.stringify(text)} -> ${want}`, () => {

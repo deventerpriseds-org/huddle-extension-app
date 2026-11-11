@@ -156,9 +156,13 @@ const URGENCY_RE: RegExp[] = [
 // is a bad time", "now isn't a good time") and the discourse marker "now that you mention it". Each one is
 // a reason NOT to start, so any match forces `default` — the safe direction, since "now" is what lets an
 // agent skip the confirm step (F1/F3). A negation only governs a "now" within three plain words of it, so
-// "don't wait, do it now" (comma between) is still urgent.
+// "don't wait, do it now" (comma between) is still urgent. The negation covers EVERY urgency word
+// URGENCY_RE fires on, not only "now": verify loop 1 (VERIFY-handoff-confirm-flow-1.md, C2) measured
+// "don't do it right away", "not immediately" and "not asap" all classifying `now`. "no rush" anywhere
+// is a reason not to start, so it forces `default` too.
 const NOT_URGENT_RE: RegExp[] = [
-  /\b(?:not|don'?t|don’t|do not|never|no need to)\s+(?:[a-z']+\s+){0,3}?now\b/i,
+  /\b(?:not|don'?t|don’t|do not|never|no need to)\s+(?:[a-z']+\s+){0,3}?(?:now|right away|immediately|asap|straight away|this second|this instant)\b/i,
+  /\bno rush\b/i,
   /\bnow(?:\s+is|'s|’s)?\s+(?:not|isn'?t|a\s+(?:bad|terrible|tough|awful|busy|hard|rough)\b)/i,
   /\bnow\s+isn'?t\b/i,
   /\bnow\s+that\b/i,
