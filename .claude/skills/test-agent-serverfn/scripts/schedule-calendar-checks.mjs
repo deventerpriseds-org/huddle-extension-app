@@ -59,5 +59,6 @@ export const checks = [
     check("'Nothing scheduled for today' is NOT shown while calendar rows exist", !(m.calendarRows > 0 && m.nothingScheduledShown), JSON.stringify(m));
     check("section count = calendar rows + task rows", Number.isNaN(m.headerCount) || m.headerCount === m.calendarRows + m.taskRows, JSON.stringify(m));
     check("no calendar read failure reported", !m.problemLine, String(m.problemLine));
+    check("the browser renders in the owner's zone (not the runner's UTC)", m.browserTimeZone === "America/New_York", String(m.browserTimeZone));
   },
 ];
