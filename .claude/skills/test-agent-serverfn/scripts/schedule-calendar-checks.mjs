@@ -42,7 +42,10 @@ export const checks = [
         headerText: header ? (header.textContent || "").trim() : null,
         headerCount: count,
         rows: cal.slice(0, 12).map((r) => (r.textContent || "").trim().slice(0, 90)),
-        labelled: cal.every((r) => /\b(Meeting|Class)\b/i.test(r.textContent || "")),
+        // The label is the row's LAST element; textContent runs it onto the title ("…AIMeeting"), so match
+        // the label node itself rather than a word boundary in the joined text (run 42966839730 false fail).
+        labelled: cal.every((r) => /^(Meeting|Class)$/.test(((r.lastElementChild && r.lastElementChild.textContent) || "").trim())),
+        browserTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         calendarRowsHaveTaskButtons: cal.some((r) => r.querySelector("button")),
         nothingScheduledShown: /Nothing scheduled for today/i.test(body),
         problemLine: (body.match(/Couldn.t read your [^\n]+/) || [null])[0],

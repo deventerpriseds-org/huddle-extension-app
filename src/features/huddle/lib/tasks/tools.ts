@@ -442,11 +442,12 @@ export async function dispatchPrioritize(
     if (date !== "all") {
       const day = await ds.readDaySchedule(date, tz, {
         ...ds.realCalendarDeps({ caller: ctx?.caller, fallbackMailbox: userEmail }),
-        tasks: ds.realTaskReader(userEmail, category),
+        tasks: ds.realTaskReader(userEmail),
       });
-      const out = ds.dayScheduleToolJson({ date, tz, ...day });
+      // A category narrows the day's TASKS after they are counted (verifier loop 2 D7), so a filtered-out
+      // task is reported as "other tasks", never read as an empty day.
+      const out = ds.dayScheduleToolJson({ date, tz, ...day, ...(category ? { category } : {}) });
       if (category) {
-        out.category = category;
         out.category_note = `Tasks are limited to ${category}; meetings and classes carry no category, so all of them are listed.`;
       }
       if (wantBlocked) {

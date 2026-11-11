@@ -204,6 +204,21 @@ for (const [arg, want] of [
 ] as const) {
   check(`D4 '${arg}' -> ${want}`, resolveDayArg(arg, NOW, TZ) === want, String(resolveDayArg(arg, NOW, TZ)));
 }
+// D5 (verifier loop 2): a month-day near New Year is the NEAREST one, not last year's.
+{
+  const DEC30 = Date.parse("2026-12-30T15:00:00Z");
+  for (const [arg, want] of [["jan 3", "2027-01-03"], ["3 jan", "2027-01-03"], ["january 1", "2027-01-01"], ["dec 31", "2026-12-31"], ["dec 1", "2026-12-01"]] as const) {
+    check(`D5 '${arg}' asked 2026-12-30 -> ${want}`, resolveDayArg(arg, DEC30, TZ) === want, String(resolveDayArg(arg, DEC30, TZ)));
+  }
+  check("D5 'nov 1' asked 2026-11-10 stays this year (recent past)", resolveDayArg("nov 1", NOW, TZ) === "2026-11-01");
+}
+// D6 (verifier loop 2): a word that merely STARTS with a month is not a month.
+for (const arg of ["junk 5", "mayday 3", "marvel 3", "decade 3", "augury 2", "ja 3"]) {
+  check(`D6 '${arg}' is rejected`, resolveDayArg(arg, NOW, TZ) === null, String(resolveDayArg(arg, NOW, TZ)));
+}
+for (const [arg, want] of [["sept 9", "2026-09-09"], ["sep 9", "2026-09-09"], ["june 5", "2026-06-05"], ["mar 3", "2027-03-03"], ["may 3", "2027-05-03"]] as const) {
+  check(`D6 '${arg}' still resolves -> ${want}`, resolveDayArg(arg, NOW, TZ) === want, String(resolveDayArg(arg, NOW, TZ)));
+}
 check("D4 nonsense is still rejected (never read as an empty day)", resolveDayArg("someday soon", NOW, TZ) === null && resolveDayArg("Foo 12", NOW, TZ) === null);
 {
   const late: BriefItem = { sourceId: "late", kind: "meeting", title: "Late call", startIso: at("23:00"), endIso: at("01:00", "2026-11-11"), location: null };
@@ -275,6 +290,17 @@ const wrow = (id: string, title: string, start: string): WidgetTaskRow => ({
   check("D3 both widget paths pass tasksError through", (src.match(/tasksError: rowsR\.error/g) ?? []).length === 2);
 }
 
+{
+  // D7 (verifier loop 2): a category that filters out the day's only task must not make the day "empty".
+  const items = mergeDayItems({ date: "2026-11-12", tz: TZ, meetings: [], classes: [], tasks: [{ id: "p1", title: "Pay rent", startIso: at("10:00", "2026-11-12"), category: "PERSONAL" }] });
+  const ok = { ok: true, count: 0 };
+  const j = dayScheduleToolJson({ date: "2026-11-12", tz: TZ, items, sources: { meetings: ok, classes: ok, tasks: { ok: true, count: 1 } }, category: "WORK" }) as Record<string, any>;
+  check("D7 filtered-out task is counted, not dropped", j.other_tasks_outside_category === 1 && j.count === 0, JSON.stringify(j));
+  check("D7 answer_rule never says nothing is scheduled", !/nothing scheduled/.test(j.answer_rule) && /other task/.test(j.answer_rule), j.answer_rule);
+  const all = dayScheduleToolJson({ date: "2026-11-12", tz: TZ, items, sources: { meetings: ok, classes: ok, tasks: { ok: true, count: 1 } }, category: "personal" }) as Record<string, any>;
+  check("D7 a matching category keeps the task", all.count === 1 && all.other_tasks_outside_category === 0, JSON.stringify(all));
+}
+
 // --- AC-30: extend, don't duplicate ------------------------------------------------------------------------
 {
   const src = readFileSync("src/features/huddle/lib/tasks/day-schedule.server.ts", "utf8");
@@ -286,7 +312,7 @@ const wrow = (id: string, title: string, start: string): WidgetTaskRow => ({
 {
   const tools = readFileSync("src/features/huddle/lib/tasks/tools.ts", "utf8");
   check("AC-2 the 'scheduled' view runs the day reader", /if \(view === "scheduled"\) \{[\s\S]{0,600}readDaySchedule/.test(tools));
-  check("D2 a category narrows the day's tasks, never falls back to the old path", /realTaskReader\(userEmail, category\)/.test(tools));
+  check("D2 a category narrows the day's tasks, never falls back to the old path", /dayScheduleToolJson\(\{ date, tz, \.\.\.day, \.\.\.\(category \? \{ category \} : \{\}\) \}\)/.test(tools));
   const fns = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
   const starts = [...fns.matchAll(/(?<!function )dispatchPrioritize\(/g)].map((m) => m.index ?? 0);
   const withCaller = starts.filter((i) => fns.slice(i, i + 400).includes("{ caller: data.caller }"));
