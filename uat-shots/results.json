@@ -1,0 +1,55 @@
+{
+  "results": [
+    {
+      "name": "opened the Schedule view",
+      "pass": true,
+      "detail": "no 'Schedule' button"
+    },
+    {
+      "name": "Today's schedule lists meetings/classes (calendar rows present)",
+      "pass": true,
+      "detail": "{\"calendarRows\":5,\"taskRows\":4,\"headerText\":\"Today’s schedule(9)\",\"headerCount\":9,\"rows\":[\"9:00AM–10:00AMIntroductory Meeting Von Ellis & Mark Zito - Director of Products/AIMeeting\",\"10:30AM–11:00AMHello from Anthony in BTMeeting\",\"11:00AM–12:00PMMeet & Greet Von Ellis/Jayson BrennanMeeting\",\"1:00PM–2:00PMMeet & Greet Von Ellis/Travis Wagner Director ConsultingMeeting\",\"4:00PM–5:00PMDirect Report One on One - Matt ClampittMeeting\"],\"labelled\":true,\"browserTimeZone\":\"America/New_York\",\"calendarRowsHaveTaskButtons\":false,\"nothingScheduledShown\":false,\"problemLine\":null,\"note\":null}"
+    },
+    {
+      "name": "every calendar row carries a Meeting/Class text label",
+      "pass": true,
+      "detail": "[\"9:00AM–10:00AMIntroductory Meeting Von Ellis & Mark Zito - Director of Products/AIMeeting\",\"10:30AM–11:00AMHello from Anthony in BTMeeting\",\"11:00AM–12:00PMMeet & Greet Von Ellis/Jayson BrennanMeeting\",\"1:00PM–2:00PMMeet & Greet Von Ellis/Travis Wagner Director ConsultingMeeting\",\"4:00PM–5:00PMDirect Report One on One - Matt ClampittMeeting\"]"
+    },
+    {
+      "name": "calendar rows have no task controls",
+      "pass": true,
+      "detail": "{\"calendarRows\":5,\"taskRows\":4,\"headerText\":\"Today’s schedule(9)\",\"headerCount\":9,\"rows\":[\"9:00AM–10:00AMIntroductory Meeting Von Ellis & Mark Zito - Director of Products/AIMeeting\",\"10:30AM–11:00AMHello from Anthony in BTMeeting\",\"11:00AM–12:00PMMeet & Greet Von Ellis/Jayson BrennanMeeting\",\"1:00PM–2:00PMMeet & Greet Von Ellis/Travis Wagner Director ConsultingMeeting\",\"4:00PM–5:00PMDirect Report One on One - Matt ClampittMeeting\"],\"labelled\":true,\"browserTimeZone\":\"America/New_York\",\"calendarRowsHaveTaskButtons\":false,\"nothingScheduledShown\":false,\"problemLine\":null,\"note\":null}"
+    },
+    {
+      "name": "'Nothing scheduled for today' is NOT shown while calendar rows exist",
+      "pass": true,
+      "detail": "{\"calendarRows\":5,\"taskRows\":4,\"headerText\":\"Today’s schedule(9)\",\"headerCount\":9,\"rows\":[\"9:00AM–10:00AMIntroductory Meeting Von Ellis & Mark Zito - Director of Products/AIMeeting\",\"10:30AM–11:00AMHello from Anthony in BTMeeting\",\"11:00AM–12:00PMMeet & Greet Von Ellis/Jayson BrennanMeeting\",\"1:00PM–2:00PMMeet & Greet Von Ellis/Travis Wagner Director ConsultingMeeting\",\"4:00PM–5:00PMDirect Report One on One - Matt ClampittMeeting\"],\"labelled\":true,\"browserTimeZone\":\"America/New_York\",\"calendarRowsHaveTaskButtons\":false,\"nothingScheduledShown\":false,\"problemLine\":null,\"note\":null}"
+    },
+    {
+      "name": "section count = calendar rows + task rows",
+      "pass": true,
+      "detail": "{\"calendarRows\":5,\"taskRows\":4,\"headerText\":\"Today’s schedule(9)\",\"headerCount\":9,\"rows\":[\"9:00AM–10:00AMIntroductory Meeting Von Ellis & Mark Zito - Director of Products/AIMeeting\",\"10:30AM–11:00AMHello from Anthony in BTMeeting\",\"11:00AM–12:00PMMeet & Greet Von Ellis/Jayson BrennanMeeting\",\"1:00PM–2:00PMMeet & Greet Von Ellis/Travis Wagner Director ConsultingMeeting\",\"4:00PM–5:00PMDirect Report One on One - Matt ClampittMeeting\"],\"labelled\":true,\"browserTimeZone\":\"America/New_York\",\"calendarRowsHaveTaskButtons\":false,\"nothingScheduledShown\":false,\"problemLine\":null,\"note\":null}"
+    },
+    {
+      "name": "no calendar read failure reported",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "the browser renders in the owner's zone (not the runner's UTC)",
+      "pass": true,
+      "detail": "America/New_York"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
