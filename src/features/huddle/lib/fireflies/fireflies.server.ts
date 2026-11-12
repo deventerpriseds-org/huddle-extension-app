@@ -19,7 +19,9 @@ import {
   firefliesSummaryMarkdown,
   markdownToEmailHtml,
   meetingDateLabel,
+  meetingDateTimeLabel,
   meetingDateMs,
+  meetingThemeFromMinutes,
   meetingInputHash,
   minutesSubject,
   minutesUserPrompt,
@@ -303,7 +305,7 @@ export async function loadMinutesSettings(owner: string): Promise<MinutesSetting
 }
 
 type Generated =
-  | { ok: true; markdown: string; kind: "custom" | "standard" | "luna" }
+  | { ok: true; markdown: string; kind: "custom" | "standard" | "luna"; theme: string }
   /** `wait`: the data may still arrive (summary not generated yet / transcript not ready) -- try again
    *  later until the wait window ends. `transient`: a model/network failure worth retrying. */
   | { ok: false; error: string; transient?: boolean; wait?: boolean };
@@ -318,10 +320,13 @@ export async function generateMinutes(
   if (source === "fireflies") {
     const r = firefliesSummaryMarkdown(t);
     if (!r.ok) return { ok: false, error: "fireflies_summary_missing", wait: true };
+    const markdown =
+      r.source === "standard" ? `_${STANDARD_SUMMARY_NOTICE}_\n\n${r.markdown}` : r.markdown;
     return {
       ok: true,
       kind: r.source,
-      markdown: r.source === "standard" ? `_${STANDARD_SUMMARY_NOTICE}_\n\n${r.markdown}` : r.markdown,
+      markdown,
+      theme: meetingThemeFromMinutes(markdown, t.title),
     };
   }
   const transcript = transcriptForModel(t);
@@ -343,7 +348,7 @@ export async function generateMinutes(
   if (!md) return { ok: false, error: "luna_empty", transient: true };
   const missing = missingTemplateSections(md);
   if (missing.length) return { ok: false, error: "luna_template_incomplete:" + missing.join("|"), transient: true };
-  return { ok: true, kind: "luna", markdown: md };
+  return { ok: true, kind: "luna", markdown: md, theme: meetingThemeFromMinutes(md, t.title) };
 }
 
 /** The existing Huddle Luna path: callOpenAIResponses on the gpt-5.6-luna tier (model-policy LADDER). */
@@ -424,7 +429,9 @@ async function emailBranch(
     return { status: "failed", error: gen.error, final };
   }
   const update = plan === "send_update";
-  const dateLabel = meetingDateLabel(meetingDateMs(t));
+  const meetingMs = meetingDateMs(t);
+  const dateLabel = meetingDateLabel(meetingMs);
+  const subjectDateTime = meetingDateTimeLabel(meetingMs);
   const heading = `# ${String(t.title ?? "Untitled meeting").trim() || "Untitled meeting"}${dateLabel ? `\n\n${dateLabel}` : ""}`;
   const sourceLine =
     gen.kind === "luna"
@@ -441,7 +448,7 @@ async function emailBranch(
   const { sendGraphEmail } = await import("../email/graph-email.server");
   const sent = await sendGraphEmail({
     to: settings.recipients,
-    subject: minutesSubject(t.title, dateLabel, update),
+    subject: minutesSubject(gen.theme, subjectDateTime, update),
     body: markdownToEmailHtml(`${heading}\n\n${sourceLine}\n\n${gen.markdown}`),
     html: true,
     callerEmail: owner,
