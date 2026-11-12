@@ -75,3 +75,40 @@ OneDrive, journey, workflow or deploy was touched.
 - `scripts/task-proposals.test.ts` sections G-J: the processor runs through the data layer's REAL
   `runIngestPass` against its dummy fixtures (adapter -> ledger -> proposals, AC-7.1). **123 passed, 0
   failed**. `tsc --noEmit -p .` clean (node_modules symlinked from the main checkout, untracked).
+
+### Merge -- data layer finished (coordinator, 2026-11-12)
+
+Merged `origin/claude_correspondence-ingest` 5c0b4593 (merge commit 714e7aa6, no conflicts). After merge:
+task-proposals 123/0, correspondence-ingest 148/0, task-proposals-sql 41/0. The seam change (optional
+`batch` on the processor context) needs nothing from proposals.
+
+### Step 4 -- server binding + wiring (AC-5.7, 5.15, 5.16, 5.22, 6.1/6.3)
+
+- `lib/proposals/proposals.server.ts` (new): `proposalsConfig()` = OFF unless
+  `correspondence.proposals === true`; extraction through the EXISTING strict-JSON path `callOpenAIRouter`
+  (Responses + json_schema strict) on the `gpt-5.6-luna` tier the minutes flow uses, 20 s bound;
+  open titles via `loadOpenTaskTitles`; Approve creates through `invokeJourneyTool quick_create_task` (the
+  one journey chokepoint, as the voice/text create paths do) and reads the journey id from its result;
+  transcripts via the minutes store's `listRecentMeetings` (finished meetings only, 7 days) + Fireflies
+  `fetchTranscript` (read-only); the evening turn via `enqueueTurn` + `runTurnById` (inbound-email shape).
+  Optional `correspondence.proposalsDeliverAt` ("HH:MM", default 18:30 ET).
+- `lib/proposals/proposals.functions.ts` (new): `getProposalStatesFn` (ONE request for every proposal row of
+  a mounted checklist) and `actOnProposalFn` (approve/complete/dismiss/edit). Proposal actions never touch
+  `updateBoardTask` (AC-5.3).
+- Edits outside lib/proposals, each additive:
+  - `lib/correspondence/ingest.server.ts` (data layer file; its header names `processorsForPass` as where
+    proposals plug in): appends the proposals processor, and runs processors when `bell || proposals`.
+    `activeProcessors` still runs each only under its own flag.
+  - `lib/tasks/scheduler.server.ts`: `runProposalsPass()` started alongside Fireflies/ingest, awaited in
+    both return paths. No route file touched (G7).
+  - `lib/fireflies/fireflies.server.ts`: `fetchTranscript` gains `export` (one word; behaviour unchanged;
+    webhook, `saveTranscript`, `TRANSCRIPT_FOLDER` and minutes settings untouched -- AC-6.5).
+  - `lib/tasks/tools.ts`: `build_checklist` gets a `proposals` boolean; the dispatcher delegates to
+    `proposalChecklistForUser` (not_enabled when OFF). The parameter description is always visible to the
+    model; it is inert when OFF.
+  - `lib/huddle.functions.ts`: the reply-assembly's inline row mapping now calls the shared pure
+    `sanitizeChecklistPayload` (byte-identical output for kind-less rows, proven in test section D); the
+    turn Input gains an optional `checklist` (bounded: 500 rows) attached to the TARGET agent's reply like
+    `navLink`, with `ensureChecklistDelivered` beside `ensureNavLinkDelivered`; the Lovable
+    `build_checklist` schema accepts `proposals`.
+- tsc clean; task-proposals 123/0; correspondence-ingest 148/0; cross-app-turn-gate 92/0.

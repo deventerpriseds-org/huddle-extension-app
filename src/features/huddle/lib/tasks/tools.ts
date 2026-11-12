@@ -94,6 +94,13 @@ export const CHECKLIST_TOOL = {
         description:
           "Only for an EXPLICIT, hand-picked set of specific tasks. For any category-shaped ask use `match` instead -- enumerating ids means YOU are doing the filtering, which silently drops tasks. When given, these ids are used verbatim and `match` is ignored.",
       },
+      // Task proposals (2026-11-12, AC-correspondence-checklist section 5): the SAME widget, a second row
+      // kind. Inert unless HUDDLE_ONEDRIVE_FEEDS.correspondence.proposals is on (the dispatcher says so).
+      proposals: {
+        type: "boolean",
+        description:
+          "Set true ONLY when the user asks to see their PROPOSED tasks -- to-dos found in their email, Teams chats or meetings that are waiting for them to approve, edit, mark done or dismiss (e.g. 'show my proposed tasks'). Ignores match/task_ids. These are suggestions, NOT tasks on their board.",
+      },
     },
     required: ["title"],
   },
@@ -117,6 +124,18 @@ export async function dispatchBuildChecklist(
       error: "no_caller_identity",
       message: "A checklist needs the signed-in user's email; none was provided this turn.",
     });
+  }
+  // Proposals mode: the same widget, proposal rows from the server-side proposal store (AC-5.15).
+  if (args.proposals === true) {
+    try {
+      const { proposalChecklistForUser } = await import("../proposals/proposals.server");
+      const out = await proposalChecklistForUser(userEmail);
+      console.info(`[checklist] proposals mode ${JSON.parse(out).error ?? "rendered"}`);
+      return out;
+    } catch {
+      console.info("[checklist] SKIPPED reason=proposals_exception");
+      return JSON.stringify({ error: "checklist_failed", message: "Could not load the proposed tasks." });
+    }
   }
   const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : "Checklist";
   const rawIds = Array.isArray(args.task_ids) ? args.task_ids : [];

@@ -19,7 +19,11 @@ import type { ItemProcessor } from "./source-item";
  *  runs only those the config switches on (activeProcessors). */
 async function processorsForPass(): Promise<ItemProcessor[]> {
   const replies = await import("../email/email-replies.server");
-  return [makeBellProcessor({ upsert: replies.upsertChatAttention, settle: replies.settleChatAttention })];
+  const out: ItemProcessor[] = [makeBellProcessor({ upsert: replies.upsertChatAttention, settle: replies.settleChatAttention })];
+  // Task proposals (AC section 5, lib/proposals). null unless correspondence.proposals is literally true.
+  const proposals = await (await import("../proposals/proposals.server")).makeProposalsProcessor();
+  if (proposals) out.push(proposals);
+  return out;
 }
 
 let running: Promise<PassResult | null> | null = null;
@@ -43,7 +47,7 @@ export function runCorrespondenceIngest(): Promise<PassResult | null> {
           const r = await readFeed(c, "email");
           return r.ok ? { ok: true, etag: r.etag ?? "", path: c.email.path, records: r.snapshot.records } : { ok: false, reason: r.reason };
         },
-        processors: cfg.correspondence.bell ? await processorsForPass() : [],
+        processors: cfg.correspondence.bell || cfg.correspondence.proposals ? await processorsForPass() : [],
         now: () => Date.now(),
         log: (line) => console.log(line),
       });

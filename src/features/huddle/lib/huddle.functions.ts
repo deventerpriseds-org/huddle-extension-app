@@ -5,6 +5,7 @@ import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
 import { joinOpenerAndBlock } from "./chat-format";
 import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
+import { sanitizeChecklistPayload } from "./proposals/proposals";
 // The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
 // and the reply DTOs are shared with the client bundle.
@@ -299,6 +300,15 @@ const Input = z.object({
     .optional(),
   // A tab-switch button attached to the TARGET agent's reply (the priority check: "Open Priorities").
   // Attached from the payload, like emailReplyRef, so it is there whatever the model does.
+  // A CODE-BUILT checklist attached to the TARGET agent's reply, like navLink: the evening task-proposal
+  // posting (lib/proposals, AC-correspondence-checklist 5.16) carries every open proposal here so the
+  // widget is there whatever the model writes. Re-validated by sanitizeChecklistPayload at attach time.
+  checklist: z
+    .object({
+      title: z.string().max(120),
+      rows: z.array(z.record(z.string(), z.unknown())).max(500),
+    })
+    .optional(),
   navLink: z
     .object({
       view: z.enum(["priorities", "schedule", "board", "artifacts"]),
@@ -6273,6 +6283,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             inputSchema: z.object({
               title: z.string(),
               task_ids: z.array(z.string()),
+              // Same proposals mode as the OpenAI tool (task proposals, AC-correspondence-checklist 5).
+              proposals: z.boolean().optional(),
             }),
             execute: async (args) => {
               // Same per-turn ledger claim as the OpenAI path: in a group turn two responders would
@@ -7141,19 +7153,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const parsed = JSON.parse(checklistToolUse.detail as string) as { checklist?: unknown };
         const c = parsed.checklist as ChecklistPayload | undefined;
         if (c && typeof c.title === "string" && Array.isArray(c.rows) && c.rows.length) {
-          replyChecklist = {
-            title: c.title,
-            rows: c.rows
-              .filter((row) => row && typeof row.taskId === "string" && typeof row.title === "string")
-              .map((row) => ({
-                taskId: row.taskId,
-                title: row.title,
-                status: typeof row.status === "string" ? row.status : "BACKLOG",
-                tags: Array.isArray(row.tags) ? row.tags.filter((t): t is string => typeof t === "string") : [],
-              })),
-            ...(typeof c.more === "number" && c.more > 0 ? { more: c.more } : {}),
-          };
-          if (!replyChecklist.rows.length) replyChecklist = undefined;
+          // Field-by-field, as before, now in ONE pure function shared with the payload path below: a row
+          // with no `kind` maps exactly as it always did; a proposal row (kind "proposal", prop- id) keeps
+          // its display detail (AC-correspondence-checklist 5.1/5.2). No rows left -> no widget.
+          replyChecklist = sanitizeChecklistPayload(c) as ChecklistPayload | undefined;
         } else {
           console.warn("[checklist] build_checklist returned an unexpected shape; no widget rendered");
         }
@@ -7217,7 +7220,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       confirmAsk: replyConfirmAsk,
       overrideAsk: replyOverrideAsk,
       emailReply: replyEmailReply,
-      checklist: replyChecklist,
+      // A payload-carried checklist (the evening task proposals, AC-5.16) rides on the TARGET agent's reply
+      // exactly like navLink, so it is there whatever the model writes; its own tool call wins if it made one.
+      checklist:
+        replyChecklist ??
+        (nextId === data.targetAgentId ? (sanitizeChecklistPayload(data.checklist) as ChecklistPayload | undefined) : undefined),
       priorities: replyPriorities,
       schedule: replySchedule,
       navLink: data.navLink && nextId === data.targetAgentId ? data.navLink : undefined,
@@ -7456,6 +7463,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   // front of the owner. Owner, 2026-10-16: "There is no scenario or excuse for priority message not being
   // produced". The target agent's reply gets the button wherever it was built (normal, hardReply); if the
   // model produced nothing at all (timeout, empty completion), a short deterministic reply carries it.
+  // A turn whose payload carries a checklist (the evening task proposals) ends with that checklist under
+  // the target agent's reply even when the model produced nothing (timeout, empty completion).
+  const ensureChecklistDelivered = () => {
+    const c = sanitizeChecklistPayload(data.checklist) as ChecklistPayload | undefined;
+    const target = data.targetAgentId;
+    if (!c || !target) return;
+    const i = replies.findIndex((r) => r.agentId === target);
+    if (i >= 0) {
+      if (!replies[i].checklist) replies[i] = { ...replies[i], checklist: c };
+      return;
+    }
+    replies.push({ agentId: target, text: "Hello Sir, here is what's waiting for your review.", checklist: c });
+  };
+
   const ensureNavLinkDelivered = () => {
     const link = data.navLink;
     const target = data.targetAgentId;
@@ -7750,6 +7771,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     ensureNotSilentOnRealWork();
     ensureAppendBlockDelivered();
     ensureNavLinkDelivered();
+    ensureChecklistDelivered();
     await ensureProduceOfferDelivered();
     try {
       await turnStore.saveTurnChunk(turnId, presentedReplies(), null, true, finalResult());
@@ -7763,6 +7785,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   ensureNotSilentOnRealWork();
   ensureAppendBlockDelivered();
   ensureNavLinkDelivered();
+  ensureChecklistDelivered();
   await ensureProduceOfferDelivered();
   persistResearchedMemory();
   return finalResult();

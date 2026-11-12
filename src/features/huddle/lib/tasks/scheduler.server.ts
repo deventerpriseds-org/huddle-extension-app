@@ -289,6 +289,11 @@ export async function runDueScheduledJobs(): Promise<number> {
   const correspondence = import("../correspondence/ingest.server")
     .then((m) => m.runCorrespondenceIngest())
     .catch(() => null);
+  // Task proposals (2026-11-12, AC section 5): Fireflies transcripts -> proposals, and the evening checklist
+  // in Iris's 1:1. Same shape again; OFF (zero work) unless correspondence.proposals is literally true.
+  const proposals = import("../proposals/proposals.server")
+    .then((m) => m.runProposalsPass())
+    .catch(() => undefined);
   try {
     await ensureGroomJobs(now);
   } catch {
@@ -310,6 +315,7 @@ export async function runDueScheduledJobs(): Promise<number> {
   } catch {
     await fireflies;
     await correspondence;
+    await proposals;
     return 0;
   }
   let fired = 0;
@@ -356,5 +362,6 @@ export async function runDueScheduledJobs(): Promise<number> {
   }
   await fireflies; // keep the request alive until the minutes pass finishes (it never throws)
   await correspondence; // same for the correspondence pass (never throws; bounded by PASS_BUDGET_MS)
+  await proposals; // same for the proposals pass (never throws; transcripts bounded at 25s)
   return fired;
 }
