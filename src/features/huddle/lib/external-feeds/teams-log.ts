@@ -40,6 +40,12 @@ export type TeamsSkipReason =
   | "not_a_message"
   | "deleted";
 
+/** What the server's drive read of the Teams log returns (onedrive-feed.server.ts readTeamsLogFile). */
+export type TeamsFileRead =
+  | { ok: true; changed: false; etag: string }
+  | { ok: true; changed: true; etag: string; itemId: string | null; path: string; text: string }
+  | { ok: false; reason: string };
+
 export interface TeamsLogParse {
   /** Set when the whole file is not JSON Lines (e.g. one JSON array): nothing is ingested (S-8). */
   rejected?: "not_jsonl";

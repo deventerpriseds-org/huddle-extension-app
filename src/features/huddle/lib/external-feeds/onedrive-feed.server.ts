@@ -30,6 +30,7 @@ import {
   type ValidSnapshot,
 } from "./onedrive-feed";
 import type { InboundMessage } from "../email/inbound-email";
+import type { TeamsFileRead } from "./teams-log";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 /** ONE deadline per file read (metadata + content together): a slow or hung drive must never hold up
@@ -218,11 +219,6 @@ export async function recordTeamsFeedStatus(cfg: OneDriveFeedsConfig, status: st
     console.error("[onedrive-feed] teams state write failed", err instanceof Error ? err.message : err);
   }
 }
-
-export type TeamsFileRead =
-  | { ok: true; changed: false; etag: string }
-  | { ok: true; changed: true; etag: string; itemId: string | null; path: string; text: string }
-  | { ok: false; reason: string };
 
 /**
  * Read the rolling Teams JSON Lines log through fetchDriveFile (same token, deadline, size cap, eTag rule

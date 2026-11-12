@@ -284,6 +284,11 @@ export async function runDueScheduledJobs(): Promise<number> {
   const fireflies = import("../fireflies/fireflies.server")
     .then((m) => m.processDueFirefliesMeetings(1))
     .catch(() => 0);
+  // Correspondence ingest (2026-11-12): Teams log + email feed -> processing ledger. Same shape as Fireflies:
+  // started here, awaited at the end, never throws, OFF (zero work) unless HUDDLE_ONEDRIVE_FEEDS turns it on.
+  const correspondence = import("../correspondence/ingest.server")
+    .then((m) => m.runCorrespondenceIngest())
+    .catch(() => null);
   try {
     await ensureGroomJobs(now);
   } catch {
@@ -304,6 +309,7 @@ export async function runDueScheduledJobs(): Promise<number> {
     claimed = await claimDueScheduledJobs(20);
   } catch {
     await fireflies;
+    await correspondence;
     return 0;
   }
   let fired = 0;
@@ -349,5 +355,6 @@ export async function runDueScheduledJobs(): Promise<number> {
     fired++;
   }
   await fireflies; // keep the request alive until the minutes pass finishes (it never throws)
+  await correspondence; // same for the correspondence pass (never throws; bounded by PASS_BUDGET_MS)
   return fired;
 }

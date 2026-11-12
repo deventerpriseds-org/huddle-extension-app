@@ -16,10 +16,21 @@ import {
   combineOutcomes,
   emailSourceItem,
   errorCategory,
+  ledgerKey,
   stableHash,
   teamsSourceItem,
   teamsSourceItemId,
+  type ClaimedItem,
+  type CorrespondenceSource,
+  type CursorStore,
+  type ItemProcessor,
+  type LedgerStatus,
+  type LedgerStore,
+  type ProcessOutcome,
+  type SourceCursor,
+  type SourceItem,
 } from "../src/features/huddle/lib/correspondence/source-item";
+import { ledgerEmailItems, runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
 
 let fail = 0;
 let pass = 0;
@@ -193,7 +204,299 @@ t("combineOutcomes: needs_context wins; result ids merge", [
   combineOutcomes([{ status: "processed", resultIds: { bell: ["b1"] } }, { status: "processed", resultIds: { proposals: ["p1"] } }]),
 ], ["needs_context", { status: "processed", resultIds: { bell: ["b1"], proposals: ["p1"] } }]);
 
-// ---- sections F/G (pass + ledger twin) are appended below ----
+console.log("F. THE PASS against the dummy fixtures, in-memory ledger twin (AC-6.1, 6.3, 7.1, 2.x, 3.x)");
+// The twin mirrors ledger.server.ts; scripts/correspondence-ledger-sql.test.ts proves the real SQL.
+type Row = { owner: string; hash: string; status: LedgerStatus; attempts: number; v: number; missing: string | null; cat: string | null; result: Record<string, string[]>; writes: number; source: CorrespondenceSource; id: string; leased?: boolean; notBefore?: number };
+const makeTwin = () => {
+  const rows = new Map<string, Row>();
+  const cursors = new Map<string, SourceCursor>();
+  const calls: string[] = [];
+  let clock = Date.parse("2026-11-12T23:05:00Z");
+  const ledger: LedgerStore = {
+    async observe(owner, items) {
+      calls.push("observe");
+      const out = { inserted: 0, changed: 0, unchanged: 0 };
+      for (const i of items) {
+        const k = ledgerKey(i);
+        const r = rows.get(k);
+        if (!r) {
+          rows.set(k, { owner, hash: i.contentHash, status: "pending", attempts: 0, v: 0, missing: null, cat: null, result: {}, writes: 1, source: i.source, id: i.sourceItemId });
+          out.inserted++;
+        } else if (r.hash !== i.contentHash) {
+          Object.assign(r, { hash: i.contentHash, status: "pending", attempts: 0, v: r.v + 1, missing: null, writes: r.writes + 1, leased: false, notBefore: 0 });
+          out.changed++;
+        } else out.unchanged++;
+      }
+      return out;
+    },
+    async reopenNeedsContext(owner, source) {
+      let n = 0;
+      for (const r of rows.values()) if (r.owner === owner && r.source === source && r.status === "needs_context") Object.assign(r, { status: "pending", missing: null, attempts: 0, v: r.v + 1 }), n++;
+      return n;
+    },
+    async hasDue(owner, sources, max) {
+      return [...rows.values()].some((r) => r.owner === owner && sources.includes(r.source) && (r.status === "pending" || r.status === "failed_retryable") && r.attempts < max && !r.leased && (r.notBefore ?? 0) <= clock);
+    },
+    async claimDue(owner, sources, limit, max) {
+      calls.push("claim");
+      const out: ClaimedItem[] = [];
+      for (const r of rows.values()) {
+        if (out.length >= limit) break;
+        if (r.owner !== owner || !sources.includes(r.source) || !(r.status === "pending" || r.status === "failed_retryable") || r.attempts >= max) continue;
+        if (r.leased || (r.notBefore ?? 0) > clock) continue; // lease / retry backoff, as the SQL does
+        r.attempts++;
+        r.v++;
+        r.leased = true;
+        out.push({ source: r.source, sourceItemId: r.id, claimVersion: r.v, attempts: r.attempts });
+      }
+      return out;
+    },
+    async markProcessed(c, ids) {
+      const r = rows.get(ledgerKey(c))!;
+      if (r.v !== c.claimVersion) return false;
+      Object.assign(r, { status: "processed", result: ids, writes: r.writes + 1, leased: false });
+      return true;
+    },
+    async markNeedsContext(c, f) {
+      const r = rows.get(ledgerKey(c))!;
+      if (r.v !== c.claimVersion) return false;
+      Object.assign(r, { status: "needs_context", missing: f, leased: false });
+      return true;
+    },
+    async markFailed(c, cat, max) {
+      const r = rows.get(ledgerKey(c))!;
+      if (r.v !== c.claimVersion) return false;
+      Object.assign(r, { status: r.attempts >= max ? "failed" : "failed_retryable", cat, leased: false, notBefore: clock + 5 * 60_000 });
+      return true;
+    },
+    async health() {
+      return {};
+    },
+  };
+  const cursor: CursorStore = {
+    async get(o, s) {
+      return cursors.get(`${o}|${s}`) ?? null;
+    },
+    async set(o, s, etag) {
+      const prev = cursors.get(`${o}|${s}`);
+      cursors.set(`${o}|${s}`, { etag: etag ?? prev?.etag ?? null, checkedAtMs: clock });
+    },
+  };
+  return { rows, cursors, calls, ledger, cursor, tick: (ms: number) => (clock += ms), now: () => clock };
+};
+const logs: string[] = [];
+const files = { teamsText: teamsFixture, teamsEtag: '"{t},1"', emailEtag: '"{e},1"', email: emailFixture };
+const reads = { teams: 0, email: 0 };
+const deps = (tw: ReturnType<typeof makeTwin>, processors: ItemProcessor[] = []): PassDeps => ({
+  ledger: tw.ledger,
+  cursor: tw.cursor,
+  async readTeams(_c, known) {
+    reads.teams++;
+    if (known && known === files.teamsEtag) return { ok: true, changed: false, etag: known };
+    return { ok: true, changed: true, etag: files.teamsEtag, itemId: "drive-item-t", path: "/automation/huddle-source-log.jsonl", text: files.teamsText };
+  },
+  async recordTeamsStatus() {},
+  async readEmail(c) {
+    reads.email++;
+    const vv = validateEmailSnapshot(files.email, c, Date.parse("2026-11-12T00:00:00Z"));
+    return vv.ok ? { ok: true, etag: files.emailEtag, path: c.email.path, records: vv.snapshot.records } : { ok: false, reason: `rejected:${vv.reason}` };
+  },
+  processors,
+  now: tw.now,
+  log: (l) => logs.push(l),
+});
+const onCfg = (over: Record<string, unknown> = {}) => parseFeedsConfig(JSON.stringify({ ...withTeams, correspondence: { ingest: true, ...over } }))!;
+
+// AC-6.1 OFF => zero calls
+{
+  const tw = makeTwin();
+  reads.teams = reads.email = 0;
+  const offs = [null, noTeams, cfg, parseFeedsConfig(JSON.stringify({ ...withTeams, correspondence: { ingest: false, bell: true } }))!];
+  const rs = [];
+  for (const c of offs) rs.push((await runIngestPass(c, deps(tw))).reason);
+  t("AC-6.1 absent config / ingest off -> the pass makes ZERO reads and ZERO ledger calls", [rs, reads.teams + reads.email, tw.calls.length, tw.rows.size], [
+    ["not_configured", "ingest_off", "ingest_off", "ingest_off"],
+    0,
+    0,
+    0,
+  ]);
+  const teamsOff = parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { ingest: true, sources: ["teams"] } }))!;
+  t("AC-6.1 ingest on but the teams entry absent -> no Teams read at all", [(await runIngestPass(teamsOff, deps(tw))).reason, reads.teams], ["no_source_enabled", 0]);
+}
+
+// AC-7.1 full pass over the fixtures; no processor switched on -> items recorded pending, nothing claimed
+const tw1 = makeTwin();
+reads.teams = reads.email = 0;
+const r1 = await runIngestPass(onCfg(), deps(tw1));
+t("AC-7.1 fixtures: 5 Teams messages + 2 emails recorded (dup/malformed/wrong-source/no-id/unprefixed skipped)", [r1.sources.teams?.new, r1.sources.email?.new, tw1.rows.size], [5, 2, 7]);
+t("AC-7.1 skip counts reported per source", [r1.sources.teams?.skipped, r1.sources.email?.skipped], [4, 1]);
+t("AC-6.3 no processor switched on -> nothing claimed, every row stays pending", [tw1.calls.includes("claim"), [...tw1.rows.values()].every((r) => r.status === "pending")], [false, true]);
+t("AC-2.2 email rows keyed (email, mailbox:outlook id)", [...tw1.rows.values()].filter((r) => r.source === "email").map((r) => r.id).sort(), ["owner@work.example:AAMk-sample-1", "owner@work.example:AAMk-sample-2"]);
+t("AC-1.7 Teams rows keyed (encoded chat id : message id)", [...tw1.rows.values()].some((r) => r.id === teamsSourceItemId("19:chat-alpha@thread.example", "1001")), true);
+
+// AC-3.5 / AC-1.6: an immediate second pass is throttled; after the throttle an unchanged file is not re-read
+const r2 = await runIngestPass(onCfg(), deps(tw1));
+t("read throttle: a pass inside minIntervalMinutes reads nothing", [r2.sources.teams?.status, r2.sources.email?.status, reads.teams, reads.email], ["throttled", "throttled", 1, 1]);
+tw1.tick(11 * 60_000);
+const writesBefore = [...tw1.rows.values()].reduce((n, r) => n + r.writes, 0);
+const r3 = await runIngestPass(onCfg(), deps(tw1));
+t("AC-3.5 unchanged eTag -> Teams short-circuits (no download), email not re-observed, zero row writes", [r3.sources.teams?.status, r3.sources.email?.status, [...tw1.rows.values()].reduce((n, r) => n + r.writes, 0) - writesBefore], ["unchanged", "unchanged", 0]);
+
+// AC-1.6 a re-capture with new capturedUtc, same messages -> new file eTag but zero new/changed rows
+tw1.tick(11 * 60_000);
+files.teamsText = teamsFixture.replaceAll("2026-11-11T23:00:00Z", "2026-11-12T23:00:00Z");
+files.teamsEtag = '"{t},2"';
+const r4 = await runIngestPass(onCfg(), deps(tw1));
+t("AC-1.6 re-capture (new capture time) -> 0 new, 0 changed, rows unchanged", [r4.sources.teams?.new, r4.sources.teams?.changed, r4.sources.teams?.unchanged, tw1.rows.size], [0, 0, 5, 7]);
+
+// AC-3.4 an edit in a later file -> SAME row, changed
+tw1.tick(11 * 60_000);
+files.teamsText += `\n${JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-bravo@thread.example", messages: [{ id: "2001", timestamp: "2026-11-11T09:00:00Z", body: "HUDDLE-PA-SBX- FYI the nightly build is RED.", sender: { id: "user-other-2" } }] })}`;
+files.teamsEtag = '"{t},3"';
+const r5 = await runIngestPass(onCfg(), deps(tw1));
+t("AC-3.4 edited Teams message -> 1 changed, still 7 rows", [r5.sources.teams?.changed, tw1.rows.size], [1, 7]);
+
+// AC-2.4 the ledger, not the 12h/72h lookback, decides new: a message days older than the pass is ingested
+t("AC-2.4 an email 3+ days older than 'now' is still recorded (no lookback window)", ledgerEmailItems((validateEmailSnapshot(emailFixture, cfg, NOW) as { snapshot: { records: Record<string, unknown>[] } }).snapshot.records, cfg, { path: "/p", etag: null }).items.length, 2);
+
+// AC-2.5 a message that rolled out of today's snapshot keeps its row untouched
+tw1.tick(11 * 60_000);
+files.email = { ...emailFixture, snapshot: { value: emailFixture.snapshot.value.filter((r: { id: string }) => r.id !== "AAMk-sample-1") } };
+files.emailEtag = '"{e},2"';
+const rolled = tw1.rows.get(`email\u0000owner@work.example:AAMk-sample-1`)!;
+const rolledBefore = JSON.stringify(rolled);
+await runIngestPass(onCfg(), deps(tw1));
+t("AC-2.5 absence from a bounded snapshot changes nothing on that row", JSON.stringify(rolled), rolledBefore);
+
+console.log("G. PROCESSOR SEAM (AC-3.3, 3.6, 3.7, 3.8, 3.10, 6.3)");
+const spyProc = (name: "bell" | "proposals", fn: (i: SourceItem) => ProcessOutcome | Promise<ProcessOutcome>): ItemProcessor & { seen: string[] } => {
+  const seen: string[] = [];
+  return { name, seen, process: async (i) => (seen.push(i.sourceItemId), fn(i)) };
+};
+{
+  files.teamsText = teamsFixture;
+  files.teamsEtag = '"{t},1"';
+  files.email = emailFixture;
+  files.emailEtag = '"{e},1"';
+  const tw = makeTwin();
+  const bell = spyProc("bell", () => ({ status: "processed", resultIds: { bell: ["b"] } }));
+  const props = spyProc("proposals", () => ({ status: "processed", resultIds: { proposals: ["p"] } }));
+  await runIngestPass(onCfg({ bell: true }), deps(tw, [bell, props]));
+  t("AC-6.3 bell only: only the bell processor runs, every item processed", [bell.seen.length, props.seen.length, [...tw.rows.values()].every((r) => r.status === "processed")], [7, 0, true]);
+  t("AC-3.2 result ids stored on the row", tw.rows.get(`email\u0000owner@work.example:AAMk-sample-1`)!.result, { bell: ["b"] });
+}
+{
+  const tw = makeTwin();
+  const boom = spyProc("proposals", (i) => {
+    if (i.source === "teams") throw new Error("Can you send me the Q3 deck by Friday? CANARY-7f3a Bearer abc");
+    return { status: "processed" };
+  });
+  logs.length = 0;
+  const r = await runIngestPass(onCfg({ proposals: true, maxAttempts: 2 }), deps(tw, [boom]));
+  const teamsRows = [...tw.rows.values()].filter((x) => x.source === "teams");
+  t("AC-3.3 a failing processor write -> failed_retryable, never processed", [r.failed, teamsRows.every((x) => x.status === "failed_retryable")], [5, true]);
+  t("AC-3.8 the error is stored as a category, never its text", teamsRows.every((x) => x.cat === "processor_error"), true);
+  t("AC-3.8 pass log: no canary, chat name, id, sender, subject or Bearer", logs.filter((l) => /CANARY|Bearer|chat-|1001|Pat|HUDDLE|AAMk|@/.test(l)), []);
+  t("AC-3.8 pass log carries counts", logs.some((l) => /teams=ok new=5/.test(l) && /failed=5/.test(l)), true);
+  tw.tick(11 * 60_000);
+  await runIngestPass(onCfg({ proposals: true, maxAttempts: 2 }), deps(tw, [boom]));
+  t("AC-3.6 after maxAttempts the item is terminal failed", teamsRows.every((x) => x.status === "failed" && x.attempts === 2), true);
+  tw.tick(11 * 60_000);
+  const seenBefore = boom.seen.length;
+  await runIngestPass(onCfg({ proposals: true, maxAttempts: 2 }), deps(tw, [boom]));
+  t("AC-3.6 a terminal item is never retried", boom.seen.length, seenBefore);
+}
+{
+  const tw = makeTwin();
+  const nc = spyProc("bell", (i) => (i.source === "teams" ? { status: "needs_context", missingField: "owner_teams_id" } : { status: "processed" }));
+  await runIngestPass(onCfg({ bell: true }), deps(tw, [nc]));
+  t("AC-3.7 undecidable item -> needs_context with the missing field", [...tw.rows.values()].filter((x) => x.source === "teams").map((x) => `${x.status}:${x.missing}`)[0], "needs_context:owner_teams_id");
+  tw.tick(11 * 60_000);
+  files.teamsEtag = '"{t},9"';
+  const r = await runIngestPass(onCfg({ bell: true }), deps(tw, [nc]));
+  t("AC-3.7 a newly published file reopens needs_context rows for re-evaluation", [r.sources.teams?.reopened, nc.seen.filter((s) => s.includes("1001")).length], [5, 2]);
+  files.teamsEtag = '"{t},1"';
+}
+{
+  // An item already in the ledger whose text is no longer in the file (rolled out) -> needs_context, not failed
+  const tw = makeTwin();
+  await runIngestPass(onCfg(), deps(tw)); // ingest only
+  tw.tick(11 * 60_000);
+  files.email = { ...emailFixture, snapshot: { value: emailFixture.snapshot.value.filter((r: { id: string }) => r.id !== "AAMk-sample-1") } };
+  files.emailEtag = '"{e},7"';
+  const p2 = spyProc("bell", () => ({ status: "processed" }));
+  await runIngestPass(onCfg({ bell: true }), deps(tw, [p2]));
+  const row1 = tw.rows.get(`email\u0000owner@work.example:AAMk-sample-1`)!;
+  t("AC-2.5 a due item absent from the current file -> needs_context 'source_payload' (not failed, not resolved)", [row1.status, row1.missing], ["needs_context", "source_payload"]);
+  files.email = emailFixture;
+  files.emailEtag = '"{e},1"';
+}
+{
+  // AC-3.10 budget: a slow processor makes the pass yield; the rest resume next tick from the ledger
+  const tw = makeTwin();
+  const slow = spyProc("bell", () => {
+    tw.tick(4_000);
+    return { status: "processed" };
+  });
+  const r = await runIngestPass(onCfg({ bell: true }), deps(tw, [slow]), { budgetMs: 10_000, batch: 2 });
+  const done = [...tw.rows.values()].filter((x) => x.status === "processed").length;
+  tw.tick(11 * 60_000);
+  await runIngestPass(onCfg({ bell: true }), deps(tw, [slow]), { budgetMs: 60_000, batch: 2 });
+  t("AC-3.10 over budget -> yields, then the next tick finishes from the ledger", [r.yielded, done < 7, [...tw.rows.values()].every((x) => x.status === "processed")], [true, true, true]);
+}
+{
+  // AC-3.9 (twin level; the real CAS is in the SQL test): two overlapping passes process each item once
+  const tw = makeTwin();
+  const once = spyProc("bell", () => ({ status: "processed" }));
+  await Promise.all([runIngestPass(onCfg({ bell: true }), deps(tw, [once])), runIngestPass(onCfg({ bell: true }), deps(tw, [once]))]);
+  t("AC-3.9 two overlapping passes: each item processed once", [once.seen.length, new Set(once.seen).size], [7, 7]);
+}
+
+console.log("I. SERVER READ — Graph spy (AC-1.2, 1.8, 1.13)");
+{
+  process.env.AZURE_TENANT_ID = "tenant-placeholder";
+  process.env.AZURE_CLIENT_ID = "client-placeholder";
+  process.env.AZURE_CLIENT_SECRET = "secret-placeholder";
+  const { readTeamsLogFile } = await import("../src/features/huddle/lib/external-feeds/onedrive-feed.server");
+  const realFetch = globalThis.fetch;
+  const realErr = console.error;
+  const seen: { method: string; host: string; path: string }[] = [];
+  let size = 100;
+  let body = teamsFixture;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const u = new URL(String(input));
+    seen.push({ method: (init?.method ?? "GET").toUpperCase(), host: u.host, path: decodeURIComponent(u.pathname) });
+    if (u.host.startsWith("login.")) return new Response(JSON.stringify({ access_token: "tok" }), { status: 200 });
+    if (u.pathname.endsWith(":/content")) return new Response(body, { status: 200 });
+    return new Response(JSON.stringify({ id: "drive-item-t", eTag: '"{t},5"', size }), { status: 200 });
+  }) as typeof fetch;
+  console.error = () => {}; // state writes fail without AZURE_PG_URL; they are caught by design
+  try {
+    const c = onCfg();
+    const a = await readTeamsLogFile(c, null);
+    t("AC-1.2 Teams log read: meta then content, text returned with eTag + drive item id", a.ok && a.changed ? [a.etag, a.itemId, a.text.length === teamsFixture.length] : a, ['"{t},5"', "drive-item-t", true]);
+    const b = await readTeamsLogFile(c, '"{t},5"');
+    t("AC-1.2 unchanged eTag -> no download", [b.ok && !b.changed, seen.filter((s) => s.path.endsWith(":/content")).length], [true, 1]);
+    size = c.maxBytes + 1;
+    const big = await readTeamsLogFile(c, null);
+    t("AC-1.8 file over maxBytes -> rejected:too_large, no download", [big.ok ? "ok" : big.reason, seen.filter((s) => s.path.endsWith(":/content")).length], ["rejected:too_large", 1]);
+    size = 100;
+    body = "x".repeat(c.maxBytes + 1);
+    const big2 = await readTeamsLogFile(c, null);
+    t("AC-1.8 downloaded text over maxBytes -> rejected:too_large", big2.ok ? "ok" : big2.reason, "rejected:too_large");
+    const graph = seen.filter((s) => s.host === "graph.microsoft.com");
+    t("AC-1.13 every Graph call is a GET (no write, rename, move or delete of the log)", [graph.length > 0, graph.every((s) => s.method === "GET")], [true, true]);
+    t("AC-1.2 the Teams read targets the configured path only", graph.every((s) => s.path.includes("/drive/root:/automation/huddle-source-log.jsonl")), true);
+    t("AC-6.1 teams disabled -> readTeamsLogFile makes no call", await (async () => {
+      const n = seen.length;
+      const r = await readTeamsLogFile(noTeams, null);
+      return [r.ok ? "ok" : r.reason, seen.length - n];
+    })(), ["disabled", 0]);
+  } finally {
+    globalThis.fetch = realFetch;
+    console.error = realErr;
+  }
+}
 
 console.log("H. PUBLIC-REPO HYGIENE (AC-8.1, AC-8.2)");
 const NEW_FILES = [

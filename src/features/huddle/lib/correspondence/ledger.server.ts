@@ -164,7 +164,7 @@ export const pgLedger: LedgerStore = {
     await ensureBootstrapped();
     const r = await getPool().query(
       `UPDATE chat.correspondence_ledger SET status = 'pending', missing_field = NULL, next_attempt_at = now(),
-              claim_version = claim_version + 1, updated_at = now()
+              attempts = 0, claim_version = claim_version + 1, updated_at = now()
         WHERE owner_email = lower($1) AND source = $2 AND status = 'needs_context'`,
       [owner, source],
     );

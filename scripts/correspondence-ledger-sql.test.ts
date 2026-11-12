@@ -157,7 +157,7 @@ try {
   const c6 = (await claim("c6:m1"))!;
   t("AC-3.7 needs_context with missing_field", [await L.markNeedsContext(c6, "owner_teams_id"), (await row("c6:m1")).status, (await row("c6:m1")).mf], [true, "needs_context", "owner_teams_id"]);
   t("AC-3.7 needs_context is not claimable", !!(await claim("c6:m1")), false);
-  t("AC-3.7 a new file reopens needs_context rows of that source only", [await L.reopenNeedsContext(O, "email"), await L.reopenNeedsContext(O, "teams"), (await row("c6:m1")).status, (await row("c6:m1")).mf], [0, 1, "pending", null]);
+  t("AC-3.7 a new file reopens needs_context rows of that source only, with a fresh attempt budget", [await L.reopenNeedsContext(O, "email"), await L.reopenNeedsContext(O, "teams"), (await row("c6:m1")).status, (await row("c6:m1")).mf, (await row("c6:m1")).a], [0, 1, "pending", null, 0]);
 
   // hasDue / owner scope
   t("hasDue true while something is pending", await L.hasDue(O, ["teams"], 5), true);
