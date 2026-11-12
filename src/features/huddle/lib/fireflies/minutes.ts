@@ -248,18 +248,19 @@ export function meetingDateTimeLabel(ms: number | null, tz = "America/New_York")
     hour12: true,
   }).formatToParts(new Date(ms));
   const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  return \`\${value("month")}/\${value("day")}/\${value("year")}, \${value("hour")}:\${value("minute")} \${value("dayPeriod")}\`;
+  return value("month") + "/" + value("day") + "/" + value("year") + ", " +
+    value("hour") + ":" + value("minute") + " " + value("dayPeriod");
 }
 
 function cleanMeetingTheme(value: string | null | undefined): string {
   return String(value ?? "")
-    .replace(/^[#>*\\s-]+/, "")
-    .replace(/\\*\\*/g, "")
-    .replace(/^(?:meeting\\s+theme\\s*:\\s*)/i, "")
-    .replace(/^(?:align on|resolve|decide|plan|discuss|review|confirm|coordinate|identify|define|establish|set up|set)\\s+/i, "")
-    .replace(/[\\r\\n]+/g, " ")
+    .replace(/^[#>*\s-]+/, "")
+    .replace(/\*\*/g, "")
+    .replace(/^(?:meeting\s+theme\s*:\s*)/i, "")
+    .replace(/^(?:align on|resolve|decide|plan|discuss|review|confirm|coordinate|identify|define|establish|set up|set)\s+/i, "")
+    .replace(/[\r\n]+/g, " ")
     .replace(/[.!?;:,]+$/, "")
-    .replace(/\\s+/g, " ")
+    .replace(/\s+/g, " ")
     .trim()
     .slice(0, 100);
 }
@@ -267,18 +268,19 @@ function cleanMeetingTheme(value: string | null | undefined): string {
 /** Derive a short subject theme from the selected minutes output, with the Fireflies meeting title as fallback. */
 export function meetingThemeFromMinutes(markdown: string, fallbackTitle?: string | null): string {
   const source = String(markdown ?? "");
-  const focus = source.match(/^##\\s+(?:Focus|Agenda)\\s*$([\\s\\S]*?)(?=^##\\s+|$(?![\\s\\S]))/im)?.[1] ?? "";
-  const explicit = focus.match(/^\\s*[-*]\\s*Meeting theme:\\s*(.+)$/im)?.[1];
-  const heading = focus.match(/^\\s*###\\s+(.+)$/m)?.[1];
-  const bullet = focus.match(/^\\s*[-*]\\s+(.+)$/m)?.[1];
-  const summary = source.match(/^##\\s+Summary\\s*$([\\s\\S]*?)(?=^##\\s+|$(?![\\s\\S]))/im)?.[1] ?? "";
-  const sentence = summary.split(/(?<=[.!?])\\s+/)[0];
+  const focus = source.match(/^##\s+(?:Focus|Agenda)\s*$([\s\S]*?)(?=^##\s+|$(?![\s\S]))/im)?.[1] ?? "";
+  const explicit = focus.match(/^\s*[-*]\s*Meeting theme:\s*(.+)$/im)?.[1];
+  const heading = focus.match(/^\s*###\s+(.+)$/m)?.[1];
+  const bullet = focus.match(/^\s*[-*]\s+(.+)$/m)?.[1];
+  const summary = source.match(/^##\s+Summary\s*$([\s\S]*?)(?=^##\s+|$(?![\s\S]))/im)?.[1] ?? "";
+  const sentence = summary.split(/(?<=[.!?])\s+/)[0];
   return cleanMeetingTheme(explicit ?? heading ?? bullet ?? sentence ?? fallbackTitle) || cleanMeetingTheme(fallbackTitle) || "Team Meeting";
 }
 
 export function minutesSubject(theme: string | null | undefined, dateTimeLabel: string, isUpdate = false): string {
   const clean = cleanMeetingTheme(theme) || "Team Meeting";
-  return \`\${isUpdate ? "Updated Meeting Minutes" : "Meeting Minutes"}: \${clean}\${dateTimeLabel ? \` \${dateTimeLabel}\` : ""}\`;
+  return (isUpdate ? "Updated Meeting Minutes" : "Meeting Minutes") + ": " + clean +
+    (dateTimeLabel ? " " + dateTimeLabel : "");
 }
 
 // ---------------------------------------------------------------- idempotency + retry policy
