@@ -1,0 +1,49 @@
+{
+  "results": [
+    {
+      "name": "Needs-you bell is visible in the header",
+      "pass": true
+    },
+    {
+      "name": "Bell reports its state (count or nothing open)",
+      "pass": true,
+      "detail": "aria-label=\"Needs you: 17 open\" badge=\"17\""
+    },
+    {
+      "name": "Bell opens its list (items or the empty state)",
+      "pass": true,
+      "detail": "items=17 empty=0"
+    },
+    {
+      "name": "Badge count matches the list length",
+      "pass": true,
+      "detail": "badge=17 list=17"
+    },
+    {
+      "name": "Every row has a labelled Dismiss button (#206)",
+      "pass": true,
+      "detail": "buttons=17 items=17 text=\"Dismiss\""
+    },
+    {
+      "name": "DIAG jump trace (informational)",
+      "pass": true,
+      "detail": "rowsBefore=5 {\"toast\":false,\"focusedAttached\":false,\"maxRows\":25,\"focusedVisible\":false}"
+    },
+    {
+      "name": "Tapping an email row lands on its highlighted reply card (#206)",
+      "pass": false,
+      "detail": "focused=false olderToast=0"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
