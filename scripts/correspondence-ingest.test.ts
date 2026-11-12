@@ -551,8 +551,8 @@ console.log("J. SECTION 4 — unanswered correspondence -> the EXISTING bell (AC
   const chatRow = (o: Record<string, unknown> = {}) => ({ id: "attn-chat-x", kind: "chat", huddle_id: "dm-iris-chase", subject: "HUDDLE-PA-SBX- Alpha chat", from_name: "Pat Example", from_address: null, received_at: "2026-11-10T14:00:00Z", ...o });
   t("AC-4.2 `chat` is a bell kind with a label", [A.ATTENTION_KINDS.includes("chat"), A.ATTENTION_KIND_LABEL.chat], [true, "Teams chats"]);
   t("AC-4.2 a chat row becomes a bell item (not silently null) that opens Iris's chat", (() => {
-    const i = A.toAttentionItem(chatRow())!;
-    return [i.kind, i.huddleId, i.title, i.uncertain ?? false];
+    const i = A.toAttentionItem(chatRow());
+    return i ? [i.kind, i.huddleId, i.title, i.uncertain ?? false] : null;
   })(), ["chat", "dm-iris-chase", "HUDDLE-PA-SBX- Alpha chat", false]);
   t("AC-4.2 the bell component maps the chat kind to an icon", readFileSync(join(ROOT, "src/features/huddle/components/AttentionBell.tsx"), "utf8").includes("chat: MessageSquare"), true);
   const unc = A.toAttentionItem(chatRow({ needs_context: "owner_messages" }))!;
