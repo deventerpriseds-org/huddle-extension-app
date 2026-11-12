@@ -1,6 +1,16 @@
 # Action Tracker — huddle-extension-app
 Last updated: 2026-10-27
 
+## ACT:bell-dismiss-deeplink — labelled Dismiss on bell rows; tap jumps to the email's reply card (2026-11-12)
+Owner: *"The bell notifications were supposed to have a dismiss option for items I've resolved ... Any proposed draft
+reply should be deep linked so I can get to the place in the chat to approve, copy or else."*
+- [x] Found: main HAD an icon-only X (aria-label Dismiss, 13px) — easy to miss; tapping a row only setActive'd the chat
+      (landed at the newest message). The bell row id IS the card's emailId (chat.email_replies.id).
+- [x] Built (claude_bell-dismiss-deeplink 1aecdf62): labelled Dismiss button; email row tap -> requestEmailFocus ->
+      transcript opens the paged window up to the card, scrolls it to centre, highlights 3s; phone alert deep link
+      /?huddle=<id>&email=<emailId>. lib/attention/focus.ts; scripts/attention-focus.test.ts; F2/S1/W1/W4 FIRED.
+- [ ] Merge + deploy; owner confirms on web and phone. NOT owner-confirmed.
+
 ## ACT:fireflies-minutes — Fireflies webhook -> meeting-minutes email + OneDrive transcript (2026-11-10)
 Owner handoff (uploaded doc, "O" = go). Extends draft PR #188 on branch `claude_fireflies-minutes` (the push
 gate refuses #188's `feature/` branch name; the new PR supersedes #188).
