@@ -165,3 +165,74 @@ The handoff requires a ledger in the existing Huddle database (L54-60). The ledg
 | AC-5.22 | Given a Fireflies meeting, then transcript proposals read the meeting already queued and processed in `chat.fireflies_meetings` (its `meeting_id` + the fetched summary). The minutes email, the `fireflies-<id>.md` upload, the queue lease and the webhook are byte-unchanged. | extend/regression | `bun scripts/fireflies-minutes.test.ts` + `fireflies-queue-sql.test.ts` green; diff shows no edit to minutes flow |
 | AC-5.23 | Given any test or UAT run that exercises Approve, then the proposal text starts with `Test-` (repo hard rule) and the run deletes its journey rows and proposal rows afterwards. Zero remain. | hygiene | [DB] `title ILIKE 'Test-%'` count 0 after cleanup |
 | AC-5.24 | Given a checklist with 50 proposal rows, when it mounts, then it paints from the snapshot immediately and the proposal refresh is ONE request (not one per row), completing in < 2 s on the deployed SWA. | perf | [UI] network log + timing |
+
+---
+
+## 6. Feature flag, dev enablement, health, Fireflies unchanged
+
+| # | Given / When / Then | Cat. | Observed via |
+|---|---|---|---|
+| AC-6.1 | Given `HUDDLE_ONEDRIVE_FEEDS` absent, unparseable, `enabled:false`, or with `teams` absent/disabled, when the heartbeat runs, then the pass makes ZERO Graph calls for Teams, writes ZERO ledger/bell/proposal rows, and posts no checklist message. | flag | test spy: 0 fetches; [DB] 0 rows |
+| AC-6.2 | Given the config is valid but the owner-facing enablement control (a Settings toggle, default OFF, stored per owner, the config-centric rule) is OFF, then the same zero-activity result as AC-6.1 holds. Toggle ON with the config absent stays off and shows "OneDrive sources not configured". | flag | [UI] toggle; spy |
+| AC-6.3 | Given the correspondence pass and the proposal pass, then each can be enabled independently (bell only, checklist only, both). | flag | [F] config permutations |
+| AC-6.4 | Given everything OFF, then the existing email feed behaviour (Iris alerts from `emails.json`), appointments feed, bell and checklist are byte-identical in behaviour to origin/main 207b0b5e. | regression | `onedrive-feed.test.ts`, `inbound-email.test.ts`, `attention.test.ts` green, unmodified expectations |
+| AC-6.5 | Given this feature in any state, then `bun scripts/fireflies-minutes.test.ts` and `bun scripts/fireflies-queue-sql.test.ts` pass unchanged. No edit touches the Fireflies webhook route, `saveTranscript`, `TRANSCRIPT_FOLDER`, or the minutes settings. | regression | suite output; `git diff` on those paths empty |
+| AC-6.6 | Given any read, then a health view (Settings panel, same place as the mirroring/minutes panels) shows per source: last status (`ok`/`unchanged`/`missing`/`rejected:<reason>`/`error`), checked-at, counts (new, processed, needs_context, failed), and skipped-line count. It shows NO message, subject, sender or transcript text. | ops | [UI] screenshot; content canary absent |
+| AC-6.7 | Given a public route file, then none is added or edited (G7 `cross-app-turn-gate`). Work runs from `scheduler.server.ts` (`runDueScheduledJobs`). | guard | `bun scripts/cross-app-turn-gate.test.ts` green |
+| AC-6.8 | Given this ships to `main`, then nothing is enabled in prod: no `HUDDLE_ONEDRIVE_FEEDS` change, no toggle flipped, no email sent (handoff L26, L93). | release | SWA app settings unchanged; deploy log |
+
+---
+
+## 7. Dummy-file mode (switch to real files by config only)
+
+| # | Given / When / Then | Cat. | Observed via |
+|---|---|---|---|
+| AC-7.1 | Given repo fixtures `fixtures/onedrive/huddle-source-log.sample.jsonl` (planned record shape, synthetic, ≥ 1 duplicate line, ≥ 1 malformed line, ≥ 1 owner reply, ≥ 1 stated to-do, ≥ 1 FYI) and an email snapshot sample in the existing envelope, then the offline suite runs the full pass (adapter → ledger → bell → proposals) against them with an in-memory store, and expected counts match. | happy | [F] |
+| AC-7.2 | Given the same pure adapter, then the SAME function parses the fixture and a real downloaded file. Moving from dummy to real changes only `HUDDLE_ONEDRIVE_FEEDS` (path, `synthetic`, `subjectPrefix`, Teams fields) and the toggle. There is no code edit or redeploy beyond the settings change. | design | code review: no fixture path referenced from `src/` |
+| AC-7.3 | Given the existing `scripts/onedrive-feed-dryrun.ts`, then it is extended (not copied) to read the real Teams file and print verdict counts, skipped-line reasons and field-presence flags (e.g. `has_sender_id`, `has_internetMessageId`, `has_sent_items`). It prints NO ids, names, subjects or bodies (public Actions logs). | extend | dry-run output on fixture; [LOG] canary absent |
+| AC-7.4 | Given dummy data uploaded to OneDrive for an end-to-end try, then every subject/text starts with the configured synthetic prefix and every proposal starts with `Test-`, and a cleanup step removes resulting rows. | hygiene | [DB] 0 remaining |
+
+---
+
+## 8. Public repository hygiene
+
+| # | Given / When / Then | Cat. | Observed via |
+|---|---|---|---|
+| AC-8.1 | Given every new or changed file under `src/`, `scripts/`, `fixtures/`, `docs/`, then no real email address, tenant id, drive id, chat id, flow id or person name appears. Fixtures use `*.example` domains and placeholder ids (the existing `onedrive-feed.test.ts` convention). | security | a test greps new fixtures: every `@` domain ends `.example`; no GUID outside an allow-listed placeholder set |
+| AC-8.2 | Given client code, then no source path, mailbox, drive user or Teams identity is hard-coded. All come from the server-only config; the client receives only display data for its own owner. | security | grep `src/features/huddle/components` for `automation/` = 0 |
+| AC-8.3 | Given CI or workflow output for this feature, then it prints counts, statuses and domains only (AC-3.8 applies to Actions logs too). | security | workflow log grep for canary |
+
+---
+
+## OPEN QUESTIONS / UNKNOWN UNTIL REAL FILES EXIST
+
+- **OQ-1 Email archive shape.** The handoff says "individual files in `/automation/email`". The code reads one snapshot `emails.json`. Which is real? If it is per-file, the reader must list a folder (new Graph call, paging, cap). That changes AC-2.1/2.2.
+- **OQ-2 Synthetic marker for Teams.** The planned record has no `synthetic` field. Synthetic-mode safety (AC-1.9) needs one: a per-line flag, a chat-id allow-list, or a body prefix. Power Automate must emit it.
+- **OQ-3 Log growth.** The rolling file only grows. Does the flow trim it (by age or size)? If not, it will hit `maxBytes` (AC-1.8) and the feed stops. The trim policy and the cap need to be agreed.
+- **OQ-4 Owner's Teams identity.** Which sender field does the flow emit (AAD object id, UPN, display name)? Reply detection (AC-4.5) needs a stable id in config.
+- **OQ-5 Does the log include the owner's own messages** in each chat? If it is inbound-only, every chat item is `needs_context` (AC-4.6), and the bell feature delivers little until that changes.
+- **OQ-6 Behaviour change for feed email (owner thumbs-up needed).** Today the email snapshot is Inbox-only, so a work email can only settle by Dismiss. Marking those items "can't tell if answered" (AC-4.7) is a visible change to an existing flow. It needs the owner's 👍, or the flow must also export Sent Items.
+- **OQ-7 Where and when the proposal checklist is posted.** Is it in Iris's 1:1 as a checklist message after each 18:00 ET pass, on demand ("show my proposed tasks"), or both? Is there a push? Does a new delivery re-post all active proposals (AC-5.15) or only the new ones? Is a bell item added for "N tasks proposed"?
+- **OQ-8 "Completed" semantics.** Does completing a proposal create a DONE task for the record, or only close the proposal (AC-5.13 assumes the latter)?
+- **OQ-9 Cross-source dedup.** The same to-do stated in an email AND a Teams chat: one proposal or two? AC-5.21 only dedups within a source item and against the board.
+- **OQ-10 Path casing.** Fireflies writes `Automation/transcripts` (capital A); the planned paths use `/automation/...`. Confirm the real casing. Whether Graph path addressing is case-insensitive on OneDrive was not verified this session (no docs opened).
+- **OQ-11 Meaning of the record's `pending` status** and whether Huddle should ignore lines that are not `pending`.
+- **OQ-12 Edited and deleted Teams messages, and system messages** (S-16): their shape is only knowable from the real sample.
+- **OQ-13 Bell badge.** Do `needs_context` items count toward the badge, or show uncounted?
+
+## Gaps (documents that could not be opened this session)
+
+- **G-1** Microsoft Graph `chatMessage` resource reference (`learn.microsoft.com`): DNS blocked by the session allowlist. This blocks spelling rows for `messageType`, `deletedDateTime`, `lastModifiedDateTime`, `from.application` and `body.contentType`.
+- **G-2** JSON Lines format (`jsonlines.org`): blocked. This blocks the blank-line and CRLF rows (S-9, S-10).
+- **G-3** No real Power Automate sample exists yet. Every Teams field name in this file is the handoff's PLANNED shape.
+
+## Goal → AC coverage
+
+- Teams day's messages read without duplicates → AC-1.1-1.13, S-1-S-16, AC-3.1, 3.5
+- Email + Teams processed durably and idempotently → AC-2.1-2.7, AC-3.1-3.10
+- Unanswered correspondence in the bell, stored and updated → AC-4.1-4.13
+- To-dos from emails/chats/transcripts as a checklist to approve/edit/keep adding/remove → AC-5.1-5.24
+- Fireflies keeps working → AC-5.22, AC-6.5
+- Off until verified; quick switch with dummy files → AC-6.1-6.8, AC-7.1-7.4
+- Public repo safety → AC-8.1-8.3, AC-3.8
+- No AC lacks a goal. AC-5.24 and AC-3.10 (performance) are proposed defaults for the owner to confirm.
