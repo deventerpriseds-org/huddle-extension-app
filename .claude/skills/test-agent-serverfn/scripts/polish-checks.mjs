@@ -74,4 +74,31 @@ export const checks = [
     check("Send sheet shows Copy / Email draft / Word document", okCopy && okMail && okWord);
     check("Email draft lists at least one account", accounts.some((a) => a.includes("@")), `accounts=${JSON.stringify(accounts)}`);
   },
+
+  async function polishNewDraft({ page, check, screenshot }) {
+    // Owner 2026-11-12: a finished draft (20 versions) had no way to start over for a new task.
+    await page.keyboard.press("Escape").catch(() => {}); // close the Send sheet from the previous check
+    await page.waitForTimeout(500);
+    const draftTab = page.getByRole("tab", { name: "Draft" });
+    if ((await draftTab.count()) && (await draftTab.isVisible())) await draftTab.click();
+    const btn = page.getByRole("button", { name: "New draft", exact: true });
+    check("New draft button is shown", (await btn.count()) > 0);
+    if (!(await btn.count())) return;
+    const before = await page.locator("#polish-draft").inputValue().catch(() => "");
+    await btn.first().click();
+    await page.waitForTimeout(800);
+    const draftAfter = await page.locator("#polish-draft").inputValue().catch(() => "x");
+    const outAfter = await page.locator("#polish-out").inputValue().catch(() => "");
+    await screenshot("polish-new-draft");
+    check("New draft empties the draft and the polished text", draftAfter === "" && outAfter.trim() === "",
+      `draft="${draftAfter.slice(0, 40)}" out="${outAfter.slice(0, 40)}"`);
+    const undo = page.getByRole("button", { name: "Undo", exact: true });
+    if (await undo.count()) {
+      await undo.first().click();
+      await page.waitForTimeout(800);
+    }
+    const restored = await page.locator("#polish-draft").inputValue().catch(() => "");
+    check("Undo brings the previous draft back", restored === before && before.length > 0,
+      `before=${before.length} restored=${restored.length}`);
+  },
 ];

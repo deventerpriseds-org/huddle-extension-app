@@ -168,6 +168,36 @@ export function PolishView() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
 
+  // "New draft" (owner, 2026-11-12: "I have a draft with 20 versions that I am finished with but I don't have
+  // a way to start a new draft for a different task"). Clear only empties the draft box; this also drops the
+  // polished text and its versions so the next task starts clean. Undo restores everything for 10s.
+  const startNewDraft = () => {
+    const snap = { draft, versions, idx, polishedFrom };
+    setDraft("");
+    setVersions([]);
+    setIdx(0);
+    setPolishedFrom("");
+    setDraftChangedSinceEdit(false);
+    setShowChanges(false);
+    setDirection("");
+    setSel(null);
+    setFreshDot(false);
+    setStatus(null);
+    setTab("draft");
+    toast("Started a new draft.", {
+      duration: 10_000,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          setDraft(snap.draft);
+          setVersions(snap.versions);
+          setIdx(snap.idx);
+          setPolishedFrom(snap.polishedFrom);
+        },
+      },
+    });
+  };
+
   useEffect(() => lsSet("draft", draft), [draft]);
   useEffect(() => lsSet("versions", versions.slice(-20)), [versions]);
   useEffect(() => lsSet("from", polishedFrom), [polishedFrom]);
@@ -452,6 +482,12 @@ export function PolishView() {
             <span className="flex-1" />
             <ToolButton onClick={() => setDraft("")} disabled={!draft}>
               Clear
+            </ToolButton>
+            <ToolButton
+              onClick={startNewDraft}
+              disabled={!!busy || (!draft && versions.length === 0)}
+            >
+              New draft
             </ToolButton>
           </div>
           <label htmlFor="polish-draft" className="sr-only">
