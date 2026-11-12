@@ -1756,6 +1756,7 @@ hard-headed. When a canned line is reported as "the agents sound robotic", check
 shared path before touching any prompt: the snapshot layer is not always the source of an agent's words.
 
 ## Active work — 1:1 VOICE latency (journey-speed) — plan + premise CONFIRMED, build next (2026-08-01)
+- **2026-11-12 Polish "New draft" (LIVE, #208, UAT 11/11 run 43268935452, NOT owner-confirmed).** Owner had a finished 20-version draft and no way to start over. New draft (Draft header, next to Clear) empties draft + polished text + versions + direction/changes; Undo for 10s via toast; disabled while a polish is in flight. Clear unchanged (draft box only). Browser check `polishNewDraft` in polish-checks.mjs.
 User complaint: "the delay for my convo with Flex to SPEAK takes way too long, much longer than journey."
 It's a VOICE latency ask (not text). Today's 1:1 voice is SLOW because Realtime is ears-only
 (`create_response:false`, remote track muted) → transcript → full Responses turn (5–10s) → 2500ms poll
