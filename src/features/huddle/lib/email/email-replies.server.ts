@@ -53,6 +53,10 @@ CREATE INDEX IF NOT EXISTS email_replies_owner_status_idx ON chat.email_replies(
 ALTER TABLE chat.email_replies ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'email';
 ALTER TABLE chat.email_replies ADD COLUMN IF NOT EXISTS huddle_id TEXT;
 CREATE INDEX IF NOT EXISTS email_replies_owner_kind_status_idx ON chat.email_replies(owner_email, kind, status);
+-- Teams chats in the bell (2026-11-12, AC-correspondence-checklist section 4): kind 'chat', one row per chat
+-- thread. needs_context set = "can't tell if answered" (listed, not counted); source_link = Teams webUrl.
+ALTER TABLE chat.email_replies ADD COLUMN IF NOT EXISTS needs_context TEXT;
+ALTER TABLE chat.email_replies ADD COLUMN IF NOT EXISTS source_link TEXT;
 CREATE TABLE IF NOT EXISTS chat.attention_settings (
   owner_email  TEXT PRIMARY KEY,
   urgent_kinds TEXT[] NOT NULL,
@@ -247,17 +251,27 @@ export async function getEmailReplyCounts(
 
 /** Settle every owed row the owner has since answered from Outlook (a Sent Items message in the same
  *  conversation, sent after the email arrived). Never throws; returns how many it settled. */
-export async function reconcileRepliedFromSentItems(ownerEmail: string): Promise<number> {
+export async function reconcileRepliedFromSentItems(
+  ownerEmail: string,
+  opts: { feedSent?: () => Promise<Map<string, number> | null> } = {},
+): Promise<number> {
   let settled = 0;
   try {
     const owed = await listOwedEmailReplies(ownerEmail);
     if (!owed.length) return 0;
     const { hasSentReplyInConversation } = await import("./graph-email.server");
-    const { isFeedId } = await import("../external-feeds/onedrive-feed");
+    const { isFeedId, sentReplySettles } = await import("../external-feeds/onedrive-feed");
+    // Work-mailbox (feed) rows cannot be checked with the EDS key. Owner decision 2026-11-12 (option A):
+    // they settle from the work Sent Items snapshot (sent.json) when it is configured; with no such file
+    // (null) they keep today's behaviour -- owed until dismissed. Loaded once, only if a feed row is owed.
+    let feedSent: Map<string, number> | null | undefined;
     for (const row of owed) {
       if (!row.conversation_id) continue;
-      // Work-mailbox (feed) rows cannot be checked against Sent Items with the EDS key; they settle by Dismiss.
-      if (isFeedId(row.graph_message_id)) continue;
+      if (isFeedId(row.graph_message_id)) {
+        if (feedSent === undefined) feedSent = await (opts.feedSent ?? loadFeedSent)(ownerEmail).catch(() => null);
+        if (feedSent && sentReplySettles(row, feedSent) && (await settleEmailReply(row.id, "replied"))) settled++;
+        continue;
+      }
       const replied = await hasSentReplyInConversation(
         row.mailbox,
         row.conversation_id,
@@ -269,6 +283,19 @@ export async function reconcileRepliedFromSentItems(ownerEmail: string): Promise
     console.error("[email-replies] reconcile failed", err instanceof Error ? err.message : err);
   }
   return settled;
+}
+
+/** The work Sent Items snapshot as latest-sent-per-conversation, or null when it is not configured, not
+ *  this owner's, or unreadable (=> no change to today's behaviour). Read through the existing feed reader. */
+async function loadFeedSent(ownerEmail: string): Promise<Map<string, number> | null> {
+  const { getFeedsConfig, readFeed } = await import("../external-feeds/onedrive-feed.server");
+  const { feedBelongsTo, latestSentByConversation, mapSentRecords } = await import("../external-feeds/onedrive-feed");
+  const cfg = getFeedsConfig();
+  if (!cfg || !cfg.sent.enabled || !feedBelongsTo(cfg, ownerEmail)) return null;
+  const r = await readFeed(cfg, "sent");
+  const snap = r.ok ? r.snapshot : r.lastGood;
+  if (!snap) return null;
+  return latestSentByConversation(mapSentRecords(snap.records, cfg).sent);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -304,13 +331,15 @@ export interface AttentionRow {
   from_address: string | null;
   received_at: string | null;
   created_at: string | null;
+  needs_context?: string | null;
+  source_link?: string | null;
 }
 
 /** Every OPEN item (any kind) for the owner, newest first. The bell filters by the owner's kinds. */
 export async function listOpenAttention(ownerEmail: string, limit = 50): Promise<AttentionRow[]> {
   await ensureBootstrapped();
   const r = await getPool().query<AttentionRow>(
-    `SELECT id, kind, huddle_id, subject, from_name, from_address, received_at, created_at
+    `SELECT id, kind, huddle_id, subject, from_name, from_address, received_at, created_at, needs_context, source_link
        FROM chat.email_replies
       WHERE owner_email = lower($1) AND status IN ('owed','drafted')
       ORDER BY coalesce(received_at, created_at) DESC
@@ -321,15 +350,80 @@ export async function listOpenAttention(ownerEmail: string, limit = 50): Promise
 }
 
 /** "Dealt with in the chat": the owner sent a message in `huddleId`, so that conversation's open
- *  MEETING/APPOINTMENT items settle. Emails keep their own rules (reply detected / Dismiss). */
+ *  MEETING/APPOINTMENT items settle. Emails keep their own rules (reply detected / Dismiss), and so do Teams
+ *  chats: talking to Iris is not answering the Teams chat (a later owner message in THAT chat, or Dismiss). */
 export async function settleAttentionForHuddle(ownerEmail: string, huddleId: string): Promise<number> {
   await ensureBootstrapped();
   const r = await getPool().query(
     `UPDATE chat.email_replies SET status = 'replied', settled_at = now(), updated_at = now()
-      WHERE owner_email = lower($1) AND huddle_id = $2 AND kind <> 'email' AND status IN ('owed','drafted')`,
+      WHERE owner_email = lower($1) AND huddle_id = $2 AND kind NOT IN ('email','chat') AND status IN ('owed','drafted')`,
     [ownerEmail, huddleId],
   );
   return r.rowCount ?? 0;
+}
+
+/**
+ * One Teams chat thread needs the owner (AC-4.1/4.9): ONE row per chat (id = attention id of the chat),
+ * holding the NEWEST unanswered ask. An open row is refreshed in place. A settled row (replied / dismissed)
+ * is reopened ONLY by a newer ask (a different message, later than the one it held) -- re-reading the ask
+ * the owner dismissed never reopens it (AC-4.10). Returns whether a row was written.
+ */
+export async function upsertChatAttention(r: {
+  id: string;
+  ownerEmail: string;
+  chatId: string;
+  askSourceId: string;
+  askAt: string;
+  senderName: string | null;
+  chatName: string | null;
+  link: string | null;
+  needsContext: string | null;
+  huddleId: string;
+}): Promise<boolean> {
+  await ensureBootstrapped();
+  const q = await getPool().query(
+    `INSERT INTO chat.email_replies AS e
+       (id, owner_email, mailbox, graph_message_id, conversation_id, from_name, subject, received_at, kind, huddle_id,
+        needs_context, source_link)
+     VALUES ($1, lower($2), '', $3, $4, $5, $6, $7, 'chat', $8, $9, $10)
+     ON CONFLICT (id) DO UPDATE SET
+       graph_message_id = EXCLUDED.graph_message_id, from_name = EXCLUDED.from_name, subject = EXCLUDED.subject,
+       received_at = EXCLUDED.received_at, needs_context = EXCLUDED.needs_context, source_link = EXCLUDED.source_link,
+       status = CASE WHEN e.status IN ('owed','drafted') THEN e.status ELSE 'owed' END,
+       settled_at = CASE WHEN e.status IN ('owed','drafted') THEN e.settled_at ELSE NULL END,
+       updated_at = now()
+     WHERE e.kind = 'chat' AND e.owner_email = lower($2) AND (
+       (e.status IN ('owed','drafted') AND (e.graph_message_id IS DISTINCT FROM EXCLUDED.graph_message_id
+          OR e.needs_context IS DISTINCT FROM EXCLUDED.needs_context OR e.subject IS DISTINCT FROM EXCLUDED.subject))
+       OR (e.status NOT IN ('owed','drafted') AND EXCLUDED.received_at > e.received_at
+          AND EXCLUDED.graph_message_id IS DISTINCT FROM e.graph_message_id))`,
+    [
+      r.id,
+      r.ownerEmail,
+      r.askSourceId,
+      r.chatId,
+      r.senderName?.slice(0, 200) ?? null,
+      r.chatName?.slice(0, 300) ?? null,
+      r.askAt,
+      r.huddleId,
+      r.needsContext,
+      r.link?.slice(0, 1000) ?? null,
+    ],
+  );
+  return (q.rowCount ?? 0) > 0;
+}
+
+/** The owner posted in the Teams chat at `ownerReplyAt`: an open row for that chat whose ask is not newer
+ *  settles 'replied' (AC-4.5/4.13). Returns whether it settled. */
+export async function settleChatAttention(id: string, ownerEmail: string, ownerReplyAt: string): Promise<boolean> {
+  await ensureBootstrapped();
+  const q = await getPool().query(
+    `UPDATE chat.email_replies SET status = 'replied', settled_at = now(), updated_at = now()
+      WHERE id = $1 AND owner_email = lower($2) AND kind = 'chat' AND status IN ('owed','drafted')
+        AND received_at <= $3`,
+    [id, ownerEmail, ownerReplyAt],
+  );
+  return (q.rowCount ?? 0) > 0;
 }
 
 export async function getUrgentKinds(ownerEmail: string): Promise<unknown> {

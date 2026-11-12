@@ -96,3 +96,108 @@ cross-app-turn-gate 92/0).
   **99 passed, 0 failed.** Ledger SQL **33/0**. tsc clean. onedrive-feed all passed, inbound-email 72/0,
   attention all passed, fireflies-queue-sql all passed, cross-app-turn-gate 92/0, fireflies-minutes
   **64 PASS / 3 FAIL (unchanged from main)**.
+
+### Step 5 -- dry-run extended (AC-7.3, AC-8.3)
+
+- `scripts/onedrive-feed-dryrun.ts` extended in place: email `ledger items / skipped / has_internetMessageId /
+  has_conversationId / has_sent_items`; Teams `HTTP / bytes / over_cap`, parse verdict, lines, messages,
+  duplicates, chat COUNT, skip reasons (teamsParseNote), and `has_sender_id / has_sender_name /
+  has_app_sender / has_chat_name / has_web_url / owner_ids_configured / owner_messages`; correspondence
+  switches. Run against the fixtures with a stubbed fetch: output has 0 hits for the canary, ids, chat
+  ids, person names or the synthetic subject prefix.
+- Note: the parent session committed this worktree's in-progress tree as 06e4f1b5 while this agent was
+  alive (it believed the agent dead); content identical to the step-4 work, nothing lost.
+
+### Step 6 -- aligned to the Power Automate contract (owner decisions 2026-11-12)
+
+Source: `docs/integrations/power-automate-huddle-sources.md` (coordinator, read from
+`refs/heads/eds-wip/claude_pa-instructions`) + coordinator message.
+- `sent` config entry (FeedFileConfig, default `/automation/email/sent.json`, OFF when absent);
+  `validateSentSnapshot` = the inbox envelope rules with `feed_type:"sent_snapshot"`; `readFeed(cfg,"sent")`.
+  `mapSentRecords` uses `conversationId` (required, the match key), `sentDateTime` (fallback
+  `receivedDateTime`), `subject` (prefix filter while synthetic). **No `isSent` marker** is added to the inbox
+  snapshot. `latestSentByConversation` for section 4.
+- `teams.ownerSenderIds` (lower-cased; `ownerIds` accepted as an alias) replaces `ownerIds`.
+- Teams log default path moved to `/automation/email/huddle-source-log.jsonl` (same folder as the emails).
+- AC-1.8 amended to the contract ("Huddle reads the end of it"): an oversized Teams log is read with
+  `Range: bytes=-maxBytes`; a server that ignores Range is trimmed to the same tail; the parse drops the
+  partial first line; the health note says how many bytes were not read. Email/appointments/sent keep the
+  `rejected:too_large` rule (tested). Range on Graph `/content` is from memory of the Graph docs (not
+  opened this session); the code is correct either way (206 or 200 + trim).
+- Fixture `scripts/fixtures/onedrive/sent.sample.json`. Test line in the doc's exact Graph message shape.
+- `correspondence-ingest.test.ts` **113 passed, 0 failed**; onedrive-feed all passed; tsc clean.
+
+### Step 7 -- AC section 4: unanswered correspondence -> the EXISTING attention bell
+
+Scope extended by the coordinator (2026-11-12) with owner decisions: proposals get NO bell item;
+email "answered?" = option A (Sent Items file); until it exists, existing work emails are UNCHANGED.
+
+| Existing behaviour today | What it becomes | Why | Impact on the owner | Reversible? |
+|---|---|---|---|---|
+| Bell kinds email/meeting/appointment | + `chat` (Teams chats), on by default | AC-4.2 | new rows only when `correspondence.bell` is on | yes (config off / "What counts") |
+| Saved "What counts" list is read as-is | a list saved before `chat` existed also counts chat; unticking chat now saves `-chat` | AC-4.3 | none for existing kinds | yes |
+| Badge = every listed item | badge = items whose state is known; "can't tell" chat rows listed, not counted | owner decision | no change while no chat rows exist | yes |
+| Owner posting in a huddle settles its non-email rows | same, but `chat` rows are excluded (talking to Iris is not answering a Teams chat) | correctness | none today (no chat rows) | yes |
+| Feed (work) emails settle only by Dismiss | also settle `replied` when `sent.json` has a later message in the same conversation; absent file = unchanged | owner decision 2 (option A) | only after the `sent` config entry exists | yes (remove `sent`) |
+
+- `lib/attention/attention.ts`: `chat` kind + label, `LATE_KINDS`, `resolveStoredUrgentKinds` (read path),
+  `serializeUrgentKinds` (save path), `badgeCount`, chat branch of `toAttentionItem` (uncertain flag,
+  "Can't tell if answered: ..." reason, https-only `link`). `parseUrgentKinds` is unchanged (attention.test.ts
+  A3 pins it).
+- `attention.functions.ts`: read uses `resolveStoredUrgentKinds`, `count = badgeCount(items)`; save stores
+  `serializeUrgentKinds`. `AttentionBell.tsx`: chat icon, badge = known items, muted uncertain rows,
+  "Open in Teams" only when a link exists; the row itself opens Iris's chat (existing `openChat`).
+- `email-replies.server.ts`: columns `needs_context`, `source_link` (idempotent ALTER);
+  `upsertChatAttention` (one row per chat; open row refreshed; a settled row reopens only for a NEWER,
+  different ask); `settleChatAttention`; `settleAttentionForHuddle` excludes `chat`;
+  `reconcileRepliedFromSentItems` settles feed rows via `sentReplySettles` against `sent.json`
+  (`loadFeedSent`: config `sent` enabled + `feedBelongsTo` + existing `readFeed(cfg,"sent")`; injectable).
+- `lib/correspondence/bell.ts`: `chatMessageAsks` (reuses `asksSomething` / `isAutomatedAddress`; app
+  senders and the owner never ask), `decideChatThread`, `chatAttentionId` (`attn-chat-<shortHash>`),
+  `makeBellProcessor` (per pass, one decision per chat; email items are a no-op -- AC-2.7).
+  "Owner messages exported" = at least one owner message anywhere in the parsed log.
+- Seam change (backward compatible): `ItemProcessor.process` ctx gains optional `batch`.
+- Tests: ingest **147/0** (section J), ledger+bell SQL **49/0**, tsc clean, onedrive-feed / attention /
+  attention-focus / fireflies-queue-sql all passed, inbound-email 72/0, cross-app-turn-gate 92/0,
+  fireflies-minutes **64/3 (unchanged)**.
+- NOT done in section 4: AC-4.7's "needs_context for feed email with no sent mail" -- owner decision 2
+  says existing work emails stay unchanged. Bell badge for needs_context = not counted (OQ-13 answered
+  by the coordinator).
+
+### Step 8 -- mutation proofs (scripts/mutate.sh, anchors from files, exit code read)
+
+44 new guards, each run through `mutate.sh` (baseline -> mutated -> comment-only control -> restore ->
+post-restore run). **44 / 44 `FIRED (control EQUIVALENT)`, exit 0, tree clean after every run.**
+Two first attempts were `UNDETERMINED` (exit 4) and were NOT counted: M27's replacement left SQL `$3`
+unreferenced (Postgres rejected the statement -> harness error), and M30's test command ran `tsc` first
+and the mutated test threw before printing its name. Both were fixed (M27 keeps `$3` referenced; the AC-4.2
+test is null-safe and reports a named FAIL) and re-run to FIRED.
+
+| id | guard (AC) | suite |
+|---|---|---|
+| M01-M02 | synthetic line marker / text prefix (AC-1.9) | ingest |
+| M03-M04 | JSON array refused, both layers (S-8) | ingest |
+| M05 | wrong source line (S-15) | ingest |
+| M06 | duplicate kept once (AC-1.5) | ingest |
+| M07 | identity encoding (AC-1.7) | ingest |
+| M08 | capture time not in hash (AC-1.6) | ingest |
+| M09 | error category only (AC-3.8) | ingest |
+| M10 | ingest-off gate (AC-6.1) | ingest |
+| M11 | no lookback window (AC-2.4) | ingest |
+| M12 | processor failure never processed (AC-3.3) | ingest |
+| M13 | observe only on a new eTag (AC-3.5) | ingest |
+| M14 | absent payload -> needs_context (AC-2.5) | ingest |
+| M15 | new file reopens needs_context (AC-3.7) | ingest |
+| M16 | budget yield (AC-3.10) | ingest |
+| M17 | tail read of oversized Teams log (AC-1.8) | ingest |
+| M18 | email keeps rejected:too_large (AC-6.4) | ingest |
+| M19 | unchanged eTag -> no download (AC-1.2) | ingest |
+| M20-M21 | teams / sent entry absent -> OFF (AC-6.1, decision 2) | ingest |
+| M22-M23 | sent must be LATER; conversationId required | ingest |
+| M24-M29 | SQL: unchanged keeps status, claim_version CAS, backoff, D9 give-up, lease, terminal failed | ledger-sql |
+| M30-M35 | bell: chat kind, late-kind default, opt-out, badge excludes uncertain, https-only link, uncertain flag | ingest |
+| M36-M39 | chat decision: ask after owner, owner messages absent, ids unconfigured, app sender | ingest |
+| M40-M44 | SQL: Iris chat does not settle Teams rows, dismissed not reopened, older owner msg, no sent file unchanged, chat-only upsert | ledger-sql |
+
+NOT mutation-provable, stated honestly: `fetchDriveFile`'s explicit `method: "GET"` -- removing it is
+behaviourally equivalent (fetch defaults to GET); AC-1.13 rests on the fetch spy seeing GET on every call.

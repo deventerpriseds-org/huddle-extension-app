@@ -8,18 +8,27 @@
 //             gains a `kind`, so emails, meetings and appointments share one open/settled lifecycle.
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   scripts/attention.test.ts; .claude/actions.md ACT:attention-bell.
+// 2026-11-12: a `chat` kind (an unanswered Teams chat, one row per chat thread) -- AC
+//             docs/ac/AC-correspondence-checklist.md section 4. A chat row may be UNCERTAIN ("can't tell if
+//             answered": the owner's own Teams messages are not available) -- shown, never counted in the
+//             badge. Stored settings saved before `chat` existed still count it (AC-4.3).
 
-export const ATTENTION_KINDS = ["email", "meeting", "appointment"] as const;
+export const ATTENTION_KINDS = ["email", "meeting", "appointment", "chat"] as const;
 export type AttentionKind = (typeof ATTENTION_KINDS)[number];
 
 export const ATTENTION_KIND_LABEL: Record<AttentionKind, string> = {
   email: "Emails",
   meeting: "Meetings",
   appointment: "Appointments & reminders",
+  chat: "Teams chats",
 };
 
 /** Seeded default only -- the owner changes it from the bell itself (config-centric rule). */
-export const DEFAULT_URGENT_KINDS: AttentionKind[] = ["email", "meeting", "appointment"];
+export const DEFAULT_URGENT_KINDS: AttentionKind[] = ["email", "meeting", "appointment", "chat"];
+
+/** Kinds added after owners could already save a setting. A saved list that predates one of these did not
+ *  choose to exclude it; saving the setting again records an explicit opt-out as "-<kind>". */
+export const LATE_KINDS: AttentionKind[] = ["chat"];
 
 export const isAttentionKind = (v: unknown): v is AttentionKind =>
   typeof v === "string" && (ATTENTION_KINDS as readonly string[]).includes(v);
@@ -31,6 +40,22 @@ export function parseUrgentKinds(raw: unknown): AttentionKind[] {
   const out: AttentionKind[] = [];
   for (const k of raw) if (isAttentionKind(k) && !out.includes(k)) out.push(k);
   return out;
+}
+
+/** A STORED setting -> the kinds that count (AC-4.3). Same as parseUrgentKinds, plus: a late kind the saved
+ *  list neither names nor opts out of ("-chat") counts, so a setting saved before the kind existed cannot
+ *  silently hide it. An explicit empty list (everything switched off) stays empty. */
+export function resolveStoredUrgentKinds(raw: unknown): AttentionKind[] {
+  const out = parseUrgentKinds(raw);
+  if (!Array.isArray(raw) || raw.length === 0) return out;
+  const optedOut = new Set(raw.filter((x): x is string => typeof x === "string" && x.startsWith("-")).map((x) => x.slice(1)));
+  for (const k of LATE_KINDS) if (!out.includes(k) && !optedOut.has(k)) out.push(k);
+  return out;
+}
+
+/** The owner's chosen kinds -> what is stored: the kinds, plus "-<kind>" for each late kind left off. */
+export function serializeUrgentKinds(kinds: AttentionKind[]): string[] {
+  return [...kinds, ...LATE_KINDS.filter((k) => !kinds.includes(k)).map((k) => `-${k}`)];
 }
 
 /** Ids of non-email bell items. Prefixed so they can never collide with an email row (a short hash). */
@@ -46,6 +71,10 @@ export interface AttentionRowLike {
   from_address: string | null;
   received_at: string | null;
   created_at?: string | null;
+  /** chat rows: why "answered?" cannot be decided (owner_teams_id | owner_messages); null = decided. */
+  needs_context?: string | null;
+  /** chat rows: the source's own link (Teams webUrl) when the record supplied one. */
+  source_link?: string | null;
 }
 
 export interface AttentionItem {
@@ -56,7 +85,25 @@ export interface AttentionItem {
   /** The conversation "Open in chat" switches to. Email alerts are Iris's. */
   huddleId: string;
   at: string | null;
+  /** "Can't tell if answered": shown in the list, NOT counted in the badge. */
+  uncertain?: boolean;
+  /** An external deep link supplied by the source (e.g. open in Teams). Absent => no control rendered. */
+  link?: string;
 }
+
+/** Owner-readable reason a chat's answered state is unknown. Never says "unanswered". */
+export const CHAT_UNCERTAIN_REASON: Record<string, string> = {
+  owner_teams_id: "Can't tell if answered: your Teams id isn't configured",
+  owner_messages: "Can't tell if answered: your own Teams messages aren't in the log",
+};
+
+/** The badge counts only items whose state is known (uncertain chat rows are listed, not counted). */
+export const badgeCount = (items: AttentionItem[]): number => items.filter((i) => !i.uncertain).length;
+
+const safeLink = (u: string | null | undefined): string | undefined => {
+  const s = String(u ?? "").trim();
+  return /^https:\/\/[^\s"<>]+$/i.test(s) ? s : undefined;
+};
 
 /** Where an email alert lives: Iris announces every flagged email in her 1:1 (inbound-email.server). */
 export const EMAIL_ALERT_HUDDLE = "dm-iris-chase";
@@ -73,6 +120,24 @@ export function toAttentionItem(r: AttentionRowLike): AttentionItem | null {
       detail: `From ${who}`,
       huddleId: r.huddle_id || EMAIL_ALERT_HUDDLE,
       at: r.received_at ?? r.created_at ?? null,
+    };
+  }
+  if (kind === "chat") {
+    const uncertain = !!r.needs_context;
+    const who = r.from_name?.trim() || "someone";
+    const link = safeLink(r.source_link);
+    return {
+      id: r.id,
+      kind,
+      title: r.subject?.trim() || "Teams chat",
+      detail: uncertain
+        ? `Teams · ${who} · ${CHAT_UNCERTAIN_REASON[r.needs_context!] ?? "Can't tell if answered"}`
+        : `Teams · ${who} asked and hasn't had your reply`,
+      // A chat row opens Iris's chat (coordinator, 2026-11-12); the Teams link is separate.
+      huddleId: r.huddle_id || EMAIL_ALERT_HUDDLE,
+      at: r.received_at ?? r.created_at ?? null,
+      ...(uncertain ? { uncertain: true } : {}),
+      ...(link ? { link } : {}),
     };
   }
   return {

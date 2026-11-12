@@ -24,11 +24,13 @@ export interface FeedFileConfig {
 }
 
 /** The rolling Teams JSON Lines log (correspondence feature, 2026-11-12). Same drive + owner binding as
- *  the email/appointments files; `source` is the label every line must carry, `ownerIds` the owner's own
- *  Teams sender ids (used only to recognise HIS replies, never to address anyone). */
+ *  the email/appointments files; `source` is the label every line must carry, `ownerSenderIds` the owner's
+ *  own Teams sender ids as they appear in `from.user.id` (config key `ownerSenderIds`; `ownerIds` accepted as
+ *  an alias), lower-cased, used only to recognise HIS replies, never to address anyone. None configured =>
+ *  every chat is "can't tell" (OQ-4). */
 export interface TeamsFeedConfig extends FeedFileConfig {
   source: string;
-  ownerIds: string[];
+  ownerSenderIds: string[];
 }
 
 /** Correspondence ingest switches (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence turns them on).
@@ -44,7 +46,11 @@ export interface CorrespondenceConfig {
   minIntervalMinutes: number;
 }
 
-export const TEAMS_LOG_PATH_DEFAULT = "/automation/huddle-source-log.jsonl";
+/** Same folder as the work-email snapshot (owner 2026-11-12; docs/integrations/power-automate-huddle-sources.md). */
+export const TEAMS_LOG_PATH_DEFAULT = "/automation/email/huddle-source-log.jsonl";
+/** Sent Items snapshot (owner decision 2026-11-12, option A): a SEPARATE replace-in-place file beside the
+ *  inbox snapshot, feed_type "sent_snapshot". */
+export const SENT_PATH_DEFAULT = "/automation/email/sent.json";
 export const TEAMS_SOURCE_EXPECTED = "power-automate-teams";
 export const CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT = 5;
 export const CORRESPONDENCE_MIN_INTERVAL_DEFAULT = 10;
@@ -71,6 +77,8 @@ export interface OneDriveFeedsConfig {
   appointments: FeedFileConfig;
   /** Absent `teams` key => disabled (unlike email/appointments, which predate it and default on). */
   teams: TeamsFeedConfig;
+  /** Absent `sent` key => disabled: with no Sent Items file, owed work email behaves exactly as today. */
+  sent: FeedFileConfig;
   correspondence: CorrespondenceConfig;
 }
 
@@ -121,6 +129,7 @@ export function parseFeedsConfig(raw: string | undefined | null): OneDriveFeedsC
     email: file(j.email, "/automation/email/emails.json"),
     appointments: file(j.appointments, "/automation/appointments/appointments.json"),
     teams: teamsFile(j.teams, file),
+    sent: j.sent === undefined || j.sent === null ? { enabled: false, path: SENT_PATH_DEFAULT } : file(j.sent, SENT_PATH_DEFAULT),
     correspondence: correspondenceFlags(j.correspondence),
   };
 }
@@ -133,7 +142,13 @@ function teamsFile(v: unknown, file: (v: unknown, fallback: string) => FeedFileC
   return {
     ...base,
     source: str(o.source) || TEAMS_SOURCE_EXPECTED,
-    ownerIds: (Array.isArray(o.ownerIds) ? o.ownerIds : []).map((x) => str(x).toLowerCase()).filter(Boolean),
+    ownerSenderIds: [
+      ...new Set(
+        [...(Array.isArray(o.ownerSenderIds) ? o.ownerSenderIds : []), ...(Array.isArray(o.ownerIds) ? o.ownerIds : [])]
+          .map((x) => str(x).toLowerCase())
+          .filter(Boolean),
+      ),
+    ],
   };
 }
 
@@ -194,7 +209,7 @@ type Validation<R> = { ok: true; snapshot: ValidSnapshot<R> } | { ok: false; rea
 function validateEnvelope(
   j: unknown,
   cfg: OneDriveFeedsConfig,
-  feedType: "email_snapshot" | "appointments_snapshot",
+  feedType: "email_snapshot" | "appointments_snapshot" | "sent_snapshot",
   nowMs: number,
 ): Validation<Record<string, unknown>> {
   if (!j || typeof j !== "object" || Array.isArray(j)) return { ok: false, reason: "not_json" };
@@ -216,7 +231,7 @@ function validateEnvelope(
   if (!isIso(e.published_utc) || !isIso(e.window_start_utc)) return { ok: false, reason: "bad_timestamps" };
   const published = Date.parse(str(e.published_utc));
   if (published > nowMs + FUTURE_SKEW_MS) return { ok: false, reason: "bad_timestamps" };
-  if (feedType === "email_snapshot" && Date.parse(str(e.window_start_utc)) > published) {
+  if ((feedType === "email_snapshot" || feedType === "sent_snapshot") && Date.parse(str(e.window_start_utc)) > published) {
     return { ok: false, reason: "bad_timestamps" };
   }
   if (feedType === "appointments_snapshot") {
@@ -250,6 +265,55 @@ export const validateEmailSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowM
   validateEnvelope(j, cfg, "email_snapshot", nowMs);
 export const validateAppointmentSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowMs: number = Date.now()) =>
   validateEnvelope(j, cfg, "appointments_snapshot", nowMs);
+/** Sent Items snapshot: the SAME envelope rules as the inbox snapshot, feed_type "sent_snapshot". */
+export const validateSentSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowMs: number = Date.now()) =>
+  validateEnvelope(j, cfg, "sent_snapshot", nowMs);
+
+/** One sent message, reduced to what reply detection needs (no body, no recipients). */
+export interface SentMessage {
+  conversationId: string;
+  sentAt: string;
+}
+
+/**
+ * Pure: Sent Items records -> {conversationId, sentAt}. `conversationId` is the match key and required;
+ * `sentDateTime` (fallback `receivedDateTime`) must parse. While synthetic, only subjects carrying the test
+ * prefix count (same rule as the inbox). Anything else is dropped and counted.
+ */
+export function mapSentRecords(records: Record<string, unknown>[], cfg: OneDriveFeedsConfig): { sent: SentMessage[]; skipped: number } {
+  const sent: SentMessage[] = [];
+  let skipped = 0;
+  for (const r of records) {
+    const conversationId = str(r.conversationId);
+    const at = isIso(r.sentDateTime) ? str(r.sentDateTime) : isIso(r.receivedDateTime) ? str(r.receivedDateTime) : "";
+    if (!conversationId || !at || (cfg.synthetic && !str(r.subject).startsWith(cfg.subjectPrefix ?? "\u0000"))) {
+      skipped++;
+      continue;
+    }
+    sent.push({ conversationId, sentAt: new Date(Date.parse(at)).toISOString() });
+  }
+  return { sent, skipped };
+}
+
+/** Pure (owner decision 2026-11-12, option A): an owed WORK email is answered when a sent message in the same
+ *  conversation is LATER than the email's receipt. No conversation id, no receipt time, or no later sent
+ *  message => not settled (it stays owed, exactly as today). */
+export function sentReplySettles(
+  row: { conversation_id: string | null; received_at: string | Date | null },
+  latestSent: Map<string, number>,
+): boolean {
+  if (!row.conversation_id || !row.received_at) return false;
+  const received = row.received_at instanceof Date ? row.received_at.getTime() : Date.parse(row.received_at);
+  const sent = latestSent.get(row.conversation_id);
+  return Number.isFinite(received) && sent !== undefined && sent > received;
+}
+
+/** Pure: latest sent time per conversation (ms). */
+export function latestSentByConversation(sent: SentMessage[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const s of sent) m.set(s.conversationId, Math.max(m.get(s.conversationId) ?? -Infinity, Date.parse(s.sentAt)));
+  return m;
+}
 
 /** Prefix that marks an id as coming from a feed. EDS Graph ids never start with it, so a feed record
  *  can never be mistaken for (or collide with) an EDS Graph message or event. */

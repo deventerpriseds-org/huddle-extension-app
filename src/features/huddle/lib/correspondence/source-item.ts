@@ -208,7 +208,10 @@ export type ProcessOutcome =
 
 export interface ItemProcessor {
   name: "bell" | "proposals";
-  process(item: SourceItem, ctx: { owner: string; nowMs: number }): Promise<ProcessOutcome>;
+  /** `batch` = every item whose text this pass holds (all sources), for thread context (a chat's other
+   *  messages, whether the log carries the owner's own messages at all). Optional: a processor that only
+   *  needs the item ignores it. */
+  process(item: SourceItem, ctx: { owner: string; nowMs: number; batch?: readonly SourceItem[] }): Promise<ProcessOutcome>;
 }
 
 /**

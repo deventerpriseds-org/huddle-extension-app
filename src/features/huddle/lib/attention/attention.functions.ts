@@ -22,14 +22,16 @@ async function resolveOwner(caller: z.infer<typeof Caller>): Promise<string | nu
 export const getAttentionFn = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => z.object({ caller: Caller }).parse(raw))
   .handler(async ({ data }) => {
-    const { bellItems, parseUrgentKinds } = await import("./attention");
+    const { badgeCount, bellItems, parseUrgentKinds, resolveStoredUrgentKinds } = await import("./attention");
     try {
       const owner = await resolveOwner(data.caller);
       if (!owner) return { ok: false as const, count: 0, items: [], kinds: parseUrgentKinds(null) };
       const ledger = await import("../email/email-replies.server");
-      const kinds = parseUrgentKinds(await ledger.getUrgentKinds(owner));
+      // AC-4.3: a setting saved before the `chat` kind existed still counts it.
+      const kinds = resolveStoredUrgentKinds(await ledger.getUrgentKinds(owner));
       const items = bellItems(await ledger.listOpenAttention(owner), kinds);
-      return { ok: true as const, count: items.length, items, kinds };
+      // "Can't tell if answered" chat rows are listed but not counted.
+      return { ok: true as const, count: badgeCount(items), items, kinds };
     } catch (err) {
       console.error("[attention] read failed", err instanceof Error ? err.message : err);
       return { ok: false as const, count: 0, items: [], kinds: parseUrgentKinds(null) };
@@ -61,13 +63,14 @@ export const setAttentionKindsFn = createServerFn({ method: "POST" })
     z.object({ caller: Caller, kinds: z.array(z.string().max(32)).max(10) }).parse(raw),
   )
   .handler(async ({ data }) => {
-    const { parseUrgentKinds } = await import("./attention");
+    const { parseUrgentKinds, serializeUrgentKinds } = await import("./attention");
     try {
       const owner = await resolveOwner(data.caller);
       if (!owner) return { ok: false, kinds: parseUrgentKinds(null) };
+      // The client sends the COMPLETE chosen list: a late kind left off is an explicit opt-out ("-chat").
       const kinds = parseUrgentKinds(data.kinds);
       const ledger = await import("../email/email-replies.server");
-      await ledger.setUrgentKinds(owner, kinds);
+      await ledger.setUrgentKinds(owner, serializeUrgentKinds(kinds));
       return { ok: true, kinds };
     } catch (err) {
       console.error("[attention] settings save failed", err instanceof Error ? err.message : err);
