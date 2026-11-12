@@ -114,3 +114,39 @@ Also: the `prime === "keep"` and LLM-resolves-to-A branches ("no hand-off" too) 
 VERDICT C1: **CONFIRMED** for the stated mechanism (no lane follow-up when handled/now; owner told what A said),
 with defects: (1) "now" detection inherits C2 (`... for now` suppresses the hand-off); (2) AC-F1-4 strip misses
 9 deferral phrasings; (3) M8 INERT -- the call-site wiring is guarded only by text. Not proven live.
+
+### C3 F2 -- a fired hand-off creates a task for the owner and yields a confirmAsk; skipped propose retried once then flagged -- NOT PROVEN (mechanism CONFIRMED offline; 2 defects)
+
+Trace. Producer: `deliverOwnerFollowup` (:2052) enqueues `followup-<huddle>-<owner>-<slug>` with
+`internal:true`, `members:[owner]`, `targetAgentId`, and `handoff:{mode,fromName,ownerId,ask}`; Input declares
+`handoff` (:299-310) and the durable runner re-parses with `Input.parse(record.payload)` (:8369), so the marker
+survives. Owner turn: the primary runs through `runHandoffAware` (:7865 -- the only primary call site outside
+ceremonies, which use `runBounded` at :7837/:7851). Consumer of the proposal: the `confirmAsk` derivation
+(:7206-7225) reads `r.toolUses.find(propose_task_intent ok + JSON detail{taskId,proposedDod})`, which
+`proposedThisTurn` mirrors exactly. `propose_task_intent` (:4304) records that detail and calls
+`proposeTaskDod`. `create_huddle_task` now returns `task_id` = journey's canonical id (:3293).
+Task assignment in the owner's DM: `pickCreatedTaskAssignee` 1:1 -> responder = the owner.
+
+Mutations:
+- M10 `needsHandoffConfirmRetry` returns `false` -> **FIRED (control EQUIVALENT)**, exit 0.
+- M11 `flagMissing: false` -> **FIRED (control EQUIVALENT)**, exit 0.
+- M12 merged toolUses -> `first.toolUses` only (literal kept in a comment) -> **INERT**, exit 1. Behaviourally this is
+  the WORST case: the retry proposes, `flagMissing` is false, but the confirmAsk derivation never sees the retry's
+  propose_task_intent -> a SILENT button-less hand-off, the exact AC-F2-4 failure. The guard is a source
+  `toContain` and is satisfied by the comment.
+
+Defect (observed from code, not live): the retry cannot learn the task id it most needs. The common skip is "the
+first attempt created the task but never called propose". On the retry, `create_huddle_task` with the same
+normalized title hits the per-turn ledger (:3154-3161) and returns `{ok:true, deduped:true, task:{title}}` with
+**no `task_id`**; the retry's prompt is `buildHandoffConfirmRetry(data.text)` (the original directive) and its
+prior (`buildPrior()`) does not contain the first attempt's tool results. So the retry must find the id through
+other task tools against a mirror that lags ~1-3s (pg_net), or it re-creates with a DIFFERENT title, which the
+normalized-title dedup does not catch -> a second board row (AC-F2-1 "exactly one").
+Never silent: if the retry also misses, a fallback with `HANDOFF_CONFIRM_UNAVAILABLE` is added (reply ->
+`perAgentFallbacks`; hardReply -> `fallbackNotes`); for a skip outcome only the `fallbacks` entry is recorded.
+
+What cannot be proven offline: that a real owner model's turn creates the task and calls propose_task_intent
+(AC-F2-1..F2-3, F2-9). That needs the F8 durable-harness run.
+
+VERDICT C3: **NOT PROVEN** (live behaviour). Offline mechanism CONFIRMED; defects: M12 INERT (silent button-less
+path unguarded), retry lacks the task id (duplicate-row risk).
