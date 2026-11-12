@@ -44,3 +44,19 @@ OneDrive, journey, workflow or deploy was touched.
   they are in the span, and a date only when they resolve (`next Friday`, `next week`, `soon` -> null);
   in-batch duplicates and anything past 8 per source dropped. Nothing is repaired.
 - `scripts/task-proposals.test.ts` sections A-E incl. the spelling table S-P1..S-P18: **69 passed, 0 failed**.
+
+### Step 2 -- proposal store in Azure PG (AC-5.4, 5.5, 5.8, 5.11-5.13, 5.21, OQ-9)
+
+- `lib/proposals/proposals-store.server.ts` (new): `chat.task_proposals` (id CHECK `prop-%`, state CHECK,
+  current title + original title + norm title, verbatim evidence, assignee/due only as extracted, source refs
+  as jsonb, journey `task_id`, `approve_lease_until`) with a PARTIAL UNIQUE index on (owner, norm_title)
+  WHERE state='proposed' (one active proposal per to-do), and `chat.task_proposal_refs` PK (owner, source,
+  source_item_id, norm_title) = the dedup memory across every state. Shared pool, lazy idempotent bootstrap.
+- upsert: seen (ref exists, any state) -> nothing; same to-do active from another source -> attach ref;
+  else create. Unique-index races re-evaluate (max 3 rounds).
+- Approve = compare-and-set LEASE (not a state flip), so a killed approve leaves the row `proposed` and
+  claimable again after the lease, and a retry then links to the task journey already created (AC-5.10).
+  Dismiss / Mark done / Edit refuse while a lease is held, so Approve and Dismiss can't both win.
+- `bun scripts/task-proposals-sql.test.ts` (real PostgreSQL 16): **41 passed, 0 failed** (first run 39/2:
+  jsonb key order in the returned refs -- fixed by rebuilding refs in a fixed shape -- and a test regex
+  that matched `due_text`).
