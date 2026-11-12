@@ -96,3 +96,14 @@ cross-app-turn-gate 92/0).
   **99 passed, 0 failed.** Ledger SQL **33/0**. tsc clean. onedrive-feed all passed, inbound-email 72/0,
   attention all passed, fireflies-queue-sql all passed, cross-app-turn-gate 92/0, fireflies-minutes
   **64 PASS / 3 FAIL (unchanged from main)**.
+
+### Step 5 -- dry-run extended (AC-7.3, AC-8.3)
+
+- `scripts/onedrive-feed-dryrun.ts` extended in place: email `ledger items / skipped / has_internetMessageId /
+  has_conversationId / has_sent_items`; Teams `HTTP / bytes / over_cap`, parse verdict, lines, messages,
+  duplicates, chat COUNT, skip reasons (teamsParseNote), and `has_sender_id / has_sender_name /
+  has_app_sender / has_chat_name / has_web_url / owner_ids_configured / owner_messages`; correspondence
+  switches. Run against the fixtures with a stubbed fetch: output has 0 hits for the canary, ids, chat
+  ids, person names or the synthetic subject prefix.
+- Note: the parent session committed this worktree's in-progress tree as 06e4f1b5 while this agent was
+  alive (it believed the agent dead); content identical to the step-4 work, nothing lost.
