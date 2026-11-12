@@ -5,7 +5,9 @@
 //             rendered it on the deployed app.
 // SUPERSEDES: nothing
 // SUPERSEDED-BY: nothing -- current
-// EVIDENCE:   PR #175; src/features/huddle/components/AttentionBell.tsx.
+// EVIDENCE:   PR #175; src/features/huddle/components/AttentionBell.tsx. PR #206 (2026-11-12) added the
+//             labelled Dismiss button and the jump-to-reply-card checks below (still read-only: tapping a
+//             row only opens the chat; nothing is dismissed).
 //
 // RUN IT:  verify-uat.yml, checks_file = .claude/skills/test-agent-serverfn/scripts/attention-bell-checks.mjs
 export const checks = [
@@ -32,6 +34,27 @@ export const checks = [
     const n = Number((label.match(/(\d+) open/) || [])[1] || 0);
     check("Badge count matches the list length", n === items, `badge=${n} list=${items}`);
     await screenshot("attention-bell-open");
+    if (items > 0) {
+      const dismissBtns = await page.locator('[data-testid="attention-dismiss"]').count();
+      const firstLabel = (await page.locator('[data-testid="attention-dismiss"]').first().innerText().catch(() => "")).trim();
+      check("Every row has a labelled Dismiss button (#206)", dismissBtns === items && firstLabel === "Dismiss", `buttons=${dismissBtns} items=${items} text="${firstLabel}"`);
+      // Tap the first EMAIL row (its detail reads "From ..."): the chat must open ON that email's reply card.
+      const emailRow = page.locator('[data-testid="attention-item"]', { hasText: "From " }).first();
+      if ((await emailRow.count()) > 0) {
+        await emailRow.locator("button").first().click();
+        const focused = await page
+          .locator('[data-focused="true"]')
+          .first()
+          .waitFor({ state: "visible", timeout: 15000 })
+          .then(() => true)
+          .catch(() => false);
+        const toast = await page.locator("text=further back in this chat").count();
+        check("Tapping an email row lands on its highlighted reply card (#206)", focused, `focused=${focused} olderToast=${toast}`);
+        await screenshot("attention-bell-jump");
+      } else {
+        check("Tapping an email row lands on its reply card (#206) -- no email rows open, not exercised", true, "skipped");
+      }
+    }
     await page.keyboard.press("Escape").catch(() => {});
   },
 ];
