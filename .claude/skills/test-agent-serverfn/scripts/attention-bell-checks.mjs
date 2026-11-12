@@ -41,7 +41,26 @@ export const checks = [
       // Tap the first EMAIL row (its detail reads "From ..."): the chat must open ON that email's reply card.
       const emailRow = page.locator('[data-testid="attention-item"]', { hasText: "From " }).first();
       if ((await emailRow.count()) > 0) {
+        const rowsBefore = await page.locator("[data-msg-id]").count();
         await emailRow.locator("button").first().click();
+        // Diagnostics, sampled every 100ms for 4s: did the "further back" toast flash, did ANY row get
+        // marked focused (attached, visible or not), and how many rows rendered.
+        const diag = await page.evaluate(async () => {
+          const seen = { toast: false, focusedAttached: false, maxRows: 0, focusedVisible: false };
+          for (let i = 0; i < 40; i++) {
+            if (document.body.innerText.includes("further back in this chat")) seen.toast = true;
+            const f = document.querySelector('[data-focused="true"]');
+            if (f) {
+              seen.focusedAttached = true;
+              const r = f.getBoundingClientRect();
+              if (r.height > 0 && r.bottom > 0 && r.top < innerHeight) seen.focusedVisible = true;
+            }
+            seen.maxRows = Math.max(seen.maxRows, document.querySelectorAll("[data-msg-id]").length);
+            await new Promise((res) => setTimeout(res, 100));
+          }
+          return seen;
+        });
+        check("DIAG jump trace (informational)", true, `rowsBefore=${rowsBefore} ${JSON.stringify(diag)}`);
         const focused = await page
           .locator('[data-focused="true"]')
           .first()
