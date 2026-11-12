@@ -135,3 +135,46 @@ task-proposals 123/0, correspondence-ingest 148/0, task-proposals-sql 41/0. The 
   (Huddle hard rule).
 - Tests: task-proposals **131 passed, 0 failed** (sections K stream-context + build_checklist OFF, L
   hygiene). context-and-confirm ALL PASS. tsc clean.
+
+### Step 6 -- full suite + mutation proofs
+
+Suites on the branch head (after the data-layer merge): task-proposals **131/0**; task-proposals-sql (real
+PG 16) **41/0**; correspondence-ingest **148/0**; correspondence-ledger-sql **50/0**; attention all passed;
+attention-focus all passed; cross-app-turn-gate **92/0**; inbound-email **72/0**; onedrive-feed all passed;
+context-and-confirm ALL PASS; fireflies-queue-sql all passed; fireflies-minutes **64 PASS / 3 FAIL -- the
+same G3/G5/G8 failures recorded on untouched main** (IMPL-correspondence-ingest.md), not caused here.
+`tsc --noEmit -p .` clean.
+
+Mutation proofs (`mutate.sh`, every one exit 0, "FIRED (control EQUIVALENT)"):
+
+| # | Guard (file) | Mutation | Named test that failed |
+|---|---|---|---|
+| M1 | evidence must be verbatim (proposals.ts) | `if (false)` | S-P4 PARAPHRASED evidence |
+| M2 | task must share a word with its evidence | `if (false)` | S-P5 invented task on a real quote |
+| M3 | assignee only when the span names them | `return a` | AC-5.20 assignee NOT named in the span |
+| M4 | due words only when in the span | keep any due_text | AC-5.20 model invents a date not in the span |
+| M5 | "next <weekday>" -> no date | line removed | AC-5.20 'next Friday' is ambiguous |
+| M6 | proposal row must carry a prop- id | line removed | AC-5.2 a 'proposal' row whose id is a task uuid is DROPPED |
+| M7 | owner's own Teams message is not a source | line removed | S-12 owner's own Teams message -> skipped |
+| M8 | to-do already open on the board not proposed (engine.ts) | `if (false)` | AC-5.21 to-do equal to an open board title |
+| M9 | failed extraction throws a code (never `processed`) | `return out` | AC-3.3/3.8 extraction failure throws a short code |
+| M10 | Approve links to an open duplicate | `if (false)` | AC-5.10 title already OPEN on the board |
+| M11 | meta-task guard on Approve | line removed | AC-5.7 create-task-core meta-task guard runs on Approve |
+| M12 | one evening turn per day | line removed | AC-5.16 a second tick the same evening sends nothing twice |
+| M13 | refs "seen" short-circuit (store SQL) | line removed | `FAIL harness` -- CAVEAT: with it gone the refs PRIMARY KEY still refuses the duplicate, so the upsert throws after its 3 retries instead of returning `seen`. Proves the line makes a re-read a clean no-op; duplicates are blocked by the PK either way. |
+| M14 | Approve CAS lease condition (store SQL) | lease clause removed | AC-5.8 two concurrent Approve claims |
+| M15 | proposals on their own stream-context line | `propRows = []` | AC-5.17 proposal rows are on their own line |
+
+## Handoff (what is needed to turn it on -- NOT done here)
+
+- Config: `HUDDLE_ONEDRIVE_FEEDS.correspondence.proposals: true` (needs `ingest: true` for email/Teams
+  sources; transcripts additionally need `FIREFLIES_API_KEY` and `minutesOwner()` inside the owner's scope).
+  Optional `correspondence.proposalsDeliverAt: "HH:MM"` (owner zone, default 18:30, weekdays, until 22:00;
+  waits up to 60 min for still-due extraction work).
+- Migration: none to run; `chat.task_proposals` and `chat.task_proposal_refs` bootstrap lazily (idempotent).
+- Model: `gpt-5.6-luna` via `callOpenAIRouter`; real extraction quality is UNVERIFIED (offline tests use a
+  stub model; the validator is what guarantees nothing ungrounded is stored).
+- Not verified live (forbidden this task): the journey create on Approve, the durable Iris turn, the UI
+  ([UI] rows of AC-5.3/5.6/5.9/5.24 timing), and the [DB] checks.
+- Not built here: the per-owner Settings toggle (AC-6.2) and the health panel (AC-6.6) -- the data layer
+  scoped those to a later pass.
