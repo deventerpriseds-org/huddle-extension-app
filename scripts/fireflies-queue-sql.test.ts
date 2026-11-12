@@ -137,6 +137,34 @@ try {
   await s.recordEmailProblem("q8", r!.queue_version, "luna", "recipients_invalid", true);
   t("Q8 a later final problem keeps email_status 'sent'", (await row("q8")).es, "sent");
 
+  // Q9 (D9) passes the host stops before they finish (never released) end in a visible failure
+  await s.recordWebhook("q9", O, "meeting.transcribed", null);
+  let claims = 0;
+  for (let i = 0; i < 30; i++) {
+    if (!(await claim("q9"))) break;
+    claims++;
+    await pool.query(`UPDATE chat.fireflies_meetings SET lease_until = now() - interval '1 s' WHERE meeting_id='q9'`); // killed
+  }
+  const q9 = await row("q9");
+  t("Q9 (D9) 5 killed passes, then a final visible failure (not retried forever)", [claims, q9.pe, q9.po, q9.es, q9.err, q9.os], [5, false, false, "failed", "gave_up:pass_did_not_finish", "failed"]);
+
+  // Q10 (D9) a pass that FINISHES resets the count: 3h of finished waiting polls are never cut off
+  await s.recordWebhook("q10", O, "meeting.transcribed", null);
+  let polls = 0;
+  for (let i = 0; i < 36; i++) {
+    r = await claim("q10");
+    if (!r) break;
+    polls++;
+    await s.recordEmailProblem("q10", r.queue_version, "fireflies", "waiting:fireflies_summary_missing", false);
+    await s.releaseMeeting("q10", r.queue_version, 300, false);
+    await due("q10");
+  }
+  t("Q10 (D9) 36 finished polls are all claimed and the meeting is still pending", [polls, (await row("q10")).pe], [36, true]);
+
+  // Q11 (D9) a new delivery after a stalled give-up re-queues the meeting with a fresh count
+  await s.recordWebhook("q9", O, "meeting.summarized", null);
+  t("Q11 (D9) a new delivery after the give-up is claimable again", !!(await claim("q9")), true);
+
   await pool.end();
 } catch (e) {
   fail++;

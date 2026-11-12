@@ -26,6 +26,13 @@
 - FIREFLIES_* secrets were MISSING on 2026-11-10 (probe run 42813708365). docs.fireflies.ai does not resolve from
   CCR; Tavily plan was over its limit (HTTP 432). The live schema probe is `fireflies-api-check.yml`.
 
+- LIVE 2026-11-12 (azure-pg-query run 43129425010): 11 real meetings, each 2 deliveries, custom summary, ONE email,
+  OneDrive saved. Fireflies-summary mode works; Luna mode not yet run live. NOT owner-confirmed (inbox/OneDrive).
+- D9 (verify loop 3): a pass that the ~45s host ceiling stops never reaches releaseMeeting. Pass budget: send starts
+  by SEND_CUTOFF_MS=30s, Luna gets lunaBudgetMs(elapsed); unfinished_passes +1 per claim, 0 on release/delivery,
+  >=5 -> gave_up:pass_did_not_finish (applied at the top of claimDueMeetings). The shared Graph sender was NOT
+  given a timeout (other features use it; that would change their behaviour).
+
 ## Attention bell (2026-11-08) — one "needs you" list on chat.email_replies
 - `kind` column (email|meeting|appointment): ANY new query on chat.email_replies that means "emails" must filter `kind='email'` (findOwed*, listOwedEmailReplies, counts already do). Non-email rows: mailbox '', graph_message_id = own id, no conversation_id.
 - A push the server sent can still not show on the phone (FCM accepts data-only messages; the Huddle app does not report display). The bell is the in-app record that needs no push.
