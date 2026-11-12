@@ -27,9 +27,13 @@ gate refuses #188's `feature/` branch name; the new PR supersedes #188).
 - [x] Verify loop 2 (VERIFY-fireflies-minutes-2, branch claude_verify-fireflies-minutes-2): D7 lost mid-lease
       delivery, D8 summary wait exhausted attempts after 60 min. Fixed on claude_fireflies-queue-fixes (7624bf2a);
       real-SQL test scripts/fireflies-queue-sql.test.ts 11/11, both guards mutation-proved. 7 claims NOT REACHED.
-- [ ] Owner configures the Fireflies Webhooks V2 entry (URL, secret, BOTH events, resend on), test event, real meeting.
-- [ ] Verify loop 3 (incl. loop 2's NOT REACHED claims C1 C5 C6 C9 C10 C11 C14).
-- [ ] Deploy, configure Fireflies webhook, test event, then one real meeting in EACH mode.
+- [x] Owner: webhook "was already set up". LIVE evidence (azure-pg-query run 43129425010, 2026-11-12): 11 real
+      meetings 2026-11-11 14:01-20:55 UTC, EVERY row deliveries=2 (transcribed + summarized), summary_kind=custom,
+      email_status=sent, emails_sent=1 (no duplicate across the 2 deliveries), onedrive_status=saved, nothing
+      pending, attempts=0. Settings row: source=fireflies, 2 recipients, update_emails off.
+- [ ] Owner confirms the minutes emails arrived at BOTH addresses and the OneDrive files look right. NOT owner-confirmed.
+- [ ] Luna mode not yet exercised live (setting has stayed on Fireflies summary): switch it for one real meeting.
+- [ ] Verify loop 3 (incl. loop 2's NOT REACHED claims C1 C5 C6 C9 C10 C11 C14) -- running.
 
 ## ACT:polish-tool — Polish text cleanup tool in Huddle (first tool module; Sidecar + Prompto later) (2026-11-05)
 - [x] Read the owner's design (claude.ai artifact 283e7883, "Refine" screens) and blended it into Huddle's Compass look.
