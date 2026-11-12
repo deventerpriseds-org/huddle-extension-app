@@ -14,8 +14,8 @@ Verifier (loop 2, second start) runs in an isolated huddle worktree; this file i
 | C2 | CONFIRMED (code + tests; live 401 not observed) |
 | C3 | CONFIRMED (with defect D1) |
 | C4 | CONFIRMED in code; NOT LIVE (claim of not-live CONFIRMED); defect D4 |
-| C5 | NOT REACHED |
-| C6 | NOT REACHED |
+| C5 | CONFIRMED (with defect D5) |
+| C6 | CONFIRMED (8/8; two checks weak, none vacuous in this run) |
 
 ## C1 -- bridge-builder getLatestApk: CONFIRMED
 
@@ -68,3 +68,43 @@ Source: journey-voice origin/main 5645ccc (contains 4b498cb), read from a /tmp c
   So the claim "NOT live yet" is CONFIRMED by that run. The tab is not reachable by the owner on journey web today.
 - **D4 (defect, also C5 if shared): every error reason collapses to the generic message.** `supabase.functions.invoke` returns `data: null` and a `FunctionsHttpError` for any non-2xx response, and the edge fn returns every failure as non-2xx (401/503/502). So `data?.reason` (:64) is always undefined on failure and the REASONS map (:47-51) is dead code: a signed-out user, an unconfigured server and an unreachable build server all see "Could not load the latest builds." (inference from supabase-js functions-js behaviour; not observed live).
 - Version compare (:38-45): numeric per part, `1.0.9 < 1.0.10` correct; non-numeric parts (e.g. `1.0.18-beta`) become NaN -> treated as 0, so `1.0.18-beta` vs `1.0.18` compares equal. Badge only for TaskOS (`THIS_APP_KEY`), from `AndroidBridge.getCapabilities().version`.
+
+## C5 -- huddle-extension-app Download tab: CONFIRMED, with defect D5
+
+- d0ac835a is an ancestor of origin/main (`git merge-base --is-ancestor` -> true).
+- `src/features/huddle/components/SettingsSheet.tsx:152 <TabsTrigger value="download">Download</TabsTrigger>`, `:164-165 <TabsContent value="download"> <AppDownloadsPanel />`, import :42.
+- Token server-side: `lib/downloads/app-downloads.functions.ts:16` reads `process.env.JOURNEY_PROXY_TOKEN`, used only as outbound header (:22); results are `{ok:false, reason}` or `{ok:true, apps: shapeDownloads(...)}` -- the token is never returned. `AppDownloadsPanel.tsx:46` calls the server fn; it holds no token.
+- Unlike journey (D4), Huddle's reasons DO reach the UI: the server fn returns `{ok:false, reason}` as a normal value, and `AppDownloadsPanel.tsx:48` maps `REASONS[res.reason]`.
+- Tests (my run): `bun scripts/app-downloads.test.ts` -> 9 lines `PASS`, `all passed`. `npx tsc --noEmit -p .` -> rc 0.
+- Deploy: the specific deploy-swa run for d0ac835 was not located within budget (the 4 newest main runs are later commits). Every one of those 4 (latest 43151578728 on 9aaf0c03, conclusion success) builds a main that contains d0ac835, and C6's live UAT shows the tab working, so the code is deployed. The claim "the run for d0ac835 succeeded" itself is UNVERIFIED.
+- **D5 (defect, auth): the server fn's sign-in check is self-asserted.** `:15 if (!data.caller?.entra_email) return sign_in_required` trusts a client-supplied `caller.entra_email`; it does not call `verifyEntraIdToken` (`src/lib/entra-verify.server.ts:50`, which `identity/profile.functions.ts:7-8` does use). Anyone who can POST to the server fn with any email string receives fresh 30-day signed APK links. Journey's edge fn (C2) does verify the user. Exposure is APK download links, not the token.
+
+## C6 -- Huddle browser UAT run 42817517451: CONFIRMED (8/8), check quality reviewed
+
+`origin/uat-shots-run-42817517451:uat-shots/results.json` -- all 8 `pass:true`:
+Settings button present; Settings has a 'Download' tab; Two signed Download links (Huddle + TaskOS) `links=2`; Huddle row shown with a version (panel text: `Download Latest Android builds. Each link is fresh for 30 days. Huddle v1.0.17 Built 11/8/2026 · 4.2 MB Download TaskOS v1.0.18 Built 11/5/2026 · 4.1 MB Download ...`); TaskOS row shown with a version; No error message; No console/page errors; No failed/4xx/5xx requests.
+Versions match C3's bridge-builder output (Huddle 1.0.17, TaskOS 1.0.18).
+
+Checks file (`origin/claude_download-tab-uat:.claude/skills/test-agent-serverfn/scripts/download-tab-checks.mjs`) vs component:
+- Tab check uses `getByRole("tab", {name:"Download"})` and `count()===1` -- tests what it says.
+- Link check: `a[href*=".blob.core.windows.net/bridge-apks/"][href*="sig="]`, strict `n === 2`, page-wide not panel-scoped; it does not tie a link to its app row and does not fetch the link (a revoked/expired SAS would still pass).
+- **Could pass vacuously: "No error message"** (:25) tests a negative regex on `panel`, and `panel` falls back to `""` on any locator error (:21). An empty panel passes it. Not vacuous in THIS run, because the Huddle-version check on the same `panel` string passed with real text.
+- "TaskOS row shown with a version" has no detail logged, but runs on the same non-empty panel.
+- The error regex lists the panel's current messages; a new reason string would slip through.
+
+## Extra defect search
+
+- Version compare: see C4 (pre-release suffix compares equal). Huddle uses the same `compareVersions` (imported from `lib/downloads/app-downloads`; test `1.0.9 < 1.0.10` PASS).
+- Token leakage: none found in responses (C2, C5) or workflow logs (C3: masked, jq drops links). bridge-builder 500 body echoes `err.message` (C1-c).
+- Android WebView link handling: NOT REACHED. `BridgeWebViewClient.kt` was not found at the guessed path in android-bridge-template and budget ran out before locating it. Both UIs render a plain `<a href>` without `target`, and journey's copy tells the user "the download opens in your browser"; whether the WebView actually hands blob-host URLs to the system browser is unproven here.
+
+## Verdict
+
+CONFIRMED: C1, C2 (code+tests; live 401 not observed: egress 403), C3, C5 (deploy-run-for-d0ac835 sub-claim unverified, deployment itself evidenced by C6), C6. C4: code CONFIRMED; "not live on journey-voice.lovable.app" CONFIRMED by run 42958573043 -- the journey tab is NOT available to users.
+REFUTED: none. NOT REACHED: Android WebView link behaviour.
+
+Defects:
+- D1 sync-bridge-builder-token smoke test never fails the job (no exit on 6x non-200, no assert on the 401).
+- D4 journey AppDownloadsSettings: all error reasons collapse to "Could not load the latest builds." because `functions.invoke` gives `data:null` on non-2xx (inference from supabase-js behaviour).
+- D5 Huddle getAppDownloadsFn trusts a client-supplied `caller.entra_email`; no token verification, so links are obtainable without signing in.
+- Minor: D2 wrong-token not smoke-tested; D3 secret rotation needs manual dispatch; C1-a empty SAS -> handled downstream; typecheck probe build step masked by `| tail`; UAT "No error message" can pass on an empty panel.
