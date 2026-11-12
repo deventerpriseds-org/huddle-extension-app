@@ -100,7 +100,7 @@ t(
 );
 t(
   "the confirm-ask enqueue turns web search off for re-asks only",
-  /"push", \{\s*webSearch: !followUp/.test(awSrc),
+  /"push",\s*\{\s*webSearch: !followUp/.test(awSrc),
 );
 
 console.log("\n--- grooming: an app fix is not agent work ---");
