@@ -28,3 +28,19 @@ OneDrive, journey, workflow or deploy was touched.
 | OQ-9 cross-source | The same to-do (normalized title) from two sources is ONE proposal keeping both source refs. | default (reversible) |
 
 ## Step log
+
+### Step 1 -- pure core (AC-5.1, 5.2, 5.18-5.21 validator, OQ-7 timing)
+
+- `src/features/huddle/lib/proposals/proposals.ts` (new, dependency-light): source text from a ledger
+  `SourceItem` (email reuses `screenMessage` in "people" mode + `newTextOnly`; Teams skips app senders and
+  the owner's own messages; transcripts read Fireflies' action items + overview only), the strict JSON
+  schema + instructions for extraction, THE VALIDATOR `validateCandidates`, due-date resolution relative to
+  the SOURCE's time in the owner's zone, `prop-` ids, `proposalChecklistRow`, `sanitizeChecklistPayload`
+  (the reply-assembly's field-by-field rule, extended for the new kind), and evening-delivery timing.
+- Validator rules (model output -> stored claim): evidence must be a verbatim span of the source's NEW
+  text (only whitespace collapse and typographic quote/dash straightening are forgiven; case-exact), 8-400
+  chars; the task must share a content word with its evidence (blocks a real quote glued to an invented
+  task); assignee kept only when the span names that person (pronouns -> null); due words kept only when
+  they are in the span, and a date only when they resolve (`next Friday`, `next week`, `soon` -> null);
+  in-batch duplicates and anything past 8 per source dropped. Nothing is repaired.
+- `scripts/task-proposals.test.ts` sections A-E incl. the spelling table S-P1..S-P18: **69 passed, 0 failed**.
