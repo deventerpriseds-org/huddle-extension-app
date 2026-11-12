@@ -31,7 +31,7 @@ gate refuses #188's `feature/` branch name; the new PR supersedes #188).
       meetings 2026-11-11 14:01-20:55 UTC, EVERY row deliveries=2 (transcribed + summarized), summary_kind=custom,
       email_status=sent, emails_sent=1 (no duplicate across the 2 deliveries), onedrive_status=saved, nothing
       pending, attempts=0. Settings row: source=fireflies, 2 recipients, update_emails off.
-- [ ] Owner confirms the minutes emails arrived at BOTH addresses and the OneDrive files look right. NOT owner-confirmed.
+- [x] OWNER-CONFIRMED 2026-11-12: "the emails have been making it to me since yesterday". OneDrive files not separately confirmed.
 - [ ] Luna mode not yet exercised live (setting has stayed on Fireflies summary): switch it for one real meeting.
 - [x] Verify loop 3 (VERIFY-fireflies-minutes-3, branch claude_verify-fireflies-minutes-3): 13 CONFIRMED, D7/D8 fixes
       hold; C11 REFUTED = D9 (a slow pass can hit the ~45s ceiling; a stopped pass was retried every 3 min forever).
