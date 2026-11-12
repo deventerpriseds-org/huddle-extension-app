@@ -704,5 +704,51 @@ console.log("\n# J. checklist result + evening delivery");
   t("OQ-7 nothing open -> no posting", (await deliverEveningProposals(OWNER, [OWNER], { ...dd("2026-11-12T23:40:00Z"), store: empty })).reason, "none_active");
 }
 
+// ── K. stream-context labelling (AC-5.17) + build_checklist proposals mode OFF (AC-6.1) ──────────
+console.log("\n# K. stream-context + build_checklist proposals mode");
+{
+  const { streamItemSummary } = await import("../src/features/huddle/lib/stream-context");
+  const taskOnly = { title: "Kids", rows: [{ taskId: "3f2a9c1e-8d7b-4c2a-9e1f-0a1b2c3d4e5f", title: "Pack bag", status: "DOING", tags: [] }] };
+  t("AC-5.1/5.17 a task-only checklist summarises EXACTLY as before", streamItemSummary({ checklist: taskOnly } as never), '[Checklist "Kids" shown: 1. Pack bag (DOING)]');
+  const mixed = { title: "Proposed tasks", rows: [...taskOnly.rows, cr] };
+  const s = streamItemSummary({ checklist: mixed } as never, { live: { [pid]: { status: "approved", tags: [] } } });
+  t("AC-5.17 proposal rows are on their own line, labelled with state, as NOT board tasks", s, '[Checklist "Proposed tasks" shown: 1. Pack bag (DOING)]\n[Proposed tasks "Proposed tasks" shown — suggestions found in email/Teams/meetings, NOT tasks on the board unless approved: 1. approved: Send the Q3 deck]');
+  const onlyProps = streamItemSummary({ checklist: { title: "Proposed tasks", rows: [cr] } } as never);
+  t("AC-5.17 proposals-only payload -> no empty task line", onlyProps.startsWith("[Proposed tasks") && !onlyProps.includes("[Checklist"), true);
+}
+{
+  const prev = process.env.HUDDLE_ONEDRIVE_FEEDS;
+  delete process.env.HUDDLE_ONEDRIVE_FEEDS;
+  const { dispatchBuildChecklist } = await import("../src/features/huddle/lib/tasks/tools");
+  t("AC-6.1 build_checklist proposals:true with the feature OFF -> not_enabled, no widget", JSON.parse(await dispatchBuildChecklist("owner@eds.example", { title: "x", proposals: true })).error, "not_enabled");
+  process.env.HUDDLE_ONEDRIVE_FEEDS = JSON.stringify({ ...feedsJson, correspondence: { ingest: true, proposals: false } });
+  t("AC-6.3 proposals:false in config -> still not_enabled", JSON.parse(await dispatchBuildChecklist("owner@eds.example", { title: "x", proposals: true })).error, "not_enabled");
+  const { proposalsDeliverAt } = await import("../src/features/huddle/lib/proposals/proposals.server");
+  t("OQ-7 deliver time: valid HH:MM kept, junk -> default", [proposalsDeliverAt(JSON.stringify({ correspondence: { proposalsDeliverAt: "19:15" } })), proposalsDeliverAt(JSON.stringify({ correspondence: { proposalsDeliverAt: "25:00" } })), proposalsDeliverAt("not json")], ["19:15", undefined, undefined]);
+  if (prev === undefined) delete process.env.HUDDLE_ONEDRIVE_FEEDS;
+  else process.env.HUDDLE_ONEDRIVE_FEEDS = prev;
+}
+
+// ── L. public-repo hygiene for this feature's files (AC-8.1, 8.2) ────────────────────────────────
+console.log("\n# L. hygiene");
+{
+  const { readdirSync } = await import("node:fs");
+  const ROOT = join(import.meta.dir, "..");
+  const mine = [
+    ...readdirSync(join(ROOT, "src/features/huddle/lib/proposals")).map((f) => `src/features/huddle/lib/proposals/${f}`),
+    "src/features/huddle/components/ProposalChecklistItem.tsx",
+    "scripts/task-proposals.test.ts",
+    "scripts/task-proposals-sql.test.ts",
+  ];
+  const bad: string[] = [];
+  for (const f of mine) {
+    const txt = readFileSync(join(ROOT, f), "utf8");
+    for (const m of txt.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? []) if (!/\.example$/.test(m)) bad.push(`${f}: ${m}`);
+  }
+  t("AC-8.1 every address in this feature's files is a .example placeholder", bad, []);
+  const ui = readFileSync(join(ROOT, "src/features/huddle/components/ProposalChecklistItem.tsx"), "utf8");
+  t("AC-8.2 no source path or mailbox in client code", /automation\/|@/.test(ui.replace(/@\/(lib|components)/g, "")), false);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

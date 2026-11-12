@@ -71,6 +71,8 @@ import { isRenderableMessage, isWorkspaceHydrated } from "../store";
 import { shouldAppendReminder } from "../lib/identity/workspace-window";
 import { emailFocusTarget, revealStartFor } from "../lib/attention/focus";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
+import { getProposalStatesFn } from "../lib/proposals/proposals.functions";
+import { ProposalChecklistItem } from "./ProposalChecklistItem";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind, type View } from "../store";
@@ -575,14 +577,41 @@ function ChecklistCard({ m }: { m: HuddleMessage }) {
   // (2) Then reconcile against server truth. `messages` is persisted but `checklistState` is NOT, so
   // after a reload the widget would otherwise show the status the row had when the message was
   // WRITTEN — hours stale, and indistinguishable from current. One read per mounted checklist.
-  const ids = useMemo(() => (payload?.rows ?? []).map((r) => r.taskId).join(","), [payload]);
+  // Proposal rows (AC-correspondence-checklist 5.6) reconcile from the PROPOSAL store, in ONE request for
+  // all of them (AC-5.24); task rows -- and any task an approved proposal became -- from getBoardTasks as
+  // before. A checklist with no proposal rows makes exactly the one board read it always made.
+  const ids = useMemo(
+    () => (payload?.rows ?? []).filter((r) => r.kind !== "proposal").map((r) => r.taskId).join(","),
+    [payload],
+  );
+  const propIds = useMemo(
+    () => (payload?.rows ?? []).filter((r) => r.kind === "proposal").map((r) => r.taskId).join(","),
+    [payload],
+  );
   useEffect(() => {
-    if (!ids || !caller?.entra_email) return;
+    if ((!ids && !propIds) || !caller?.entra_email) return;
     let cancelled = false;
-    const wanted = new Set(ids.split(","));
-    void getBoardTasks({ data: { caller } })
+    const wanted = new Set(ids ? ids.split(",") : []);
+    const proposalsRead = propIds
+      ? getProposalStatesFn({ data: { caller, ids: propIds.split(",") } })
+          .then((res) => {
+            if (cancelled) return;
+            const store = useHuddleStore.getState();
+            for (const r of res.rows) {
+              if (store.checklistState[r.id]?.busy) continue; // a tap in flight wins, as for task rows
+              if (r.taskId) {
+                wanted.add(r.taskId);
+                store.seedChecklistRows([{ taskId: r.taskId, status: "BACKLOG", tags: [] }]);
+              }
+              store.setChecklistRow(r.id, { status: r.state, title: r.title, linkedTaskId: r.taskId });
+            }
+          })
+          .catch(() => {})
+      : Promise.resolve();
+    void proposalsRead
+      .then(() => (wanted.size ? getBoardTasks({ data: { caller } }) : null))
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || !res) return;
         const fresh = res.tasks
           .filter((t) => wanted.has(t.id))
           .map((t) => ({ taskId: t.id, status: (t.status ?? "BACKLOG").toUpperCase(), tags: t.tags ?? [] }));
@@ -594,7 +623,7 @@ function ChecklistCard({ m }: { m: HuddleMessage }) {
     return () => {
       cancelled = true;
     };
-  }, [ids, caller]);
+  }, [ids, propIds, caller]);
 
   if (!payload || !payload.rows?.length) return null;
 
@@ -605,9 +634,27 @@ function ChecklistCard({ m }: { m: HuddleMessage }) {
         <span className="min-w-0 truncate text-xs font-semibold text-foreground">{payload.title}</span>
       </div>
       <ul className="divide-y divide-hairline">
-        {payload.rows.map((row) => (
-          <ChecklistItem key={row.taskId} row={row} live={rowState[row.taskId]} caller={caller} />
-        ))}
+        {payload.rows.map((row) => {
+          if (row.kind !== "proposal") {
+            return <ChecklistItem key={row.taskId} row={row} live={rowState[row.taskId]} caller={caller} />;
+          }
+          // An approved proposal IS a task now (AC-5.9): render it as an ordinary task row keyed by the
+          // journey id, so done / Doing / Backlog / parking lot act on the real task immediately.
+          const p = rowState[row.taskId];
+          const linked = p?.status === "approved" ? (p.linkedTaskId ?? row.proposal?.linkedTaskId) : null;
+          if (linked) {
+            const lt = rowState[linked];
+            return (
+              <ChecklistItem
+                key={row.taskId}
+                row={{ taskId: linked, title: p?.title ?? row.title, status: lt?.status ?? "BACKLOG", tags: lt?.tags ?? [] }}
+                live={lt}
+                caller={caller}
+              />
+            );
+          }
+          return <ProposalChecklistItem key={row.taskId} row={row} live={p} caller={caller} />;
+        })}
       </ul>
       {payload.more ? (
         // LEGACY ONLY. New checklists are never truncated, so `more` is absent on anything rendered

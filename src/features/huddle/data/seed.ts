@@ -3,6 +3,7 @@ import { AGENTS, type AgentId } from "./agents";
 // dependency-free, so this import is erased at compile time and pulls no server code into the client.
 import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widgets.server";
 import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
+import type { ProposalRowInfo } from "../lib/proposals/proposals";
 
 /** A button under an agent message that switches the app to one of its tabs (owner, 2026-10-16:
  *  "she can do so with a button that deep links to the priority tab in the app instead of embedded
@@ -102,6 +103,12 @@ export interface ChecklistRow {
   status: string;
   /** Full tag set at snapshot time. Parking-lot is a TAG, not a status — see BoardView's toggle. */
   tags: string[];
+  /** Row kind (2026-11-12, AC-correspondence-checklist 5.1). Absent = "task", exactly as before. A
+   *  "proposal" row is a to-do found in email/Teams/meetings, NOT yet a board task: its `taskId` is a
+   *  `prop-` id (never a journey uuid), its `status` is the proposal state, and its actions go to the
+   *  proposal server functions, never to updateBoardTask. */
+  kind?: "task" | "proposal";
+  proposal?: ProposalRowInfo;
 }
 
 export interface ChecklistPayload {

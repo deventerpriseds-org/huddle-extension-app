@@ -112,3 +112,26 @@ task-proposals 123/0, correspondence-ingest 148/0, task-proposals-sql 41/0. The 
     `navLink`, with `ensureChecklistDelivered` beside `ensureNavLinkDelivered`; the Lovable
     `build_checklist` schema accepts `proposals`.
 - tsc clean; task-proposals 123/0; correspondence-ingest 148/0; cross-app-turn-gate 92/0.
+
+### Step 5 -- the EXISTING checklist UI gets the proposal row kind (AC-5.1-5.3, 5.6, 5.9, 5.17, 5.24, 8.x)
+
+- `data/seed.ts`: `ChecklistRow` gains optional `kind` ("task" | "proposal"; absent = task, unchanged) and
+  `proposal` (display detail). `store.ts`: `ChecklistRowState` gains optional `title` / `linkedTaskId`.
+- `components/HuddleView.tsx` `ChecklistCard`: stage 2 now reads proposal rows from `getProposalStatesFn`
+  (ONE request for all of them) and task rows -- plus any task an approved proposal became -- from
+  `getBoardTasks` as before; a checklist without proposal rows makes exactly the one read it always made.
+  Rendering: task rows unchanged; an APPROVED proposal renders as an ordinary `ChecklistItem` keyed by its
+  journey id (AC-5.9); every other proposal renders `ProposalChecklistItem`.
+- `components/ProposalChecklistItem.tsx` (new): dashed approve box + Approve / Edit (inline input) / Mark
+  done / Dismiss menu; source, date, due and named owner on a second line; the evidence span as the title's
+  tooltip; decided rows inert and labelled. Same optimistic -> server -> rollback contract and `busy` guard
+  as task rows; actions go to `actOnProposalFn`, never `updateBoardTask`.
+- `lib/stream-context.ts`: proposal rows summarised on their OWN line, "NOT tasks on the board unless
+  approved", each with its state (`1. approved: ...`); a task-only checklist produces the identical line.
+- AC-5.14 (ContextPanel "Needs your approval"): LEFT UNTOUCHED and documented as a separate feature. It
+  lists client-only agent-suggested `Task.suggested` cards (`approveTask` flips a local lane, `skipTask`
+  deletes) and never shows server proposals, so there is ONE place proposals are approved: the chat
+  checklist. Folding that panel into proposals would change an existing flow -> owner thumbs-up first
+  (Huddle hard rule).
+- Tests: task-proposals **131 passed, 0 failed** (sections K stream-context + build_checklist OFF, L
+  hygiene). context-and-confirm ALL PASS. tsc clean.

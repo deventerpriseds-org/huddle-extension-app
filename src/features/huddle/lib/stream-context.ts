@@ -91,10 +91,27 @@ export function streamItemSummary(m: StreamItemLike, opts?: { live?: LiveRowStat
   }
   if (m.checklist) {
     const c = m.checklist;
-    const rows = c.rows.map((r) => ({ taskId: r.taskId, title: r.title, status: r.status }));
-    const body = rows.length ? rowList(rows, live) : "empty";
-    const more = c.more ? ` (+${c.more} not shown)` : "";
-    parts.push(`[Checklist "${clip(c.title, 60)}" shown: ${body}${more}]`);
+    // Proposal rows (AC-correspondence-checklist 5.17) are summarised on their OWN line, labelled as
+    // suggestions with their state, so an agent never reports a proposal as an existing task. A checklist
+    // with no proposal rows produces exactly the line it always did.
+    const taskRows = c.rows.filter((r) => r.kind !== "proposal");
+    const propRows = c.rows.filter((r) => r.kind === "proposal");
+    if (taskRows.length || !propRows.length) {
+      const rows = taskRows.map((r) => ({ taskId: r.taskId, title: r.title, status: r.status }));
+      const body = rows.length ? rowList(rows, live) : "empty";
+      const more = c.more ? ` (+${c.more} not shown)` : "";
+      parts.push(`[Checklist "${clip(c.title, 60)}" shown: ${body}${more}]`);
+    }
+    if (propRows.length) {
+      const shown = propRows.slice(0, MAX_ROWS).map((r, i) => {
+        const state = live?.[r.taskId]?.status || r.proposal?.state || r.status || "proposed";
+        return `${i + 1}. ${state}: ${clip(r.title)}`;
+      });
+      const extra = propRows.length - shown.length;
+      parts.push(
+        `[Proposed tasks "${clip(c.title, 60)}" shown — suggestions found in email/Teams/meetings, NOT tasks on the board unless approved: ${shown.join(", ")}${extra > 0 ? `, +${extra} more` : ""}]`,
+      );
+    }
   }
   if (m.confirmAsk) {
     const a = m.confirmAsk;

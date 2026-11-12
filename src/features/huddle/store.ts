@@ -69,6 +69,10 @@ export interface ChecklistRowState {
   prevStatus?: string;
   busy?: boolean;
   today?: boolean;
+  /** Proposal rows only (2026-11-12, AC-correspondence-checklist 5): the owner's edited text, and the
+   *  journey task an Approve created/linked -- the row then renders as an ordinary task row (AC-5.9). */
+  title?: string;
+  linkedTaskId?: string | null;
 }
 
 export type MeetingKind = "morning" | "midday" | "afternoon" | "adhoc" | "virtual-meeting";
