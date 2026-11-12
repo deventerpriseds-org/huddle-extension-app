@@ -163,3 +163,41 @@ email "answered?" = option A (Sent Items file); until it exists, existing work e
 - NOT done in section 4: AC-4.7's "needs_context for feed email with no sent mail" -- owner decision 2
   says existing work emails stay unchanged. Bell badge for needs_context = not counted (OQ-13 answered
   by the coordinator).
+
+### Step 8 -- mutation proofs (scripts/mutate.sh, anchors from files, exit code read)
+
+44 new guards, each run through `mutate.sh` (baseline -> mutated -> comment-only control -> restore ->
+post-restore run). **44 / 44 `FIRED (control EQUIVALENT)`, exit 0, tree clean after every run.**
+Two first attempts were `UNDETERMINED` (exit 4) and were NOT counted: M27's replacement left SQL `$3`
+unreferenced (Postgres rejected the statement -> harness error), and M30's test command ran `tsc` first
+and the mutated test threw before printing its name. Both were fixed (M27 keeps `$3` referenced; the AC-4.2
+test is null-safe and reports a named FAIL) and re-run to FIRED.
+
+| id | guard (AC) | suite |
+|---|---|---|
+| M01-M02 | synthetic line marker / text prefix (AC-1.9) | ingest |
+| M03-M04 | JSON array refused, both layers (S-8) | ingest |
+| M05 | wrong source line (S-15) | ingest |
+| M06 | duplicate kept once (AC-1.5) | ingest |
+| M07 | identity encoding (AC-1.7) | ingest |
+| M08 | capture time not in hash (AC-1.6) | ingest |
+| M09 | error category only (AC-3.8) | ingest |
+| M10 | ingest-off gate (AC-6.1) | ingest |
+| M11 | no lookback window (AC-2.4) | ingest |
+| M12 | processor failure never processed (AC-3.3) | ingest |
+| M13 | observe only on a new eTag (AC-3.5) | ingest |
+| M14 | absent payload -> needs_context (AC-2.5) | ingest |
+| M15 | new file reopens needs_context (AC-3.7) | ingest |
+| M16 | budget yield (AC-3.10) | ingest |
+| M17 | tail read of oversized Teams log (AC-1.8) | ingest |
+| M18 | email keeps rejected:too_large (AC-6.4) | ingest |
+| M19 | unchanged eTag -> no download (AC-1.2) | ingest |
+| M20-M21 | teams / sent entry absent -> OFF (AC-6.1, decision 2) | ingest |
+| M22-M23 | sent must be LATER; conversationId required | ingest |
+| M24-M29 | SQL: unchanged keeps status, claim_version CAS, backoff, D9 give-up, lease, terminal failed | ledger-sql |
+| M30-M35 | bell: chat kind, late-kind default, opt-out, badge excludes uncertain, https-only link, uncertain flag | ingest |
+| M36-M39 | chat decision: ask after owner, owner messages absent, ids unconfigured, app sender | ingest |
+| M40-M44 | SQL: Iris chat does not settle Teams rows, dismissed not reopened, older owner msg, no sent file unchanged, chat-only upsert | ledger-sql |
+
+NOT mutation-provable, stated honestly: `fetchDriveFile`'s explicit `method: "GET"` -- removing it is
+behaviourally equivalent (fetch defaults to GET); AC-1.13 rests on the fetch spy seeing GET on every call.
