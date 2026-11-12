@@ -137,6 +137,7 @@ import {
 } from "./email/email-reply-ask";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
 import { textWithStreamContext, streamContextInstructionBlock } from "./stream-context";
+import { messageDeepLink } from "./attention/focus";
 import {
   assignCreatedJourneyTasks,
   isOneToOne,
@@ -8259,6 +8260,10 @@ async function executeClaimedTurn(record: {
           // fcmData.deepLink; the Android bridge loads baseUrl + deepLink, so in the Huddle app this
           // opens `?huddle=<id>` (the client reads it and switches to that huddle). Harmless elsewhere.
           const huddleId = String((record.payload as { huddleId?: string })?.huddleId ?? "");
+          // A new-email alert carries its reply card's id: the tap lands ON the card (owner 2026-11-12).
+          const focusEmailId = String(
+            (record.payload as { emailReplyRef?: { emailId?: string } })?.emailReplyRef?.emailId ?? "",
+          );
           await invokeJourneyTool({
             toolName: "send_push",
             args: {
@@ -8271,7 +8276,7 @@ async function executeClaimedTurn(record: {
               app: "huddle",
               data: {
                 ...(huddleId
-                  ? { deepLink: `/?huddle=${huddleId}`, source: "huddle-message", huddleId }
+                  ? { deepLink: messageDeepLink(huddleId, focusEmailId), source: "huddle-message", huddleId }
                   : {}),
                 // UNIQUE per turn. The Android bridge identifies a notification by its `tag`
                 // (`notify(tag, 0, …)`) and journey defaults an untagged push to the constant `'fcm'`,

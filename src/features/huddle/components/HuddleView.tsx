@@ -69,6 +69,7 @@ import { loadOlderMessages } from "../lib/identity/workspace.functions";
 import { getToken } from "@/lib/entra-auth";
 import { isRenderableMessage, isWorkspaceHydrated } from "../store";
 import { shouldAppendReminder } from "../lib/identity/workspace-window";
+import { emailFocusTarget, revealStartFor } from "../lib/attention/focus";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
@@ -399,6 +400,36 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
     if (el.scrollHeight <= el.clientHeight) revealOlder();
   }, [start, revealOlder, messages.length]);
 
+  // Jump to one email's reply card (bell tap / `?email=` deep link). Waits for history to load; opens the
+  // window far enough up to render the card; scrolls it to the middle and highlights it briefly.
+  const focusRequest = useHuddleStore((s) => s.focusRequest);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focusRequest || focusRequest.huddleId !== huddle.id) return;
+    const target = emailFocusTarget(messages, focusRequest.emailId);
+    if (!target) {
+      if (!isWorkspaceHydrated()) return; // history still loading: the card may arrive with it
+      useHuddleStore.getState().clearFocusRequest();
+      toast.message("That reply card is further back in this chat. Scroll up to find it.");
+      return;
+    }
+    if (target.index < start) {
+      setPinnedStart(revealStartFor(target.index, start));
+      return; // re-runs once the card is rendered
+    }
+    const el = scrollRef.current?.querySelector(`[data-msg-id="${CSS.escape(target.id)}"]`);
+    if (!el) return;
+    follow.release();
+    el.scrollIntoView({ block: "center" });
+    setHighlightId(target.id);
+    useHuddleStore.getState().clearFocusRequest();
+  }, [focusRequest, huddle.id, messages, start, follow]);
+  useEffect(() => {
+    if (!highlightId) return;
+    const t = setTimeout(() => setHighlightId(null), 3000);
+    return () => clearTimeout(t);
+  }, [highlightId]);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -446,7 +477,12 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
         )}
 
         {shown.map((m) => (
-          <div key={m.id} data-msg-id={m.id}>
+          <div
+            key={m.id}
+            data-msg-id={m.id}
+            data-focused={highlightId === m.id ? "true" : undefined}
+            className={cn("rounded-xl transition-shadow", highlightId === m.id && "ring-2 ring-primary/60 ring-offset-2 ring-offset-background")}
+          >
             <MessageRow m={m} huddle={huddle} />
           </div>
         ))}
