@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "feed_type": "email_snapshot",
+  "source": "power-automate-outlook",
+  "mailbox": "owner@work.example",
+  "source_login": "login@work.example",
+  "synthetic": true,
+  "subject_prefix": "HUDDLE-PA-SBX-",
+  "published_utc": "2026-11-11T23:00:00Z",
+  "window_start_utc": "2026-11-07T23:00:00Z",
+  "complete": true,
+  "snapshot": {
+    "value": [
+      {
+        "id": "AAMk-sample-1",
+        "internetMessageId": "<sample-1@partner.example>",
+        "receivedDateTime": "2026-11-10T11:00:00Z",
+        "subject": "HUDDLE-PA-SBX- Can you review the draft by Monday?",
+        "bodyPreview": "Can you review the draft by Monday? CANARY-7f3a",
+        "body": "<p>Can you review the draft by Monday? CANARY-7f3a</p>",
+        "isHtml": true,
+        "from": "colleague@partner.example",
+        "conversationId": "conv-sample-1",
+        "internetMessageHeaders": [{ "name": "From", "value": "\"Pat Example\" <colleague@partner.example>" }]
+      },
+      {
+        "id": "AAMk-sample-2",
+        "receivedDateTime": "2026-11-10T12:00:00Z",
+        "subject": "HUDDLE-PA-SBX- Weekly newsletter",
+        "bodyPreview": "This week in widgets.",
+        "body": "This week in widgets.",
+        "from": "news@newsletter.example",
+        "conversationId": "conv-sample-2",
+        "internetMessageHeaders": [{ "name": "List-Unsubscribe", "value": "<https://newsletter.example/u>" }]
+      },
+      {
+        "id": "",
+        "receivedDateTime": "2026-11-10T13:00:00Z",
+        "subject": "HUDDLE-PA-SBX- record with no id",
+        "body": "no id",
+        "from": "colleague@partner.example"
+      },
+      {
+        "id": "AAMk-sample-3",
+        "receivedDateTime": "2026-11-10T14:00:00Z",
+        "subject": "Real-looking subject without the synthetic prefix",
+        "body": "must never be ingested while synthetic",
+        "from": "colleague@partner.example",
+        "conversationId": "conv-sample-3"
+      }
+    ]
+  }
+}

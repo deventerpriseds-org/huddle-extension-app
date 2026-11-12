@@ -7,6 +7,9 @@
 //             only; every existing Graph tool stays exactly as it is.
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   .claude/actions.md ACT:trinnex-onedrive-feed; scripts/onedrive-feed.test.ts.
+// 2026-11-12: the same config now also carries the rolling Teams log (`teams`, OFF when absent) and the
+//             correspondence ingest switches (`correspondence`, all OFF by default); the Teams parser is
+//             teams-log.ts. AC: docs/ac/AC-correspondence-checklist.md sections 1, 6.
 //
 // THIS REPO IS PUBLIC: no tenant, drive, flow or calendar identifiers live in code. Everything that
 // binds the feed to a person comes from the server-only HUDDLE_ONEDRIVE_FEEDS setting.
@@ -19,6 +22,32 @@ export interface FeedFileConfig {
   /** Drive-relative path, e.g. "/automation/email/emails.json". */
   path: string;
 }
+
+/** The rolling Teams JSON Lines log (correspondence feature, 2026-11-12). Same drive + owner binding as
+ *  the email/appointments files; `source` is the label every line must carry, `ownerIds` the owner's own
+ *  Teams sender ids (used only to recognise HIS replies, never to address anyone). */
+export interface TeamsFeedConfig extends FeedFileConfig {
+  source: string;
+  ownerIds: string[];
+}
+
+/** Correspondence ingest switches (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence turns them on).
+ *  `ingest` alone reads the sources into the processing ledger; `bell` / `proposals` select the
+ *  processors that a later pass plugs in. Nothing here runs unless `ingest` is true. */
+export interface CorrespondenceConfig {
+  ingest: boolean;
+  sources: ("teams" | "email")[];
+  bell: boolean;
+  proposals: boolean;
+  maxAttempts: number;
+  /** Minimum gap between two eTag checks of the Teams log (the flow writes once a weekday evening). */
+  minIntervalMinutes: number;
+}
+
+export const TEAMS_LOG_PATH_DEFAULT = "/automation/huddle-source-log.jsonl";
+export const TEAMS_SOURCE_EXPECTED = "power-automate-teams";
+export const CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT = 5;
+export const CORRESPONDENCE_MIN_INTERVAL_DEFAULT = 10;
 
 export interface OneDriveFeedsConfig {
   enabled: boolean;
@@ -40,6 +69,9 @@ export interface OneDriveFeedsConfig {
   notBeforeUtc?: string;
   email: FeedFileConfig;
   appointments: FeedFileConfig;
+  /** Absent `teams` key => disabled (unlike email/appointments, which predate it and default on). */
+  teams: TeamsFeedConfig;
+  correspondence: CorrespondenceConfig;
 }
 
 export const FEED_MAX_BYTES_DEFAULT = 2_000_000;
@@ -88,6 +120,40 @@ export function parseFeedsConfig(raw: string | undefined | null): OneDriveFeedsC
     notBeforeUtc: isIso(j.notBeforeUtc) ? str(j.notBeforeUtc) : undefined,
     email: file(j.email, "/automation/email/emails.json"),
     appointments: file(j.appointments, "/automation/appointments/appointments.json"),
+    teams: teamsFile(j.teams, file),
+    correspondence: correspondenceFlags(j.correspondence),
+  };
+}
+
+/** Pure: the Teams entry, through the SAME `file()` path rule as email/appointments (AC-1.1). An absent
+ *  key is OFF -- a new source must never switch itself on for an existing config (AC-6.1). */
+function teamsFile(v: unknown, file: (v: unknown, fallback: string) => FeedFileConfig): TeamsFeedConfig {
+  const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  const base = v === undefined || v === null ? { enabled: false, path: TEAMS_LOG_PATH_DEFAULT } : file(v, TEAMS_LOG_PATH_DEFAULT);
+  return {
+    ...base,
+    source: str(o.source) || TEAMS_SOURCE_EXPECTED,
+    ownerIds: (Array.isArray(o.ownerIds) ? o.ownerIds : []).map((x) => str(x).toLowerCase()).filter(Boolean),
+  };
+}
+
+/** Pure: correspondence switches. Every flag defaults OFF; only a literal `true` turns one on. */
+function correspondenceFlags(v: unknown): CorrespondenceConfig {
+  const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  const sources = (Array.isArray(o.sources) ? o.sources : ["teams", "email"]).filter(
+    (s): s is "teams" | "email" => s === "teams" || s === "email",
+  );
+  const n = (x: unknown, dflt: number, max: number) => {
+    const k = Number(x);
+    return Number.isFinite(k) && k >= 1 ? Math.min(Math.floor(k), max) : dflt;
+  };
+  return {
+    ingest: o.ingest === true,
+    sources: [...new Set(sources)],
+    bell: o.bell === true,
+    proposals: o.proposals === true,
+    maxAttempts: n(o.maxAttempts, CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT, 20),
+    minIntervalMinutes: n(o.minIntervalMinutes, CORRESPONDENCE_MIN_INTERVAL_DEFAULT, 24 * 60),
   };
 }
 
