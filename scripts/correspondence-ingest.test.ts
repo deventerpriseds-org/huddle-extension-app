@@ -15,6 +15,7 @@ import {
   mapFeedMessage,
   mapSentRecords,
   parseFeedsConfig,
+  sentReplySettles,
   validateEmailSnapshot,
   validateSentSnapshot,
 } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
@@ -36,6 +37,7 @@ import {
   type ProcessOutcome,
   type SourceCursor,
   type SourceItem,
+  type TeamsMessage,
 } from "../src/features/huddle/lib/correspondence/source-item";
 import { ledgerEmailItems, runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
 
@@ -539,6 +541,129 @@ console.log("I. SERVER READ — Graph spy (AC-1.2, 1.8, 1.13)");
     globalThis.fetch = realFetch;
     console.error = realErr;
   }
+}
+
+console.log("J. SECTION 4 — unanswered correspondence -> the EXISTING bell (AC-4.x)");
+{
+  const A = await import("../src/features/huddle/lib/attention/attention");
+  const B = await import("../src/features/huddle/lib/correspondence/bell");
+  const chatRow = (o: Record<string, unknown> = {}) => ({ id: "attn-chat-x", kind: "chat", huddle_id: "dm-iris-chase", subject: "HUDDLE-PA-SBX- Alpha chat", from_name: "Pat Example", from_address: null, received_at: "2026-11-10T14:00:00Z", ...o });
+  t("AC-4.2 `chat` is a bell kind with a label", [A.ATTENTION_KINDS.includes("chat"), A.ATTENTION_KIND_LABEL.chat], [true, "Teams chats"]);
+  t("AC-4.2 a chat row becomes a bell item (not silently null) that opens Iris's chat", (() => {
+    const i = A.toAttentionItem(chatRow())!;
+    return [i.kind, i.huddleId, i.title, i.uncertain ?? false];
+  })(), ["chat", "dm-iris-chase", "HUDDLE-PA-SBX- Alpha chat", false]);
+  t("AC-4.2 the bell component maps the chat kind to an icon", readFileSync(join(ROOT, "src/features/huddle/components/AttentionBell.tsx"), "utf8").includes("chat: MessageSquare"), true);
+  const unc = A.toAttentionItem(chatRow({ needs_context: "owner_messages" }))!;
+  t("AC-4.6 uncertain chat row says 'Can't tell if answered', never 'unanswered'", [unc.uncertain, /Can't tell if answered/.test(unc.detail!), /unanswered/i.test(unc.detail!)], [true, true, false]);
+  t("owner decision: uncertain rows are listed but NOT counted in the badge", [A.badgeCount([A.toAttentionItem(chatRow())!, unc]), A.bellItems([chatRow(), chatRow({ id: "y", needs_context: "owner_teams_id" })], A.DEFAULT_URGENT_KINDS).length], [1, 2]);
+  t("AC-4.11 deep link only when the record supplied an https link; none -> no link field", [A.toAttentionItem(chatRow({ source_link: "https://teams.example/l/m/1" }))!.link, "link" in A.toAttentionItem(chatRow())!, "link" in A.toAttentionItem(chatRow({ source_link: "javascript:alert(1)" }))!], ["https://teams.example/l/m/1", false, false]);
+  t("AC-4.3 a setting saved BEFORE chat existed still counts chat", A.resolveStoredUrgentKinds(["email", "meeting", "appointment"]), ["email", "meeting", "appointment", "chat"]);
+  t("AC-4.3 explicit empty list (everything off) still honoured", A.resolveStoredUrgentKinds([]), []);
+  t("AC-4.3 an explicit opt-out survives: saving without chat stores '-chat' and reads back without it", [A.serializeUrgentKinds(["email"]), A.resolveStoredUrgentKinds(A.serializeUrgentKinds(["email"]))], [["email", "-chat"], ["email"]]);
+  t("AC-4.3 unset setting -> default includes chat", A.resolveStoredUrgentKinds(null).includes("chat"), true);
+  t("AC-4.1 chat row id cannot collide with an email row (16 hex) or meeting/appointment ids", (() => {
+    const id = B.chatAttentionId("Owner@eds.example", "19:chat-alpha@thread.example");
+    return [/^attn-chat-[0-9a-f]{16}$/.test(id), id === B.chatAttentionId("owner@eds.example", "19:chat-alpha@thread.example"), id === B.chatAttentionId("owner@eds.example", "19:chat-bravo@thread.example")];
+  })(), [true, true, false]);
+
+  const M = (o: Partial<TeamsMessage>): TeamsMessage => ({ chatId: "c1", messageId: "m", at: "2026-11-10T10:00:00Z", senderId: "u-other", senderName: "Pat", senderIsApp: false, fromOwner: false, text: "HUDDLE-PA-SBX- Can you send the deck?", ...o });
+  t("AC-4.5 an ask followed by an owner message -> answered at the owner's time", B.decideChatThread([M({ messageId: "1" }), M({ messageId: "2", fromOwner: true, at: "2026-11-10T11:00:00Z", text: "HUDDLE-PA-SBX- sent" })], true), { state: "answered", ownerReplyAt: "2026-11-10T11:00:00Z" });
+  t("AC-4.9 four questions in a row -> ONE open ask, the newest", (() => {
+    const d = B.decideChatThread([1, 2, 3, 4].map((i) => M({ messageId: String(i), at: `2026-11-10T1${i}:00:00Z` })), true);
+    return d.state === "open" ? [d.ask.messageId, d.missing] : d;
+  })(), ["4", null]);
+  t("AC-4.6 the log carries no owner message at all -> open but missing owner_messages (can't tell)", (() => {
+    const d = B.decideChatThread([M({})], false);
+    return d.state === "open" ? d.missing : d.state;
+  })(), "owner_messages");
+  t("AC-4.6 / OQ-4 owner ids not configured (fromOwner null) -> missing owner_teams_id", (() => {
+    const d = B.decideChatThread([M({ fromOwner: null })], false);
+    return d.state === "open" ? d.missing : d.state;
+  })(), "owner_teams_id");
+  t("AC-4.8 FYI (no ask), app sender, automated address -> nothing", [
+    B.decideChatThread([M({ text: "HUDDLE-PA-SBX- FYI the nightly build is green." })], true).state,
+    B.decideChatThread([M({ senderIsApp: true })], true).state,
+    B.decideChatThread([M({ senderId: "noreply@svc.example" })], true).state,
+  ], ["nothing", "nothing", "nothing"]);
+  t("S-12 the owner's own question is never an item needing reply", B.decideChatThread([M({ fromOwner: true })], true).state, "answered");
+  t("an ask AFTER the owner's last message re-opens the chat", B.decideChatThread([M({ messageId: "1", fromOwner: true }), M({ messageId: "2", at: "2026-11-10T12:00:00Z" })], true).state, "open");
+
+  // The processor through the pass, fixtures + in-memory bell store.
+  const bellRows = new Map<string, { status: string; needs: string | null; ask: string; at: string }>();
+  const store = {
+    upserts: 0,
+    settles: 0,
+    async upsert(r: { id: string; askSourceId: string; askAt: string; needsContext: string | null }) {
+      this.upserts++;
+      const cur = bellRows.get(r.id);
+      if (cur && cur.status !== "owed" && !(Date.parse(r.askAt) > Date.parse(cur.at) && r.askSourceId !== cur.ask)) return false;
+      bellRows.set(r.id, { status: "owed", needs: r.needsContext, ask: r.askSourceId, at: r.askAt });
+      return true;
+    },
+    async settle(id: string, _o: string, at: string) {
+      this.settles++;
+      const cur = bellRows.get(id);
+      if (!cur || cur.status !== "owed" || Date.parse(cur.at) > Date.parse(at)) return false;
+      cur.status = "replied";
+      return true;
+    },
+  };
+  files.teamsText = teamsFixture;
+  files.teamsEtag = '"{t},1"';
+  files.email = emailFixture;
+  files.emailEtag = '"{e},1"';
+  const tw = makeTwin();
+  await runIngestPass(onCfg({ bell: true }), deps(tw, [B.makeBellProcessor(store)]));
+  const alpha = B.chatAttentionId("login@eds.example", "19:chat-alpha@thread.example");
+  t("AC-4.5 fixture: the alpha chat (owner replied later) writes no open row", bellRows.get(alpha)?.status ?? "none", "none");
+  t("AC-7.1 fixture: exactly ONE open certain row -- the charlie chat's ask (its app message ignored)", [...bellRows.entries()].map(([k, v]) => [k === B.chatAttentionId("login@eds.example", "19:chat-charlie@thread.example"), v.status, v.needs, v.ask]), [[true, "owed", null, "19:chat-charlie@thread.example:3001"]]);
+  t("AC-4.5 fixture: the alpha chat's owner reply reached the store as a settle", store.settles >= 1, true);
+  t("AC-4.8 fixture: the FYI chat writes no row", bellRows.has(B.chatAttentionId("login@eds.example", "19:chat-bravo@thread.example")), false);
+  t("AC-2.7 email items: the bell processor announces nothing (the inbox watch already did)", [...bellRows.keys()].every((k) => k.startsWith("attn-chat-")), true);
+  t("AC-3.2 / ledger: every fixture item processed or needs_context, none failed", [...tw.rows.values()].every((r) => r.status === "processed" || r.status === "needs_context"), true);
+
+  // AC-4.13 two passes: an ask, then the owner's reply in a later file, settles with no action in Huddle
+  bellRows.clear();
+  const line1 = JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-golf@thread.example", chatName: "HUDDLE-PA-SBX- Golf", messages: [{ id: "g1", createdDateTime: "2026-11-11T10:00:00Z", body: { contentType: "text", content: "HUDDLE-PA-SBX- Could you approve the PO today?" }, from: { user: { id: "user-other-7", displayName: "Gale" } }, webUrl: "https://teams.example/l/m/g1" }] });
+  const ownerLine = JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-hotel@thread.example", messages: [{ id: "h1", createdDateTime: "2026-11-11T09:00:00Z", body: "HUDDLE-PA-SBX- morning all", from: { user: { id: "USER-OWNER-1" } } }] });
+  const tw2 = makeTwin();
+  files.teamsText = [line1, ownerLine].join("\n");
+  files.teamsEtag = '"{g},1"';
+  await runIngestPass(onCfg({ bell: true, sources: ["teams"] }), deps(tw2, [B.makeBellProcessor(store)]));
+  const golf = B.chatAttentionId("login@eds.example", "19:chat-golf@thread.example");
+  t("AC-4.13 pass 1: the ask is an open (owed, certain) row", [bellRows.get(golf)?.status, bellRows.get(golf)?.needs], ["owed", null]);
+  tw2.tick(11 * 60_000);
+  files.teamsText += `\n${JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-golf@thread.example", messages: [{ id: "g2", createdDateTime: "2026-11-11T12:00:00Z", body: "HUDDLE-PA-SBX- approved", from: { user: { id: "USER-OWNER-1" } } }] })}`;
+  files.teamsEtag = '"{g},2"';
+  await runIngestPass(onCfg({ bell: true, sources: ["teams"] }), deps(tw2, [B.makeBellProcessor(store)]));
+  t("AC-4.13 pass 2: the owner's later message settles it 'replied'", bellRows.get(golf)?.status, "replied");
+  t("AC-4.6 with NO owner message anywhere in the log, the same ask is 'can't tell'", await (async () => {
+    bellRows.clear();
+    const tw3 = makeTwin();
+    files.teamsText = line1;
+    files.teamsEtag = '"{g},9"';
+    await runIngestPass(onCfg({ bell: true, sources: ["teams"] }), deps(tw3, [B.makeBellProcessor(store)]));
+    return [bellRows.get(golf)?.needs, [...tw3.rows.values()][0].status];
+  })(), ["owner_messages", "needs_context"]);
+  t("AC-6.3 bell OFF -> the bell processor never runs", await (async () => {
+    const before = store.upserts + store.settles;
+    const tw4 = makeTwin();
+    await runIngestPass(onCfg({ proposals: false, sources: ["teams"] }), deps(tw4, [B.makeBellProcessor(store)]));
+    return store.upserts + store.settles - before;
+  })(), 0);
+  t("AC-4.12 the bell module never sends (no send/draft/POST call sites)", /sendMail|createDraft|send_email|method:\s*"POST"/.test(readFileSync(join(ROOT, "src/features/huddle/lib/correspondence/bell.ts"), "utf8")), false);
+
+  // Owner decision 2 (option A): a work email settles when a LATER sent message is in its conversation
+  const S = new Map([["conv-1", Date.parse("2026-11-10T15:00:00Z")]]);
+  t("sent settle: a later sent message in the same conversation settles the owed work email", sentReplySettles({ conversation_id: "conv-1", received_at: "2026-11-10T11:00:00Z" }, S), true);
+  t("sent settle: a sent message EARLIER than the email does not", sentReplySettles({ conversation_id: "conv-1", received_at: "2026-11-10T16:00:00Z" }, S), false);
+  t("sent settle: equal time is not later -> not settled", sentReplySettles({ conversation_id: "conv-1", received_at: "2026-11-10T15:00:00Z" }, S), false);
+  t("sent settle: other conversation / no conversation id / no receipt time -> unchanged", [sentReplySettles({ conversation_id: "conv-2", received_at: "2026-11-10T11:00:00Z" }, S), sentReplySettles({ conversation_id: null, received_at: "2026-11-10T11:00:00Z" }, S), sentReplySettles({ conversation_id: "conv-1", received_at: null }, S)], [false, false, false]);
+  t("sent settle: fixture end to end (conv-sample-1 replied later; conv-sample-2's sent mail is older)", (() => {
+    const latest = latestSentByConversation(ms.sent);
+    return [sentReplySettles({ conversation_id: "conv-sample-1", received_at: "2026-11-10T11:00:00Z" }, latest), sentReplySettles({ conversation_id: "conv-sample-2", received_at: "2026-11-10T12:00:00Z" }, latest)];
+  })(), [true, false]);
 }
 
 console.log("H. PUBLIC-REPO HYGIENE (AC-8.1, AC-8.2)");

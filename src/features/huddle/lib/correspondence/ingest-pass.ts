@@ -198,6 +198,7 @@ export async function runIngestPass(
   // No processor switched on: items stay `pending` in the ledger, ready for when one is (AC-6.3).
   if (processors.length && withPayload.length) {
     const nowMs = () => deps.now();
+    const batch = [...payload.values()];
     while (true) {
       if (nowMs() - start >= budget) {
         result.yielded = true; // AC-3.10: resume from the ledger next tick
@@ -215,7 +216,7 @@ export async function runIngestPass(
         }
         try {
           const outcomes: ProcessOutcome[] = [];
-          for (const p of processors) outcomes.push(await p.process(item, { owner, nowMs: nowMs() }));
+          for (const p of processors) outcomes.push(await p.process(item, { owner, nowMs: nowMs(), batch }));
           const o = combineOutcomes(outcomes);
           if (o.status === "processed") {
             if (await deps.ledger.markProcessed(c, o.resultIds ?? {})) result.processed++;

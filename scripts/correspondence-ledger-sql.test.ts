@@ -1,7 +1,9 @@
 // WHAT:       Runs the REAL correspondence ledger SQL (lib/correspondence/ledger.server.ts, unmodified) against a
 //             throwaway local PostgreSQL: first-seen insert, re-reads, an edited item, concurrent claims, a
 //             failed write, bounded retries, a killed pass, needs_context reopening, the cursor, and a
-//             schema check that no body/subject/sender column exists.
+//             schema check that no body/subject/sender column exists. Also (section 4) the Teams-chat bell
+//             rows in the EXISTING chat.email_replies and the Sent Items settle of feed work emails
+//             (lib/email/email-replies.server.ts, unmodified by the test).
 // WHY:        AC docs/ac/AC-correspondence-checklist.md section 3 (Tier 1). The in-memory twin in
 //             correspondence-ingest.test.ts mirrors what the author THINKS the SQL does; this exercises the
 //             SQL itself (the lesson of scripts/fireflies-queue-sql.test.ts, D7/D8/D9).
@@ -176,6 +178,35 @@ try {
   await C.set(O, "teams");
   const k2 = await C.get(O, "teams");
   t("cursor keeps the ingested eTag when only the check time moves", [k1?.etag, k2?.etag, (k2?.checkedAtMs ?? 0) >= (k1?.checkedAtMs ?? 0)], ['"{e1},1"', '"{e1},1"', true]);
+
+  // ---- Section 4: the bell rows in the EXISTING chat.email_replies (real SQL) ----
+  const R = await import("../src/features/huddle/lib/email/email-replies.server");
+  const W = "owner@eds.example";
+  await R.recordOwedEmail({ id: "e-1", ownerEmail: W, mailbox: "owner@work.example", graphMessageId: "feed:owner@work.example:A1", conversationId: "conv-1", fromAddress: "pat@partner.example", subject: "HUDDLE-PA-SBX- review?", receivedAt: "2026-11-10T11:00:00Z" });
+  await R.recordOwedEmail({ id: "e-2", ownerEmail: W, mailbox: "owner@work.example", graphMessageId: "feed:owner@work.example:A2", conversationId: "conv-2", fromAddress: "pat@partner.example", subject: "HUDDLE-PA-SBX- later?", receivedAt: "2026-11-10T16:00:00Z" });
+  const countsBefore = await R.getEmailReplyCounts(W);
+  const owedBefore = (await R.listOwedEmailReplies(W)).map((r) => r.id);
+  const byFromBefore = (await R.findOwedEmailReplyByFrom(W, "pat@partner.example"))?.id;
+  const chat = (o: Record<string, unknown> = {}) => ({ id: "attn-chat-0000000000000001", ownerEmail: W, chatId: "19:c@thread.example", askSourceId: "19:c@thread.example:m1", askAt: "2026-11-10T10:00:00Z", senderName: "Pat", chatName: "HUDDLE-PA-SBX- C", link: "https://teams.example/l/m/1", needsContext: null as string | null, huddleId: "dm-iris-chase", ...o });
+  t("AC-4.1 a chat ask writes ONE kind='chat' owed row in chat.email_replies", [await R.upsertChatAttention(chat()), (await pool.query(`SELECT kind, status, needs_context, source_link FROM chat.email_replies WHERE id=$1`, ["attn-chat-0000000000000001"])).rows[0]], [true, { kind: "chat", status: "owed", needs_context: null, source_link: "https://teams.example/l/m/1" }]);
+  t("AC-4.9 a newer ask in the same chat updates the SAME row", [await R.upsertChatAttention(chat({ askSourceId: "19:c@thread.example:m2", askAt: "2026-11-10T10:30:00Z" })), Number((await pool.query(`SELECT count(*) n FROM chat.email_replies WHERE kind='chat'`)).rows[0].n)], [true, 1]);
+  t("AC-4.4 email-only queries are unchanged by chat rows (counts, owed list, by-sender lookup)", [await R.getEmailReplyCounts(W), (await R.listOwedEmailReplies(W)).map((r) => r.id), (await R.findOwedEmailReplyByFrom(W, "pat@partner.example"))?.id], [countsBefore, owedBefore, byFromBefore]);
+  t("AC-4.2 listOpenAttention returns the chat row with needs_context + source_link", (await R.listOpenAttention(W)).filter((r) => r.kind === "chat").map((r) => [r.id, r.needs_context, r.source_link]), [["attn-chat-0000000000000001", null, "https://teams.example/l/m/1"]]);
+  t("talking to Iris does NOT settle a Teams chat row (settleAttentionForHuddle skips chat)", [await R.settleAttentionForHuddle(W, "dm-iris-chase"), (await pool.query(`SELECT status FROM chat.email_replies WHERE id='attn-chat-0000000000000001'`)).rows[0].status], [0, "owed"]);
+  t("AC-4.5 an owner message OLDER than the ask does not settle", await R.settleChatAttention("attn-chat-0000000000000001", W, "2026-11-10T10:15:00Z"), false);
+  t("AC-4.5 / 4.13 an owner message after the ask settles 'replied'", [await R.settleChatAttention("attn-chat-0000000000000001", W, "2026-11-10T11:00:00Z"), (await pool.query(`SELECT status FROM chat.email_replies WHERE id='attn-chat-0000000000000001'`)).rows[0].status], [true, "replied"]);
+  t("the SAME ask re-read after settling does not reopen", await R.upsertChatAttention(chat({ askSourceId: "19:c@thread.example:m2", askAt: "2026-11-10T10:30:00Z" })), false);
+  t("a NEWER ask after the reply reopens the chat row", [await R.upsertChatAttention(chat({ askSourceId: "19:c@thread.example:m3", askAt: "2026-11-10T12:00:00Z" })), (await pool.query(`SELECT status FROM chat.email_replies WHERE id='attn-chat-0000000000000001'`)).rows[0].status], [true, "owed"]);
+  t("AC-4.10 Dismiss settles it through the existing ownership check", [!!(await R.getOwnedEmailReply("attn-chat-0000000000000001", W)), await R.getOwnedEmailReply("attn-chat-0000000000000001", "other@eds.example"), await R.settleEmailReply("attn-chat-0000000000000001", "dismissed")], [true, null, true]);
+  t("AC-4.10 the next pass re-reading the dismissed ask does not reopen it", [await R.upsertChatAttention(chat({ askSourceId: "19:c@thread.example:m3", askAt: "2026-11-10T12:00:00Z" })), (await pool.query(`SELECT status FROM chat.email_replies WHERE id='attn-chat-0000000000000001'`)).rows[0].status], [false, "dismissed"]);
+  t("AC-4.6 an uncertain chat row stores needs_context", [await R.upsertChatAttention(chat({ id: "attn-chat-0000000000000002", chatId: "19:d@thread.example", askSourceId: "19:d@thread.example:m1", needsContext: "owner_messages" })), (await pool.query(`SELECT needs_context FROM chat.email_replies WHERE id='attn-chat-0000000000000002'`)).rows[0].needs_context], [true, "owner_messages"]);
+  t("an upsert never touches a non-chat row with the same id", [await R.upsertChatAttention(chat({ id: "e-1" })), (await pool.query(`SELECT kind, status FROM chat.email_replies WHERE id='e-1'`)).rows[0]], [false, { kind: "email", status: "owed" }]);
+
+  // Owner decision 2 (option A): feed work emails settle from the Sent Items snapshot
+  t("no Sent Items file (null) -> feed emails unchanged (owed until dismissed, as today)", [await R.reconcileRepliedFromSentItems(W, { feedSent: async () => null }), (await R.listOwedEmailReplies(W)).map((r) => r.id)], [0, ["e-1", "e-2"]]);
+  const sentMap = new Map([["conv-1", Date.parse("2026-11-10T15:00:00Z")], ["conv-2", Date.parse("2026-11-10T15:00:00Z")]]);
+  t("a later sent message settles e-1 'replied'; e-2 (received after the sent one) stays owed", [await R.reconcileRepliedFromSentItems(W, { feedSent: async () => sentMap }), (await pool.query(`SELECT id, status FROM chat.email_replies WHERE id IN ('e-1','e-2') ORDER BY id`)).rows], [1, [{ id: "e-1", status: "replied" }, { id: "e-2", status: "owed" }]]);
+  t("a failing Sent Items read changes nothing", await R.reconcileRepliedFromSentItems(W, { feedSent: async () => { throw new Error("graph_500"); } }), 0);
 
   await pool.end();
 } catch (e) {

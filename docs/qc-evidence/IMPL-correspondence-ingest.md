@@ -126,3 +126,40 @@ Source: `docs/integrations/power-automate-huddle-sources.md` (coordinator, read 
   opened this session); the code is correct either way (206 or 200 + trim).
 - Fixture `scripts/fixtures/onedrive/sent.sample.json`. Test line in the doc's exact Graph message shape.
 - `correspondence-ingest.test.ts` **113 passed, 0 failed**; onedrive-feed all passed; tsc clean.
+
+### Step 7 -- AC section 4: unanswered correspondence -> the EXISTING attention bell
+
+Scope extended by the coordinator (2026-11-12) with owner decisions: proposals get NO bell item;
+email "answered?" = option A (Sent Items file); until it exists, existing work emails are UNCHANGED.
+
+| Existing behaviour today | What it becomes | Why | Impact on the owner | Reversible? |
+|---|---|---|---|---|
+| Bell kinds email/meeting/appointment | + `chat` (Teams chats), on by default | AC-4.2 | new rows only when `correspondence.bell` is on | yes (config off / "What counts") |
+| Saved "What counts" list is read as-is | a list saved before `chat` existed also counts chat; unticking chat now saves `-chat` | AC-4.3 | none for existing kinds | yes |
+| Badge = every listed item | badge = items whose state is known; "can't tell" chat rows listed, not counted | owner decision | no change while no chat rows exist | yes |
+| Owner posting in a huddle settles its non-email rows | same, but `chat` rows are excluded (talking to Iris is not answering a Teams chat) | correctness | none today (no chat rows) | yes |
+| Feed (work) emails settle only by Dismiss | also settle `replied` when `sent.json` has a later message in the same conversation; absent file = unchanged | owner decision 2 (option A) | only after the `sent` config entry exists | yes (remove `sent`) |
+
+- `lib/attention/attention.ts`: `chat` kind + label, `LATE_KINDS`, `resolveStoredUrgentKinds` (read path),
+  `serializeUrgentKinds` (save path), `badgeCount`, chat branch of `toAttentionItem` (uncertain flag,
+  "Can't tell if answered: ..." reason, https-only `link`). `parseUrgentKinds` is unchanged (attention.test.ts
+  A3 pins it).
+- `attention.functions.ts`: read uses `resolveStoredUrgentKinds`, `count = badgeCount(items)`; save stores
+  `serializeUrgentKinds`. `AttentionBell.tsx`: chat icon, badge = known items, muted uncertain rows,
+  "Open in Teams" only when a link exists; the row itself opens Iris's chat (existing `openChat`).
+- `email-replies.server.ts`: columns `needs_context`, `source_link` (idempotent ALTER);
+  `upsertChatAttention` (one row per chat; open row refreshed; a settled row reopens only for a NEWER,
+  different ask); `settleChatAttention`; `settleAttentionForHuddle` excludes `chat`;
+  `reconcileRepliedFromSentItems` settles feed rows via `sentReplySettles` against `sent.json`
+  (`loadFeedSent`: config `sent` enabled + `feedBelongsTo` + existing `readFeed(cfg,"sent")`; injectable).
+- `lib/correspondence/bell.ts`: `chatMessageAsks` (reuses `asksSomething` / `isAutomatedAddress`; app
+  senders and the owner never ask), `decideChatThread`, `chatAttentionId` (`attn-chat-<shortHash>`),
+  `makeBellProcessor` (per pass, one decision per chat; email items are a no-op -- AC-2.7).
+  "Owner messages exported" = at least one owner message anywhere in the parsed log.
+- Seam change (backward compatible): `ItemProcessor.process` ctx gains optional `batch`.
+- Tests: ingest **147/0** (section J), ledger+bell SQL **49/0**, tsc clean, onedrive-feed / attention /
+  attention-focus / fireflies-queue-sql all passed, inbound-email 72/0, cross-app-turn-gate 92/0,
+  fireflies-minutes **64/3 (unchanged)**.
+- NOT done in section 4: AC-4.7's "needs_context for feed email with no sent mail" -- owner decision 2
+  says existing work emails stay unchanged. Bell badge for needs_context = not counted (OQ-13 answered
+  by the coordinator).

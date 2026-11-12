@@ -295,6 +295,19 @@ export function mapSentRecords(records: Record<string, unknown>[], cfg: OneDrive
   return { sent, skipped };
 }
 
+/** Pure (owner decision 2026-11-12, option A): an owed WORK email is answered when a sent message in the same
+ *  conversation is LATER than the email's receipt. No conversation id, no receipt time, or no later sent
+ *  message => not settled (it stays owed, exactly as today). */
+export function sentReplySettles(
+  row: { conversation_id: string | null; received_at: string | Date | null },
+  latestSent: Map<string, number>,
+): boolean {
+  if (!row.conversation_id || !row.received_at) return false;
+  const received = row.received_at instanceof Date ? row.received_at.getTime() : Date.parse(row.received_at);
+  const sent = latestSent.get(row.conversation_id);
+  return Number.isFinite(received) && sent !== undefined && sent > received;
+}
+
 /** Pure: latest sent time per conversation (ms). */
 export function latestSentByConversation(sent: SentMessage[]): Map<string, number> {
   const m = new Map<string, number>();

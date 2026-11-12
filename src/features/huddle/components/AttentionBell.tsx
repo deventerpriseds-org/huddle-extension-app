@@ -8,7 +8,7 @@
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   lib/attention/attention.ts; .claude/actions.md ACT:attention-bell.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, CalendarClock, Mail, AlarmClock, X } from "lucide-react";
+import { Bell, CalendarClock, Mail, AlarmClock, MessageSquare, X } from "lucide-react";
 import { toast } from "sonner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuth } from "@/hooks/useAuth";
@@ -21,6 +21,7 @@ import {
 import {
   ATTENTION_KINDS,
   ATTENTION_KIND_LABEL,
+  badgeCount,
   type AttentionItem,
   type AttentionKind,
 } from "../lib/attention/attention";
@@ -31,6 +32,7 @@ const KIND_ICON: Record<AttentionKind, typeof Mail> = {
   email: Mail,
   meeting: CalendarClock,
   appointment: AlarmClock,
+  chat: MessageSquare,
 };
 
 function when(iso: string | null): string {
@@ -87,7 +89,8 @@ export function AttentionBell() {
   }, [open, refresh]);
 
   if (!caller) return null;
-  const count = items.length;
+  // "Can't tell if answered" chat rows are listed but not counted (2026-11-12).
+  const count = badgeCount(items);
 
   async function dismiss(id: string) {
     setItems((xs) => xs.filter((x) => x.id !== id));
@@ -157,7 +160,7 @@ export function AttentionBell() {
           </div>
         )}
         <div className="max-h-80 overflow-y-auto">
-          {count === 0 ? (
+          {items.length === 0 ? (
             <p className="px-3 py-6 text-center text-xs text-muted-foreground">Nothing waiting on you.</p>
           ) : (
             items.map((it) => {
@@ -165,12 +168,26 @@ export function AttentionBell() {
               return (
                 <div key={it.id} className="flex items-start gap-2 border-b border-hairline px-3 py-2 last:border-b-0" data-testid="attention-item">
                   <Icon size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
-                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => openChat(it)}>
-                    <p className="truncate text-xs font-medium text-foreground">{it.title}</p>
-                    <p className="truncate text-[11px] text-muted-foreground">
-                      {[it.detail, when(it.at)].filter(Boolean).join(" · ")}
-                    </p>
-                  </button>
+                  <div className="min-w-0 flex-1">
+                    <button type="button" className="w-full text-left" onClick={() => openChat(it)}>
+                      <p className={`truncate text-xs font-medium ${it.uncertain ? "text-muted-foreground" : "text-foreground"}`}>{it.title}</p>
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {[it.detail, when(it.at)].filter(Boolean).join(" · ")}
+                      </p>
+                    </button>
+                    {/* Only when the source supplied a link: a missing link renders no dead control. */}
+                    {it.link && (
+                      <a
+                        href={it.link}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        data-testid="attention-source-link"
+                        className="text-[11px] text-primary hover:underline"
+                      >
+                        Open in Teams
+                      </a>
+                    )}
+                  </div>
                   {/* A labelled button: the owner did not find the old icon-only X (2026-11-12). */}
                   <button
                     type="button"
