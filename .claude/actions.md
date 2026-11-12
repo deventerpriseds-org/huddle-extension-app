@@ -9,9 +9,18 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       Section 5 corrected to EXTEND the existing build_checklist (owner caught the miss; accuracy-log row).
 - [x] Power Automate instructions: docs/integrations/power-automate-huddle-sources.md (separate sent.json, sent_snapshot;
       Teams JSONL huddle-source-log.jsonl in the email folder; report-back list). For the owner's PA session.
-- [ ] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest (builder running).
-- [ ] Section 5 proposals in the existing checklist: branch claude_task-proposals (builder running).
-- [ ] Red-team pre-pass + independent verifier (Tier 1: model output into stored proposals) before any PR.
+- [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
+      docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
+- [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
+      docs/qc-evidence/IMPL-task-proposals.md: 131/0 offline, 41/0 real-PG, 15 mutation proofs FIRED (controls equivalent).
+      Not built: AC-6.2 Settings toggle, AC-6.6 health panel. 5.14 (side-panel approvals) left separate pending owner.
+- [ ] Owner asked (2026-11-12) why not put Sent Items INSIDE emails.json. Read origin/main: feedEmailMessages ->
+      mapFeedMessage -> eligibleFeedMessages has NO sender filter, so every record in emails.json is screened as
+      incoming mail today. One-file layout needs Huddle to skip records whose from == the mailbox FIRST, then the PA edit.
+- [ ] Owner's Teams user id received in chat (from.user.id, aadUser). NOT committed (public repo); goes into
+      HUDDLE_ONEDRIVE_FEEDS.teams.ownerSenderIds at switch-on.
+- [ ] Red-team pre-pass (running, writes docs/qc-evidence/REDTEAM-correspondence-proposals.md on branch
+      claude_redteam-correspondence) + independent verifier (Tier 1: model output into stored proposals) before any PR.
 - [ ] Stays OFF and UNMERGED until the owner's real Power Automate files are checked (handoff rule).
 
 ## ACT:bell-dismiss-deeplink — labelled Dismiss on bell rows; tap jumps to the email's reply card (2026-11-12)
