@@ -185,6 +185,18 @@ export interface LedgerStore {
   health(owner: string): Promise<Record<string, Partial<Record<LedgerStatus, number>>>>;
 }
 
+/** Per owner + source: the eTag of the source file last ingested, and when the file was last checked. */
+export interface SourceCursor {
+  etag: string | null;
+  checkedAtMs: number | null;
+}
+
+export interface CursorStore {
+  get(owner: string, source: CorrespondenceSource): Promise<SourceCursor | null>;
+  /** `etag` given => a new file version was ingested; omitted => only the check time moves. */
+  set(owner: string, source: CorrespondenceSource, etag?: string): Promise<void>;
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Processor seam. The bell (AC section 4) and proposals (section 5) are NOT built in this pass; they plug in
 // here. A processor MUST be idempotent per (source, sourceItemId): an item is re-run after a crash between
