@@ -121,6 +121,7 @@ function turnPayload(
   tz: string,
   caller: Caller,
   notify: "batch" | "push" = "batch",
+  opts: { webSearch?: boolean } = {},
 ) {
   const agent = task.assigned_agent as string;
   return {
@@ -135,7 +136,7 @@ function turnPayload(
       [agent]: {
         backend: "openai",
         journey: { enabled: false },
-        webSearch: true, // ensure the agent is handed its web-search tool
+        webSearch: opts.webSearch ?? true, // the agent's web-search tool; off only for confirm re-asks
         rag: { store: "azure", chunks: true, triples: false, fileSearch: false, sharing: "shared" },
       },
     },
@@ -196,11 +197,18 @@ export function confirmIntentDirective(
     `their Executive Profile and anything you remember about their goals (already in your context). ` +
     opener +
     `${modeProposalHint(mode)}\n` +
-    `ALWAYS include, in the message, the most relevant link(s) you can find right now with your web search ` +
-    `(the product or vendor page, the sign-up or subscription page, the course, the shop) and, for any ` +
-    `product, service, tool or provider, a one-to-two sentence summary of what it is — so the user learns ` +
-    `something from the ask itself, even before confirming. Only real links you actually found; never ` +
-    `invent a URL.\n` +
+    (opts.followUp
+      ? // Owner 2026-11-12 (option a-narrow): 38 of 43 Tavily searches in a week came from re-asks repeating
+        // the first ask's search. A re-ask is not handed the web-search tool (turnPayload webSearch:false),
+        // so it must not promise fresh links: it points back to the first check-in's.
+        `Do NOT search the web for this follow-up — the links went in your first check-in. If they help, ` +
+        `say they are in your earlier message; for any product, service, tool or provider you may add a ` +
+        `one-to-two sentence summary of what it is from what you already know. Never invent a URL.\n`
+      : `ALWAYS include, in the message, the most relevant link(s) you can find right now with your web search ` +
+        `(the product or vendor page, the sign-up or subscription page, the course, the shop) and, for any ` +
+        `product, service, tool or provider, a one-to-two sentence summary of what it is — so the user learns ` +
+        `something from the ask itself, even before confirming. Only real links you actually found; never ` +
+        `invent a URL.\n`) +
     `In this SAME message/turn, also call propose_task_intent with task_id "${task.id}", task_title ` +
     `"${task.title}", and the definition_of_done you just proposed — this records what you proposed ` +
     `immediately, before they've replied, so the user can act on it with one tap. This is separate from ` +
@@ -271,7 +279,14 @@ function tzClock(d: Date, tz: string): TzClock {
   for (const p of parts) if (p.type !== "literal") o[p.type] = p.value;
   let h = Number(o.hour);
   if (h === 24) h = 0; // some engines emit "24" at midnight under hour12:false — normalize
-  return { y: Number(o.year), mo: Number(o.month), d: Number(o.day), h, mi: Number(o.minute), s: Number(o.second) };
+  return {
+    y: Number(o.year),
+    mo: Number(o.month),
+    d: Number(o.day),
+    h,
+    mi: Number(o.minute),
+    s: Number(o.second),
+  };
 }
 
 /** ms to add to a wall clock read as UTC to recover the true instant, under `d`'s tz rules. */
@@ -296,7 +311,13 @@ export function insideFanWindow(now: Date, tz: string, windows: WinRange[]): boo
  * the exact hour. Always returns an instant that is inside a window and > prev. DST self-heal: a skewed
  * instant is re-checked at fire time by fireDueConfirmAsks and re-fanned if it fell outside a window.
  */
-export function nextSpacedFanSlotIso(prev: Date, tz: string, windows: WinRange[], gapMinMs: number, gapMaxMs: number): string {
+export function nextSpacedFanSlotIso(
+  prev: Date,
+  tz: string,
+  windows: WinRange[],
+  gapMinMs: number,
+  gapMaxMs: number,
+): string {
   const wins = windows.filter((w) => w.end > w.start).sort((a, b) => a.start - b.start);
   const randInt = (a: number, b: number) => a + Math.floor(Math.random() * Math.max(1, b - a)); // [a,b)
   if (!wins.length) return new Date(prev.getTime() + Math.max(gapMinMs, 60_000)).toISOString(); // no windows → gap fallback
@@ -321,7 +342,10 @@ export function nextSpacedFanSlotIso(prev: Date, tz: string, windows: WinRange[]
     }
     const offset = tzOffsetMs(cand, tz);
     const jitter = randInt(0, Math.min(gapMinMs, 30 * 60_000)); // ≤ gapMin and ≤30min → stays well inside the ≥2h window
-    candMs = Date.UTC(c.y, c.mo - 1, c.d + dayOffset, Math.floor(target / 60), target % 60, 0) - offset + jitter;
+    candMs =
+      Date.UTC(c.y, c.mo - 1, c.d + dayOffset, Math.floor(target / 60), target % 60, 0) -
+      offset +
+      jitter;
   }
   return new Date(candMs).toISOString();
 }
@@ -339,10 +363,17 @@ export type ArmItem = { taskId: string; kind: "first" | "reask" };
  * Both writes are set-once per round (`ensureConfirmAskAt` for a first ask; `armConfirmReAskAt` for a re-ask), so
  * a task that already has a pending instant is left unchanged — and a re-ask that did NOT arm gives its slot back.
  */
-async function armConfirmAsksSpaced(items: ArmItem[], email: string, tz: string, windows: WinRange[]): Promise<void> {
+async function armConfirmAsksSpaced(
+  items: ArmItem[],
+  email: string,
+  tz: string,
+  windows: WinRange[],
+): Promise<void> {
   if (!items.length) return;
-  const { resolveConfirmGap, CONFIRM_GAP_DEFAULT } = await import("../identity/scheduling-config.server");
-  const { getLatestPendingConfirmAskAt, ensureConfirmAskAt, armConfirmReAskAt } = await import("./tasks.server");
+  const { resolveConfirmGap, CONFIRM_GAP_DEFAULT } =
+    await import("../identity/scheduling-config.server");
+  const { getLatestPendingConfirmAskAt, ensureConfirmAskAt, armConfirmReAskAt } =
+    await import("./tasks.server");
   let gap = CONFIRM_GAP_DEFAULT;
   try {
     gap = await resolveConfirmGap(email);
@@ -381,7 +412,8 @@ type EngagementLike = {
   approach_status?: string | null;
 };
 
-const ms = (v: string | Date | null | undefined): number | null => (v ? new Date(v).getTime() : null);
+const ms = (v: string | Date | null | undefined): number | null =>
+  v ? new Date(v).getTime() : null;
 
 /**
  * May this item be confirm-asked at all? Not yet confirmed, not paused on an open clarifying question (AC-33),
@@ -389,7 +421,11 @@ const ms = (v: string | Date | null | undefined): number | null => (v ? new Date
  */
 function askEligible(s: EngagementLike | undefined): boolean {
   const status = s?.confirm_status ?? "awaiting";
-  return (status === "awaiting" || status === "asked") && s?.clarify_status !== "open" && s?.approach_status !== "escalated";
+  return (
+    (status === "awaiting" || status === "asked") &&
+    s?.clarify_status !== "open" &&
+    s?.approach_status !== "escalated"
+  );
 }
 
 /** Armed and not yet sent (mirrors tasks.server.ts ARMED_UNSENT_SQL). */
@@ -451,7 +487,12 @@ export function planConfirmArming(input: {
       if (!best || sent < best.sent) best = { taskId: t.id, sent, idx };
     });
     const chosen = best as { taskId: string; sent: number; idx: number } | null;
-    if (!agentHasPending && chosen) reasks.push({ item: { taskId: chosen.taskId, kind: "reask" }, sent: chosen.sent, idx: chosen.idx });
+    if (!agentHasPending && chosen)
+      reasks.push({
+        item: { taskId: chosen.taskId, kind: "reask" },
+        sent: chosen.sent,
+        idx: chosen.idx,
+      });
   }
   reasks.sort((a, b) => a.sent - b.sent || a.idx - b.idx);
   return [...first, ...reasks.map((r) => r.item)];
@@ -483,11 +524,21 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
 
   let fired = 0;
   try {
-    const { claimConfirmAskSend, releaseConfirmAskSend, reArmConfirmAskAt, getLatestPendingConfirmAskAt, getLastConfirmSentAt } =
-      await import("./tasks.server");
+    const {
+      claimConfirmAskSend,
+      releaseConfirmAskSend,
+      reArmConfirmAskAt,
+      getLatestPendingConfirmAskAt,
+      getLastConfirmSentAt,
+    } = await import("./tasks.server");
     const { enqueueTurn, taskIdsInReminderWindow } = await import("./turns.server");
-    const { resolveJobCadence, resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT, resolveConfirmGap, CONFIRM_GAP_DEFAULT } =
-      await import("../identity/scheduling-config.server");
+    const {
+      resolveJobCadence,
+      resolveConfirmFanWindows,
+      CONFIRM_FAN_WINDOWS_DEFAULT,
+      resolveConfirmGap,
+      CONFIRM_GAP_DEFAULT,
+    } = await import("../identity/scheduling-config.server");
 
     const byUser = new Map<string, typeof due>();
     for (const row of due) {
@@ -560,7 +611,9 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
           /* no reminder filter */
         }
         // Coursework is never asked about, even while a stale assignee lingers until the next groom.
-        const rows = allRows.filter((r) => r.assigned_agent && !inReminder.has(r.task_id) && !isCoursework(r.title));
+        const rows = allRows.filter(
+          (r) => r.assigned_agent && !inReminder.has(r.task_id) && !isCoursework(r.title),
+        );
         if (!rows.length) continue;
 
         // Fire-time half of the spacing chain. If we cannot read when the user was last asked, we cannot prove
@@ -581,7 +634,9 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
             continue;
           }
           const followUp = row.confirm_status === "asked";
-          const claim = await claimConfirmAskSend(row.task_id, row.confirm_ask_count).catch(() => null);
+          const claim = await claimConfirmAskSend(row.task_id, row.confirm_ask_count).catch(
+            () => null,
+          );
           if (!claim) continue; // another tick sent it / it was answered or reassigned meanwhile
           const stamp = now.getTime().toString(36);
           // NEW id for every ask: never the bare legacy `autowork-confirm-${task_id}`, which ON CONFLICT DO
@@ -590,7 +645,13 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
             ? `autowork-reask-${row.task_id}-${claim.count}-${stamp}`
             : `autowork-confirm-${row.task_id}-${claim.count}-${stamp}`;
           const directive = confirmIntentDirective(
-            { id: row.task_id, title: row.title, assigned_agent: row.assigned_agent, category: row.category, tags: row.tags },
+            {
+              id: row.task_id,
+              title: row.title,
+              assigned_agent: row.assigned_agent,
+              category: row.category,
+              tags: row.tags,
+            },
             { followUp },
           );
           let ok = false;
@@ -599,7 +660,16 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
               turnId,
               `dm-${row.assigned_agent}`,
               email,
-              turnPayload({ assigned_agent: row.assigned_agent }, directive, tz, { entra_email: email }, "push"),
+              turnPayload(
+                { assigned_agent: row.assigned_agent },
+                directive,
+                tz,
+                { entra_email: email },
+                "push",
+                {
+                  webSearch: !followUp, // re-asks never search (owner option a-narrow, 2026-11-12)
+                },
+              ),
             );
           } catch {
             ok = false;
@@ -621,7 +691,10 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
         if (sent && unsent.length) await reFan(unsent, now);
         // Queue the NEXT ask the moment one goes out, so the loop through the lane is paced only by the spacing
         // chain — not by waiting for the next 9/13/17 cadence pass (which made it ≤3 re-asks per agent per day).
-        if (sent) await runScheduledAutoWork({ entra_email: email }, { timeZone: tz, armOnly: true }).catch(() => {});
+        if (sent)
+          await runScheduledAutoWork({ entra_email: email }, { timeZone: tz, armOnly: true }).catch(
+            () => {},
+          );
       } catch {
         /* one user's failure never blocks the rest */
       }
@@ -681,7 +754,13 @@ export function renderBlockedLine(it: BlockedItem): string {
 }
 
 /** Surface grooming-flagged blocked items in the coordinator's DM (report-only). One short turn. */
-async function surfaceBlocked(opts: { email: string; tz: string; caller: Caller; items: BlockedItem[]; runId: string }): Promise<void> {
+async function surfaceBlocked(opts: {
+  email: string;
+  tz: string;
+  caller: Caller;
+  items: BlockedItem[];
+  runId: string;
+}): Promise<void> {
   const list = opts.items.slice(0, 8).map(renderBlockedLine).join("\n");
   const directive =
     `Some of the user's assigned tasks are blocked pending THEIR input — the team can't proceed without a ` +
@@ -734,11 +813,19 @@ interface AgentBucket {
  */
 export async function runScheduledAutoWork(
   caller: Caller | undefined,
-  opts: { timeZone?: string; force?: boolean; runId?: string; promoteOnly?: boolean; armOnly?: boolean } = {},
+  opts: {
+    timeZone?: string;
+    force?: boolean;
+    runId?: string;
+    promoteOnly?: boolean;
+    armOnly?: boolean;
+  } = {},
 ): Promise<AutoWorkRunResult> {
   const runId =
-    opts.runId?.trim() || `autowork-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  if (!caller?.entra_email) return { ok: false, skipped: true, reason: "missing_caller_email", runId };
+    opts.runId?.trim() ||
+    `autowork-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  if (!caller?.entra_email)
+    return { ok: false, skipped: true, reason: "missing_caller_email", runId };
 
   const { resolveTaskEmail } = await import("../journey/identity");
   const email = (await resolveTaskEmail(caller)) ?? caller.entra_email;
@@ -766,14 +853,36 @@ export async function runScheduledAutoWork(
   const { taskIdsInReminderWindow } = await import("./turns.server");
   const inReminderWindow = await taskIdsInReminderWindow(email);
   const assigned = (await getOpenAssignedTasks(email)).filter(
-    (t) => !(t.tags ?? []).includes("parking-lot") && !inReminderWindow.has(t.id) && !isCoursework(t.title),
+    (t) =>
+      !(t.tags ?? []).includes("parking-lot") &&
+      !inReminderWindow.has(t.id) &&
+      !isCoursework(t.title),
   );
   const signature = backlogSignature(assigned);
 
   if (!assigned.length && !opts.force) {
-    if (opts.armOnly) return { ok: true, skipped: true, reason: "empty", enqueued: 0, promoted: 0, blocked: 0, remaining: 0, runId };
+    if (opts.armOnly)
+      return {
+        ok: true,
+        skipped: true,
+        reason: "empty",
+        enqueued: 0,
+        promoted: 0,
+        blocked: 0,
+        remaining: 0,
+        runId,
+      };
     await setAutoWorkSignature(email, signature);
-    return { ok: true, skipped: true, reason: "empty", enqueued: 0, promoted: 0, blocked: 0, remaining: 0, runId };
+    return {
+      ok: true,
+      skipped: true,
+      reason: "empty",
+      enqueued: 0,
+      promoted: 0,
+      blocked: 0,
+      remaining: 0,
+      runId,
+    };
   }
 
   const byAgent = new Map<string, AgentBucket>();
@@ -840,7 +949,10 @@ export async function runScheduledAutoWork(
   }
   // Every id the gate or the ask rotation needs — read in ONE query per pass, never per item (AC-19).
   const gateIds = [
-    ...new Set([...doingSlotCandidates.map((c) => c.task.id), ...lanes.flatMap((l) => l.lane.map((t) => t.id))]),
+    ...new Set([
+      ...doingSlotCandidates.map((c) => c.task.id),
+      ...lanes.flatMap((l) => l.lane.map((t) => t.id)),
+    ]),
   ];
 
   // Per-agent gate requirement. FAIL-CLOSED twice over: a resolver that THROWS (or resolves to anything but an
@@ -859,8 +971,12 @@ export async function runScheduledAutoWork(
       ),
     );
 
-  const { resolveConfirmFanWindows, CONFIRM_FAN_WINDOWS_DEFAULT, resolveConfirmReaskMinHours, CONFIRM_REASK_MIN_HOURS_DEFAULT } =
-    await import("../identity/scheduling-config.server");
+  const {
+    resolveConfirmFanWindows,
+    CONFIRM_FAN_WINDOWS_DEFAULT,
+    resolveConfirmReaskMinHours,
+    CONFIRM_REASK_MIN_HOURS_DEFAULT,
+  } = await import("../identity/scheduling-config.server");
   // The per-ITEM re-ask floor (owner: 24h). A non-positive / non-numeric value falls back to the default —
   // never to "re-ask every gap".
   let reaskMinHours = CONFIRM_REASK_MIN_HOURS_DEFAULT;
@@ -898,7 +1014,16 @@ export async function runScheduledAutoWork(
         /* best-effort — the next send or cadence pass re-arms */
       }
     }
-    return { ok: true, skipped: false, reason: "arm_only", enqueued: 0, promoted: 0, blocked: 0, remaining: 0, runId };
+    return {
+      ok: true,
+      skipped: false,
+      reason: "arm_only",
+      enqueued: 0,
+      promoted: 0,
+      blocked: 0,
+      remaining: 0,
+      runId,
+    };
   }
 
   // promoteOnly (the grooming→auto-work chain): ONLY top up UP_NEXT from the freshly-ranked backlog.
@@ -943,7 +1068,16 @@ export async function runScheduledAutoWork(
       }
     }
     await setAutoWorkSignature(email, signature);
-    return { ok: true, skipped: false, reason: "promote_only", enqueued: 0, promoted, blocked: 0, remaining: 0, runId };
+    return {
+      ok: true,
+      skipped: false,
+      reason: "promote_only",
+      enqueued: 0,
+      promoted,
+      blocked: 0,
+      remaining: 0,
+      runId,
+    };
   }
 
   const engagementByTaskId = await getTaskEngagementStates(gateIds);
@@ -989,14 +1123,19 @@ export async function runScheduledAutoWork(
       if (!(requiredByAgent.get(agent) ?? true)) continue;
       for (const t of lane) {
         const s = engagementByTaskId.get(t.id);
-        if (s?.confirm_status === "confirmed" && s.approach_status === "pending" && s.clarify_status !== "open") {
+        if (
+          s?.confirm_status === "confirmed" &&
+          s.approach_status === "pending" &&
+          s.clarify_status !== "open"
+        ) {
           redrives.push({ agent, task: t });
         }
       }
     }
     if (redrives.length) {
       const { getWorkflowCaps } = await import("../identity/agent-workflow-config.server");
-      const { claimApproachRedrive, releaseApproachRedrive, escalateApproach } = await import("./tasks.server");
+      const { claimApproachRedrive, releaseApproachRedrive, escalateApproach } =
+        await import("./tasks.server");
       const nowMs = Date.now();
       for (const { agent, task } of redrives) {
         try {
@@ -1025,7 +1164,11 @@ export async function runScheduledAutoWork(
           }
           if (!ok) {
             const prev = ms(s.approach_redrive_last_at);
-            await releaseApproachRedrive(task.id, claimed, prev === null ? null : new Date(prev).toISOString()).catch(() => {});
+            await releaseApproachRedrive(
+              task.id,
+              claimed,
+              prev === null ? null : new Date(prev).toISOString(),
+            ).catch(() => {});
           }
         } catch {
           /* one bad re-drive never blocks the rest */
@@ -1073,7 +1216,11 @@ export async function runScheduledAutoWork(
   const stuckWithArtifact = doingCandidates.filter((t) => withArtifact.has(t.id));
   if (stuckWithArtifact.length) {
     const { ensureReviewFlip } = await import("./tasks.server");
-    await Promise.all(stuckWithArtifact.map((t) => ensureReviewFlip(t.id, email, caller, t.assigned_agent).catch(() => {})));
+    await Promise.all(
+      stuckWithArtifact.map((t) =>
+        ensureReviewFlip(t.id, email, caller, t.assigned_agent).catch(() => {}),
+      ),
+    );
   }
 
   // Blocked = tasks an agent flagged (a task_blockers row) — with the REAL reason it recorded. Not a guess.
@@ -1101,8 +1248,16 @@ export async function runScheduledAutoWork(
     const id = `autowork-${runId}-${task.id}`;
     try {
       const eng = engagementByTaskId.get(task.id);
-      const agreed = { dod: eng?.confirmed_dod ?? task.definition_of_done ?? null, approach: eng?.proposed_approach ?? null };
-      await enqueueTurn(id, `dm-${task.assigned_agent}`, email, turnPayload(task, researchDirective(task, agreed), tz, caller));
+      const agreed = {
+        dod: eng?.confirmed_dod ?? task.definition_of_done ?? null,
+        approach: eng?.proposed_approach ?? null,
+      };
+      await enqueueTurn(
+        id,
+        `dm-${task.assigned_agent}`,
+        email,
+        turnPayload(task, researchDirective(task, agreed), tz, caller),
+      );
       enqueued++;
     } catch {
       /* enqueue failure is non-fatal — the task stays a candidate and is retried next pass */
@@ -1119,5 +1274,14 @@ export async function runScheduledAutoWork(
 
   await setAutoWorkSignature(email, signature);
   const remaining = Math.max(0, candidates.length - enqueued);
-  return { ok: true, skipped: false, enqueued, promoted, blocked: blockedItems.length, remaining, confirmAsked: 0, runId };
+  return {
+    ok: true,
+    skipped: false,
+    enqueued,
+    promoted,
+    blocked: blockedItems.length,
+    remaining,
+    confirmAsked: 0,
+    runId,
+  };
 }
