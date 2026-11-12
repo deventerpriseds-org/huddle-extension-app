@@ -39,9 +39,19 @@ for (const followUp of [false, true]) {
   t(`${k}: names the task in plain words`, /NAMES THE TASK|BY NAMING THE TASK/.test(d));
   t(`${k}: forbids "this" as the subject`, /never "this/.test(d));
   t(`${k}: no longer models "before I get going on this"`, !/before I get going on this/.test(d) && !/Circling back on this one/.test(d));
-  t(`${k}: always includes real links`, /ALWAYS include, in the message, the most relevant link/.test(d) && /never ` \+?\s*`?invent a URL|never invent a URL/.test(d));
+  if (!followUp) {
+    t(`${k}: always includes real links`, /ALWAYS include, in the message, the most relevant link/.test(d) && /never ` \+?\s*`?invent a URL|never invent a URL/.test(d));
+  } else {
+    // Owner 2026-11-12 option a-narrow: re-asks were 38 of 43 Tavily searches in a week.
+    t(`${k}: does NOT search the web`, /Do NOT search the web for this follow-up/.test(d) && !/with your web search/.test(d));
+    t(`${k}: never invents a URL`, /Never invent a URL/.test(d));
+  }
   t(`${k}: summary of the product for knowledge`, /one-to-two sentence summary of what it is/.test(d));
 }
+
+console.log("\n--- re-asks are not handed the web-search tool ---");
+t("turnPayload's webSearch defaults on and is overridable", /webSearch: opts\.webSearch \?\? true/.test(awSrc));
+t("the confirm-ask enqueue turns web search off for re-asks only", /"push", \{\s*webSearch: !followUp/.test(awSrc));
 
 console.log("\n--- grooming: an app fix is not agent work ---");
 t("app/system bug fix is a 'none' example", /fixing a bug or a broken section in an app or system/.test(groomSrc) && /Fix the\s+Nexus assignments section/.test(groomSrc));

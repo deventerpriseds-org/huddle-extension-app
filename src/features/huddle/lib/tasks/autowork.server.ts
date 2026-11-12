@@ -121,6 +121,7 @@ function turnPayload(
   tz: string,
   caller: Caller,
   notify: "batch" | "push" = "batch",
+  opts: { webSearch?: boolean } = {},
 ) {
   const agent = task.assigned_agent as string;
   return {
@@ -135,7 +136,7 @@ function turnPayload(
       [agent]: {
         backend: "openai",
         journey: { enabled: false },
-        webSearch: true, // ensure the agent is handed its web-search tool
+        webSearch: opts.webSearch ?? true, // the agent's web-search tool; off only for confirm re-asks
         rag: { store: "azure", chunks: true, triples: false, fileSearch: false, sharing: "shared" },
       },
     },
@@ -196,11 +197,18 @@ export function confirmIntentDirective(
     `their Executive Profile and anything you remember about their goals (already in your context). ` +
     opener +
     `${modeProposalHint(mode)}\n` +
-    `ALWAYS include, in the message, the most relevant link(s) you can find right now with your web search ` +
-    `(the product or vendor page, the sign-up or subscription page, the course, the shop) and, for any ` +
-    `product, service, tool or provider, a one-to-two sentence summary of what it is — so the user learns ` +
-    `something from the ask itself, even before confirming. Only real links you actually found; never ` +
-    `invent a URL.\n` +
+    (opts.followUp
+      ? // Owner 2026-11-12 (option a-narrow): 38 of 43 Tavily searches in a week came from re-asks repeating
+        // the first ask's search. A re-ask is not handed the web-search tool (turnPayload webSearch:false),
+        // so it must not promise fresh links: it points back to the first check-in's.
+        `Do NOT search the web for this follow-up — the links went in your first check-in. If they help, ` +
+        `say they are in your earlier message; for any product, service, tool or provider you may add a ` +
+        `one-to-two sentence summary of what it is from what you already know. Never invent a URL.\n`
+      : `ALWAYS include, in the message, the most relevant link(s) you can find right now with your web search ` +
+        `(the product or vendor page, the sign-up or subscription page, the course, the shop) and, for any ` +
+        `product, service, tool or provider, a one-to-two sentence summary of what it is — so the user learns ` +
+        `something from the ask itself, even before confirming. Only real links you actually found; never ` +
+        `invent a URL.\n`) +
     `In this SAME message/turn, also call propose_task_intent with task_id "${task.id}", task_title ` +
     `"${task.title}", and the definition_of_done you just proposed — this records what you proposed ` +
     `immediately, before they've replied, so the user can act on it with one tap. This is separate from ` +
@@ -599,7 +607,9 @@ export async function fireDueConfirmAsks(now: Date = new Date()): Promise<number
               turnId,
               `dm-${row.assigned_agent}`,
               email,
-              turnPayload({ assigned_agent: row.assigned_agent }, directive, tz, { entra_email: email }, "push"),
+              turnPayload({ assigned_agent: row.assigned_agent }, directive, tz, { entra_email: email }, "push", {
+                webSearch: !followUp, // re-asks never search (owner option a-narrow, 2026-11-12)
+              }),
             );
           } catch {
             ok = false;
