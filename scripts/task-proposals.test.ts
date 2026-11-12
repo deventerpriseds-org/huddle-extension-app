@@ -828,7 +828,11 @@ console.log("\n# L. red-team fix pass");
   t("F7 over-match negative: \"Don't forget to send ...\" is NOT a negation", ok("Send the deck", "send the deck by Friday", "Don't forget to send the deck by Friday."), ["Don't forget to send the deck by Friday."]);
   t("F7 over-match negative: \"Not sure ..., but can you send ...\" is NOT a negation", ok("Send the deck", "can you send the deck by Friday", "Not sure if you saw it, but can you send the deck by Friday?").length, 1);
   t("F7 the stored evidence is the whole enclosing sentence (not the fragment)", ok("Send the contract", "send the contract to the client", "Hi team.\nPlease send the contract to the client today. Thanks!"), ["Please send the contract to the client today."]);
-  t("F4 over-match negative: a fully grounded imperative title is accepted", ok("Update the budget sheet", "Dana will update the budget sheet", "Dana will update the budget sheet by Nov 14.").length, 1);
+  const why = (task: string, evidence: string, src: string) => Object.keys(validateCandidates({ tasks: [{ task, evidence, assignee: null, due_text: null }] }, src, { atIso: AT, tz: TZ }).rejected);
+  t("F4 majority: one shared verb + an invented object (no numbers) -> task_not_grounded", why("Send the signed lease to Morgan", "Please send the invoice to Dana by Friday", "Please send the invoice to Dana by Friday."), ["task_not_grounded"]);
+  t("F4 numbers: majority grounded but an invented number ('Q4' vs 'Q3') -> task_number_not_grounded", why("Send the Q4 deck", "Can you send me the Q3 deck by Friday?", "Can you send me the Q3 deck by Friday?"), ["task_number_not_grounded"]);
+  t("F5 size: a 3-word fragment is refused even when every word matches the title", why("Send the deck", "send the deck", "Thanks for offering to send the deck."), ["evidence_too_short"]);
+  t("F4 over-match negative: a fully grounded imperative title is accepted",ok("Update the budget sheet", "Dana will update the budget sheet", "Dana will update the budget sheet by Nov 14.").length, 1);
 }
 t("F12 trailing addressee ('..., Dana?') -> Dana", groundedAssignee("Dana", "Can you send the deck, Dana?"), "Dana");
 t("F12 hand-off ('ask Dana to ...') -> Dana", groundedAssignee("Dana", "Please ask Dana to send the deck"), "Dana");
