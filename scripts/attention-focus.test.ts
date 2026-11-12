@@ -7,7 +7,9 @@
 // EVIDENCE:   .claude/actions.md ACT:bell-dismiss-deeplink.
 import { readFileSync } from "node:fs";
 import {
+  FOCUS_WAIT_MS,
   emailFocusTarget,
+  focusStep,
   messageDeepLink,
   parseFocusParams,
   revealStartFor,
@@ -34,6 +36,15 @@ t("F1 finds the card carrying that email's reply", emailFocusTarget(msgs, "e2"),
 t("F2 a revised reply wins: the NEWEST card for the email", emailFocusTarget(msgs, "e1"), { index: 4, id: "m4" });
 t("F3 no card for the email -> null (bell falls back to opening the chat)", emailFocusTarget(msgs, "zz"), null);
 t("F4 an empty id never matches a message without a card", emailFocusTarget([{ id: "a" }], ""), null);
+
+const st = (found: boolean, hydrated: boolean, waitExpired: boolean, aboveWindow = false) =>
+  focusStep({ found, hydrated, waitExpired, aboveWindow });
+t("J1 card not loaded yet and history still loading -> wait", st(false, false, false), "waiting");
+t("J2 history never finishes loading -> after the wait, say so (never a silent no-op)", st(false, false, true), "not-found");
+t("J3 history loaded and no card -> say so at once", st(false, true, false), "not-found");
+t("J4 card above the window -> reveal it first", st(true, true, false, true), "revealing");
+t("J5 card in view -> land on it", st(true, false, false, false), "landing");
+t("J6 the wait is a few seconds, not forever", FOCUS_WAIT_MS > 0 && FOCUS_WAIT_MS <= 10000, true);
 
 t("R1 card above the window: open the window up to it", revealStartFor(3, 10), 3);
 t("R2 card already shown: the window does not shrink", revealStartFor(12, 10), 10);
@@ -63,6 +74,8 @@ const fns = readFileSync("src/features/huddle/lib/huddle.functions.ts", "utf8");
 t("W4 the phone alert for an email links to its card", /deepLink: messageDeepLink\(huddleId, focusEmailId\)/.test(fns), true);
 const view = readFileSync("src/features/huddle/components/HuddleView.tsx", "utf8");
 t("W5 the transcript consumes the focus request and scrolls to the card", /const target = emailFocusTarget\(messages, focusRequest\.emailId\);/.test(view) && /el\.scrollIntoView\(\{ block: "center" \}\);/.test(view), true);
+t("W6 the wait timer feeds the step (a stuck load cannot hang the jump)", /waitExpired: focusWaitExpired,/.test(view) && /setTimeout\(\(\) => setExpiredNonce\(nonce\), FOCUS_WAIT_MS\)/.test(view), true);
+t("W7 the outcome is visible to a browser check", /data-focus-state=\{focusState \?\? undefined\}/.test(view), true);
 
 if (fail) {
   console.log(`\n${fail} FAILED`);
