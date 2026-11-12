@@ -69,7 +69,7 @@ import { loadOlderMessages } from "../lib/identity/workspace.functions";
 import { getToken } from "@/lib/entra-auth";
 import { isRenderableMessage, isWorkspaceHydrated } from "../store";
 import { shouldAppendReminder } from "../lib/identity/workspace-window";
-import { emailFocusTarget, revealStartFor } from "../lib/attention/focus";
+import { emailFocusTarget, focusStep, FOCUS_WAIT_MS, revealStartFor, type FocusState } from "../lib/attention/focus";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
@@ -400,30 +400,58 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
     if (el.scrollHeight <= el.clientHeight) revealOlder();
   }, [start, revealOlder, messages.length]);
 
-  // Jump to one email's reply card (bell tap / `?email=` deep link). Waits for history to load; opens the
-  // window far enough up to render the card; scrolls it to the middle and highlights it briefly.
+  // Jump to one email's reply card (bell tap / `?email=` deep link). Waits for history to load (at most
+  // FOCUS_WAIT_MS: a load that never completes must not leave the tap doing nothing -- seen in browser UAT
+  // run 43165525010); opens the window far enough up to render the card; scrolls it to the middle and
+  // highlights it. `focusState` is mirrored to data-focus-state so a browser check can read the outcome.
   const focusRequest = useHuddleStore((s) => s.focusRequest);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [focusState, setFocusState] = useState<FocusState | null>(null);
+  // The wait timer is tied to ONE request (its nonce), so an expired earlier tap never cuts a new one short.
+  const [expiredNonce, setExpiredNonce] = useState<number | null>(null);
+  const focusWaitExpired = !!focusRequest && expiredNonce === focusRequest.nonce;
+  useEffect(() => {
+    if (!focusRequest || focusRequest.huddleId !== huddle.id) return;
+    const nonce = focusRequest.nonce;
+    const t = setTimeout(() => setExpiredNonce(nonce), FOCUS_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [focusRequest, huddle.id]);
   useEffect(() => {
     if (!focusRequest || focusRequest.huddleId !== huddle.id) return;
     const target = emailFocusTarget(messages, focusRequest.emailId);
-    if (!target) {
-      if (!isWorkspaceHydrated()) return; // history still loading: the card may arrive with it
+    const step = focusStep({
+      found: !!target,
+      hydrated: isWorkspaceHydrated(),
+      waitExpired: focusWaitExpired,
+      aboveWindow: !!target && target.index < start,
+    });
+    setFocusState(step);
+    if (step === "waiting") return; // history still loading: the card may arrive with it
+    if (step === "not-found") {
       useHuddleStore.getState().clearFocusRequest();
       toast.message("That reply card is further back in this chat. Scroll up to find it.");
       return;
     }
-    if (target.index < start) {
-      setPinnedStart(revealStartFor(target.index, start));
+    follow.release(); // before revealing, so nothing pins the window back to the newest rows
+    if (step === "revealing") {
+      setPinnedStart(revealStartFor(target!.index, start));
       return; // re-runs once the card is rendered
     }
-    const el = scrollRef.current?.querySelector(`[data-msg-id="${CSS.escape(target.id)}"]`);
-    if (!el) return;
-    follow.release();
-    el.scrollIntoView({ block: "center" });
-    setHighlightId(target.id);
-    useHuddleStore.getState().clearFocusRequest();
-  }, [focusRequest, huddle.id, messages, start, follow]);
+    let raf = 0;
+    const land = (tries: number) => {
+      const el = scrollRef.current?.querySelector(`[data-msg-id="${CSS.escape(target!.id)}"]`);
+      if (!el) {
+        if (tries > 0) raf = requestAnimationFrame(() => land(tries - 1));
+        return;
+      }
+      el.scrollIntoView({ block: "center" });
+      setHighlightId(target!.id);
+      setFocusState("focused");
+      useHuddleStore.getState().clearFocusRequest();
+    };
+    land(10);
+    return () => cancelAnimationFrame(raf);
+  }, [focusRequest, huddle.id, messages, start, follow, focusWaitExpired]);
   useEffect(() => {
     if (!highlightId) return;
     const t = setTimeout(() => setHighlightId(null), 3000);
@@ -458,6 +486,7 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
       ref={scrollRef}
       onScroll={onScroll}
       data-testid="transcript"
+      data-focus-state={focusState ?? undefined}
       className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6"
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
