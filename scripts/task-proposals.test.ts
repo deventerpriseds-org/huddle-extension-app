@@ -20,9 +20,12 @@ import {
   sanitizeChecklistPayload,
   transcriptProposalText,
   validateCandidates,
+  groundedAssignee,
+  titleKey,
   type ProposalRow,
   type ProposalStore,
 } from "../src/features/huddle/lib/proposals/proposals";
+import { htmlToText, parseUtcMs, parseFeedsConfig as parseCfg } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import {
   approveProposal,
   decideProposal,
@@ -30,6 +33,7 @@ import {
   editProposal,
   proposalChecklistResult,
   proposalsProcessor,
+  proposeFromSource,
   runTranscriptProposals,
   type ExtractFn,
   type MeetingRef,
@@ -282,6 +286,12 @@ const memStore = () => {
       rows.set(p.id, { id: p.id, owner, state: "proposed", title: p.title, originalTitle: p.title, normTitle: p.normTitle, edited: false, evidence: p.evidence, assignee: p.assignee, dueText: p.dueText, dueDate: p.dueDate, sources: [{ ...p.ref, context: p.ref.context ?? null }], taskId: null, createdAt: new Date(clock).toISOString(), decidedAt: null, lease: 0 });
       refs.set(rk, p.id);
       return { kind: "created", id: p.id };
+    },
+    async priorRelated(owners, ref, norm) {
+      const same = (r: ProposalRow) => r.sources.some((s) => s.source === ref.source && s.sourceItemId === ref.sourceItemId);
+      return [...rows.values()]
+        .filter((r) => own(owners, r) && (same(r) || (r.normTitle === norm && r.state === "dismissed")))
+        .map((r) => ({ id: r.id, normTitle: r.normTitle, state: r.state, sameItem: same(r) }));
     },
     async listActive(owners) {
       return [...rows.values()].filter((r) => own(owners, r) && r.state === "proposed").map((r) => out(r)!);
@@ -748,6 +758,95 @@ console.log("\n# L. hygiene");
   t("AC-8.1 every address in this feature's files is a .example placeholder", bad, []);
   const ui = readFileSync(join(ROOT, "src/features/huddle/components/ProposalChecklistItem.tsx"), "utf8");
   t("AC-8.2 no source path or mailbox in client code", /automation\/|@/.test(ui.replace(/@\/(lib|components)/g, "")), false);
+}
+
+// ── L. red-team fix pass (2026-11-12): over-match negatives + the fixes the red-team suite does not drive ──
+console.log("\n# L. red-team fix pass");
+{
+  // F3: one candidate's failed write does not lose the others; the item is retried with a short code.
+  const store = memStore();
+  const flaky: ProposalStore = { ...store, upsert: async (p) => (p.normTitle === "send the q3 deck" ? Promise.reject(new Error("boom")) : store.upsert(p)) };
+  const src = { source: "email" as const, sourceItemId: "m:iso", at: AT, context: null, text: "Can you send me the Q3 deck by Friday? Also please update the budget sheet by Nov 14." };
+  const raw = { tasks: [
+    { task: "Send the Q3 deck", evidence: "Can you send me the Q3 deck by Friday?", assignee: null, due_text: "by Friday" },
+    { task: "Update the budget sheet", evidence: "please update the budget sheet by Nov 14", assignee: null, due_text: "by Nov 14" },
+  ] };
+  let err = "";
+  try {
+    await proposeFromSource(OWNER, src, { store: flaky, extract: async () => raw, openTitles: async () => new Set(), tz: TZ });
+  } catch (e) {
+    err = e instanceof Error ? e.message : "";
+  }
+  t("F3 a failed row write -> the item throws a short code (ledger retries it)", err, "proposals:store_failed");
+  t("F3 ...and the OTHER to-do of the same item was still stored", [...store.rows.values()].map((r) => r.title), ["Update the budget sheet"]);
+}
+{
+  // S4: create succeeded, recording it failed -> the lease is released at once; a retry links, never re-creates.
+  const store = memStore();
+  const r = await proposeFromSource(OWNER, { source: "email", sourceItemId: "m:s4", at: AT, context: null, text: "Please review the vendor contract today." }, {
+    store,
+    extract: async () => ({ tasks: [{ task: "Review the vendor contract", evidence: "Please review the vendor contract today.", assignee: null, due_text: "today" }] }),
+    openTitles: async () => new Set(),
+    tz: TZ,
+  });
+  const id = r.ids[0];
+  let creates = 0;
+  let finishCalls = 0;
+  const board: Array<{ id: string; title: string }> = [];
+  const broken: ProposalStore = { ...store, finishApprove: async () => { finishCalls++; return null; } };
+  const deps = (st: ProposalStore) => ({
+    store: st,
+    openTasks: async () => board,
+    createTask: async (title: string) => {
+      creates++;
+      board.push({ id: `task-${creates}`, title });
+      return { ok: true as const, taskId: `task-${creates}` };
+    },
+    metaGuard: () => null,
+  });
+  const a1 = await approveProposal([OWNER], id, deps(broken));
+  t("S4 finishApprove fails -> error, retried once (2 calls)", [a1.ok, finishCalls], [false, 2]);
+  t("S4 ...and the lease is RELEASED (claimable again right away)", (await store.claimApprove([OWNER], id, 90)).claimed, true);
+  await store.releaseApprove(id);
+  const a2 = await approveProposal([OWNER], id, deps(store));
+  t("S4 a retry links the task just created instead of creating a second", [a2.ok, a2.ok && a2.alreadyOnBoard, creates], [true, true, 1]);
+}
+{
+  // F14 negative: the same item re-extracted with a genuinely DIFFERENT to-do (a different number) is proposed.
+  const store = memStore();
+  const src = { source: "email" as const, sourceItemId: "m:f14", at: AT, context: null, text: "Can you send me the Q3 deck and the Q4 deck by Friday?" };
+  let task = "Send the Q3 deck";
+  const deps = { store, extract: async () => ({ tasks: [{ task, evidence: "Can you send me the Q3 deck and the Q4 deck by Friday?", assignee: null, due_text: null }] }), openTitles: async () => new Set<string>(), tz: TZ };
+  const r1 = await proposeFromSource(OWNER, src, deps);
+  await decideProposal([OWNER], r1.ids[0], "dismissed", store);
+  task = "Send the Q4 deck";
+  const r2 = await proposeFromSource(OWNER, src, deps);
+  t("F14 over-match negative: a different to-do from the same item (Q4 vs dismissed Q3) is still proposed", [r2.created, r2.suppressed], [1, 0]);
+}
+{
+  const ok = (task: string, evidence: string, src: string) => validateCandidates({ tasks: [{ task, evidence, assignee: null, due_text: null }] }, src, { atIso: AT, tz: TZ }).accepted.map((c) => c.evidence);
+  t("F7 over-match negative: \"Don't forget to send ...\" is NOT a negation", ok("Send the deck", "send the deck by Friday", "Don't forget to send the deck by Friday."), ["Don't forget to send the deck by Friday."]);
+  t("F7 over-match negative: \"Not sure ..., but can you send ...\" is NOT a negation", ok("Send the deck", "can you send the deck by Friday", "Not sure if you saw it, but can you send the deck by Friday?").length, 1);
+  t("F7 the stored evidence is the whole enclosing sentence (not the fragment)", ok("Send the contract", "send the contract to the client", "Hi team.\nPlease send the contract to the client today. Thanks!"), ["Please send the contract to the client today."]);
+  t("F4 over-match negative: a fully grounded imperative title is accepted", ok("Update the budget sheet", "Dana will update the budget sheet", "Dana will update the budget sheet by Nov 14.").length, 1);
+}
+t("F12 trailing addressee ('..., Dana?') -> Dana", groundedAssignee("Dana", "Can you send the deck, Dana?"), "Dana");
+t("F12 hand-off ('ask Dana to ...') -> Dana", groundedAssignee("Dana", "Please ask Dana to send the deck"), "Dana");
+t("F12 lower-case common word is not a name", groundedAssignee("dana", "dana will send it"), null);
+t("F11 day-month order ('14 November') -> 2026-11-14", resolveDueDate("by 14 November", AT, TZ), "2026-11-14");
+t("F11 every date term negated -> null", resolveDueDate("not today", AT, TZ), null);
+t("F13 titleKey folds full-width + zero-width + mixed-script look-alikes", titleKey("Ｓеnd the Q3\u200b deck"), "send the q3 deck");
+t("F13 an all-Cyrillic word is real text and is NOT folded", titleKey("Отправить deck"), "отправить deck");
+t("F8 over-match negative: a visible styled span is kept", htmlToText('<p>Hi <span style="display:inline-block;font-size:12px">please send the deck</span></p>'), "Hi please send the deck");
+t("F8 nested hidden element removed whole, the text after it kept", htmlToText('<div style="display:none"><div>a</div>hidden</div><p>shown</p>'), "shown");
+t("F19 &amp;lt; decodes once to the literal &lt;", htmlToText("<p>a &amp;lt; b</p>"), "a &lt; b");
+t("S1 a zone-less timestamp is UTC", parseUtcMs("2026-11-10T10:00:00") === Date.parse("2026-11-10T10:00:00Z"), true);
+t("S1 an explicit offset is kept", parseUtcMs("2026-11-10T10:00:00+02:00") === Date.parse("2026-11-10T08:00:00Z"), true);
+{
+  const base = { enabled: true, ownerLogins: ["owner@eds.example"], driveUser: "owner@eds.example", mailbox: "owner@work.example", synthetic: false };
+  const c = (x: Record<string, unknown>) => parseCfg(JSON.stringify({ ...base, ...x }));
+  t("F1 teams:true -> on at the default path; teams:{} -> on", [c({ teams: true })?.teams.enabled, c({ teams: true })?.teams.path, c({ teams: {} })?.teams.enabled], [true, "/automation/email/huddle-source-log.jsonl", true]);
+  t("F1/F2 teams:0 / [] / {enabled:false}, sent:\"on\" -> off", [c({ teams: 0 })?.teams.enabled, c({ teams: [] })?.teams.enabled, c({ teams: { enabled: false } })?.teams.enabled, c({ sent: "on" })?.sent.enabled], [false, false, false, false]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

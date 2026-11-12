@@ -25,6 +25,8 @@ import {
   proposalChecklistRow,
   proposalId,
   proposalSourceFromItem,
+  similarTitleKeys,
+  titleKey,
   validateCandidates,
   type ProposalRow,
   type ProposalSource,
@@ -49,6 +51,10 @@ export interface ProposeResult {
   attached: number;
   seen: number;
   onBoard: number;
+  /** Not proposed again: a reworded re-extraction of the same item (F14) or a to-do dismissed elsewhere (F15). */
+  suppressed: number;
+  /** Candidates whose store write failed (the item is retried; the others were still stored). */
+  failed: number;
   rejected: Partial<Record<RejectReason, number>>;
 }
 
@@ -57,7 +63,7 @@ const code = (c: string) => new Error(c);
 
 /** One source -> extraction -> validation -> store (AC-5.18 .. 5.21). */
 export async function proposeFromSource(owner: string, src: ProposalSource, deps: ProposeDeps): Promise<ProposeResult> {
-  const out: ProposeResult = { ids: [], created: 0, attached: 0, seen: 0, onBoard: 0, rejected: {} };
+  const out: ProposeResult = { ids: [], created: 0, attached: 0, seen: 0, onBoard: 0, suppressed: 0, failed: 0, rejected: {} };
   let raw: unknown;
   try {
     raw = await deps.extract(EXTRACTION_INSTRUCTIONS, extractionInput(src));
@@ -68,27 +74,46 @@ export async function proposeFromSource(owner: string, src: ProposalSource, deps
   const { accepted, rejected } = validateCandidates(raw, src.text, { atIso: src.at, tz: deps.tz });
   out.rejected = rejected;
   if (!accepted.length) return out;
-  const open = await deps.openTitles();
+  const openRaw = await deps.openTitles();
+  // Red-team F13: board titles go through the same key as proposals (invisible / look-alike chars folded).
+  const open = openRaw ? new Set([...openRaw].map(titleKey)) : null;
   for (const c of accepted) {
     // AC-5.21: a to-do already open on the board is not proposed at all.
-    if (open?.has(c.normTitle)) {
+    if (open?.has(titleKey(c.normTitle))) {
       out.onBoard++;
       continue;
     }
-    const r = await deps.store.upsert({
-      id: proposalId(owner, src, c.normTitle),
-      owner,
-      title: c.title,
-      normTitle: c.normTitle,
-      evidence: c.evidence,
-      assignee: c.assignee,
-      dueText: c.dueText,
-      dueDate: c.dueDate,
-      ref: { source: src.source, sourceItemId: src.sourceItemId, at: src.at, context: src.context ?? null },
-    });
-    out[r.kind === "created" ? "created" : r.kind === "attached" ? "attached" : "seen"]++;
-    if (!out.ids.includes(r.id)) out.ids.push(r.id);
+    // Red-team F3: one candidate's failed write must not lose the others. Each write is isolated; a failure
+    // is counted and the item is retried after the loop (the refs make the stored ones "seen" on retry).
+    try {
+      const prior = await deps.store.priorRelated([owner], src, c.normTitle);
+      // Red-team F14: the same source item re-extracted (an edited message, a re-processed transcript) and
+      // the model words the to-do slightly differently -> the same to-do, whatever its state.
+      const reworded = prior.find((p) => p.sameItem && p.normTitle !== c.normTitle && similarTitleKeys(p.normTitle, c.normTitle));
+      // Red-team F15 (decision, reversible): a dismissal suppresses the same to-do from ANY source.
+      const dismissed = prior.find((p) => p.state === "dismissed" && p.normTitle === c.normTitle && !p.sameItem);
+      if (reworded || dismissed) {
+        out.suppressed++;
+        continue;
+      }
+      const r = await deps.store.upsert({
+        id: proposalId(owner, src, c.normTitle),
+        owner,
+        title: c.title,
+        normTitle: c.normTitle,
+        evidence: c.evidence,
+        assignee: c.assignee,
+        dueText: c.dueText,
+        dueDate: c.dueDate,
+        ref: { source: src.source, sourceItemId: src.sourceItemId, at: src.at, context: src.context ?? null },
+      });
+      out[r.kind === "created" ? "created" : r.kind === "attached" ? "attached" : "seen"]++;
+      if (!out.ids.includes(r.id)) out.ids.push(r.id);
+    } catch {
+      out.failed++;
+    }
   }
+  if (out.failed) throw code("proposals:store_failed");
   return out;
 }
 
@@ -104,9 +129,9 @@ export function proposalsProcessor(deps: ProposeDeps & { owner(): string; mailbo
       const src = proposalSourceFromItem(item, deps.mailbox());
       if ("skip" in src) return { status: "processed", resultIds: {} };
       const r = await proposeFromSource(deps.owner(), src, deps);
-      if (deps.log && (r.created || r.attached || Object.keys(r.rejected).length)) {
+      if (deps.log && (r.created || r.attached || r.suppressed || Object.keys(r.rejected).length)) {
         const rej = Object.entries(r.rejected).map(([k, n]) => `${k}=${n}`).join(",");
-        deps.log(`[proposals] ${item.source} created=${r.created} attached=${r.attached} seen=${r.seen} on_board=${r.onBoard}${rej ? ` rejected=${rej}` : ""}`);
+        deps.log(`[proposals] ${item.source} created=${r.created} attached=${r.attached} seen=${r.seen} on_board=${r.onBoard} suppressed=${r.suppressed}${rej ? ` rejected=${rej}` : ""}`);
       }
       return { status: "processed", resultIds: r.ids.length ? { proposals: r.ids } : {} };
     },
@@ -227,14 +252,17 @@ export async function approveProposal(owners: string[], id: string, deps: Approv
   } catch {
     unavailable = "open-task read failed"; // fail OPEN but loud, the create-task-core rule (AC-64)
   }
+  // Red-team F13: both sides through titleKey (sanitizeTitle + normalizeTaskTitle), so a zero-width or
+  // look-alike character in either title cannot defeat the duplicate screen.
   const decision = await screenRawJourneyCreate(
     "quick_create_task",
-    { title: row.title },
-    { ledger: new Set<string>(), loadTitles: async () => ({ titles: new Set(open.map((t) => normalizeTaskTitle(t.title))), unavailable }) },
+    // The screen re-normalizes with normalizeTaskTitle, which leaves a titleKey unchanged (idempotent).
+    { title: titleKey(row.title) },
+    { ledger: new Set<string>(), loadTitles: async () => ({ titles: new Set(open.map((t) => titleKey(t.title))), unavailable }) },
   );
   if (decision.action === "skip") {
-    const key = normalizeTaskTitle(row.title);
-    const existing = open.find((t) => normalizeTaskTitle(t.title) === key);
+    const key = titleKey(row.title);
+    const existing = open.find((t) => titleKey(t.title) === key);
     const done = await deps.store.finishApprove(id, existing?.id ?? null);
     if (!done) return release("Couldn't record that approval.");
     return { ok: true, row: done, alreadyOnBoard: true, note: "It was already on your board." };
@@ -246,8 +274,15 @@ export async function approveProposal(owners: string[], id: string, deps: Approv
     return release("Couldn't add that task to your board.");
   }
   if (!created.ok) return release(created.error || "Couldn't add that task to your board.");
-  const done = await deps.store.finishApprove(id, created.taskId);
-  if (!done) return { ok: false, error: "The task was added, but the proposal could not be marked approved.", row };
+  // Red-team S4: the task now exists. Record it (one retry), and if that still fails RELEASE the lease at
+  // once: an immediate retry by the owner re-reads the board, finds the task just created and links it
+  // (alreadyOnBoard), instead of the row sitting leased until a later retry that may hit a failed board read.
+  let done: ProposalRow | null = null;
+  for (let i = 0; i < 2 && !done; i++) done = await deps.store.finishApprove(id, created.taskId).catch(() => null);
+  if (!done) {
+    await deps.store.releaseApprove(id).catch(() => {});
+    return { ok: false, error: "The task was added, but the proposal could not be marked approved.", row };
+  }
   return { ok: true, row: done, ...(unavailable ? { note: "Added (the duplicate check could not run)." } : {}) };
 }
 

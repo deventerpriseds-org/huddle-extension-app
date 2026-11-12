@@ -13,7 +13,7 @@
 // owner's own display) -- never a message body, never a sender address. Nothing here logs content.
 import type { Pool, PoolClient } from "pg";
 import { getSharedPool } from "../db/shared-pool.server";
-import type { NewProposal, ProposalRow, ProposalSourceRef, ProposalState, ProposalStore, UpsertOutcome } from "./proposals";
+import type { NewProposal, PriorProposal, ProposalRow, ProposalSourceRef, ProposalState, ProposalStore, UpsertOutcome } from "./proposals";
 
 let _pool: Pool | null = null;
 function getPool(): Pool {
@@ -205,6 +205,25 @@ export const pgProposalStore: ProposalStore = {
         throw e;
       }
     }
+  },
+
+  async priorRelated(owners, ref, normTitle) {
+    await ensureBootstrapped();
+    const own = lower(owners);
+    const r = await getPool().query<{ id: string; norm_title: string; state: ProposalState; same_item: boolean }>(
+      `SELECT p.id, p.norm_title, p.state,
+              EXISTS (SELECT 1 FROM chat.task_proposal_refs r
+                       WHERE r.proposal_id = p.id AND r.source = $2 AND r.source_item_id = $3) AS same_item
+         FROM chat.task_proposals p
+        WHERE p.owner_email = ANY($1)
+          AND (p.id IN (SELECT proposal_id FROM chat.task_proposal_refs
+                         WHERE owner_email = ANY($1) AND source = $2 AND source_item_id = $3)
+               OR (p.norm_title = $4 AND p.state = 'dismissed'))
+        ORDER BY p.created_at, p.id
+        LIMIT 100`,
+      [own, ref.source, ref.sourceItemId, normTitle],
+    );
+    return r.rows.map((x): PriorProposal => ({ id: x.id, normTitle: x.norm_title, state: x.state, sameItem: x.same_item }));
   },
 
   async listActive(owners) {

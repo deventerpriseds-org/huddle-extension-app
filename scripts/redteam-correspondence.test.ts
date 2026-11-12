@@ -272,6 +272,14 @@ const memStore = () => {
       refs.set(rk, p.id);
       return { kind: "created", id: p.id };
     },
+    // Added by the red-team fix pass: in-memory model of the new ProposalStore.priorRelated contract
+    // (rows referencing this source item in any state + dismissed rows with this exact key).
+    async priorRelated(o, ref, norm) {
+      const same = (r: ProposalRow) => r.sources.some((s) => s.source === ref.source && s.sourceItemId === ref.sourceItemId);
+      return [...rows.values()]
+        .filter((r) => own(o, r) && (same(r) || (r.normTitle === norm && r.state === "dismissed")))
+        .map((r) => ({ id: r.id, normTitle: r.normTitle, state: r.state, sameItem: same(r) }));
+    },
     async listActive(o) {
       return [...rows.values()].filter((r) => own(o, r) && r.state === "proposed");
     },

@@ -130,6 +130,20 @@ try {
   const g = cand("Test-Call the vendor", "test-call the vendor", "teams", "c9:m9");
   const rg = await S.upsert(g);
   t("AC-5.21 same text from a NEW source item after a dismissal -> a new proposal (key is source item + text)", [rg.kind, rg.id !== f.id], ["created", true]);
+  // Red-team F14/F15 (2026-11-12): the STORE still records the row above; the ENGINE now reads priorRelated
+  // first and suppresses it (scripts/redteam-correspondence.test.ts RT-24/24b). These check the SQL it reads.
+  t(
+    "F14 priorRelated: the rows referencing this source item, any state (dismissed f), sameItem=true",
+    (await S.priorRelated([O], { source: "email", sourceItemId: "mbx:BBB2" }, "test-call the vendr")).map((p) => [p.id === f.id, p.state, p.sameItem]),
+    [[true, "dismissed", true]],
+  );
+  t(
+    "F15 priorRelated: a DISMISSED row with this exact key from another source, sameItem=false; the active g is not returned",
+    (await S.priorRelated([O], { source: "teams", sourceItemId: "c-new:m1" }, "test-call the vendor")).map((p) => [p.id === f.id, p.state, p.sameItem]),
+    [[true, "dismissed", false]],
+  );
+  t("F14/F15 priorRelated is owner-scoped", await S.priorRelated([OTHER], { source: "email", sourceItemId: "mbx:BBB2" }, "test-call the vendor"), []);
+  t("F14 priorRelated: an unrelated item + key -> nothing", await S.priorRelated([O], { source: "email", sourceItemId: "mbx:ZZZ9" }, "test-nothing here"), []);
 
   // ── concurrency on upsert (two overlapping passes) ──────────────────────────────────────────────
   const h = cand("Test-Renew the permit", "test-renew the permit", "email", "mbx:CCC3");

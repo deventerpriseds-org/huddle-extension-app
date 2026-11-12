@@ -242,7 +242,10 @@ export async function recordTeamsFeedStatus(cfg: OneDriveFeedsConfig, status: st
       [teamsFeedKey(cfg), etag ?? null, status, note],
     );
   } catch (err) {
-    console.error("[onedrive-feed] teams state write failed", err instanceof Error ? err.message : err);
+    // Red-team S5: an error CATEGORY only (the SQLSTATE or the error class), never the raw message.
+    const pgCode = (err as { code?: unknown } | null)?.code;
+    const category = typeof pgCode === "string" && /^[0-9A-Z]{5}$/.test(pgCode) ? `pg_${pgCode}` : err instanceof Error ? err.name : "error";
+    console.error("[onedrive-feed] teams state write failed", category);
   }
 }
 
