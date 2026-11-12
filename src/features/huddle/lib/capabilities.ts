@@ -164,16 +164,28 @@ const NOT_URGENT_RE: RegExp[] = [
   // Negator: any "n't" contraction (don't, doesn't, isn't, can't, won't, wouldn't, shouldn't …) plus the
   // spelled-out forms. Verify loop 2 (VERIFY-handoff-confirm-flow-2.md, C2) measured nine unsafe misses
   // from the closed list this replaced ("it doesn't need to be done right away", "can't do it now", …).
-  /\b(?:not|never|do not|no need (?:to|for)|rather than|[a-z]+n['’]?t)\s+(?:[a-z'’]+\s+){0,4}?(?:now|right away|immediately|asap|straight away|this second|this instant)\b/i,
+  // The apostrophe is REQUIRED (verify loop 3, VERIFY-handoff-confirm-flow-3.md W-1..W-6): an optional one made
+  // every word ending in "nt" a negator, so "I want it now" / "urgent" / "important" / "client" read as not-now.
+  // The apostrophe-less spellings people actually type are listed by name instead.
+  /\b(?:not|never|do not|no need (?:to|for)|rather than|instead of|[a-z]+n['’]t|dont|cant|wont|doesnt|isnt|didnt|wouldnt|shouldnt|couldnt)\s+(?:[a-z'’]+\s+){0,4}?(?:now|right away|immediately|asap|straight away|this second|this instant)\b/i,
+  /\bnot[\s.,!]+now\b/i, // "Not. Now."
   /\bno (?:rush|hurry)\b/i,
+  // Deferral idioms that mean "not yet" wherever they sit (verify loop 3, U-1..U-23): "leave it for now",
+  // "hold off", "busy right now, do it later", "instead of right away, do it Friday", "nothing right now".
+  /\b(?:for now|hold off|later|tomorrow|tonight|next week|this weekend|wait until|in a meeting|busy|park(?:ed)? it|on the backlog|nothing (?:right )?now)\b/i,
   /\bnow(?:\s+is|'s|’s)?\s+(?:not|isn'?t|a\s+(?:bad|terrible|tough|awful|busy|hard|rough)\b)/i,
-  /\bnow\s+isn'?t\b/i,
+  /\bnow\s+(?:isn'?t|doesn'?t|won'?t|does not|will not|is not)\b/i,
   /\bnow\s+that\b/i,
 ];
+
+// A negator that is part of an urgent REQUEST, not a refusal: "why don't you do it right now", "can't you just
+// do it now?", "I don't care, just do it now" (verify loop 3, O-3/O-4/O-6). Checked before NOT_URGENT_RE.
+const URGENT_DESPITE_NEGATOR_RE = /\b(?:why (?:don'?t|not) you|can'?t you|won'?t you|i don'?t care)\b/i;
 
 /** Is this ask an explicit "do it now"? ONE classifier for urgency — consumers read `classifyAsk().urgency`. */
 function askIsUrgentNow(t: string): boolean {
   if (!URGENCY_RE.some((re) => re.test(t))) return false;
+  if (URGENT_DESPITE_NEGATOR_RE.test(t)) return true;
   return !NOT_URGENT_RE.some((re) => re.test(t));
 }
 
