@@ -256,6 +256,29 @@ export const SUMMARY_WAIT_MS = 3 * 60 * 60 * 1000;
 /** Luna mode waits this long for transcript sentences to appear before giving up. */
 export const TRANSCRIPT_WAIT_MS = 60 * 60 * 1000;
 
+/** Verify loop 3, D9: the hosting ceiling stops a pass at ~45s, and the slow steps run one after another
+ *  (Fireflies query <=12s, a schema-retry query <=12s, Luna <=25s, then the Graph token + send, which have
+ *  no timeout of their own). So the pass keeps a budget measured from its own start:
+ *  - the email send must START by SEND_CUTOFF_MS, leaving ~15s for token + send + recording "sent";
+ *  - Luna gets only the time left before that cutoff (at most 25s), and is skipped under MIN_LUNA_MS. */
+export const SEND_CUTOFF_MS = 30_000;
+export const LUNA_MAX_MS = 25_000;
+export const MIN_LUNA_MS = 8_000;
+/** Consecutive passes that were stopped before they finished (never released) before the meeting is given
+ *  up with a visible failure. A pass that finishes -- success, waiting or failure -- resets the count. */
+export const MAX_UNFINISHED_PASSES = 5;
+
+/** Milliseconds Luna may use given the time the pass has already spent; 0 = not enough time this pass. */
+export function lunaBudgetMs(elapsedMs: number): number {
+  const left = Math.min(LUNA_MAX_MS, SEND_CUTOFF_MS - elapsedMs);
+  return left >= MIN_LUNA_MS ? left : 0;
+}
+
+/** Whether there is still time to start the email send in this pass. */
+export function canStartSend(elapsedMs: number): boolean {
+  return elapsedMs <= SEND_CUTOFF_MS;
+}
+
 /** Backoff between worker attempts: 1, 2, 4, 8, 16, 30 (cap) minutes. */
 export function retryDelaySec(attempts: number): number {
   return Math.min(60 * 2 ** Math.max(0, attempts - 1), 1800);

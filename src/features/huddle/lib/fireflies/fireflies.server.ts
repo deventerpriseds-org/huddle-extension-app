@@ -25,6 +25,9 @@ import {
   minutesUserPrompt,
   stamp,
   missingTemplateSections,
+  canStartSend,
+  lunaBudgetMs,
+  LUNA_MAX_MS,
   MINUTES_INSTRUCTIONS,
   parseMinutesSource,
   parseRecipients,
@@ -309,7 +312,8 @@ type Generated =
 export async function generateMinutes(
   source: MinutesSource,
   t: FfTranscript,
-  callModel: (instructions: string, input: string) => Promise<string> = callLuna,
+  callModel: (instructions: string, input: string, budgetMs: number) => Promise<string> = callLuna,
+  lunaBudget: number = LUNA_MAX_MS,
 ): Promise<Generated> {
   if (source === "fireflies") {
     const r = firefliesSummaryMarkdown(t);
@@ -322,11 +326,14 @@ export async function generateMinutes(
   }
   const transcript = transcriptForModel(t);
   if (!transcript.trim()) return { ok: false, error: "transcript_missing", wait: true };
+  // D9: not enough of this pass left for Luna AND the send -> retry on a fresh pass (counts as a failure).
+  if (lunaBudget <= 0) return { ok: false, error: "pass_time_exhausted", transient: true };
   let text: string;
   try {
     text = await callModel(
       MINUTES_INSTRUCTIONS,
       minutesUserPrompt(String(t.title ?? ""), meetingDateLabel(meetingDateMs(t)), transcript),
+      lunaBudget,
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -340,10 +347,11 @@ export async function generateMinutes(
 }
 
 /** The existing Huddle Luna path: callOpenAIResponses on the gpt-5.6-luna tier (model-policy LADDER). */
-async function callLuna(instructions: string, input: string): Promise<string> {
+async function callLuna(instructions: string, input: string, budgetMs: number = LUNA_MAX_MS): Promise<string> {
   const { callOpenAIResponses } = await import("../openai-responses.server");
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 25_000); // fetch(<=12s) + Luna(<=25s) stays under the ~45s ceiling
+  // D9: only the time left before the pass's send cutoff (lunaBudgetMs), so the send still fits under ~45s.
+  const timer = setTimeout(() => ctl.abort(), Math.min(budgetMs, LUNA_MAX_MS));
   try {
     const r = await callOpenAIResponses({
       model: "gpt-5.6-luna",
@@ -387,6 +395,7 @@ async function emailBranch(
   t: FfTranscript,
   owner: string,
   nowMs: number,
+  elapsedMs: () => number = () => 0,
 ): Promise<EmailOutcome> {
   const store = await import("./minutes-store.server");
   const id = row.meeting_id;
@@ -402,7 +411,7 @@ async function emailBranch(
     await store.recordEmailProblem(id, v, settings.source, "recipients_invalid", true);
     return { status: "failed", error: "recipients_invalid", final: true };
   }
-  const gen = await generateMinutes(settings.source, t);
+  const gen = await generateMinutes(settings.source, t, undefined, lunaBudgetMs(elapsedMs()));
   if (!gen.ok) {
     const age = nowMs - (Date.parse(row.created_at) || nowMs);
     const window = gen.error === "transcript_missing" ? TRANSCRIPT_WAIT_MS : SUMMARY_WAIT_MS;
@@ -423,6 +432,12 @@ async function emailBranch(
       : gen.kind === "custom"
         ? "_Minutes from your Fireflies custom summary._"
         : "_Minutes from the Fireflies summary._";
+  // D9: too late in this pass to start a send that must finish (and be recorded) before the ~45s ceiling.
+  // A send cut off after Graph accepted it would be re-sent, so do not start it; retry on a fresh pass.
+  if (!canStartSend(elapsedMs())) {
+    await store.recordEmailProblem(id, v, settings.source, "pass_time_exhausted", false);
+    return { status: "failed", error: "pass_time_exhausted", final: false };
+  }
   const { sendGraphEmail } = await import("../email/graph-email.server");
   const sent = await sendGraphEmail({
     to: settings.recipients,
@@ -445,6 +460,7 @@ async function emailBranch(
 export async function processMeeting(
   row: import("./minutes-store.server").MeetingRow,
   nowMs = Date.now(),
+  startedAt = Date.now(),
 ): Promise<{ email?: EmailOutcome; onedrive?: { ok: boolean; path?: string; error?: string }; error?: string }> {
   const store = await import("./minutes-store.server");
   const id = row.meeting_id;
@@ -469,7 +485,9 @@ export async function processMeeting(
     .catch(() => {});
 
   const [emailR, driveR] = await Promise.allSettled([
-    row.pending_email ? emailBranch(row, t as FfTranscript, row.owner_email, nowMs) : Promise.resolve(undefined),
+    row.pending_email
+      ? emailBranch(row, t as FfTranscript, row.owner_email, nowMs, () => Date.now() - startedAt)
+      : Promise.resolve(undefined),
     row.pending_onedrive
       ? (async () => {
           const path = await saveTranscript(t, id);
@@ -506,10 +524,11 @@ export async function processMeeting(
  *  per tick keeps a pass well inside the ~45s hosting ceiling. Never throws. */
 export async function processDueFirefliesMeetings(limit = 1, nowMs = Date.now()): Promise<number> {
   if (!env("FIREFLIES_API_KEY") || !process.env.AZURE_PG_URL) return 0;
+  const startedAt = Date.now(); // the pass budget (D9) runs from here, before the claim query
   try {
     const store = await import("./minutes-store.server");
     const rows = await store.claimDueMeetings(limit);
-    for (const row of rows) await processMeeting(row, nowMs);
+    for (const row of rows) await processMeeting(row, nowMs, startedAt);
     return rows.length;
   } catch (e) {
     console.error("[fireflies] worker pass failed", errCode(e, "worker_failed"));

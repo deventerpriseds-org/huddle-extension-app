@@ -255,7 +255,7 @@ t("C4 explicit empty list rejected", M.parseRecipients([]), null);
   t("E5 Luna mode + missing transcript -> error, Luna NOT called, NO fallback to Fireflies summary", [g4, modelCalls], [{ ok: false, error: "transcript_missing", wait: true }, 1]);
   modelReply = "## Focus\n- x\n## Summary\nOne line.";
   const g5 = await S.generateMinutes("luna", baseTranscript() as any);
-  t("E6 Luna reply missing template sections is not emailed", g5.ok ? "ok" : g5.error, "luna_template_incomplete:Focus|Questions|Decisions|Action Items");
+  t("E6 Luna reply missing template sections is not emailed", g5.ok ? "ok" : g5.error, "luna_template_incomplete:Questions|Decisions|Action Items");
 }
 
 // ---------------------------------------------------------------- F: email plan + retry policy
@@ -376,6 +376,28 @@ const drain = async (n = 6) => {
   await tick();
   t("G21 Luna mode end to end: Luna called once, email says Luna wrote it", [db.meetings.get("m9")?.summary_kind, modelCalls, sent[0]?.body.includes("Minutes written by Luna")], ["luna", 1, true]);
   t("G22 transcript timestamps arrive as STRINGS in Fireflies' schema and still render", lastModelInput.includes("[01:05] Sam:"), true);
+}
+// ---------------------------------------------------------------- I: pass time budget (verify loop 3, D9)
+{
+  t("I1 Luna gets only the time left before the send cutoff, none under 8s", [0, 10_000, 22_000, 23_000].map(M.lunaBudgetMs), [25_000, 20_000, 8_000, 0]);
+  t("I2 the send may start up to the 30s cutoff, not after", [M.canStartSend(30_000), M.canStartSend(30_001)], [true, false]);
+  const store = await import("../src/features/huddle/lib/fireflies/minutes-store.server");
+  reset();
+  ffTranscript = baseTranscript();
+  await deliver(evt("m10"));
+  let [row] = await store.claimDueMeetings(1);
+  await S.processMeeting(row as any, clock, Date.now() - 31_000); // a pass that already used 31s
+  const m10 = db.meetings.get("m10");
+  t("I3 too late in the pass to send: NO email, retried later as a counted failure", [sent.length, m10?.email_error, m10?.pending_email, m10?.attempts], [0, "pass_time_exhausted", true, 1]);
+  await drain(1);
+  t("I4 ...a fresh pass then sends exactly once", [sent.length, db.meetings.get("m10")?.emails_sent], [1, 1]);
+  reset();
+  ffTranscript = baseTranscript();
+  db.settings.set("owner@example.com", { minutes_source: "luna", recipients: null, update_emails: false });
+  await deliver(evt("m11"));
+  [row] = await store.claimDueMeetings(1);
+  await S.processMeeting(row as any, clock, Date.now() - 23_000); // 7s left before the cutoff
+  t("I5 Luna mode with too little pass time left: Luna NOT called, no email, retried", [modelCalls, sent.length, db.meetings.get("m11")?.email_error], [0, 0, "pass_time_exhausted"]);
 }
 {
   reset();

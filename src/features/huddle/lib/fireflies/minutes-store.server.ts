@@ -12,6 +12,7 @@
 // only ids, titles, statuses, short error codes and a content hash.
 import type { Pool } from "pg";
 import { getSharedPool } from "../db/shared-pool.server";
+import { MAX_UNFINISHED_PASSES } from "./minutes";
 
 let _pool: Pool | null = null;
 function getPool(): Pool {
@@ -67,6 +68,10 @@ ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS lease_until TIMESTA
 -- now count FAILED passes only (a "waiting for the summary" poll is not a failure), and running out of
 -- attempts records a final, visible failure instead of leaving the row stuck.
 ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS queue_version BIGINT NOT NULL DEFAULT 0;
+-- Verify loop 3 (2026-11-12), D9: a pass the host stops before it finishes never reaches releaseMeeting,
+-- so attempts never moved and the meeting was retried every 3 minutes forever. Every claim now adds one
+-- unfinished pass and every release resets it; MAX_UNFINISHED_PASSES in a row ends in a visible failure.
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS unfinished_passes INT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS fireflies_meetings_due_idx ON chat.fireflies_meetings(next_attempt_at)
   WHERE pending_email OR pending_onedrive;
 `;
@@ -173,6 +178,7 @@ export async function recordWebhook(
              AND EXCLUDED.last_reprocessed_at > COALESCE(chat.fireflies_meetings.last_reprocessed_at, 0))
          OR chat.fireflies_meetings.email_status IS DISTINCT FROM 'sent',
        attempts = 0,
+       unfinished_passes = 0,
        queue_version = chat.fireflies_meetings.queue_version + 1,
        next_attempt_at = now(),
        updated_at = now()
@@ -184,17 +190,36 @@ export async function recordWebhook(
 
 /** Lease up to `limit` meetings whose work is due. SKIP LOCKED + the lease mean a meeting is worked by
  *  at most one heartbeat at a time; a crashed worker's lease lapses after 3 minutes. */
-export async function claimDueMeetings(limit: number, maxAttempts = 12): Promise<MeetingRow[]> {
+export async function claimDueMeetings(
+  limit: number,
+  maxAttempts = 12,
+  maxUnfinished = MAX_UNFINISHED_PASSES,
+): Promise<MeetingRow[]> {
   await ensureBootstrapped();
-  const r = await getPool().query<MeetingRow>(
-    `UPDATE chat.fireflies_meetings m SET lease_until = now() + interval '3 minutes', updated_at = now()
+  const pool = getPool();
+  // D9: meetings whose last passes were all stopped before finishing (lease lapsed, never released) get a
+  // VISIBLE final failure here, since no worker will ever release them. A 'sent' email stays 'sent'.
+  await pool.query(
+    `UPDATE chat.fireflies_meetings SET
+        email_status = CASE WHEN pending_email AND email_status IS DISTINCT FROM 'sent' THEN 'failed' ELSE email_status END,
+        email_error = CASE WHEN pending_email THEN 'gave_up:pass_did_not_finish' ELSE email_error END,
+        onedrive_status = CASE WHEN pending_onedrive THEN 'failed' ELSE onedrive_status END,
+        onedrive_error = CASE WHEN pending_onedrive THEN 'gave_up:pass_did_not_finish' ELSE onedrive_error END,
+        pending_email = false, pending_onedrive = false, updated_at = now()
+      WHERE (pending_email OR pending_onedrive) AND unfinished_passes >= $1
+        AND (lease_until IS NULL OR lease_until < now())`,
+    [maxUnfinished],
+  );
+  const r = await pool.query<MeetingRow>(
+    `UPDATE chat.fireflies_meetings m SET lease_until = now() + interval '3 minutes',
+        unfinished_passes = m.unfinished_passes + 1, updated_at = now()
       WHERE m.meeting_id IN (
         SELECT meeting_id FROM chat.fireflies_meetings
          WHERE (pending_email OR pending_onedrive) AND next_attempt_at <= now()
-           AND (lease_until IS NULL OR lease_until < now()) AND attempts < $2
+           AND (lease_until IS NULL OR lease_until < now()) AND attempts < $2 AND unfinished_passes < $3
          ORDER BY next_attempt_at LIMIT $1 FOR UPDATE SKIP LOCKED)
       RETURNING m.*`,
-    [limit, maxAttempts],
+    [limit, maxAttempts, maxUnfinished],
   );
   return r.rows;
 }
@@ -210,7 +235,7 @@ export async function releaseMeeting(
 ): Promise<void> {
   await ensureBootstrapped();
   await getPool().query(
-    `UPDATE chat.fireflies_meetings SET lease_until = NULL,
+    `UPDATE chat.fireflies_meetings SET lease_until = NULL, unfinished_passes = 0,
         attempts = attempts + CASE WHEN $4 AND queue_version = $2::bigint THEN 1 ELSE 0 END,
         next_attempt_at = CASE WHEN queue_version = $2::bigint THEN now() + make_interval(secs => $3) ELSE now() END,
         updated_at = now()
