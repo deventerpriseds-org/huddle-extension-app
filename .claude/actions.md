@@ -1,6 +1,19 @@
 # Action Tracker — huddle-extension-app
 Last updated: 2026-10-27
 
+## ACT:correspondence-checklist — Teams + email unanswered correspondence on the bell; task proposals in Iris's checklist (2026-11-12)
+Owner handoff (uploaded, "Huddle Email and Teams Daily Processing") + *"build all you can until it's done, maybe even using dummy
+files"*. Owner decisions 2026-11-12: proposals in IRIS's chat after the 6pm pass AND on request, NO bell item for tasks;
+replies to work email = option A (Power Automate adds Sent Items) with instructions for another session.
+- [x] ACs (independent): branch claude_ac-correspondence-checklist docs/ac/AC-correspondence-checklist.md (82 ACs, 13 open Qs).
+      Section 5 corrected to EXTEND the existing build_checklist (owner caught the miss; accuracy-log row).
+- [x] Power Automate instructions: docs/integrations/power-automate-huddle-sources.md (separate sent.json, sent_snapshot;
+      Teams JSONL huddle-source-log.jsonl in the email folder; report-back list). For the owner's PA session.
+- [ ] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest (builder running).
+- [ ] Section 5 proposals in the existing checklist: branch claude_task-proposals (builder running).
+- [ ] Red-team pre-pass + independent verifier (Tier 1: model output into stored proposals) before any PR.
+- [ ] Stays OFF and UNMERGED until the owner's real Power Automate files are checked (handoff rule).
+
 ## ACT:bell-dismiss-deeplink — labelled Dismiss on bell rows; tap jumps to the email's reply card (2026-11-12)
 Owner: *"The bell notifications were supposed to have a dismiss option for items I've resolved ... Any proposed draft
 reply should be deep linked so I can get to the place in the chat to approve, copy or else."*
