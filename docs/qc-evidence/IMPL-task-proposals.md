@@ -178,3 +178,22 @@ Mutation proofs (`mutate.sh`, every one exit 0, "FIRED (control EQUIVALENT)"):
   ([UI] rows of AC-5.3/5.6/5.9/5.24 timing), and the [DB] checks.
 - Not built here: the per-owner Settings toggle (AC-6.2) and the health panel (AC-6.6) -- the data layer
   scoped those to a later pass.
+
+## Red-team fix pass (2026-11-12)
+
+Fixes for `docs/qc-evidence/REDTEAM-correspondence-proposals.md` (F1-F19, S1/S2/S4/S5). Repro suite:
+`bun scripts/redteam-correspondence.test.ts` (no red-team assertion was weakened or removed). Rows are
+appended as each fix lands.
+
+| finding | change | file | red-team test now passing |
+|---|---|---|---|
+| F1 | `teams` is OPT-IN: only an object (or literal `true` = default path) enables it; `false`, `"off"`, 0, arrays, null, absent = OFF (`optInFile`). email/appointments keep main's default-on `file()` untouched. | `external-feeds/onedrive-feed.ts` `optInFile` / `teamsFile` | RT-22, RT-22b, RT-22d |
+| F2 | `sent` goes through the same `optInFile`. | `onedrive-feed.ts` parseFeedsConfig | RT-22c |
+| F18 | Synthetic Sent Items: `RE:/Re:/FW:/Fwd:/AW:/TR:/WG:/SV:/RV:` (repeated, `[n]`) stripped before the prefix test (`stripReplyPrefixes`). | `onedrive-feed.ts` mapSentRecords | RT-23 |
+| S1 | `parseUtcMs`: a zone-less ISO date-time is UTC (Sent Items `sentDateTime`, Teams `timestamp`). Main's envelope checks are unchanged. | `onedrive-feed.ts`, `teams-log.ts` | (suspected; no RT test) |
+| F8 | `htmlToText` drops `<head>`, comments, `<script>/<style>`, and any element hidden by inline style (`display:none`, `visibility:hidden`, `font-size:0`, `opacity:0`, `max-height:0`, `mso-hide:all`) or the `hidden` attribute, with its whole subtree (nested same-name tags matched; an unclosed hidden element swallows the rest). | `onedrive-feed.ts` `stripHiddenElements` | RT-13, RT-13b |
+| F19 | One-pass entity decode: numeric (`&#8217;`, `&#x2019;`) and common named entities (`&rsquo;` etc. -> plain quotes, `&nbsp;`, `&mdash;` ...); `&amp;lt;` -> `&lt;` (never double-decoded). | `onedrive-feed.ts` `decodeHtmlEntities` | RT-14, RT-14b |
+| F16 | A Teams message with no sender id -> `fromOwner: null` (can't tell), never `false`. | `teams-log.ts` parseTeamsLog | RT-16, RT-16b |
+| F17 | URLs removed before the ask heuristic in `chatMessageAsks` (any source path), and plain-text Teams bodies get the HTML path's `[link]` rule. | `correspondence/bell.ts`, `teams-log.ts` bodyText | RT-17 |
+| S2 | Owner presence decided PER CHAT (AC-4.6 "for that chat"). Two existing `correspondence-ingest.test.ts` checks encoded the old cross-chat rule and were updated: AC-7.1 charlie row is now `owner_messages` (can't tell, fixture has no owner message in that chat); AC-4.13's owner message moved into the SAME chat (before the ask), so the two-pass settle is still proved with a certain row. Recall cost: a chat where the owner has never posted is listed "can't tell", not counted. | `bell.ts` makeBellProcessor | (suspected) + updated AC-7.1 / AC-4.13 |
+| F9 | `newTextOnly` cuts non-English reply headers (FR `De :`/`Envoyé :`, DE `Von:`/`Gesendet:`, ES `De:`/`Enviado:`, IT, NL, PT, Nordic, PL, RU, TR) -- a From-line still needs a Sent/Date-line within 4 lines --, translated "On ... wrote:" attributions and "Original Message" separators, and a Gmail attribution wrapped over two lines. | `email/inbound-email.ts` newTextOnly | RT-12, RT-12b, RT-12c (RT-12d still passes) |

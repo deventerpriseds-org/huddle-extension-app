@@ -618,7 +618,9 @@ console.log("J. SECTION 4 — unanswered correspondence -> the EXISTING bell (AC
   await runIngestPass(onCfg({ bell: true }), deps(tw, [B.makeBellProcessor(store)]));
   const alpha = B.chatAttentionId("login@eds.example", "19:chat-alpha@thread.example");
   t("AC-4.5 fixture: the alpha chat (owner replied later) writes no open row", bellRows.get(alpha)?.status ?? "none", "none");
-  t("AC-7.1 fixture: exactly ONE open certain row -- the charlie chat's ask (its app message ignored)", [...bellRows.entries()].map(([k, v]) => [k === B.chatAttentionId("login@eds.example", "19:chat-charlie@thread.example"), v.status, v.needs, v.ask]), [[true, "owed", null, "19:chat-charlie@thread.example:3001"]]);
+  // Red-team S2 (2026-11-12): owner presence is decided PER CHAT (AC-4.6 "for that chat"). The fixture's charlie
+  // chat carries no owner message, so its ask is listed as can't-tell (owner_messages), not certain-owed.
+  t("AC-7.1 fixture: exactly ONE open row -- the charlie chat's ask (its app message ignored); can't-tell per chat (S2)", [...bellRows.entries()].map(([k, v]) => [k === B.chatAttentionId("login@eds.example", "19:chat-charlie@thread.example"), v.status, v.needs, v.ask]), [[true, "owed", "owner_messages", "19:chat-charlie@thread.example:3001"]]);
   t("AC-4.5 fixture: the alpha chat's owner reply reached the store as a settle", store.settles >= 1, true);
   t("AC-4.8 fixture: the FYI chat writes no row", bellRows.has(B.chatAttentionId("login@eds.example", "19:chat-bravo@thread.example")), false);
   t("AC-2.7 email items: the bell processor announces nothing (the inbox watch already did)", [...bellRows.keys()].every((k) => k.startsWith("attn-chat-")), true);
@@ -627,7 +629,8 @@ console.log("J. SECTION 4 — unanswered correspondence -> the EXISTING bell (AC
   // AC-4.13 two passes: an ask, then the owner's reply in a later file, settles with no action in Huddle
   bellRows.clear();
   const line1 = JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-golf@thread.example", chatName: "HUDDLE-PA-SBX- Golf", messages: [{ id: "g1", createdDateTime: "2026-11-11T10:00:00Z", body: { contentType: "text", content: "HUDDLE-PA-SBX- Could you approve the PO today?" }, from: { user: { id: "user-other-7", displayName: "Gale" } }, webUrl: "https://teams.example/l/m/g1" }] });
-  const ownerLine = JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-hotel@thread.example", messages: [{ id: "h1", createdDateTime: "2026-11-11T09:00:00Z", body: "HUDDLE-PA-SBX- morning all", from: { user: { id: "USER-OWNER-1" } } }] });
+  // Red-team S2: the owner's earlier message is in THE SAME chat (presence is per chat), before the ask.
+  const ownerLine = JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-golf@thread.example", messages: [{ id: "h1", createdDateTime: "2026-11-11T09:00:00Z", body: "HUDDLE-PA-SBX- morning all", from: { user: { id: "USER-OWNER-1" } } }] });
   const tw2 = makeTwin();
   files.teamsText = [line1, ownerLine].join("\n");
   files.teamsEtag = '"{g},1"';

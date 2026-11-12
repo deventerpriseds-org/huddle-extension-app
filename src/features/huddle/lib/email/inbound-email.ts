@@ -69,20 +69,29 @@ const ASK =
 /** A meeting invite from a person always wants an answer (accept/decline), "?" or not. */
 const INVITE_SUBJECT = /^\s*(invitation|updated invitation|meeting request)\b|\binvite\b/i;
 
+// Red-team F9 (2026-11-12): the reply-header block in the languages Outlook / Gmail write it in. A "From"
+// line only counts when a "Sent/Date" line follows within 4 lines (the original rule), so a body line that
+// merely starts with "De:" is never cut on its own. A space before the colon is allowed (French "De :").
+const HDR_FROM = /^\s*(From|De|Von|Van|Da|Od|Från|Fra|Fta|Lähettäjä|Feladó|От|Kimden)\s*:\s/i;
+const HDR_SENT = /^\s*(Sent|Date|Envoyé|Date d'envoi|Gesendet|Datum|Enviado|Enviada|Fecha|Inviato|Data|Verzonden|Skickat|Sendt|Lähetetty|Elküldve|Отправлено|Wysłano|Tarih)\s*:\s/i;
+// "On <date> <person> wrote:" and its translations (FR "Le … a écrit :", DE "Am … schrieb …:", ES "El …
+// escribió:", IT "Il … ha scritto:", NL "Op … schreef …:", PT "Em … escreveu:", SV "Den … skrev …:").
+const ATTRIBUTION = /^\s*(On|Le|Am|El|Il|Op|Em|Den)\s.+\b(wrote|a écrit|schrieb|escribió|ha scritto|schreef|escreveu|skrev)(\s[^:]{0,80})?\s*:\s*$/i;
+
 /** Only the sender's NEW text: drop quoted history ("> " lines and everything from an
  *  "On … wrote:" / "-----Original Message-----" / Outlook "From:…Sent:" header down), so an old
- *  question in the thread does not make a "thanks!" reply look like an ask (verifier loop 1). */
+ *  question in the thread does not make a "thanks!" reply look like an ask (verifier loop 1).
+ *  Red-team F9: also the non-English header blocks above, and a Gmail attribution wrapped over two
+ *  lines ("On Mon, … <jane@…>" / "wrote:"). */
 export function newTextOnly(body: string): string {
   const lines = body.replace(/\r/g, "").split("\n");
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (/^\s*On .+wrote:\s*$/i.test(l) || /^-{2,}\s*Original Message\s*-{2,}/i.test(l)) break;
-    if (
-      /^\s*From:\s/i.test(l) &&
-      lines.slice(i + 1, i + 5).some((n) => /^\s*(Sent|Date):\s/i.test(n))
-    )
-      break;
+    if (ATTRIBUTION.test(l) || /^-{2,}\s*(Original Message|Message d'origine|Ursprüngliche Nachricht|Mensaje original|Messaggio originale|Oorspronkelijk bericht)\s*-{2,}/i.test(l)) break;
+    // Gmail wraps a long attribution: the "wrote:" lands on the next line.
+    if (i + 1 < lines.length && /^\s*(On|Le|Am|El|Il|Op|Em|Den)\s/i.test(l) && ATTRIBUTION.test(`${l.trimEnd()} ${lines[i + 1].trim()}`)) break;
+    if (HDR_FROM.test(l) && lines.slice(i + 1, i + 5).some((n) => HDR_SENT.test(n))) break;
     if (/^\s*>/.test(l)) continue;
     out.push(l);
   }

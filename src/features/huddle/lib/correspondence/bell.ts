@@ -26,7 +26,9 @@ export type ChatDecision =
 export function chatMessageAsks(m: TeamsMessage): boolean {
   if (m.senderIsApp || m.fromOwner === true) return false;
   if (m.senderId.includes("@") && isAutomatedAddress(m.senderId)) return false;
-  return asksSomething({ subject: "", bodyText: m.text });
+  // Red-team F17: a link's "?" is a query string, not a question -- URLs are removed before the heuristic
+  // whatever path produced the text (the HTML converter already does this; plain text did not).
+  return asksSomething({ subject: "", bodyText: m.text.replace(/\b(?:https?:\/\/|www\.)\S+/gi, "[link]") });
 }
 
 /**
@@ -35,7 +37,7 @@ export function chatMessageAsks(m: TeamsMessage): boolean {
  *    four questions in a row are one item, the newest);
  *  - no such ask and an owner message exists => answered at that time (AC-4.5 / 4.13);
  *  - an open ask when the owner's ids are not configured => missing owner_teams_id; when the log carries no
- *    owner message at all (anywhere) => missing owner_messages. Both are "can't tell" (AC-4.6), never owed.
+ *    owner message in THIS chat => missing owner_messages (per chat, red-team S2). Both are "can't tell" (AC-4.6), never owed.
  */
 export function decideChatThread(messages: readonly TeamsMessage[], ownerMessagesExported: boolean): ChatDecision {
   const sorted = [...messages].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
@@ -90,7 +92,10 @@ export function makeBellProcessor(store: ChatAttentionStore): ItemProcessor {
         const batch = ctx.batch ?? [item];
         const teams = batch.filter((b) => b.source === "teams" && b.teams).map((b) => b.teams!);
         const thread = teams.filter((m) => m.chatId === chatId);
-        const ownerMessagesExported = teams.some((m) => m.fromOwner === true);
+        // Red-team S2: owner presence is decided PER CHAT. A chat whose owner messages the log does not
+        // carry (a channel, a chat the flow skips, or one the owner has never posted in) is "can't tell",
+        // not owed, even when the owner appears in some other chat.
+        const ownerMessagesExported = thread.some((m) => m.fromOwner === true);
         const d = decideChatThread(thread.length ? thread : [item.teams!], ownerMessagesExported);
         const id = chatAttentionId(ctx.owner, chatId);
         if (d.state === "open") {

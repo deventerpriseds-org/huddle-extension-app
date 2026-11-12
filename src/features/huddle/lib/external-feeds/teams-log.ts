@@ -23,7 +23,7 @@
 // carry synthetic:true AND each message's text must start with the configured subjectPrefix; once live, a
 // line must carry synthetic:false. Anything else is skipped and counted -- fail closed.
 
-import { htmlToText, type OneDriveFeedsConfig } from "./onedrive-feed";
+import { htmlToText, parseUtcMs, type OneDriveFeedsConfig } from "./onedrive-feed";
 import type { TeamsMessage } from "../correspondence/source-item";
 
 export type TeamsSkipReason =
@@ -60,7 +60,6 @@ export interface TeamsLogParse {
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "");
-const isIso = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
 const pick = (o: Record<string, unknown>, ...keys: string[]): unknown => {
   for (const k of keys) if (o[k] !== undefined && o[k] !== null) return o[k];
   return undefined;
@@ -82,13 +81,16 @@ function sender(m: Record<string, unknown>): { id: string; name: string; isApp: 
 
 function bodyText(m: Record<string, unknown>): string {
   const b = m.body;
-  if (typeof b === "string") return b.trim();
+  // Red-team F17: a plain-text body gets the SAME URL rule as the HTML path (a link's "?" is a query
+  // string, not a question).
+  const plain = (t: string) => t.replace(/\bhttps?:\/\/\S+/gi, "[link]").trim();
+  if (typeof b === "string") return plain(b);
   if (b && typeof b === "object") {
     const o = b as Record<string, unknown>;
     const content = typeof o.content === "string" ? o.content : "";
     // Teams sends HTML bodies (quoted replies arrive as <blockquote>): reuse the email feed's converter,
     // which drops quoted history and treats a URL's "?" as not-a-question (S-11, S-13, S-14).
-    return str(o.contentType).toLowerCase() === "html" ? htmlToText(content) : content.trim();
+    return str(o.contentType).toLowerCase() === "html" ? htmlToText(content) : plain(content);
   }
   return "";
 }
@@ -177,12 +179,12 @@ export function parseTeamsLog(
         skip("deleted", "message");
         continue;
       }
-      const at = pick(m, "timestamp", "createdDateTime");
-      if (!isIso(at)) {
+      // Red-team S1: a timestamp with no zone is UTC, never the host's local time.
+      const atMs = parseUtcMs(pick(m, "timestamp", "createdDateTime"));
+      if (!Number.isFinite(atMs)) {
         skip("bad_timestamp", "message");
         continue;
       }
-      const atMs = Date.parse(at as string);
       if (atMs < notBefore) {
         skip("before_not_before", "message");
         continue;
@@ -205,7 +207,9 @@ export function parseTeamsLog(
         senderId: who.id,
         senderName: who.name,
         senderIsApp: who.isApp,
-        fromOwner: owners.size ? owners.has(who.id) : null,
+        // Red-team F16: no sender id means we cannot tell whose message it is (it may be the owner's own
+        // reply) -- null ("can't tell"), never false.
+        fromOwner: owners.size && who.id ? owners.has(who.id) : null,
         text: textOut,
         ...(chatName ? { chatName } : {}),
         ...(str(m.webUrl) ? { webUrl: str(m.webUrl) } : {}),

@@ -88,6 +88,30 @@ export const FEED_MAX_RECORDS = 1000;
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 const isIso = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
 
+/** Pure (red-team S1): an ISO date-time with NO zone (`2026-11-10T10:00:00`) is read as UTC, never in the
+ *  host's local zone (Date.parse would), so settle/order decisions do not depend on where the server runs.
+ *  A value that already carries Z or an offset, or a date-only value (already UTC in JS), is unchanged.
+ *  Used by the NEW correspondence paths only (Sent Items, Teams log); NaN when it does not parse. */
+export function parseUtcMs(v: unknown): number {
+  if (typeof v !== "string") return NaN;
+  const s = v.trim();
+  if (!s) return NaN;
+  const zoneless = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s);
+  return Date.parse(zoneless ? `${s.replace(" ", "T")}Z` : s);
+}
+
+/** Pure (red-team F18): drop leading reply/forward markers in the common languages (RE:, Re:, FW:, Fwd:,
+ *  AW: German, TR: French, WG: German forward, SV: Nordic, RV: Spanish), repeated, with optional [n]. */
+export function stripReplyPrefixes(subject: string): string {
+  let s = subject;
+  for (let i = 0; i < 10; i++) {
+    const next = s.replace(/^\s*(re|fw|fwd|aw|tr|wg|sv|rv|antw)(\[\d+\])?\s*:\s*/i, "");
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
 /**
  * Pure: parse the server-only HUDDLE_ONEDRIVE_FEEDS JSON. Returns null (feature OFF) when it is absent,
  * unparseable, disabled, or missing a binding field -- fail closed, never half-configured.
@@ -129,16 +153,27 @@ export function parseFeedsConfig(raw: string | undefined | null): OneDriveFeedsC
     email: file(j.email, "/automation/email/emails.json"),
     appointments: file(j.appointments, "/automation/appointments/appointments.json"),
     teams: teamsFile(j.teams, file),
-    sent: j.sent === undefined || j.sent === null ? { enabled: false, path: SENT_PATH_DEFAULT } : file(j.sent, SENT_PATH_DEFAULT),
+    sent: optInFile(j.sent, SENT_PATH_DEFAULT, file),
     correspondence: correspondenceFlags(j.correspondence),
   };
 }
 
-/** Pure: the Teams entry, through the SAME `file()` path rule as email/appointments (AC-1.1). An absent
- *  key is OFF -- a new source must never switch itself on for an existing config (AC-6.1). */
+/** Pure: an OPT-IN file key (teams, sent -- the keys that postdate the feed). Red-team F1/F2: only an object
+ *  (or a literal `true`, meaning "on at the default path") can switch one on. Absent, null, `false`, "off",
+ *  0, an array or any other non-object is OFF -- a value written to be safe must never enable a source. An
+ *  object goes through the SAME `file()` path rule as email/appointments (AC-1.1). email/appointments keep
+ *  their original default-on `file()` behaviour untouched (they predate this rule). */
+function optInFile(v: unknown, fallback: string, file: (v: unknown, fallback: string) => FeedFileConfig): FeedFileConfig {
+  if (v === true) return file({}, fallback);
+  if (!v || typeof v !== "object" || Array.isArray(v)) return { enabled: false, path: fallback };
+  return file(v, fallback);
+}
+
+/** Pure: the Teams entry (opt-in, see optInFile). An absent key is OFF -- a new source must never switch
+ *  itself on for an existing config (AC-6.1). */
 function teamsFile(v: unknown, file: (v: unknown, fallback: string) => FeedFileConfig): TeamsFeedConfig {
-  const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
-  const base = v === undefined || v === null ? { enabled: false, path: TEAMS_LOG_PATH_DEFAULT } : file(v, TEAMS_LOG_PATH_DEFAULT);
+  const o = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
+  const base = optInFile(v, TEAMS_LOG_PATH_DEFAULT, file);
   return {
     ...base,
     source: str(o.source) || TEAMS_SOURCE_EXPECTED,
@@ -285,12 +320,14 @@ export function mapSentRecords(records: Record<string, unknown>[], cfg: OneDrive
   let skipped = 0;
   for (const r of records) {
     const conversationId = str(r.conversationId);
-    const at = isIso(r.sentDateTime) ? str(r.sentDateTime) : isIso(r.receivedDateTime) ? str(r.receivedDateTime) : "";
-    if (!conversationId || !at || (cfg.synthetic && !str(r.subject).startsWith(cfg.subjectPrefix ?? "\u0000"))) {
+    const atMs = Number.isFinite(parseUtcMs(r.sentDateTime)) ? parseUtcMs(r.sentDateTime) : parseUtcMs(r.receivedDateTime);
+    // F18: the owner's reply to a synthetic test email is "RE: <prefix>...": reply/forward prefixes are
+    // stripped before the synthetic prefix test (the prefix itself is still required).
+    if (!conversationId || !Number.isFinite(atMs) || (cfg.synthetic && !stripReplyPrefixes(str(r.subject)).startsWith(cfg.subjectPrefix ?? "\u0000"))) {
       skipped++;
       continue;
     }
-    sent.push({ conversationId, sentAt: new Date(Date.parse(at)).toISOString() });
+    sent.push({ conversationId, sentAt: new Date(atMs).toISOString() });
   }
   return { sent, skipped };
 }
@@ -347,21 +384,91 @@ function stripBlockquotes(html: string): string {
   return out.replace(/<blockquote\b[\s\S]*$/i, " ");
 }
 
+/** An inline style or attribute that hides an element from the reader (red-team F8). */
+const HIDDEN_STYLE =
+  /(?:^|[;\s"'])(?:display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0(?:\.0+)?(?:px|pt|em|rem|%)?\s*(?:!important)?\s*(?:;|$)|opacity\s*:\s*0(?:\.0+)?\s*(?:!important)?\s*(?:;|$)|max-height\s*:\s*0(?:px)?\s*(?:!important)?\s*(?:;|$)|mso-hide\s*:\s*all)/i;
+const isHiddenOpenTag = (tag: string): boolean => {
+  if (/\shidden(\s|=|\/?>)/i.test(tag)) return true;
+  const style = /\sstyle\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+  const v = style ? (style[2] ?? style[3] ?? style[4] ?? "") : "";
+  return !!v && HIDDEN_STYLE.test(` ${v}`);
+};
+const VOID_TAGS = new Set(["br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"]);
+
+/** Pure (red-team F8): remove every element the reader cannot see -- inline-style hidden (display:none,
+ *  visibility:hidden, font-size:0, opacity:0, max-height:0, mso-hide:all) or the `hidden` attribute --
+ *  together with everything inside it, matching nested same-name tags. An unclosed hidden element
+ *  swallows the rest (fail closed: hidden text is never source text). */
+export function stripHiddenElements(html: string): string {
+  const open = /<([a-z][a-z0-9]*)\b[^>]*>/gi;
+  let out = "";
+  let pos = 0;
+  for (let guard = 0; guard < 10_000; guard++) {
+    open.lastIndex = pos;
+    const m = open.exec(html);
+    if (!m) break;
+    const name = m[1].toLowerCase();
+    if (VOID_TAGS.has(name) || m[0].endsWith("/>") || !isHiddenOpenTag(m[0])) {
+      out += html.slice(pos, m.index + m[0].length);
+      pos = m.index + m[0].length;
+      continue;
+    }
+    out += html.slice(pos, m.index) + " ";
+    const tagRe = new RegExp(`<(/?)${name}\\b[^>]*>`, "gi");
+    tagRe.lastIndex = m.index + m[0].length;
+    let depth = 1;
+    let end = html.length;
+    for (let t = tagRe.exec(html); t; t = tagRe.exec(html)) {
+      depth += t[1] ? -1 : t[0].endsWith("/>") ? 0 : 1;
+      if (depth === 0) {
+        end = t.index + t[0].length;
+        break;
+      }
+    }
+    pos = end;
+  }
+  return out + html.slice(pos);
+}
+
+const NAMED_ENTITIES: Record<string, string> = {
+  nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'",
+  // Typographic quotes decode to their plain form (the converter already wrote &#39; as "'").
+  rsquo: "'", lsquo: "'", sbquo: "'", rdquo: '"', ldquo: '"', bdquo: '"',
+  ndash: "\u2013", mdash: "\u2014", hellip: "\u2026", bull: "\u2022", middot: "\u00b7", copy: "\u00a9",
+  reg: "\u00ae", trade: "\u2122", euro: "\u20ac", pound: "\u00a3", yen: "\u00a5", cent: "\u00a2",
+  deg: "\u00b0", times: "\u00d7", divide: "\u00f7", laquo: "\u00ab", raquo: "\u00bb", shy: "",
+  zwnj: "", zwj: "", ensp: " ", emsp: " ", thinsp: " ",
+};
+/** Pure (red-team F19): decode numeric (&#8217; &#x2019;) and common named entities in ONE pass, so
+ *  "&amp;lt;" becomes the literal "&lt;" (never double-decoded). Unknown names stay literal. */
+export function decodeHtmlEntities(s: string): string {
+  return s.replace(/&(#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});/gi, (whole, ent: string) => {
+    if (ent[0] === "#") {
+      const cp = ent[1] === "x" || ent[1] === "X" ? parseInt(ent.slice(2), 16) : parseInt(ent.slice(1), 10);
+      if (!Number.isFinite(cp) || cp <= 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return " ";
+      return String.fromCodePoint(cp);
+    }
+    const v = NAMED_ENTITIES[ent.toLowerCase()];
+    return v === undefined ? whole : v;
+  });
+}
+
 export function htmlToText(html: string): string {
-  return stripBlockquotes(
-    // Quoted history is the OTHER person's old words, not this email's ask: Outlook's reply/forward
-    // header block and everything after it, and any <blockquote>, are dropped (verifier D5).
-    html.replace(/<div[^>]*id=["']?(divRplyFwdMsg|appendonsend)["']?[\s\S]*$/i, " "),
+  const visible = stripHiddenElements(
+    // <head> (title, meta, styles) is never message text (red-team F8); comments neither.
+    html.replace(/<head\b[\s\S]*?<\/head\s*>/gi, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, " "),
+  );
+  return decodeHtmlEntities(
+    stripBlockquotes(
+      // Quoted history is the OTHER person's old words, not this email's ask: Outlook's reply/forward
+      // header block and everything after it, and any <blockquote>, are dropped (verifier D5).
+      visible.replace(/<div[^>]*id=["']?(divRplyFwdMsg|appendonsend)["']?[\s\S]*$/i, " "),
+    )
+      .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+      .replace(/<br\s*\/?>|<\/(p|div|li|tr|h\d)>/gi, "\n")
+      .replace(/<[^>]+>/g, " "),
   )
-    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<br\s*\/?>|<\/(p|div|li|tr|h\d)>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
+    .replace(/\u00a0/g, " ")
     // A URL's "?" is a query string, not a question.
     .replace(/\bhttps?:\/\/\S+/gi, "[link]")
     .replace(/[ \t]+/g, " ")
