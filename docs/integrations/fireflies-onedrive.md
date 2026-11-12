@@ -42,6 +42,11 @@ status / recipients / error, OneDrive path / status, a hash of the meeting **inp
   email only if *Email again when Fireflies updates a meeting* is on AND the input hash changed.
 - **Failures** retry with backoff (1, 2, 4 … 30 min, 12 attempts). A refusal by the send gate or bad
   recipients is final. A failed queue write answers 503, which Fireflies retries (5 times).
+- **Pass time budget** (verify loop 3, D9). The host stops a pass at about 45s. The email send must start
+  by 30s into the pass, and Luna only gets the time left before that (at most 25s), so a slow Fireflies
+  answer cannot push the send past the ceiling. Too little time is a counted failure, retried on a fresh pass.
+- **Passes that never finish.** Each claim counts one unfinished pass and each finished pass resets it. After
+  5 stopped passes in a row the meeting records `gave_up:pass_did_not_finish` instead of retrying forever.
 - Remaining window: a worker killed after Graph accepted the email but before the row was written would
   send once more when the lease lapses. The row is written immediately after the send to keep this small.
 

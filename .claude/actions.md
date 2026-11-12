@@ -33,7 +33,15 @@ gate refuses #188's `feature/` branch name; the new PR supersedes #188).
       pending, attempts=0. Settings row: source=fireflies, 2 recipients, update_emails off.
 - [ ] Owner confirms the minutes emails arrived at BOTH addresses and the OneDrive files look right. NOT owner-confirmed.
 - [ ] Luna mode not yet exercised live (setting has stayed on Fireflies summary): switch it for one real meeting.
-- [ ] Verify loop 3 (incl. loop 2's NOT REACHED claims C1 C5 C6 C9 C10 C11 C14) -- running.
+- [x] Verify loop 3 (VERIFY-fireflies-minutes-3, branch claude_verify-fireflies-minutes-3): 13 CONFIRMED, D7/D8 fixes
+      hold; C11 REFUTED = D9 (a slow pass can hit the ~45s ceiling; a stopped pass was retried every 3 min forever).
+- [x] D9 fixed on claude_fireflies-pass-budget (bb552e44): send must start by 30s into the pass, Luna gets only the
+      time left; unfinished_passes cap (5) -> gave_up:pass_did_not_finish. 67/67 + 14/14; 4 guards FIRED (controlled).
+      Also fixed E6's expectation broken by #198 (it failed on main).
+- [ ] Settings -> Meeting minutes panel: not browser-tested (needs a real sign-in). Owner to open + save it once.
+- [ ] Not built (noted by loop 3, C5): Fireflies AI-app outputs (apps_preview) are not read; if a standard summary
+      already exists at the transcribed event the custom version is only emailed with update emails on. Live: all
+      11 real meetings used the custom summary.
 
 ## ACT:polish-tool — Polish text cleanup tool in Huddle (first tool module; Sidecar + Prompto later) (2026-11-05)
 - [x] Read the owner's design (claude.ai artifact 283e7883, "Refine" screens) and blended it into Huddle's Compass look.
