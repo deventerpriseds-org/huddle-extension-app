@@ -151,7 +151,10 @@ export type SummaryResult =
 export function firefliesSummaryMarkdown(t: FfTranscript): SummaryResult {
   const s = t.summary ?? {};
   const sections = (s.extended_sections ?? [])
-    .map((x) => ({ title: String(x?.title ?? "").trim(), content: String(x?.content ?? "").trim() }))
+    .map((x) => {
+      const title = String(x?.title ?? "").trim();
+      return { title: /^agenda$/i.test(title) ? "Focus" : title, content: String(x?.content ?? "").trim() };
+    })
     .filter((x) => x.content);
   if (sections.length) {
     const md = sections.map((x) => (x.title ? `## ${x.title}\n\n${x.content}` : x.content)).join("\n\n");
@@ -161,7 +164,7 @@ export function firefliesSummaryMarkdown(t: FfTranscript): SummaryResult {
   const overview = asText(s.overview) || asText(s.short_summary);
   if (overview) parts.push(`## Summary\n\n${overview}`);
   const outline = asText(s.shorthand_bullet) || asText(s.outline) || asText(s.bullet_gist);
-  if (outline) parts.push(`## Discussion\n\n${outline}`);
+  if (outline) parts.push(`## Focus\n\n${outline}`);
   const actions = asText(s.action_items);
   if (actions) parts.push(`## Action Items\n\n${actions}`);
   if (!parts.length) return { ok: false, error: "summary_missing" };
@@ -180,6 +183,7 @@ export const STANDARD_SUMMARY_NOTICE =
 export const MINUTES_INSTRUCTIONS = `You write meeting minutes from a meeting transcript. Use ONLY facts stated in the transcript. Do not infer, guess, or add anything that was not said. Output GitHub-flavoured Markdown with exactly these five top-level sections, in this order, each as a "## " heading: Focus, Summary, Questions, Decisions, Action Items. Write nothing before the first heading and nothing after the last section.
 
 ## Focus
+- Begin with one bullet exactly in this form: "- Meeting theme: <3-8 word label>" naming the meeting's central theme. Do not add facts or repeat this label as a separate discussion point.
 - Reverse-engineer the likely agenda from what participants actually discussed. Do not invent facts.
 - Each major agenda item is a "### " heading phrased as an action ("Align on…", "Resolve…", "Decide…", "Plan…"), never a bare topic label.
 - Under each, concise bullets for the points discussed.
@@ -232,9 +236,49 @@ export function meetingDateLabel(ms: number | null, tz = "America/New_York"): st
   );
 }
 
-export function minutesSubject(title: string | null | undefined, dateLabel: string, isUpdate = false): string {
-  const clean = String(title ?? "").replace(/[\r\n]+/g, " ").trim().slice(0, 150) || "Untitled meeting";
-  return `${isUpdate ? "Updated meeting minutes" : "Meeting minutes"}: ${clean}${dateLabel ? ` (${dateLabel})` : ""}`;
+export function meetingDateTimeLabel(ms: number | null, tz = "America/New_York"): string {
+  if (ms == null) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(new Date(ms));
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return \`\${value("month")}/\${value("day")}/\${value("year")}, \${value("hour")}:\${value("minute")} \${value("dayPeriod")}\`;
+}
+
+function cleanMeetingTheme(value: string | null | undefined): string {
+  return String(value ?? "")
+    .replace(/^[#>*\\s-]+/, "")
+    .replace(/\\*\\*/g, "")
+    .replace(/^(?:meeting\\s+theme\\s*:\\s*)/i, "")
+    .replace(/^(?:align on|resolve|decide|plan|discuss|review|confirm|coordinate|identify|define|establish|set up|set)\\s+/i, "")
+    .replace(/[\\r\\n]+/g, " ")
+    .replace(/[.!?;:,]+$/, "")
+    .replace(/\\s+/g, " ")
+    .trim()
+    .slice(0, 100);
+}
+
+/** Derive a short subject theme from the selected minutes output, with the Fireflies meeting title as fallback. */
+export function meetingThemeFromMinutes(markdown: string, fallbackTitle?: string | null): string {
+  const source = String(markdown ?? "");
+  const focus = source.match(/^##\\s+(?:Focus|Agenda)\\s*$([\\s\\S]*?)(?=^##\\s+|$(?![\\s\\S]))/im)?.[1] ?? "";
+  const explicit = focus.match(/^\\s*[-*]\\s*Meeting theme:\\s*(.+)$/im)?.[1];
+  const heading = focus.match(/^\\s*###\\s+(.+)$/m)?.[1];
+  const bullet = focus.match(/^\\s*[-*]\\s+(.+)$/m)?.[1];
+  const summary = source.match(/^##\\s+Summary\\s*$([\\s\\S]*?)(?=^##\\s+|$(?![\\s\\S]))/im)?.[1] ?? "";
+  const sentence = summary.split(/(?<=[.!?])\\s+/)[0];
+  return cleanMeetingTheme(explicit ?? heading ?? bullet ?? sentence ?? fallbackTitle) || cleanMeetingTheme(fallbackTitle) || "Team Meeting";
+}
+
+export function minutesSubject(theme: string | null | undefined, dateTimeLabel: string, isUpdate = false): string {
+  const clean = cleanMeetingTheme(theme) || "Team Meeting";
+  return \`\${isUpdate ? "Updated Meeting Minutes" : "Meeting Minutes"}: \${clean}\${dateTimeLabel ? \` \${dateTimeLabel}\` : ""}\`;
 }
 
 // ---------------------------------------------------------------- idempotency + retry policy
