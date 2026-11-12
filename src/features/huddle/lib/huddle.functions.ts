@@ -64,6 +64,7 @@ import {
 // (voice/realtime-tools.server.ts) so the two surfaces cannot drift; see create-task-core.ts.
 import {
   alreadyDispatchedResult,
+  alreadySentSkips,
   annotateRawCreateOutput,
   describeRawCreateSkip,
   dispatchedToolUses,
@@ -73,10 +74,10 @@ import {
   normalizeTaskTitle,
   screenCapabilityMetaTask,
   screenRawJourneyCreate,
-  priorBatchDispatch,
   priorDispatchDirective,
   RAW_JOURNEY_CREATE_TOOLS,
   recordDispatchedCreate,
+  splitByPriorDispatch,
   splitTaskEntries,
   summarizeQuickCreateOutcome,
   type DispatchedCreate,
@@ -1970,7 +1971,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // Task creates SENT to journey this turn, recorded before the await (tasks/create-task-core.ts
   // DispatchedCreate). Round-trips in the resume state like createdTaskTitles. A timed-out attempt's
   // result is built from it (runBounded), its re-run is told about it (priorDispatchDirective in the
-  // scene) and cannot send a second batch (priorBatchDispatch). 2026-11-07: without it a 23-task ask
+  // scene) and drops only the titles it already sent, exact or reworded (splitByPriorDispatch). 2026-11-07: without it a 23-task ask
   // became 43 journey rows over 6 timed-out attempts and the turn ended with no record of any of them.
   const dispatchedCreates: DispatchedCreate[] = resume?.dispatchedCreates
     ? resume.dispatchedCreates.map((e) => ({ ...e, titles: [...e.titles] }))
@@ -2923,32 +2924,40 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           dispatch?: DispatchedCreate;
         }
     > {
-      // Same no-re-send rule as create_huddle_task(s): an EARLIER attempt of this agent already sent a
-      // batch create this turn, so a raw create in the re-run is that request again (often reworded).
+      // Same re-run rule as create_huddle_task(s) (Revision B): titles an EARLIER attempt of this agent
+      // already sent this turn, exactly or reworded, are dropped; every other title is still created.
+      let screenArgs: unknown = rawArgs;
+      let rerunSkips: Array<{ title: string; reason: string }> = [];
       if (RAW_JOURNEY_CREATE_TOOLS.has(toolName)) {
-        const priorBatch = priorBatchDispatch(dispatchedCreates, winner.id, attemptId);
-        if (priorBatch) {
+        const a = (rawArgs && typeof rawArgs === "object" ? rawArgs : {}) as Record<string, unknown>;
+        const rawIsBatch = toolName === "parse_and_create_tasks";
+        const requested = rawIsBatch
+          ? splitTaskEntries(a)
+          : [String(a.title ?? a.task ?? a.name ?? "").trim()].filter(Boolean);
+        const rerun = splitByPriorDispatch(dispatchedCreates, winner.id, attemptId, requested);
+        if (rerun.alreadySent.length && !rerun.fresh.length) {
           recordToolUse(
             winner.id,
             toolName,
-            `not re-sent — ${priorBatch.titles.length} task(s) already sent earlier this turn`,
+            `not re-sent — all ${rerun.alreadySent.length} already sent earlier this turn`,
             true,
             undefined,
             rawArgs,
           );
-          const a = (rawArgs && typeof rawArgs === "object" ? rawArgs : {}) as Record<string, unknown>;
-          const requested =
-            toolName === "parse_and_create_tasks"
-              ? splitTaskEntries(a)
-              : [String(a.title ?? a.task ?? a.name ?? "")];
-          return { skipOutput: JSON.stringify(alreadyDispatchedResult(priorBatch, requested)) };
+          return { skipOutput: JSON.stringify(alreadyDispatchedResult(rerun.alreadySent, requested)) };
+        }
+        if (rerun.alreadySent.length) {
+          // A batch with some new titles: forward only those, in whichever field the model used.
+          screenArgs = Array.isArray(a.tasks) ? { ...a, tasks: rerun.fresh } : { ...a, text: rerun.fresh.join("\n") };
+          rerunSkips = alreadySentSkips(rerun.alreadySent);
         }
       }
-      const decision = await screenRawJourneyCreate(toolName, rawArgs, {
+      const decision = await screenRawJourneyCreate(toolName, screenArgs, {
         ledger: createdTaskTitles,
         loadTitles: loadExistingOpenTitles,
       });
-      if (decision.action === "pass") return { args: rawArgs, decision };
+      if (decision.action === "pass") return { args: screenArgs, decision };
+      decision.skipped.push(...rerunSkips);
       reportDedupUnavailable(decision.dedupUnavailable, toolName);
       if (decision.action === "skip") {
         recordToolUse(winner.id, toolName, describeRawCreateSkip(decision.skipped), true, undefined, rawArgs);
@@ -3039,17 +3048,17 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       // don't create a second card. The first caller claims the title here.
       // Keyed by THE normalizer (not a local lowercase) so the raw-create interception, which shares
       // this ledger, collides with it whatever whitespace/punctuation either side used (AC-60).
-      // After an EARLIER attempt's batch create (then a timeout) a single create in the re-run is the
-      // same request reworded one item at a time — the same block as the batch path.
-      const priorBatchForSingle = priorBatchDispatch(dispatchedCreates, winner.id, attemptId);
-      if (priorBatchForSingle) {
+      // Re-run after a timeout (Revision B): skip ONLY if an earlier attempt of this agent already sent
+      // this title this turn, exactly or reworded. A title it did not send is created normally.
+      const rerunSingle = splitByPriorDispatch(dispatchedCreates, winner.id, attemptId, [title]);
+      if (rerunSingle.alreadySent.length) {
         recordToolUse(
           winner.id,
           "create_huddle_task",
-          `not re-sent — ${priorBatchForSingle.titles.length} task(s) already sent earlier this turn`,
+          `not re-sent — already sent earlier this turn as “${rerunSingle.alreadySent[0].matchedSentTitle.slice(0, 60)}”`,
           true,
         );
-        return alreadyDispatchedResult(priorBatchForSingle, [title]);
+        return alreadyDispatchedResult(rerunSingle.alreadySent, [title]);
       }
       const titleKey = normTitle(title);
       if (createdTaskTitles.has(titleKey)) {
@@ -3307,26 +3316,27 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         return { ok: false, error };
       }
 
-      // An EARLIER attempt of this agent in this turn already sent a batch create (and then timed out):
-      // the same request, typically reworded, which the exact-title checks below cannot catch. Do not
-      // send it again (FIX-iris-timeout-no-rerun.md; 6 re-sends on 2026-11-07).
-      const priorBatch = priorBatchDispatch(dispatchedCreates, winner.id, attemptId);
-      if (priorBatch) {
+      // Re-run after a timeout (Revision B, owner 2026-11-08): drop ONLY the titles an EARLIER attempt
+      // of this agent already sent this turn, exactly or reworded (the 11-07 re-sends were rewordings no
+      // exact-title check sees). Everything else is still created. The blanket "no create at all after a
+      // prior batch" from #164 is gone: it dropped genuinely new tasks.
+      const rerun = splitByPriorDispatch(dispatchedCreates, winner.id, attemptId, entries);
+      if (rerun.alreadySent.length && !rerun.fresh.length) {
         recordToolUse(
           winner.id,
           "create_huddle_tasks",
-          `not re-sent — ${priorBatch.titles.length} task(s) already sent earlier this turn`,
+          `not re-sent — all ${rerun.alreadySent.length} already sent earlier this turn`,
           true,
         );
-        return alreadyDispatchedResult(priorBatch, entries);
+        return alreadyDispatchedResult(rerun.alreadySent, entries);
       }
 
       // Per-entry guards (mirror the single path): exclusive-capability meta-task guard + dedup.
       const existing = await openTitlesForCreate("create_huddle_tasks");
       const survivors: string[] = [];
-      const skipped: Array<{ title: string; reason: string }> = [];
+      const skipped: Array<{ title: string; reason: string }> = alreadySentSkips(rerun.alreadySent);
       const deferred: Array<{ title: string; handedTo?: string; reason: string }> = [];
-      for (const entry of entries) {
+      for (const entry of rerun.fresh) {
         const titleOwner = screenCapabilityMetaTask(entry, winner.id);
         if (titleOwner) {
           deferred.push({ title: entry, handedTo: titleOwner.handedTo, reason: titleOwner.reason });
