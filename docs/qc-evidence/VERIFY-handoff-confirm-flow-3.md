@@ -71,3 +71,46 @@ Requested checks: O-1 `don't wait, do it right away` -> now (PASS); O-2 `can you
 
 VERDICT C2: **REFUTED** -- concrete failing input `just leave it for now` (and 14 more HIGH rows) classifies `now`.
 Secondary: f3d94a5f's `[a-z]+n['’]?t` turns "want"/"urgent"/"important"/"client" into negators (W-1..W-6).
+
+### C1 F1 -- skip the 1:1 hand-off when handled / "now"; owner told what was said -- CONFIRMED (mechanism), 3 defects
+
+Trace (huddle.functions.ts @ f3d94a5f). Producer: the addressed agent's `r.toolUses` (recordToolUse, :2451) and
+the reply pushed at :7309. Decision: the follow-up block :7360-7445, gated `scope!=="group" && !internal &&
+intent==="perform"` (:7361). Branch order: exclusive `capOwnerId` -> `primeLaneDecision` -> **`laneSuppressed`**
+(`laneHandoffSuppression`, capabilities.ts) -> async LLM `resolveOwnerLLM` -> `deliverOwnerFollowup`.
+Directive consumer: `buildFollowupDirective` (handoff-followup.ts), fed `addressedReply` captured from the reply
+pushed just above (:7372-7375, captured BEFORE the async resolver and before any strip).
+Producer strings checked against `isPerformedWork` (board-claims.ts): delegate success summary `tasked <role>: ...`
+(:2549), failure `delegation failed` ok=false (:2563); `create_artifact` detail = `deepLink` = `/artifacts/<id>`
+(artifacts.server.ts:157); `create_huddle_task` success summary `"<t>" → Huddle board + journey` (:3287), dedup
+summaries `... skipped duplicate` (:3158/:3170). All reconcile.
+
+Probe `c1-probe.ts`: **20 passed, 10 failed**.
+- S-1..S-9 PASS: delegate ok / artifact saved / task row -> `handled`; failed delegate, artifact dedup alone,
+  task dedup, web search alone, another agent's work -> `null`; explicit now -> `now`.
+- F-1..F-5 PASS: confirm and now directives quote A's reply, forbid repeating it, carry no `@`; now mode never asks to confirm.
+- **S-10 FAIL** (inherits C2): `park the pricing model for now` -> `now`, so the lane hand-off is SUPPRESSED and
+  the agent is told to do it now.
+- **D-5..D-13 FAIL (AC-F1-4)**: `stripTeammateDeferral` keeps these deferrals to a named teammate after a
+  no-hand-off decision, so the reply promises a teammate who never arrives:
+  `Let me bring Finn in on the numbers.` / `I've asked Finn to take a look.` / `I'll get Finn on it.` /
+  `Finn can take it from here.` / `Finn will handle the spreadsheet.` / `I'll have Finn look into it.` /
+  `I'll ping Finn about it.` / `I'm putting this in Finn's hands.` / `I'm sending this over to Finn.`
+  (D-1..D-4, K-1, K-2 PASS: the covered phrasings are stripped, neutral mentions and own name kept.)
+
+Mutations (mutate.sh; bun prints `(fail)` lowercase, so the test cmd maps it to `FAIL`):
+- M4 `agentPerformedWork ... return "handled"` deleted -> **FIRED (control EQUIVALENT)**, exit 0.
+- M9 `!data.internal &&` dropped from the follow-up gate -> **FIRED (control EQUIVALENT)**, exit 0.
+- M8 `toolUses: r.toolUses,` -> `toolUses: [], // toolUses: r.toolUses,` (the call site no longer sees the agent's
+  work) -> **INERT**, exit 1. The wiring test is a source-literal `toContain` and is satisfied by the comment.
+  No behavioural test covers the call site passing the agent's own toolUses.
+
+Spec divergence (not counted as REFUTED, flagged): AC-F1-1 says "NO follow-up ... for any other agent" when A did
+the work. The build only suppresses the SEMANTIC lane branch; if the ask also hits an exclusive capability trigger
+or a prime-holder rule, the follow-up still fires even though A delegated / saved / created the task (by design,
+"tool-gated", per the code comment at :7390).
+Also: the `prime === "keep"` and LLM-resolves-to-A branches ("no hand-off" too) never run `stripTeammateDeferral`.
+
+VERDICT C1: **CONFIRMED** for the stated mechanism (no lane follow-up when handled/now; owner told what A said),
+with defects: (1) "now" detection inherits C2 (`... for now` suppresses the hand-off); (2) AC-F1-4 strip misses
+9 deferral phrasings; (3) M8 INERT -- the call-site wiring is guarded only by text. Not proven live.
