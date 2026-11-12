@@ -834,7 +834,23 @@ console.log("\n# L. red-team fix pass");
   t("F5 size: a 3-word fragment is refused even when every word matches the title", why("Send the deck", "send the deck", "Thanks for offering to send the deck."), ["evidence_too_short"]);
   t("F4 over-match negative: a fully grounded imperative title is accepted",ok("Update the budget sheet", "Dana will update the budget sheet", "Dana will update the budget sheet by Nov 14.").length, 1);
 }
-t("F12 trailing addressee ('..., Dana?') -> Dana", groundedAssignee("Dana", "Can you send the deck, Dana?"), "Dana");
+// Isolating checks: each one fails if ONLY its own guard is removed (the red-team probes are also caught
+// by a second guard, so they cannot prove these alone -- see the mutation table in IMPL-task-proposals.md).
+t("F6 a prefix collision cannot make a majority ('Preserve notes' vs 'presentation notes')", Object.keys(validateCandidates({ tasks: [{ task: "Preserve notes", evidence: "See the presentation notes please", assignee: null, due_text: null }] }, "See the presentation notes please.", { atIso: AT, tz: TZ }).rejected), ["task_not_grounded"]);
+t("F12 a name that is only the RECIPIENT is not the assignee", groundedAssignee("Bob", "Please send the deck to Bob"), null);
+t("F12 a date word in the addressee slot is not a person ('Tomorrow, please ...')", groundedAssignee("Tomorrow", "Tomorrow, please send the deck"), null);
+t("F13 the STORED title itself carries no zero-width / look-alike char", validateCandidates({ tasks: [{ task: "Sеnd the Q3​ deck", evidence: "send me the Q3 deck", assignee: null, due_text: null }] }, "Can you send me the Q3 deck by Friday?", { atIso: AT, tz: TZ }).accepted.map((c) => c.title), ["Send the Q3 deck"]);
+{
+  const r = await proposeFromSource(OWNER, { source: "email", sourceItemId: "m:zwboard", at: AT, context: null, text: "Can you send me the Q3 deck by Friday?" }, {
+    store: memStore(),
+    extract: async () => ({ tasks: [{ task: "Send the Q3 deck", evidence: "send me the Q3 deck", assignee: null, due_text: null }] }),
+    openTitles: async () => new Set(["send the q3​ deck"]),
+    tz: TZ,
+  });
+  t("F13 a BOARD title with a zero-width char still counts as already on the board", [r.created, r.onBoard], [0, 1]);
+}
+t("S1 a zone-less timestamp is UTC whatever the host zone", parseUtcMs("2026-11-10T10:00:00"), Date.UTC(2026, 10, 10, 10, 0, 0));
+t("F12 trailing addressee ('..., Dana?') -> Dana",groundedAssignee("Dana", "Can you send the deck, Dana?"), "Dana");
 t("F12 hand-off ('ask Dana to ...') -> Dana", groundedAssignee("Dana", "Please ask Dana to send the deck"), "Dana");
 t("F12 lower-case common word is not a name", groundedAssignee("dana", "dana will send it"), null);
 t("F11 day-month order ('14 November') -> 2026-11-14", resolveDueDate("by 14 November", AT, TZ), "2026-11-14");
