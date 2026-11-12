@@ -14,6 +14,8 @@ independent things at the same time; either one can fail without stopping the ot
      Decisions / Action Items, `lib/fireflies/minutes.ts` `MINUTES_INSTRUCTIONS`). A reply missing any
      section is not emailed.
 
+   For either mode, the email subject is `Meeting Minutes: {theme} MM/DD/YYYY, hh:mm AM/PM` in America/New_York. Huddle derives the theme from the Focus section (explicit theme label first, then its first agenda heading), then falls back to the meeting title. Fireflies' custom `Agenda` section is normalized to `Focus`; its standard outline is also labeled `Focus`.
+
    Neither mode ever falls back to the other. If the selected mode's data is missing, no email is sent.
    The reason (`fireflies_summary_missing`, `transcript_missing`, `luna_*`) is recorded on the meeting
    row and shown in the Settings panel under *Recent meetings*.
