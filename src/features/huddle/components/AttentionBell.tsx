@@ -99,7 +99,11 @@ export function AttentionBell() {
   }
 
   function openChat(item: AttentionItem) {
-    useHuddleStore.getState().setActive(item.huddleId);
+    const store = useHuddleStore.getState();
+    store.setActive(item.huddleId);
+    // An email row's id IS its reply card's emailId: land on the card (approve / copy / dismiss), not
+    // at the bottom of the chat (owner, 2026-11-12).
+    if (item.kind === "email") store.requestEmailFocus(item.huddleId, item.id);
     setOpen(false);
   }
 
@@ -167,13 +171,16 @@ export function AttentionBell() {
                       {[it.detail, when(it.at)].filter(Boolean).join(" · ")}
                     </p>
                   </button>
+                  {/* A labelled button: the owner did not find the old icon-only X (2026-11-12). */}
                   <button
                     type="button"
-                    aria-label="Dismiss"
-                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    aria-label={`Dismiss ${it.title}`}
+                    data-testid="attention-dismiss"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-hairline px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
                     onClick={() => void dismiss(it.id)}
                   >
-                    <X size={13} />
+                    <X size={11} />
+                    Dismiss
                   </button>
                 </div>
               );

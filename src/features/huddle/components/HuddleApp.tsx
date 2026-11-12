@@ -27,6 +27,7 @@ import { getAllTurnUpdates } from "../lib/huddle.functions";
 import { catchUpCursor } from "../lib/turn-catchup";
 import { userTurnTs } from "../lib/turn-identity";
 import { useAgentPanelStore } from "../lib/agent-panel-store";
+import { parseFocusParams } from "../lib/attention/focus";
 
 /** Presence heartbeat while the user is watching. MUST stay below the server's PRESENCE_FRESH_MS
  *  (`lib/tasks/turns.server.ts`), which is sized as this beat plus one beat of slack. Mirrored rather
@@ -351,6 +352,10 @@ export function HuddleApp() {
     const params = new URLSearchParams(window.location.search);
     const target = params.get("huddle");
     if (!target) return;
+    // `&email=<id>`: a new-email alert points at its reply card; the transcript scrolls to it once the
+    // history holding it has loaded (lib/attention/focus.ts).
+    const { email } = parseFocusParams(window.location.search);
+    if (email) useHuddleStore.getState().requestEmailFocus(target, email);
     // Record the deep-link intent so workspace-sync hydration (which resolves async) honors it instead
     // of reverting to the last-synced channel — otherwise the tapped channel flashes then bounces back.
     setDeepLinkTarget(target);
@@ -358,6 +363,7 @@ export function HuddleApp() {
     if (exists) useHuddleStore.getState().setActive(target);
     // Clean the param so a manual refresh doesn't keep forcing this huddle.
     params.delete("huddle");
+    params.delete("email");
     const qs = params.toString();
     window.history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
   }, []);
