@@ -113,6 +113,7 @@ try {
   t("markProcessed with the current claim applies", await L.markProcessed(cl, { bell: ["b1"] }), true);
   t("AC-3.2 result ids stored", (await row("c2:m1")).r, { bell: ["b1"] });
   t("a processed item is not claimable", !!(await claim("c2:m1")), false);
+  t("AC-3.5 an unchanged re-read of a PROCESSED item keeps it processed (no reprocessing)", [await L.observe(O, [item("c2:m1")]), (await row("c2:m1")).status], [{ inserted: 0, changed: 0, unchanged: 1 }, "processed"]);
 
   // AC-3.4 edited content: SAME row back to pending, stale claim cannot mark it
   await L.observe(O, [item("c3:m1")]);

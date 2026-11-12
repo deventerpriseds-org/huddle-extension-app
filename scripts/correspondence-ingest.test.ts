@@ -164,6 +164,7 @@ t("AC-1.7 identity keys cannot collide across ':' in chat ids", teamsSourceItemI
 t("S-5 line without chatId skipped", parse(L({ chatId: "" })).skipped.missing_chat_id, 1);
 t("S-6 unparseable timestamp skipped", parse(L({}, [{ id: "m1", timestamp: "tuesday", body: "HUDDLE-PA-SBX- x", sender: "u1" }])).skipped.bad_timestamp, 1);
 t("S-8 whole file is a JSON array -> rejected not_jsonl (never half-ingested)", parse(`[${L()},${L({ chatId: "c2" })}]`).rejected, "not_jsonl");
+t("S-8 an array written one object per line (last line parses alone) -> rejected, never half-ingested", parse(`[\n${L()},\n${L({ chatId: "c2" })}\n]`).rejected, "not_jsonl");
 t("S-8 pretty-printed single object (no line parses) -> rejected not_jsonl", parse(JSON.stringify(JSON.parse(L()), null, 2)).rejected, "not_jsonl");
 t("S-9 (provisional) blank lines ignored, not counted", (() => {
   const r = parse([L(), "", "   ", L({ chatId: "c2" })].join("\n"));
