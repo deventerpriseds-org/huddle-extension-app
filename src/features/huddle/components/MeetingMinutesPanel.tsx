@@ -110,7 +110,7 @@ export function MeetingMinutesPanel() {
       <h3 className="mb-1 text-sm font-semibold">Meeting minutes</h3>
       <p className="mb-3 text-xs text-muted-foreground">
         When Fireflies finishes transcribing a meeting, Huddle emails the minutes and saves the transcript to
-        OneDrive under Automation/transcripts.
+        OneDrive under Automation/transcripts. The subject uses the meeting theme and its local date and time.
       </p>
       {configured && (!configured.webhookSecret || !configured.apiKey) && (
         <p className="mb-3 rounded bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
