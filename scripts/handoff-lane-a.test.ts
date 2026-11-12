@@ -69,6 +69,18 @@ describe("F1 urgency: classifyAsk().urgency spelling table", () => {
     ["v1-C2", "not immediately", "default"],
     ["v1-C2", "not asap", "default"],
     ["v1-C2", "no rush, asap is fine whenever", "default"],
+    // verify loop 2 C2 (VERIFY-handoff-confirm-flow-2.md): any "n't" / spelled-out negator is NOT urgent
+    ["v2-C2", "it doesn't need to be done right away", "default"],
+    ["v2-C2", "no need for it right now", "default"],
+    ["v2-C2", "I wouldn't start it right away", "default"],
+    ["v2-C2", "you shouldn't do it immediately", "default"],
+    ["v2-C2", "this isn't urgent, it doesn't have to happen immediately", "default"],
+    ["v2-C2", "there's no hurry to do it right now", "default"],
+    ["v2-C2", "can't do it now", "default"],
+    ["v2-C2", "I won't need it right away", "default"],
+    ["v2-C2", "later is fine, rather than right now", "default"],
+    ["pos", "never mind, do it right away", "now"],
+    ["pos", "don't forget, do it now", "now"],
     ["pos", "do it right away", "now"],
     ["pos", "don't wait, do it immediately", "now"],
   ];

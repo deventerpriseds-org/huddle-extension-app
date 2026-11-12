@@ -161,8 +161,11 @@ const URGENCY_RE: RegExp[] = [
 // "don't do it right away", "not immediately" and "not asap" all classifying `now`. "no rush" anywhere
 // is a reason not to start, so it forces `default` too.
 const NOT_URGENT_RE: RegExp[] = [
-  /\b(?:not|don'?t|don’t|do not|never|no need to)\s+(?:[a-z']+\s+){0,3}?(?:now|right away|immediately|asap|straight away|this second|this instant)\b/i,
-  /\bno rush\b/i,
+  // Negator: any "n't" contraction (don't, doesn't, isn't, can't, won't, wouldn't, shouldn't …) plus the
+  // spelled-out forms. Verify loop 2 (VERIFY-handoff-confirm-flow-2.md, C2) measured nine unsafe misses
+  // from the closed list this replaced ("it doesn't need to be done right away", "can't do it now", …).
+  /\b(?:not|never|do not|no need (?:to|for)|rather than|[a-z]+n['’]?t)\s+(?:[a-z'’]+\s+){0,4}?(?:now|right away|immediately|asap|straight away|this second|this instant)\b/i,
+  /\bno (?:rush|hurry)\b/i,
   /\bnow(?:\s+is|'s|’s)?\s+(?:not|isn'?t|a\s+(?:bad|terrible|tough|awful|busy|hard|rough)\b)/i,
   /\bnow\s+isn'?t\b/i,
   /\bnow\s+that\b/i,
