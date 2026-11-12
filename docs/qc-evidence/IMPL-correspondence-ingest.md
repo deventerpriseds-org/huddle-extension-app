@@ -74,3 +74,25 @@ cross-app-turn-gate 92/0).
   `failed / gave_up:pass_did_not_finish` (Fireflies D9). markFailed: backoff 5,10,20,40,60 min, terminal
   `failed` at maxAttempts.
 - `bun scripts/correspondence-ledger-sql.test.ts` (real PostgreSQL 16): **33 passed, 0 failed**.
+
+### Step 4 -- the pass + heartbeat hook (AC-2.1, 2.4, 2.5, 3.3-3.10, 6.1, 6.3, 6.7, 7.1)
+
+- `lib/correspondence/ingest-pass.ts` (pure, injected deps): per enabled source, cursor + read throttle
+  (`minIntervalMinutes`), download only when the file changed or due work needs item text, observe into
+  the ledger only on a new file eTag (+ reopen that source's needs_context rows), then -- ONLY if a
+  processor is switched on -- claim in batches of 10 under a 30 s budget (`PASS_BUDGET_MS`, under the
+  ~45 s host ceiling; AC-3.10 allows 60) and yield. A due item absent from the current file ->
+  `needs_context / source_payload` (AC-2.5: absence is not failure or resolution). Processor throw ->
+  `markFailed(errorCategory(e))`. One count-only log line per pass.
+- Email: `ledgerEmailItems` reuses `eligibleFeedMessages` with NO lookback (epoch) -- the ledger, not the
+  12 h/72 h window, decides new (AC-2.4). Read through the existing `readFeed(cfg,"email")` (AC-2.1).
+- `lib/correspondence/ingest.server.ts`: binds config + `readFeed` + `readTeamsLogFile` + PG ledger.
+  `PROCESSORS = []` (sections 4/5 plug in there). Returns before ANY call unless `correspondence.ingest`
+  is literally true.
+- `lib/tasks/scheduler.server.ts`: started next to Fireflies, awaited at the end (and in the early-return
+  path). No route file touched (G7).
+- `scripts/correspondence-ingest.test.ts` sections F (pass vs fixtures, twin with lease + backoff), G
+  (processor seam), I (server read with a `fetch` spy: GET-only, eTag short-circuit, too_large).
+  **99 passed, 0 failed.** Ledger SQL **33/0**. tsc clean. onedrive-feed all passed, inbound-email 72/0,
+  attention all passed, fireflies-queue-sql all passed, cross-app-turn-gate 92/0, fireflies-minutes
+  **64 PASS / 3 FAIL (unchanged from main)**.
