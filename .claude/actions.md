@@ -9,7 +9,12 @@ reply should be deep linked so I can get to the place in the chat to approve, co
 - [x] Built (claude_bell-dismiss-deeplink 1aecdf62): labelled Dismiss button; email row tap -> requestEmailFocus ->
       transcript opens the paged window up to the card, scrolls it to centre, highlights 3s; phone alert deep link
       /?huddle=<id>&email=<emailId>. lib/attention/focus.ts; scripts/attention-focus.test.ts; F2/S1/W1/W4 FIRED.
-- [ ] Merge + deploy; owner confirms on web and phone. NOT owner-confirmed.
+- [x] Merged #206 (deploy 43164606033) + #207 jump never a silent no-op (deploy 43229081463). Browser UAT
+      43271531291 @390 PASS: 19/19 rows labelled Dismiss; email-row tap resolved (state=not-found + notice).
+      Earlier failures: 43229420758 was a TEST defect (clicked a meeting row "From Iris's schedule brief");
+      43164962419/43164965524/43165525010 found the real silent-wait bug fixed in #207.
+- [ ] Landing ON the card is NOT browser-verified: the UAT sign-in loads only recent Iris messages (14), so the
+      card is not in view there. Owner to confirm on web + phone. NOT owner-confirmed.
 
 ## ACT:fireflies-minutes — Fireflies webhook -> meeting-minutes email + OneDrive transcript (2026-11-10)
 Owner handoff (uploaded doc, "O" = go). Extends draft PR #188 on branch `claude_fireflies-minutes` (the push
