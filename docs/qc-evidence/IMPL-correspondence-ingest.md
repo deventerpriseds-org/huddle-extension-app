@@ -107,3 +107,22 @@ cross-app-turn-gate 92/0).
   ids, person names or the synthetic subject prefix.
 - Note: the parent session committed this worktree's in-progress tree as 06e4f1b5 while this agent was
   alive (it believed the agent dead); content identical to the step-4 work, nothing lost.
+
+### Step 6 -- aligned to the Power Automate contract (owner decisions 2026-11-12)
+
+Source: `docs/integrations/power-automate-huddle-sources.md` (coordinator, read from
+`refs/heads/eds-wip/claude_pa-instructions`) + coordinator message.
+- `sent` config entry (FeedFileConfig, default `/automation/email/sent.json`, OFF when absent);
+  `validateSentSnapshot` = the inbox envelope rules with `feed_type:"sent_snapshot"`; `readFeed(cfg,"sent")`.
+  `mapSentRecords` uses `conversationId` (required, the match key), `sentDateTime` (fallback
+  `receivedDateTime`), `subject` (prefix filter while synthetic). **No `isSent` marker** is added to the inbox
+  snapshot. `latestSentByConversation` for section 4.
+- `teams.ownerSenderIds` (lower-cased; `ownerIds` accepted as an alias) replaces `ownerIds`.
+- Teams log default path moved to `/automation/email/huddle-source-log.jsonl` (same folder as the emails).
+- AC-1.8 amended to the contract ("Huddle reads the end of it"): an oversized Teams log is read with
+  `Range: bytes=-maxBytes`; a server that ignores Range is trimmed to the same tail; the parse drops the
+  partial first line; the health note says how many bytes were not read. Email/appointments/sent keep the
+  `rejected:too_large` rule (tested). Range on Graph `/content` is from memory of the Graph docs (not
+  opened this session); the code is correct either way (206 or 200 + trim).
+- Fixture `scripts/fixtures/onedrive/sent.sample.json`. Test line in the doc's exact Graph message shape.
+- `correspondence-ingest.test.ts` **113 passed, 0 failed**; onedrive-feed all passed; tsc clean.

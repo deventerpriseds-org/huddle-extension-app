@@ -25,6 +25,7 @@ import {
   parseFeedsConfig,
   validateAppointmentSnapshot,
   validateEmailSnapshot,
+  validateSentSnapshot,
   type FeedCalendarEvent,
   type OneDriveFeedsConfig,
   type ValidSnapshot,
@@ -81,7 +82,7 @@ export function getFeedsConfig(): OneDriveFeedsConfig | null {
   return parseFeedsConfig(process.env.HUDDLE_ONEDRIVE_FEEDS);
 }
 
-type Kind = "email" | "appointments";
+type Kind = "email" | "appointments" | "sent";
 
 export type FeedRead =
   | { ok: true; snapshot: ValidSnapshot<Record<string, unknown>>; changed: boolean; etag?: string }
@@ -95,7 +96,7 @@ const drivePath = (cfg: OneDriveFeedsConfig, path: string) =>
 
 export type DriveFile =
   | { kind: "unchanged"; etag: string }
-  | { kind: "text"; etag: string; itemId: string | null; text: string }
+  | { kind: "text"; etag: string; itemId: string | null; text: string; tailSkippedBytes?: number }
   | { kind: "fail"; reason: string; error?: string | null };
 
 /**
@@ -103,7 +104,12 @@ export type DriveFile =
  * GET only: Huddle never writes, renames, moves or deletes a feed file (AC-1.13, AC-2.6). `knownEtag`
  * short-circuits an unchanged file before any download. Throws only on network/abort; callers map that.
  */
-async function fetchDriveFile(cfg: OneDriveFeedsConfig, path: string, knownEtag: string | null): Promise<DriveFile> {
+async function fetchDriveFile(
+  cfg: OneDriveFeedsConfig,
+  path: string,
+  knownEtag: string | null,
+  opts: { tailWhenTooLarge?: boolean } = {},
+): Promise<DriveFile> {
   const { getAppToken } = await import("../email/graph-email.server");
   const deadline = AbortSignal.timeout(FEED_READ_DEADLINE_MS);
   const timedFetch = (url: string, init: RequestInit) => fetch(url, { ...init, method: "GET", signal: deadline });
@@ -114,12 +120,27 @@ async function fetchDriveFile(cfg: OneDriveFeedsConfig, path: string, knownEtag:
   const item = (await meta.json()) as { id?: string; eTag?: string; size?: number };
   const etag = String(item.eTag ?? "");
   if (etag && knownEtag === etag) return { kind: "unchanged", etag };
-  if (typeof item.size === "number" && item.size > cfg.maxBytes) return { kind: "fail", reason: "rejected:too_large" };
+  const itemId = typeof item.id === "string" ? item.id : null;
+  if (typeof item.size === "number" && item.size > cfg.maxBytes) {
+    if (!opts.tailWhenTooLarge) return { kind: "fail", reason: "rejected:too_large" };
+    // A rolling append-only log (the Teams JSONL) is read from its END: the last maxBytes bytes with an
+    // HTTP Range request. The first line of the tail is partial and the parser drops it; older lines are
+    // already in the processing ledger, so nothing is lost and nothing is re-emitted (AC-1.8, OQ-3).
+    const tail = await timedFetch(`${drivePath(cfg, path)}:/content`, { headers: { ...auth, Range: `bytes=-${cfg.maxBytes}` } });
+    if (!tail.ok) return { kind: "fail", reason: "error", error: `drive content read failed (${tail.status})` };
+    let text = await tail.text();
+    // A server that ignores Range returns the whole file (200): keep only the end, by the same rule.
+    if (text.length > cfg.maxBytes) text = text.slice(text.length - cfg.maxBytes);
+    return { kind: "text", etag, itemId, text, tailSkippedBytes: Math.max(1, item.size - cfg.maxBytes) };
+  }
   const content = await timedFetch(`${drivePath(cfg, path)}:/content`, { headers: auth });
   if (!content.ok) return { kind: "fail", reason: "error", error: `drive content read failed (${content.status})` };
   const text = await content.text();
-  if (text.length > cfg.maxBytes) return { kind: "fail", reason: "rejected:too_large" };
-  return { kind: "text", etag, itemId: typeof item.id === "string" ? item.id : null, text };
+  if (text.length > cfg.maxBytes) {
+    if (!opts.tailWhenTooLarge) return { kind: "fail", reason: "rejected:too_large" };
+    return { kind: "text", etag, itemId, text: text.slice(text.length - cfg.maxBytes), tailSkippedBytes: text.length - cfg.maxBytes };
+  }
+  return { kind: "text", etag, itemId, text };
 }
 
 /**
@@ -187,7 +208,12 @@ export async function readFeed(cfg: OneDriveFeedsConfig, kind: Kind): Promise<Fe
     } catch {
       return fail("rejected:not_json");
     }
-    const v = kind === "email" ? validateEmailSnapshot(json, cfg) : validateAppointmentSnapshot(json, cfg);
+    const v =
+      kind === "email"
+        ? validateEmailSnapshot(json, cfg)
+        : kind === "sent"
+          ? validateSentSnapshot(json, cfg)
+          : validateAppointmentSnapshot(json, cfg);
     if (!v.ok) return fail(`rejected:${v.reason}`);
     // Malformed records (no id) are dropped, not fatal -- but say so, or the flow's bug is invisible.
     const skippedNote = v.snapshot.skipped ? `skipped ${v.snapshot.skipped} record(s) with no id` : null;
@@ -231,7 +257,7 @@ export async function recordTeamsFeedStatus(cfg: OneDriveFeedsConfig, status: st
 export async function readTeamsLogFile(cfg: OneDriveFeedsConfig, knownEtag: string | null): Promise<TeamsFileRead> {
   if (!cfg.teams.enabled) return { ok: false, reason: "disabled" };
   try {
-    const got = await fetchDriveFile(cfg, cfg.teams.path, knownEtag);
+    const got = await fetchDriveFile(cfg, cfg.teams.path, knownEtag, { tailWhenTooLarge: true });
     if (got.kind === "fail") {
       await recordTeamsFeedStatus(cfg, got.reason, got.error ?? null);
       return { ok: false, reason: got.reason };
@@ -240,7 +266,15 @@ export async function readTeamsLogFile(cfg: OneDriveFeedsConfig, knownEtag: stri
       await recordTeamsFeedStatus(cfg, "unchanged", null);
       return { ok: true, changed: false, etag: got.etag };
     }
-    return { ok: true, changed: true, etag: got.etag, itemId: got.itemId, path: cfg.teams.path, text: got.text };
+    return {
+      ok: true,
+      changed: true,
+      etag: got.etag,
+      itemId: got.itemId,
+      path: cfg.teams.path,
+      text: got.text,
+      ...(got.tailSkippedBytes ? { tailSkippedBytes: got.tailSkippedBytes } : {}),
+    };
   } catch (err) {
     // An abort / network error: the category only (a Graph error body could carry anything).
     const reason = err instanceof Error && err.name === "TimeoutError" ? "error:timeout" : "error";

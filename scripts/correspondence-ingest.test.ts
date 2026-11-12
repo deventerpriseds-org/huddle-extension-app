@@ -10,7 +10,14 @@
 // Run: bun scripts/correspondence-ingest.test.ts
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { parseFeedsConfig, validateEmailSnapshot, mapFeedMessage } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
+import {
+  latestSentByConversation,
+  mapFeedMessage,
+  mapSentRecords,
+  parseFeedsConfig,
+  validateEmailSnapshot,
+  validateSentSnapshot,
+} from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { parseTeamsLog, teamsParseNote } from "../src/features/huddle/lib/external-feeds/teams-log";
 import {
   combineOutcomes,
@@ -56,14 +63,14 @@ const baseJson = {
   synthetic: true,
   subjectPrefix: "HUDDLE-PA-SBX-",
 };
-const withTeams = { ...baseJson, teams: { path: "/automation/huddle-source-log.jsonl", ownerIds: ["USER-OWNER-1"] } };
+const withTeams = { ...baseJson, teams: { path: "/automation/email/huddle-source-log.jsonl", ownerSenderIds: ["USER-OWNER-1"] } };
 const cfg = parseFeedsConfig(JSON.stringify(withTeams))!;
 
 console.log("A. CONFIG — Teams entry + switches (AC-1.1, AC-6.1, AC-6.3)");
 const noTeams = parseFeedsConfig(JSON.stringify(baseJson))!;
-t("AC-1.1 teams entry parsed with the same path rule", [cfg.teams.enabled, cfg.teams.path, cfg.teams.source, cfg.teams.ownerIds], [
+t("AC-1.1 teams entry parsed with the same path rule", [cfg.teams.enabled, cfg.teams.path, cfg.teams.source, cfg.teams.ownerSenderIds], [
   true,
-  "/automation/huddle-source-log.jsonl",
+  "/automation/email/huddle-source-log.jsonl",
   "power-automate-teams",
   ["user-owner-1"],
 ]);
@@ -96,6 +103,11 @@ t("AC-6.3 bell only / proposals only / both are independent", [perm({ ingest: tr
 ]);
 t("AC-3.6 maxAttempts configurable, bounded", [perm({}) && parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { maxAttempts: 3 } }))!.correspondence.maxAttempts, parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { maxAttempts: 999 } }))!.correspondence.maxAttempts, parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { maxAttempts: 0 } }))!.correspondence.maxAttempts], [3, 20, 5]);
 t("AC-6.3 sources filter rejects unknown names", parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { sources: ["teams", "fax"] } }))!.correspondence.sources, ["teams"]);
+
+t("PA contract: teams.ownerIds accepted as an alias of ownerSenderIds, merged, lower-cased", parseFeedsConfig(JSON.stringify({ ...baseJson, teams: { ownerSenderIds: ["A"], ownerIds: ["b", "a"] } }))!.teams.ownerSenderIds, ["a", "b"]);
+t("PA contract: teams entry with no path -> the email folder default", parseFeedsConfig(JSON.stringify({ ...baseJson, teams: {} }))!.teams.path, "/automation/email/huddle-source-log.jsonl");
+t("AC-6.4 / owner decision 2: absent `sent` key -> Sent Items OFF", noTeams.sent, { enabled: false, path: "/automation/email/sent.json" });
+t("PA contract: `sent` entry -> same path rule as email", [parseFeedsConfig(JSON.stringify({ ...baseJson, sent: {} }))!.sent, parseFeedsConfig(JSON.stringify({ ...baseJson, sent: { path: "sent.json" } }))!.sent.enabled], [{ enabled: true, path: "/automation/email/sent.json" }, false]);
 
 console.log("B. TEAMS ADAPTER — the fixture (AC-1.3..1.12, AC-7.1)");
 const p = parseTeamsLog(teamsFixture, cfg);
@@ -159,6 +171,11 @@ t("S-10 (provisional) CRLF line endings accepted", parse([L(), L({ chatId: "c2" 
 t("S-14 a URL-only body maps to [link] (its '?' is not a question)", parse(L({}, [{ id: "m1", timestamp: "2026-11-11T10:00:00Z", body: { contentType: "html", content: "HUDDLE-PA-SBX- https://x.example/form?id=1" }, sender: "u1" }])).messages[0].text, "HUDDLE-PA-SBX- [link]");
 t("S-16 (provisional) deleted message skipped", parse(L({}, [{ id: "m1", timestamp: "2026-11-11T10:00:00Z", deletedDateTime: "2026-11-11T11:00:00Z", body: "HUDDLE-PA-SBX- x" }])).skipped.deleted, 1);
 t("Graph createdDateTime / value aliases accepted", parse(JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "c9", value: [{ id: "g1", createdDateTime: "2026-11-11T10:00:00Z", body: { contentType: "text", content: "HUDDLE-PA-SBX- hi" }, from: { user: { id: "U1", displayName: "N" } } }] })).messages[0].senderId, "u1");
+t("PA contract: the doc's exact Graph message shape (createdDateTime, from.user, body object, webUrl, messageType)", (() => {
+  const line = JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-alpha@thread.example", chatName: "HUDDLE-PA-SBX- Alpha chat", capturedUtc: "2026-11-11T23:00:00Z", messages: [{ id: "1001", createdDateTime: "2026-11-10T14:00:00Z", messageType: "message", webUrl: "https://teams.example/l/message/1001", body: { contentType: "text", content: "HUDDLE-PA-SBX- Can you send me the Q3 deck by Friday?" }, from: { user: { id: "USER-OWNER-1", displayName: "Owner Example" } } }] });
+  const m = parse(line).messages[0];
+  return [m.messageId, m.at, m.senderId, m.fromOwner, m.webUrl, m.text, m.chatName];
+})(), ["1001", "2026-11-10T14:00:00.000Z", "user-owner-1", true, "https://teams.example/l/message/1001", "HUDDLE-PA-SBX- Can you send me the Q3 deck by Friday?", "HUDDLE-PA-SBX- Alpha chat"]);
 t("AC-1.9 synthetic config: line NOT marked synthetic -> skipped", parse(L({ synthetic: undefined })).skipped.synthetic_mismatch, 1);
 t("AC-1.9 synthetic config: text without the test prefix -> skipped", parse(L({}, [{ id: "m1", timestamp: "2026-11-11T10:00:00Z", body: "a real message", sender: "u1" }])).skipped.prefix_mismatch, 1);
 const live = parseFeedsConfig(JSON.stringify({ ...withTeams, synthetic: false, subjectPrefix: "" }))!;
@@ -195,6 +212,18 @@ t("AC-2.3 drive-item identity: a new eTag is a CHANGE of the same item", (() => 
   return [b.sourceItemId === perFile.sourceItemId, b.contentHash === perFile.contentHash];
 })(), [true, false]);
 t("AC-2.2 snapshot eTag does not affect a provider-id item's hash", emailSourceItem(recs[0], mapFeedMessage(recs[0], cfg.mailbox), { ...file, etag: "other" }, cfg.mailbox)!.contentHash, e1.contentHash);
+
+console.log("D2. SENT ITEMS SNAPSHOT (owner decision 2, option A)");
+const sentFixture = JSON.parse(readFileSync(join(FIX, "sent.sample.json"), "utf8"));
+const sv = validateSentSnapshot(sentFixture, cfg, NOW);
+t("sent.json validates with the email envelope rules + feed_type sent_snapshot", [sv.ok, sv.ok ? sv.snapshot.records.length : -1], [true, 4]);
+t("the inbox validator refuses a sent snapshot (feed_type differs)", validateEmailSnapshot(sentFixture, cfg, NOW).ok ? "ok" : (validateEmailSnapshot(sentFixture, cfg, NOW) as { reason: string }).reason, "wrong_feed_type");
+t("the sent validator refuses an inbox snapshot", (validateSentSnapshot(emailFixture, cfg, NOW) as { reason?: string }).reason, "wrong_feed_type");
+t("sent snapshot: synthetic rule applies (unmarked file refused while synthetic)", (validateSentSnapshot({ ...sentFixture, synthetic: undefined }, cfg, NOW) as { reason?: string }).reason, "synthetic_mismatch");
+const ms = mapSentRecords(sv.ok ? sv.snapshot.records : [], cfg);
+t("mapSentRecords: conversationId required, prefix filter while synthetic, receivedDateTime fallback", [ms.sent.map((s) => s.conversationId), ms.skipped], [["conv-sample-1", "conv-sample-2"], 2]);
+t("mapSentRecords: receivedDateTime accepted when sentDateTime is absent (live config)", mapSentRecords([{ id: "x", conversationId: "c", receivedDateTime: "2026-11-10T17:00:00Z", subject: "no prefix" }], parseFeedsConfig(JSON.stringify({ ...baseJson, synthetic: false }))!).sent, [{ conversationId: "c", sentAt: "2026-11-10T17:00:00.000Z" }]);
+t("latestSentByConversation keeps the newest per thread", [...latestSentByConversation([{ conversationId: "c", sentAt: "2026-11-10T10:00:00Z" }, { conversationId: "c", sentAt: "2026-11-10T12:00:00Z" }]).entries()], [["c", Date.parse("2026-11-10T12:00:00Z")]]);
 
 console.log("E. PURE HELPERS");
 t("stableHash deterministic, separator-safe", [stableHash(["a", "b"]) === stableHash(["a", "b"]), stableHash(["ab", ""]) === stableHash(["a", "b"])], [true, false]);
@@ -293,7 +322,7 @@ const deps = (tw: ReturnType<typeof makeTwin>, processors: ItemProcessor[] = [])
   async readTeams(_c, known) {
     reads.teams++;
     if (known && known === files.teamsEtag) return { ok: true, changed: false, etag: known };
-    return { ok: true, changed: true, etag: files.teamsEtag, itemId: "drive-item-t", path: "/automation/huddle-source-log.jsonl", text: files.teamsText };
+    return { ok: true, changed: true, etag: files.teamsEtag, itemId: "drive-item-t", path: "/automation/email/huddle-source-log.jsonl", text: files.teamsText };
   },
   async recordTeamsStatus() {},
   async readEmail(c) {
@@ -460,12 +489,14 @@ console.log("I. SERVER READ — Graph spy (AC-1.2, 1.8, 1.13)");
   const { readTeamsLogFile } = await import("../src/features/huddle/lib/external-feeds/onedrive-feed.server");
   const realFetch = globalThis.fetch;
   const realErr = console.error;
-  const seen: { method: string; host: string; path: string }[] = [];
+  const seen: { method: string; host: string; path: string; range: string | null }[] = [];
   let size = 100;
   let body = teamsFixture;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const u = new URL(String(input));
-    seen.push({ method: (init?.method ?? "GET").toUpperCase(), host: u.host, path: decodeURIComponent(u.pathname) });
+    const range = new Headers(init?.headers).get("range");
+    seen.push({ method: (init?.method ?? "GET").toUpperCase(), host: u.host, path: decodeURIComponent(u.pathname), range });
+    if (range && u.pathname.endsWith(":/content")) return new Response(body.slice(body.length - Number(range.replace("bytes=-", ""))), { status: 206 });
     if (u.host.startsWith("login.")) return new Response(JSON.stringify({ access_token: "tok" }), { status: 200 });
     if (u.pathname.endsWith(":/content")) return new Response(body, { status: 200 });
     return new Response(JSON.stringify({ id: "drive-item-t", eTag: '"{t},5"', size }), { status: 200 });
@@ -477,16 +508,28 @@ console.log("I. SERVER READ — Graph spy (AC-1.2, 1.8, 1.13)");
     t("AC-1.2 Teams log read: meta then content, text returned with eTag + drive item id", a.ok && a.changed ? [a.etag, a.itemId, a.text.length === teamsFixture.length] : a, ['"{t},5"', "drive-item-t", true]);
     const b = await readTeamsLogFile(c, '"{t},5"');
     t("AC-1.2 unchanged eTag -> no download", [b.ok && !b.changed, seen.filter((s) => s.path.endsWith(":/content")).length], [true, 1]);
+    // AC-1.8 as amended by the PA contract doc ("Huddle reads the end of it"): an oversized rolling log is
+    // read from its END with a Range request; the parse then drops the partial first line.
+    const line = (i: number) => JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: `c${i}`, messages: [{ id: "m", createdDateTime: "2026-11-11T10:00:00Z", body: "HUDDLE-PA-SBX- x", from: { user: { id: "u" } } }] });
+    body = Array.from({ length: 40 }, (_, i) => line(i)).join("\n");
+    const c2 = { ...c, maxBytes: 1000 };
+    size = body.length;
+    const big = await readTeamsLogFile(c2, null);
+    t("AC-1.8 oversized log -> tail read (Range bytes=-maxBytes), never the whole file", big.ok && big.changed ? [big.text.length, (big.tailSkippedBytes ?? 0) > 0, seen.at(-1)!.range] : big, [1000, true, "bytes=-1000"]);
+    const tailParse = big.ok && big.changed ? parseTeamsLog(big.text, c2, { dropFirstLine: true }) : null;
+    t("AC-1.8 tail parse: partial first line dropped, only whole lines become items, last line kept", [tailParse?.rejected ?? "none", tailParse?.skippedLines, tailParse?.messages.at(-1)?.chatId], ["none", 0, "c39"]);
+    size = 100; // the size header understated the file: the downloaded text is trimmed to its end too
+    const big2 = await readTeamsLogFile(c2, null);
+    t("AC-1.8 downloaded text over maxBytes -> trimmed to the tail", big2.ok && big2.changed ? [big2.text.length, (big2.tailSkippedBytes ?? 0) > 0] : big2, [1000, true]);
+    body = teamsFixture;
+    const { readFeed } = await import("../src/features/huddle/lib/external-feeds/onedrive-feed.server");
     size = c.maxBytes + 1;
-    const big = await readTeamsLogFile(c, null);
-    t("AC-1.8 file over maxBytes -> rejected:too_large, no download", [big.ok ? "ok" : big.reason, seen.filter((s) => s.path.endsWith(":/content")).length], ["rejected:too_large", 1]);
+    const em = await readFeed(c, "email");
+    t("AC-6.4 the email snapshot keeps today's rule: over maxBytes -> rejected:too_large (no tail read)", em.ok ? "ok" : em.reason, "rejected:too_large");
     size = 100;
-    body = "x".repeat(c.maxBytes + 1);
-    const big2 = await readTeamsLogFile(c, null);
-    t("AC-1.8 downloaded text over maxBytes -> rejected:too_large", big2.ok ? "ok" : big2.reason, "rejected:too_large");
     const graph = seen.filter((s) => s.host === "graph.microsoft.com");
-    t("AC-1.13 every Graph call is a GET (no write, rename, move or delete of the log)", [graph.length > 0, graph.every((s) => s.method === "GET")], [true, true]);
-    t("AC-1.2 the Teams read targets the configured path only", graph.every((s) => s.path.includes("/drive/root:/automation/huddle-source-log.jsonl")), true);
+    t("AC-1.13 / AC-2.6 every Graph call is a GET (no write, rename, move or delete of any feed file)", [graph.length > 0, graph.every((s) => s.method === "GET")], [true, true]);
+    t("AC-1.2 drive calls target only the configured Teams log and email snapshot paths", graph.every((s) => /\/drive\/root:\/automation\/email\/(huddle-source-log\.jsonl|emails\.json)/.test(s.path)), true);
     t("AC-6.1 teams disabled -> readTeamsLogFile makes no call", await (async () => {
       const n = seen.length;
       const r = await readTeamsLogFile(noTeams, null);
@@ -502,6 +545,7 @@ console.log("H. PUBLIC-REPO HYGIENE (AC-8.1, AC-8.2)");
 const NEW_FILES = [
   "scripts/fixtures/onedrive/huddle-source-log.sample.jsonl",
   "scripts/fixtures/onedrive/emails.sample.json",
+  "scripts/fixtures/onedrive/sent.sample.json",
   "src/features/huddle/lib/external-feeds/teams-log.ts",
   "src/features/huddle/lib/correspondence/source-item.ts",
 ];

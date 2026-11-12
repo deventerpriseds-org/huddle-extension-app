@@ -161,7 +161,8 @@ export async function runIngestPass(
           await deps.cursor.set(owner, "teams");
           continue;
         }
-        const parsed = parseTeamsLog(r.text, cfg);
+        // A tail read (oversized rolling log) starts mid-line: the parser drops that partial first line.
+        const parsed = parseTeamsLog(r.text, cfg, { dropFirstLine: !!r.tailSkippedBytes });
         if (parsed.rejected) {
           // S-8: a whole-file JSON array is refused by name, never half-ingested; the cursor's eTag is not
           // advanced, so a corrected file is read as new.
@@ -173,7 +174,7 @@ export async function runIngestPass(
         const items = parsed.messages.map((m) => teamsSourceItem(m, { path: r.path, itemId: r.itemId, etag: r.etag }));
         const rep = await ingest("teams", items, r.etag, cur?.etag ?? null);
         rep.skipped = parsed.skippedLines + parsed.skippedMessages;
-        await deps.recordTeamsStatus(cfg, "ok", teamsParseNote(parsed), r.etag);
+        await deps.recordTeamsStatus(cfg, "ok", teamsParseNote(parsed, r.tailSkippedBytes ?? 0), r.etag);
         result.sources.teams = rep;
       } else {
         const r = await deps.readEmail(cfg);

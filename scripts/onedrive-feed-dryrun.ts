@@ -69,7 +69,7 @@ if (cfg.teams.enabled) {
     );
     console.log(`  skips: ${teamsParseNote(p) ?? "none"}`);
     console.log(
-      `  has_sender_id ${ms.some((m) => !!m.senderId)} | has_sender_name ${ms.some((m) => !!m.senderName)} | has_app_sender ${ms.some((m) => m.senderIsApp)} | has_chat_name ${ms.some((m) => !!m.chatName)} | has_web_url ${ms.some((m) => !!m.webUrl)} | owner_ids_configured ${cfg.teams.ownerIds.length > 0} | owner_messages ${ms.filter((m) => m.fromOwner === true).length}`,
+      `  has_sender_id ${ms.some((m) => !!m.senderId)} | has_sender_name ${ms.some((m) => !!m.senderName)} | has_app_sender ${ms.some((m) => m.senderIsApp)} | has_chat_name ${ms.some((m) => !!m.chatName)} | has_web_url ${ms.some((m) => !!m.webUrl)} | owner_ids_configured ${cfg.teams.ownerSenderIds.length > 0} | owner_messages ${ms.filter((m) => m.fromOwner === true).length}`,
     );
   }
 } else {

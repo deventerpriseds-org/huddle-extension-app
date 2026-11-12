@@ -43,7 +43,7 @@ export type TeamsSkipReason =
 /** What the server's drive read of the Teams log returns (onedrive-feed.server.ts readTeamsLogFile). */
 export type TeamsFileRead =
   | { ok: true; changed: false; etag: string }
-  | { ok: true; changed: true; etag: string; itemId: string | null; path: string; text: string }
+  | { ok: true; changed: true; etag: string; itemId: string | null; path: string; text: string; tailSkippedBytes?: number }
   | { ok: false; reason: string };
 
 export interface TeamsLogParse {
@@ -101,7 +101,7 @@ function bodyText(m: Record<string, unknown>): string {
 export function parseTeamsLog(
   text: string,
   cfg: Pick<OneDriveFeedsConfig, "synthetic" | "subjectPrefix" | "notBeforeUtc"> & {
-    teams: { source: string; ownerIds: string[] };
+    teams: { source: string; ownerSenderIds: string[] };
   },
   opts: { dropFirstLine?: boolean } = {},
 ): TeamsLogParse {
@@ -118,7 +118,7 @@ export function parseTeamsLog(
   const rawLines = text.split("\n");
   if (opts.dropFirstLine) rawLines.shift();
   const notBefore = cfg.notBeforeUtc ? Date.parse(cfg.notBeforeUtc) : -Infinity;
-  const owners = new Set(cfg.teams.ownerIds);
+  const owners = new Set(cfg.teams.ownerSenderIds);
   const byKey = new Map<string, TeamsMessage>();
   let parsedLines = 0;
   for (const raw of rawLines) {
