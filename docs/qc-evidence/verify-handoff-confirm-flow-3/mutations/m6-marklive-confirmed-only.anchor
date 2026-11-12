@@ -1,0 +1,2 @@
+      WHERE task_id = $1 AND confirm_status = 'confirmed'
+      RETURNING task_id

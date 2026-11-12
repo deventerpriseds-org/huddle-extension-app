@@ -1,0 +1,1 @@
+  /\b(?:not|don'?t|don’t|do not|never|no need to)\s+(?:[a-z']+\s+){0,3}?now\b/i,

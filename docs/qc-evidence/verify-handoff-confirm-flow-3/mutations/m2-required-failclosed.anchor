@@ -1,0 +1,1 @@
+  const required = input.required !== false;
