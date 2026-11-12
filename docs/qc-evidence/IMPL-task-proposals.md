@@ -60,3 +60,18 @@ OneDrive, journey, workflow or deploy was touched.
 - `bun scripts/task-proposals-sql.test.ts` (real PostgreSQL 16): **41 passed, 0 failed** (first run 39/2:
   jsonb key order in the returned refs -- fixed by rebuilding refs in a fixed shape -- and a test regex
   that matched `due_text`).
+
+### Step 3 -- engine: processor, transcripts, owner actions, delivery (AC-5.3, 5.7-5.16, 5.18-5.22, 3.3)
+
+- `lib/proposals/engine.ts` (new, I/O injected): `proposeFromSource` (extract -> validate -> skip open board
+  titles -> store), `proposalsProcessor` (the data layer's `ItemProcessor` seam, name "proposals"; a failed
+  extraction throws the code `proposals:extract_failed` so the ledger marks it failed_retryable, never
+  processed), `runTranscriptProposals` (Fireflies meetings the minutes flow already FINISHED, observed into
+  the SAME ledger as source `transcript`, keyed by meeting_id; read-only), `approveProposal` (CAS lease ->
+  `screenCapabilityMetaTask` -> `screenRawJourneyCreate` against the owner's open titles -> the existing
+  journey create; a duplicate links to the open task), `decideProposal`, `editProposal`,
+  `proposalChecklistResult` (build_checklist proposals mode), `deliverEveningProposals` (ONE durable turn
+  per owner per local weekday, in `dm-iris-chase`, journey disabled, payload carries every open proposal).
+- `scripts/task-proposals.test.ts` sections G-J: the processor runs through the data layer's REAL
+  `runIngestPass` against its dummy fixtures (adapter -> ledger -> proposals, AC-7.1). **123 passed, 0
+  failed**. `tsc --noEmit -p .` clean (node_modules symlinked from the main checkout, untracked).
