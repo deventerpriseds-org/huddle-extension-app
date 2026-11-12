@@ -13,7 +13,7 @@ Verifier (loop 2, second start) runs in an isolated huddle worktree; this file i
 | C1 | CONFIRMED |
 | C2 | CONFIRMED (code + tests; live 401 not observed) |
 | C3 | CONFIRMED (with defect D1) |
-| C4 | NOT REACHED |
+| C4 | CONFIRMED in code; NOT LIVE (claim of not-live CONFIRMED); defect D4 |
 | C5 | NOT REACHED |
 | C6 | NOT REACHED |
 
@@ -54,3 +54,17 @@ Source: journey-voice origin/main 5645ccc (contains 4b498cb), read from a /tmp c
 - **D1 (defect): the smoke test cannot fail the job.** `:45-49` loops 6 times and breaks on 200, but never `exit 1` when all 6 miss, and never asserts the no-token call is 401. A broken endpoint still yields a green run. The "smoke-tested" claim holds only because the logs happen to show 200/401; the job conclusion is not evidence.
 - D2 (gap): only "no token" is probed, not a WRONG token; the wrong-token 401 rests on C1 code + unit test.
 - D3 (operational): trigger is `push` on this workflow file only (+ dispatch). Rotating the GitHub secret does not re-sync the Function until someone dispatches it.
+
+## C4 -- journey-voice Settings "Download" tab: code CONFIRMED, NOT live (as claimed), defect D4
+
+- `src/pages/Settings.tsx:55  { value: 'download', label: 'Download', icon: Download }`, `:193-194 <TabsContent value="download"> <AppDownloadsSettings />`, import at :40.
+- `src/components/AppDownloadsSettings.tsx` calls `supabase.functions.invoke('app-downloads', {method:'GET'})` (:62), renders one row per returned app, Download button only when `downloadUrl` is non-null (:108-112).
+- Typecheck/build run 42815756501 (branch claude_download-tab-typecheck, 1eb1d73): conclusion success; steps `typecheck (new files)` success and `npx vite build 2>&1 | tail -5` success. **Weak evidence:** the build step is piped into `tail` under `bash -e` without `pipefail`, so its exit code is tail's, and a failed build would still be green; the typecheck covers "new files" only. Log body not read.
+- Live: journey UAT run 42958573043, `uat-shots` commit 545af656 `uat-shots/results.json`:
+  - `C0 live bundle contains the Download tab ('Latest Android builds')` pass:false, detail `NOT in any of 1 JS files served by https://journey-voice.lovable.app -- #110 is likely not published by Lovable yet`
+  - `C1 signed in as owner -> /settings renders` pass:true `landed on /settings`
+  - `C2 Settings has a tab labelled 'Download'` pass:false `matches: 0`
+  - console errors: pass; failed requests: pass:false (repeated `net::ERR_ABORTED .../rest/v1/error_log`, unrelated to this feature)
+  So the claim "NOT live yet" is CONFIRMED by that run. The tab is not reachable by the owner on journey web today.
+- **D4 (defect, also C5 if shared): every error reason collapses to the generic message.** `supabase.functions.invoke` returns `data: null` and a `FunctionsHttpError` for any non-2xx response, and the edge fn returns every failure as non-2xx (401/503/502). So `data?.reason` (:64) is always undefined on failure and the REASONS map (:47-51) is dead code: a signed-out user, an unconfigured server and an unreachable build server all see "Could not load the latest builds." (inference from supabase-js functions-js behaviour; not observed live).
+- Version compare (:38-45): numeric per part, `1.0.9 < 1.0.10` correct; non-numeric parts (e.g. `1.0.18-beta`) become NaN -> treated as 0, so `1.0.18-beta` vs `1.0.18` compares equal. Badge only for TaskOS (`THIS_APP_KEY`), from `AndroidBridge.getCapabilities().version`.
