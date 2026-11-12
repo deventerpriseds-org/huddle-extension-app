@@ -1,0 +1,54 @@
+{
+  "results": [
+    {
+      "name": "Needs-you bell is visible in the header",
+      "pass": true
+    },
+    {
+      "name": "Bell reports its state (count or nothing open)",
+      "pass": true,
+      "detail": "aria-label=\"Needs you: 19 open\" badge=\"19\""
+    },
+    {
+      "name": "Bell opens its list (items or the empty state)",
+      "pass": true,
+      "detail": "items=19 empty=0"
+    },
+    {
+      "name": "Badge count matches the list length",
+      "pass": true,
+      "detail": "badge=19 list=19"
+    },
+    {
+      "name": "Every row has a labelled Dismiss button (#206)",
+      "pass": true,
+      "detail": "buttons=19 items=19 text=\"Dismiss\""
+    },
+    {
+      "name": "DIAG jump trace (informational)",
+      "pass": true,
+      "detail": "rowsBefore=5 {\"toast\":true,\"focusedAttached\":false,\"maxRows\":14,\"focusedVisible\":false}"
+    },
+    {
+      "name": "Tapping an email row is never a silent no-op: it lands on the card or says it is further back (#206)",
+      "pass": true,
+      "detail": "state=not-found toast=true"
+    },
+    {
+      "name": "Landing on the card NOT exercised: the UAT sign-in cannot load the full history, so the card is not in view (informational)",
+      "pass": true,
+      "detail": "state=not-found focusedVisible=false"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
