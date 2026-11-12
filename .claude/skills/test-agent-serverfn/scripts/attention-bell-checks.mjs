@@ -38,8 +38,10 @@ export const checks = [
       const dismissBtns = await page.locator('[data-testid="attention-dismiss"]').count();
       const firstLabel = (await page.locator('[data-testid="attention-dismiss"]').first().innerText().catch(() => "")).trim();
       check("Every row has a labelled Dismiss button (#206)", dismissBtns === items && firstLabel === "Dismiss", `buttons=${dismissBtns} items=${items} text="${firstLabel}"`);
-      // Tap the first EMAIL row (its detail reads "From ..."): the chat must open ON that email's reply card.
-      const emailRow = page.locator('[data-testid="attention-item"]', { hasText: "From " }).first();
+      // Tap the first EMAIL row -- the one with the envelope icon. NOT "the first row containing 'From '":
+      // meeting rows read "From Iris's schedule brief" and correctly only open the chat (run 43229420758
+      // clicked one and reported a false failure). The chat must open ON that email's reply card.
+      const emailRow = page.locator('[data-testid="attention-item"]:has(svg.lucide-mail)').first();
       if ((await emailRow.count()) > 0) {
         const rowsBefore = await page.locator("[data-msg-id]").count();
         await emailRow.locator("button").first().click();
