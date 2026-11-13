@@ -168,11 +168,25 @@ jobs:
                       # Shape of the failure without content: first/last code point, where the first
                       # "{" sits, and whether the text from that brace on parses.
                       b0=l.find("{")
+                      tail_err=""
                       try:
                           tail_ok=isinstance(json.loads(l[b0:]), dict) if b0 >= 0 else False
+                      except json.JSONDecodeError as te:
+                          tail_ok=False
+                          p=te.pos
+                          tail_err=" | from-brace error: %s at char %d, chars there %s" % (te.msg, p, "".join("a" if c.isalpha() else "9" if c.isdigit() else c for c in l[b0+max(p-3,0):b0+p+3]))
                       except Exception:
                           tail_ok=False
-                      shape="first U+%04X last U+%04X first-brace-at %d parses-from-brace %s" % (ord(l[0]), ord(l[-1]), b0, tail_ok)
+                      # A short prefix made only of key-name characters is schema, not content: print it.
+                      import re as _re
+                      pre=l[:b0] if 0 <= b0 <= 16 else ""
+                      # Only a word from a fixed schema/function vocabulary is printed; anything else
+                      # (it could be a name) is reduced to its character classes.
+                      VOCAB={"content","contents","chatid","chatname","source","status","messages","message","capturedat","synthetic","body","value","values","data","json","record","item","items","line","text","concat","string","outputs","output","body/value"}
+                      word=_re.sub(r"[^A-Za-z/]", "", pre).lower()
+                      pre=pre if word in VOCAB or word == "" else "<withheld: %d chars, %s>" % (len(pre), "".join(sorted(set("a" if c.isalpha() else "9" if c.isdigit() else "_" if c.isspace() else "p" for c in pre))))
+                      head="".join("a" if c.isalpha() else "9" if c.isdigit() else c for c in (l[b0:b0+4] if b0 >= 0 else ""))
+                      shape="first U+%04X last U+%04X first-brace-at %d prefix %r head %r parses-from-brace %s%s" % (ord(l[0]), ord(l[-1]), b0, pre, head, tail_ok, tail_err)
                       bad.append((i, len(l), type(ex).__name__ + ": " + str(ex)[:90] + " | " + shape))
               if bad:
                   print("JSONL UNPARSEABLE LINES:", len(bad), "of", len(lines), "| last line ok:", not bad or bad[-1][0] != len(lines))
