@@ -79,3 +79,51 @@ next line ending "wrote ...:" into an attribution (N3); `HDR_SENT` includes `Dat
 removed before `asksSomething` (`inbound-email.ts:116`, used for BOTH the EDS main mailbox and the work feed) -> unless
 the subject itself asks, the email is screened as "no ask": not announced, no owed row. Also feeds proposals
 (`proposals.ts:82,92`), so the to-do is never proposed either.
+
+## Claim (e): real production file shapes -- CONFIRMED for parsing/paths/contracts; two defects in 3f6bb5fb
+
+- Default Teams path `/automation/Teams Chats/teams-chats.jsonl` (space) -> `enabled:true` via `teams:true` and via
+  an explicit object; `drivePath` encodes per segment -> `/automation/Teams%20Chats/teams-chats.jsonl`
+  (`onedrive-feed.server.ts:91-95`). CONFIRMED (path rule + encoding; no live Graph call made).
+- Today's real line (source "teams", status "Pending", capturedAt, NO synthetic key) -> 0 kept,
+  `synthetic_mismatch:1` (deliberate). CONFIRMED.
+- Full Graph message shape with `synthetic:false`: user sender kept (`fromOwner` matched case-insensitively against
+  an upper-case configured id), `systemEventMessage` -> `not_a_message`, `deletedDateTime` -> `deleted`,
+  `lastEditedDateTime` kept, `{application:{...}, user:null}` -> `isApp:true`, `{application:null, device:null,
+  user:{...}}` -> user. Thread decision "answered". CONFIRMED.
+- `sent.json` per `docs/integrations/power-automate-huddle-sources.md` (envelope `feed_type:"sent_snapshot"`,
+  `snapshot.value`) -> validates; `sentDateTime` and fallback `receivedDateTime` both mapped; record without
+  `conversationId` skipped. A top-level `value` (no `snapshot` wrapper) -> `bad_records` (the doc says
+  `snapshot.value`, so consistent). CONFIRMED.
+- Real `emails.json` record shape (`from` string, `body` string + `isHtml`) -> `mapFeedMessage` id
+  `feed:<mailbox>:<id>`, `conversationId` carried, body converted; `sentReplySettles` true for a LATER sent in the
+  same conversation, false for an earlier one, works with `received_at` as a Date. CONFIRMED.
+
+### 3f6bb5fb `empty` skip -- REFUTED: it drops real owner replies
+
+`teams-log.ts:204` skips a message whose text is empty after `htmlToText` and whose `attachments` is empty.
+
+| owner message body (Graph html) | kept? | thread decision for "Pat: Can you send the Q3 deck?" then owner reply |
+|---|---|---|
+| inline image only (`<img src=".../hostedContents/.../$value">`, attachments `[]`, which is how Graph returns pasted images) | NO (`empty`) | **open** (bell OWED) |
+| Teams emoji only (`<emoji id="1f44d_thumbsup" alt="..."></emoji>`) | NO (`empty`) | **open** |
+| Giphy (`<img itemtype=".../Giphy">`) | NO | -- |
+| literal emoji character `<p>(thumbs up)</p>` | yes | answered |
+| mention only `<at id="0">Pat</at>` | yes (text "Pat Example") | -- |
+| adaptive card / file (`<attachment>` + attachments[]) | yes | -- |
+
+Before 3f6bb5fb such a message was kept and, being the owner's, settled the chat. Repro:
+`bun scripts/verify3-probes.ts | grep E-empty-consequence` -> `{"kept":["10","11"],"decision":"open"}` for both.
+Cause: `htmlToText` drops `<img>` and `<emoji>` with their `alt`, then `:204` treats that as empty.
+
+### 3f6bb5fb capture-coverage DROP flag -- PARTIAL (note only; misfires and blind spots)
+
+- Normal 12 vs 12 -> no flag; a rerun on the same UTC day unions -> no flag. OK.
+- **Misfire:** a rerun after 19:00 EST (00:30Z) lands on the NEXT UTC day: 12 chats on 11-12, 3 on 11-13 -> `drop:true`,
+  note reads "COVERAGE DROP: 3 chat(s) vs 12". Days are UTC dates (`teams-log.ts:151`), the flow runs 18:00 ET.
+- **Misfire (conditional):** if the flow writes only chats with activity, a quiet day (12 -> 2) flags; the doc says
+  "messages for the day", so that is the likely shape.
+- **Blind spot:** lines without `capturedAt`/`capturedUtc` go to "unknown" and are ignored, so a flow regression that
+  stops writing `capturedAt` hides any drop (`latest` stays the last dated day, `previous:null`).
+- A dated capture with an offset (`19:30-05:00`) is filed under the UTC day (11-13). Consistent, but see misfire.
+- It changes no behaviour (status note text only), so severity is note/minor.
