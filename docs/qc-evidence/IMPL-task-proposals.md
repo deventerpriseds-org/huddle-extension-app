@@ -215,3 +215,22 @@ Red-team fixture note: `scripts/redteam-correspondence.test.ts` `memStore` gaine
 in-memory model of the new store contract (same as task-proposals.test.ts's twin). No assertion, input or expected
 value in that file was changed. Without the method RT-24/24b cannot be satisfied by any engine change, because the
 fixture's `upsert` keys on the exact title and has no read of decided rows.
+
+### Fix-pass suite results (head `1abbce6b`, 2026-11-13, isolated worktree)
+
+| suite | runner | result |
+|---|---|---|
+| redteam-correspondence.test.ts | bun | **49 passed, 0 failed** (was 16/33 at `8475140c`) |
+| task-proposals.test.ts | bun | **164 passed, 0 failed** |
+| correspondence-ingest.test.ts | bun | **148 passed, 0 failed** |
+| task-proposals-sql.test.ts | bun, real PostgreSQL 16 (`/usr/lib/postgresql/16`, throwaway initdb) | **45 passed, 0 failed** |
+| correspondence-ledger-sql.test.ts | bun, real PostgreSQL 16 | **50 passed, 0 failed** |
+| onedrive-feed.test.ts | bun | **all passed** (the one "FAIL" grep hit is the section title "I. EDS FAILS, FEED LOADS") |
+| inbound-email.test.ts | bun | **72 passed, 0 failed** |
+| attention.test.ts | tsx@4.19.2 | **15 PASS, 0 FAIL**, rc 0 |
+| attention-focus.test.ts | tsx@4.19.2 | **all passed** (19 PASS) |
+| cross-app-turn-gate.test.ts | bun | **92 passed, 0 failed** |
+| fireflies-minutes.test.ts | bun | 64 PASS / **3 FAIL: G3, G5, G8** -- the same three recorded on untouched main (IMPL-correspondence-ingest.md); not from this branch |
+| `npx tsc --noEmit -p .` | tsc | **clean** (rc 0, no output) |
+
+No production fix was needed in this step.
