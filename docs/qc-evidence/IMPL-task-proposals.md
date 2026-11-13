@@ -441,3 +441,14 @@ Source: `docs/qc-evidence/VERIFY-correspondence-proposals-3.md` on `claude_verif
 | `<emoji>` not counted as content | D3 image/emoji/Giphy reply kept | FIRED (control EQUIVALENT), exit 0 |
 | capture day back to the UTC date | D4 7:30pm-Eastern rerun | FIRED (control EQUIVALENT), exit 0 |
 | untimed-lines note suppressed | D4 lines with no capture time named | FIRED (control EQUIVALENT), exit 0 |
+
+#### M1 -- an opt-in object written to switch OFF turned it ON
+`src/features/huddle/lib/external-feeds/onedrive-feed.ts` `optInFile`: for `teams`/`sent`, an object is on only when
+`enabled` is absent or literally `true`; any other value ("false", 0, "off", null, "true", 1, "0") is off.
+`email`/`appointments` keep `file()`'s original `!== false` rule (unchanged; test pins it).
+- Tests (task-proposals): M1 off-values (7 values x 2 keys), M1 `{enabled:true}`/`{}` on, M1 email/appointments
+  unchanged. Suites: task-proposals 191/0, others unchanged; tsc clean.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| guard narrowed back to `enabled === false` | M1 teams/sent {enabled:<anything but true>} -> off | FIRED (control EQUIVALENT), exit 0 |
