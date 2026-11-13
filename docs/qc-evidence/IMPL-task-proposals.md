@@ -588,3 +588,57 @@ vendor?", "Can you sign the NDA?" once, "Can you approve the PO?"). W1b: `""`, a
 | year-or-time requirement removed | D2 X1/X2 hard-wrapped English lines ... | FIRED (control EQUIVALENT), exit 0 |
 | name-before-verb check always true | D2 X1/X2 hard-wrapped English lines ... | FIRED (control EQUIVALENT), exit 0 |
 | name-before-verb check always false | D2 real two-line wrapped attributions are still cut | FIRED (control EQUIVALENT), exit 0 |
+
+#### Items 5, 6 (file-staleness) -- see `IMPL-feed-staleness.md` "Verifier loop-4 fix pass" (commits 81e5fc41,
+572d00d7, 04356a0e). Note for the live-change list: `chat.email_replies.feed_pending` (nullable, additive) is added
+by the existing bootstrap, so it lands on the live table at merge even with every flag off.
+
+#### Item 7 (D5) -- "Nobody should send ..." accepted (commit 0cf8abec)
+`src/features/huddle/lib/proposals/proposals.ts` `NEGATION` gains `nobody | no one | no-one`; `NOT_NEGATION` treats
+"nobody/no one forget(s)/miss(es)/fail(s)/hesitate(s) to" as affirmative, like "don't forget to". Verifier probe D5 n6
+now `evidence_negated`. Tests (task-proposals): D5 loop 4 refused (4 spellings), D5 loop 4 neg (earlier clause /
+earlier sentence still accepted).
+
+#### Item 8 (D6) -- a title that inverts its evidence was grounded (commit 9191d353)
+`proposals.ts`
+- `titleGrounding`: after the every-content-word rule, every NEGATOR in the title (`negators()`: not / no / never /
+  nobody / none / nothing / neither / nor; `n't`, `cannot`, `dont`... -> `not`; `no one` -> `nobody`) must also be in the
+  evidence, read with the affirmative look-alikes ("don't forget to") removed -> `task_not_grounded` otherwise.
+  "Do not / Don't / Never send the deck to finance" from "send the deck to finance" (and from "Don't forget to send
+  ...") are refused; "Do the no-show follow-up" from "the no-show follow-up" is still grounded.
+- The other direction, "a title whose evidence negates it": `negatesAction` also returns true when a title word is
+  negated in EVERY place the evidence has it (its own clause, after the last , ; : or "but", leads with a negation)
+  -> `evidence_negated`. "Send the deck to legal" from "send the deck to finance, not legal" and "Send the deck and
+  the budget sheet" from "send the deck but not the budget sheet" are refused; "Send the deck to finance" from the
+  same evidence, and "Send the deck to Dana" from "Send the deck, not the draft deck, to Dana" are accepted (one
+  affirmative occurrence keeps a word).
+- Tests (task-proposals): D6 loop 4 refused (6), D6 loop 4 neg accepted (4), negators normalisation.
+
+#### Item 9 (D3) -- `<customemoji>`-only owner reply skipped as empty (commit 7244f963)
+`src/features/huddle/lib/external-feeds/teams-log.ts` `hasNonTextContent`: any element whose NAME contains "emoji"
+(`<customemoji>`, upper case, `<teams-emoji>`) counts as content. "emoji" in an attribute or a comment does not.
+Tests (redteam): D3 loop 4 kept + settles the chat (3 shapes), D3 loop 4 neg (still empty). Not changed: `<video>`-only
+is still `empty` (the verifier listed it; not in this pass's scope).
+
+#### Items 10, 11 -- preview script (commit 42c5630b)
+`scripts/proposals-preview.ts`: `parseFeedJson` wraps the three uncaught `JSON.parse` calls on feed content (email,
+email re-read, sent); a non-JSON file logs only `email: not JSON` / `sent: not JSON`. The two Teams parses were
+already inside try/catch with no logging. Header now says it WRITES one Markdown file to the owner's OneDrive every
+run and, with `PREVIEW_EMAIL=1`, EMAILS the report; env list completed. `scripts/proposals-preview.test.ts` runs the
+real script under `bun --preload scripts/fixtures/preview-fetch-stub.ts` (Graph stubbed, no network): PV-1 a
+"Secret merger ..." non-JSON file prints none of its words and no parser message; PV-2 the run completes with one
+OneDrive write; PV-3/PV-4 sendMail only with `PREVIEW_EMAIL=1`; PV-5 the header (a source check -- weak by nature).
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| nobody/no one removed from NEGATION | D5 loop 4: 'Nobody should send' / 'No one should send' are refused | FIRED (control EQUIVALENT), exit 0 |
+| title-negator rule always ok | D6 loop 4: a title that negates its evidence ... | FIRED (control EQUIVALENT), exit 0 |
+| affirmative look-alikes not removed from the evidence | D6 loop 4: a title that negates its evidence ... | FIRED (control EQUIVALENT), exit 0 |
+| per-title-word negation check off | D6 loop 4: a title that negates its evidence ... | FIRED (control EQUIVALENT), exit 0 |
+| "every occurrence" -> "any occurrence" | D6 loop 4 neg: matching polarity ... still accepted | FIRED (control EQUIVALENT), exit 0 |
+| media regex back to `<img` / `<emoji` only | D3 loop 4: a <customemoji>-only ... owner reply | FIRED (control EQUIVALENT), exit 0 |
+| parseFeedJson re-throws the raw parse | PV-1 non-JSON email / sent files print 'not JSON' ... | FIRED (control EQUIVALENT), exit 0 |
+| header back to "sends nothing" | PV-5 the header states the OneDrive write ... | FIRED (control EQUIVALENT), exit 0 |
+
+Verifier's own `scripts/verify4-probes.ts` re-run at this head (copied in, run, removed): W1-W4, W7 match Chromium;
+X1/X2 `same: true` vs main; D3 customemoji kept; D5 n6 refused; D6 n4 refused; every loop-3 control unchanged.
