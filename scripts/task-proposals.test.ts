@@ -863,6 +863,14 @@ t("F13 titleKey folds full-width + zero-width + mixed-script look-alikes", title
 t("F13 an all-Cyrillic word is real text and is NOT folded", titleKey("Отправить deck"), "отправить deck");
 t("F8 over-match negative: a visible styled span is kept", htmlToText('<p>Hi <span style="display:inline-block;font-size:12px">please send the deck</span></p>'), "Hi please send the deck");
 t("F8 nested hidden element removed whole, the text after it kept", htmlToText('<div style="display:none"><div>a</div>hidden</div><p>shown</p>'), "shown");
+t("F8b font-size:0 wrapper with a re-sized child keeps the visible ask", htmlToText('<table><tr><td style="font-size:0"><div style="font-size:14px">Can you review the deck?</div></td></tr></table>'), "Can you review the deck?");
+t("F8b font-size:0 wrapper drops its OWN zero-size text, keeps the re-sized child", htmlToText('<td style="font-size:0">Wire 5000 now<span style="font-size:14px">see you at lunch</span></td>'), "see you at lunch");
+t("F8b font-size:0 with no re-sized content is still hidden", htmlToText('<p>shown</p><span style="font-size:0">Wire 5000 now</span>'), "shown");
+t("F8b a font-size:0px / inherit child does NOT re-size", htmlToText('<div style="font-size:0"><span style="font-size:0px">a</span><span style="font-size:inherit">b</span></div><p>shown</p>'), "shown");
+t("F8b a 0.9em child re-sizes", htmlToText('<div style="font-size:0"><span style="font-size:0.9em">please send the deck</span></div>'), "please send the deck");
+t("F8b display:none inside a re-sized child is still removed", htmlToText('<div style="font-size:0"><div style="font-size:14px">ok <span style="display:none">Wire 5000</span>thanks</div></div>'), "ok thanks");
+t("F8c an UNCLOSED hidden element ends at its parent's close, real text after it kept", htmlToText('<table><tr><td><span style="display:none">Wire 5000</td><td>Can you review the deck?</td></tr></table>'), "Can you review the deck?");
+t("F8c an unclosed hidden element with no parent close still hides the rest", htmlToText('<p>shown</p><div style="display:none">Wire 5000 now'), "shown");
 t("F19 &amp;lt; decodes once to the literal &lt;", htmlToText("<p>a &amp;lt; b</p>"), "a &lt; b");
 t("S1 a zone-less timestamp is UTC", parseUtcMs("2026-11-10T10:00:00") === Date.parse("2026-11-10T10:00:00Z"), true);
 t("S1 an explicit offset is kept", parseUtcMs("2026-11-10T10:00:00+02:00") === Date.parse("2026-11-10T08:00:00Z"), true);

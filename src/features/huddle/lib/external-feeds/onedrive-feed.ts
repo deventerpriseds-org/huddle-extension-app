@@ -384,47 +384,98 @@ function stripBlockquotes(html: string): string {
   return out.replace(/<blockquote\b[\s\S]*$/i, " ");
 }
 
-/** An inline style or attribute that hides an element from the reader (red-team F8). */
+/** An inline style or attribute that hides an element from the reader (red-team F8). font-size:0 is kept
+ *  SEPARATE: responsive templates set it on a wrapper to kill inline-block gaps and give the real size to
+ *  the content inside, so on its own it hides only what is not re-sized (fix-pass F8 over-match). */
 const HIDDEN_STYLE =
-  /(?:^|[;\s"'])(?:display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0(?:\.0+)?(?:px|pt|em|rem|%)?\s*(?:!important)?\s*(?:;|$)|opacity\s*:\s*0(?:\.0+)?\s*(?:!important)?\s*(?:;|$)|max-height\s*:\s*0(?:px)?\s*(?:!important)?\s*(?:;|$)|mso-hide\s*:\s*all)/i;
-const isHiddenOpenTag = (tag: string): boolean => {
-  if (/\shidden(\s|=|\/?>)/i.test(tag)) return true;
+  /(?:^|[;\s"'])(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\s*(?:!important)?\s*(?:;|$)|max-height\s*:\s*0(?:px)?\s*(?:!important)?\s*(?:;|$)|mso-hide\s*:\s*all)/i;
+const FONT_ZERO_STYLE = /(?:^|[;\s"'])font-size\s*:\s*0(?:\.0+)?(?:px|pt|em|rem|%)?\s*(?:!important)?\s*(?:;|$)/i;
+/** A declaration that gives text a real (non-zero) size again. `inherit`/`unset` inherit the zero. */
+const SIZED_STYLE =
+  /(?:^|[;\s"'])(?:font-size\s*:\s*(?:(?!0(?:\.0+)?(?![0-9.]))\d*\.?\d+|xx-small|x-small|small|medium|large|x-large|xx-large|larger|initial)|font\s*:[^;]*?(?:^|[\s/:])(?!0(?:\.0+)?(?![0-9.]))\d*\.?\d+(?:px|pt|em|rem|%))/i;
+const styleOf = (tag: string): string => {
   const style = /\sstyle\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
-  const v = style ? (style[2] ?? style[3] ?? style[4] ?? "") : "";
-  return !!v && HIDDEN_STYLE.test(` ${v}`);
+  return style ? ` ${style[2] ?? style[3] ?? style[4] ?? ""}` : "";
+};
+const hiddenKind = (tag: string): "hidden" | "font0" | null => {
+  if (/\shidden(\s|=|\/?>)/i.test(tag)) return "hidden";
+  const v = styleOf(tag);
+  if (!v.trim()) return null;
+  if (HIDDEN_STYLE.test(v)) return "hidden";
+  return FONT_ZERO_STYLE.test(v) ? "font0" : null;
 };
 const VOID_TAGS = new Set(["br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"]);
+const OPEN_TAG = /<([a-z][a-z0-9]*)\b[^>]*>/gi;
+const isSelfContained = (name: string, tag: string) => VOID_TAGS.has(name) || tag.endsWith("/>");
 
-/** Pure (red-team F8): remove every element the reader cannot see -- inline-style hidden (display:none,
- *  visibility:hidden, font-size:0, opacity:0, max-height:0, mso-hide:all) or the `hidden` attribute --
- *  together with everything inside it, matching nested same-name tags. An unclosed hidden element
- *  swallows the rest (fail closed: hidden text is never source text). */
-export function stripHiddenElements(html: string): string {
-  const open = /<([a-z][a-z0-9]*)\b[^>]*>/gi;
+/** Pure: where the element opened at `openEnd` ends. Its matching close tag (nested same-name tags
+ *  counted) -> the index just after it. UNCLOSED -> where its PARENT closes (the first close tag that
+ *  takes the depth of all tags below zero), the way a browser implies the end; no parent close -> the end
+ *  of the document. `inner` is the content between the open tag and that end. */
+function elementEnd(html: string, name: string, openEnd: number): { end: number; inner: string } {
+  const same = new RegExp(`<(/?)${name}\\b[^>]*>`, "gi");
+  same.lastIndex = openEnd;
+  let depth = 1;
+  for (let t = same.exec(html); t; t = same.exec(html)) {
+    depth += t[1] ? -1 : t[0].endsWith("/>") ? 0 : 1;
+    if (depth === 0) return { end: t.index + t[0].length, inner: html.slice(openEnd, t.index) };
+  }
+  const any = /<(\/?)([a-z][a-z0-9]*)\b[^>]*>/gi;
+  any.lastIndex = openEnd;
+  let d = 0;
+  for (let t = any.exec(html); t; t = any.exec(html)) {
+    if (isSelfContained(t[2].toLowerCase(), t[0])) continue;
+    d += t[1] ? -1 : 1;
+    if (d < 0) return { end: t.index, inner: html.slice(openEnd, t.index) };
+  }
+  return { end: html.length, inner: html.slice(openEnd) };
+}
+
+/** Pure: inside a font-size:0 element, keep ONLY the descendants that set a real size again (with
+ *  their content); every other text node and element there is zero-size and dropped. */
+function keepResizedDescendants(inner: string): string {
   let out = "";
   let pos = 0;
   for (let guard = 0; guard < 10_000; guard++) {
-    open.lastIndex = pos;
-    const m = open.exec(html);
+    OPEN_TAG.lastIndex = pos;
+    const m = OPEN_TAG.exec(inner);
     if (!m) break;
     const name = m[1].toLowerCase();
-    if (VOID_TAGS.has(name) || m[0].endsWith("/>") || !isHiddenOpenTag(m[0])) {
-      out += html.slice(pos, m.index + m[0].length);
-      pos = m.index + m[0].length;
+    const openEnd = m.index + m[0].length;
+    if (isSelfContained(name, m[0]) || !SIZED_STYLE.test(styleOf(m[0]))) {
+      pos = openEnd;
       continue;
     }
-    out += html.slice(pos, m.index) + " ";
-    const tagRe = new RegExp(`<(/?)${name}\\b[^>]*>`, "gi");
-    tagRe.lastIndex = m.index + m[0].length;
-    let depth = 1;
-    let end = html.length;
-    for (let t = tagRe.exec(html); t; t = tagRe.exec(html)) {
-      depth += t[1] ? -1 : t[0].endsWith("/>") ? 0 : 1;
-      if (depth === 0) {
-        end = t.index + t[0].length;
-        break;
-      }
+    const { end } = elementEnd(inner, name, openEnd);
+    out += " " + inner.slice(m.index, end) + " ";
+    pos = end;
+  }
+  return out;
+}
+
+/** Pure (red-team F8): remove every element the reader cannot see -- inline-style hidden (display:none,
+ *  visibility:hidden, opacity:0, max-height:0, mso-hide:all) or the `hidden` attribute -- together with
+ *  everything inside it, matching nested same-name tags. An element at font-size:0 keeps only the
+ *  descendants that set a real size again (fix pass). An UNCLOSED hidden element ends where its parent
+ *  closes, not at the end of the email (fix pass: it used to swallow every real ask after broken HTML). */
+export function stripHiddenElements(html: string): string {
+  let out = "";
+  let pos = 0;
+  for (let guard = 0; guard < 10_000; guard++) {
+    OPEN_TAG.lastIndex = pos;
+    const m = OPEN_TAG.exec(html);
+    if (!m) break;
+    const name = m[1].toLowerCase();
+    const openEnd = m.index + m[0].length;
+    const kind = isSelfContained(name, m[0]) ? null : hiddenKind(m[0]);
+    if (!kind) {
+      out += html.slice(pos, openEnd);
+      pos = openEnd;
+      continue;
     }
+    const { end, inner } = elementEnd(html, name, openEnd);
+    out += html.slice(pos, m.index) + " ";
+    if (kind === "font0") out += stripHiddenElements(keepResizedDescendants(inner)) + " ";
     pos = end;
   }
   return out + html.slice(pos);
