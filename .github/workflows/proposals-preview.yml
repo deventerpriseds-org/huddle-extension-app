@@ -29,6 +29,11 @@ on:
         description: "Open-vs-replied report start, ISO UTC (e.g. 2026-11-09T05:00:00Z = Monday 00:00 ET). Blank = the days window."
         required: false
         default: ""
+      email:
+        description: "Also email the HTML report to the owner (mailbox from the private feed config)"
+        required: false
+        type: boolean
+        default: false
       accept_unmarked_teams:
         description: "Preview only: read Teams lines that predate the synthetic:false marker"
         required: false
@@ -62,6 +67,8 @@ jobs:
           PREVIEW_DAYS: ${{ inputs.days }}
           PREVIEW_MAX_SOURCES: ${{ inputs.max_sources }}
           PREVIEW_SINCE: ${{ inputs.since }}
+          PREVIEW_EMAIL: ${{ inputs.email && '1' || '0' }}
+          HUDDLE_EMAIL_FROM: ${{ secrets.HUDDLE_EMAIL_FROM }}
           PREVIEW_ACCEPT_UNMARKED: ${{ inputs.accept_unmarked_teams && '1' || '0' }}
         run: |
           TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
