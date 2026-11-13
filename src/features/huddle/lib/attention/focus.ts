@@ -33,6 +33,18 @@ export function revealStartFor(index: number, currentStart: number): number {
   return Math.max(0, Math.min(index, currentStart));
 }
 
+/** How long a jump waits for history to load before saying the card is further back (verify-uat run
+ *  43165525010: when the history load never completed, the tap did nothing at all). */
+export const FOCUS_WAIT_MS = 6000;
+
+export type FocusState = "waiting" | "not-found" | "revealing" | "landing" | "focused";
+
+/** Which step a jump is at. Not found + still loading = wait, unless the wait has expired. */
+export function focusStep(o: { found: boolean; hydrated: boolean; waitExpired: boolean; aboveWindow: boolean }): FocusState {
+  if (!o.found) return o.hydrated || o.waitExpired ? "not-found" : "waiting";
+  return o.aboveWindow ? "revealing" : "landing";
+}
+
 /** The push/deep link for a message, optionally pointing at an email's reply card. */
 export function messageDeepLink(huddleId: string, emailId?: string | null): string {
   const q = new URLSearchParams({ huddle: huddleId });

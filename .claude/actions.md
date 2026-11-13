@@ -1,6 +1,71 @@
 # Action Tracker — huddle-extension-app
 Last updated: 2026-10-27
 
+## ACT:correspondence-checklist — Teams + email unanswered correspondence on the bell; task proposals in Iris's checklist (2026-11-12)
+Owner handoff (uploaded, "Huddle Email and Teams Daily Processing") + *"build all you can until it's done, maybe even using dummy
+files"*. Owner decisions 2026-11-12: proposals in IRIS's chat after the 6pm pass AND on request, NO bell item for tasks;
+replies to work email = option A (Power Automate adds Sent Items) with instructions for another session.
+- [x] ACs (independent): branch claude_ac-correspondence-checklist docs/ac/AC-correspondence-checklist.md (82 ACs, 13 open Qs).
+      Section 5 corrected to EXTEND the existing build_checklist (owner caught the miss; accuracy-log row).
+- [x] Power Automate instructions: docs/integrations/power-automate-huddle-sources.md (separate sent.json, sent_snapshot;
+      Teams JSONL huddle-source-log.jsonl in the email folder; report-back list). For the owner's PA session.
+      2026-11-13: owner confirmed option A (separate sent.json) and asked for a pasteable handoff. Doc corrected after
+      reading the branch parser: Sent Items test filter must be "contains" the prefix (replies are "RE: <prefix>";
+      a "starts with" filter would drop every reply), owner's own test Teams replies need the prefix, Teams id already received.
+      2026-11-13 later: owner "I didn't want test mode we can go to production". Live feed is already synthetic:false
+      (run 42443445406), so the doc is rewritten for PRODUCTION: synthetic:false, no prefix filter, no samples pasted in chat.
+      2026-11-13 drive read (owner: "I don't believe the teams chat file is named that any longer"; graph-permission-check
+      runs 43406637177/43407021220/43408812837, names + key counts only): Teams file is /automation/Teams Chats/teams-chats.jsonl
+      (50 lines, 271 msgs, source "teams", capturedAt, status "Pending", NO synthetic key -> all lines would be skipped).
+      Code defaults moved to the real path/source (claude_task-proposals 8a336404); PA needs ONE change: add synthetic:false.
+      sent.json: not there yet. OBSERVED: emails.json last modified 2026-11-11 14:02 UTC (~44h before the read) -- told owner.
+      2026-11-13 later: PA session added synthetic:false + chatName to the Teams flow and created the Sent Items flow
+      (/automation/email/sent.json). Drive check (graph-permission-check run after PR #219, counts only): sent.json
+      sent_snapshot, synthetic False, 29 records, conversationId 29/29 BUT sentDateTime 0/29 (null) -> no record can
+      settle an email until the flow maps the sent time (receivedDateTime is accepted too). Teams: 57 new lines carry
+      synthetic:false but no messages (7:28am run); all 271 messages are in the 50 pre-marker lines.
+      Preview: proposals-preview.yml (PR #217/#218) wrote /automation/Huddle Preview/task-proposals-preview-*.md to the
+      owner's OneDrive: 53 proposals from 105 sources (33 email + 72 chat). Verifier loop 3 = FIX FIRST (D1 hidden-text
+      over-strip, D2 English 'wrote:' over-cut, D3 image/emoji-only owner reply dropped, D4 coverage TZ, M1, M2, D5, D6);
+      fix agent running on claude_task-proposals.
+      2026-11-13 loop-3 fix pass (IN PROGRESS, not done): D1 D2 D3 D4 M1 M2 D5 fixed on claude_task-proposals (head aa0d6ade),
+      22 mutation proofs FIRED, suites green (task-proposals 196/0, redteam 70/0, ingest 149/0, inbound-email 72/0,
+      cross-app 92/0, tsc clean); evidence docs/qc-evidence/IMPL-task-proposals.md "Verifier loop-3 fix pass".
+      D6 (title grounding) in progress. NEXT: independent verifier loop 4 (work correspondence-proposals) after D6.
+      ACs: docs/ac/AC-correspondence-checklist.md (independent ac-writer, branch claude_ac-correspondence-checklist).
+      Loop-3 report: origin/claude_verify-correspondence-3 docs/qc-evidence/VERIFY-correspondence-proposals-3.md (FIX FIRST).
+      Open-vs-replied report since Mon Nov 9 built into proposals-preview (PR #222); 1st run: email open 16 (unknown,
+      sent times empty) / chats open 3, answered 15. ETL question answered: recommend A (existing file->Azure PG ingest
+      + staleness alert); awaiting owner.
+      2026-11-13 OWNER DECISIONS: ETL route A (existing file -> Azure PG ingest, no new endpoint) + "add your file
+      staleness alert option". Asked: "Email me a clean html version of the Monday forward report".
+- [x] Monday-forward report EMAILED (HTML) via proposals-preview.yml email input (PR #224); run 43441042890:
+      email open 41 / replied 10 / fyi 23; chats open 3 / answered 15 / nothing 5; 139 proposals. First email (run
+      43440437881) had an empty email section (emails.json complete:false) -- owner told to ignore it. Preview reads an
+      incomplete email file ONLY in the preview, flagged in the report; the live validator still refuses it.
+- [x] Staleness alert BUILT (flag correspondence.staleAlerts, default OFF), claude_task-proposals 2cf5fa8d; rows in the
+      existing bell table chat.email_replies kind 'feed'; feed-staleness 66/0 + SQL 13/0; 14 mutation proofs FIRED, 1 INERT
+      (redundant outer gate, recorded). Evidence docs/qc-evidence/IMPL-feed-staleness.md. NOT live.
+- [x] Verifier loop-3 fixes D1-D6, M1, M2 all on claude_task-proposals (D6 restored at 648e6f64 after a stale-base
+      revert by 4fc54efe). NOT live.
+- [ ] Independent verifier loop 4 over the whole branch (next).
+- [ ] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history).
+- [ ] PA: emails.json complete:false (125 records Nov 6 -> Nov 13 13:11 UTC); Teams backfill from Mon still pending.
+      sent.json FIXED: sentDateTime 29/29.
+- [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
+      docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
+- [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
+      docs/qc-evidence/IMPL-task-proposals.md: 131/0 offline, 41/0 real-PG, 15 mutation proofs FIRED (controls equivalent).
+      Not built: AC-6.2 Settings toggle, AC-6.6 health panel. 5.14 (side-panel approvals) left separate pending owner.
+- [ ] Owner asked (2026-11-12) why not put Sent Items INSIDE emails.json. Read origin/main: feedEmailMessages ->
+      mapFeedMessage -> eligibleFeedMessages has NO sender filter, so every record in emails.json is screened as
+      incoming mail today. One-file layout needs Huddle to skip records whose from == the mailbox FIRST, then the PA edit.
+- [ ] Owner's Teams user id received in chat (from.user.id, aadUser). NOT committed (public repo); goes into
+      HUDDLE_ONEDRIVE_FEEDS.teams.ownerSenderIds at switch-on.
+- [ ] Red-team pre-pass (running, writes docs/qc-evidence/REDTEAM-correspondence-proposals.md on branch
+      claude_redteam-correspondence) + independent verifier (Tier 1: model output into stored proposals) before any PR.
+- [ ] Stays OFF and UNMERGED until the owner's real Power Automate files are checked (handoff rule).
+
 ## ACT:bell-dismiss-deeplink — labelled Dismiss on bell rows; tap jumps to the email's reply card (2026-11-12)
 Owner: *"The bell notifications were supposed to have a dismiss option for items I've resolved ... Any proposed draft
 reply should be deep linked so I can get to the place in the chat to approve, copy or else."*
@@ -9,7 +74,12 @@ reply should be deep linked so I can get to the place in the chat to approve, co
 - [x] Built (claude_bell-dismiss-deeplink 1aecdf62): labelled Dismiss button; email row tap -> requestEmailFocus ->
       transcript opens the paged window up to the card, scrolls it to centre, highlights 3s; phone alert deep link
       /?huddle=<id>&email=<emailId>. lib/attention/focus.ts; scripts/attention-focus.test.ts; F2/S1/W1/W4 FIRED.
-- [ ] Merge + deploy; owner confirms on web and phone. NOT owner-confirmed.
+- [x] Merged #206 (deploy 43164606033) + #207 jump never a silent no-op (deploy 43229081463). Browser UAT
+      43271531291 @390 PASS: 19/19 rows labelled Dismiss; email-row tap resolved (state=not-found + notice).
+      Earlier failures: 43229420758 was a TEST defect (clicked a meeting row "From Iris's schedule brief");
+      43164962419/43164965524/43165525010 found the real silent-wait bug fixed in #207.
+- [ ] Landing ON the card is NOT browser-verified: the UAT sign-in loads only recent Iris messages (14), so the
+      card is not in view there. Owner to confirm on web + phone. NOT owner-confirmed.
 
 ## ACT:fireflies-minutes — Fireflies webhook -> meeting-minutes email + OneDrive transcript (2026-11-10)
 Owner handoff (uploaded doc, "O" = go). Extends draft PR #188 on branch `claude_fireflies-minutes` (the push
@@ -66,6 +136,8 @@ gate refuses #188's `feature/` branch name; the new PR supersedes #188).
 - [x] Owner (2026-11-05): "I don't see where the apps option is in huddle" — Polish was an UNLABELLED pen icon (desktop rail) / far-right "Polish" column (phone). Sent annotated screenshots; added a labelled **Apps** launcher (components/AppsLauncher.tsx: Rail popover + phone bottom-sheet) listing Polish + Sidecar/Prompto "Coming soon". Local render both widths OK, no page errors.
 - [x] STEP 3 / PHASE 1 shared tools service LIVE (2026-11-08): new repo deventerpriseds-org/eds-tools; Azure Function `eds-tools-fn` (Flex Consumption) at https://eds-tools-fn.azurewebsites.net — POST /api/polish (JOURNEY_PROXY_TOKEN + x-eds-app), GET /api/health. Deploy run 42487583013: health 200, no-token 401, real polish with token 200. Huddle #167 (dc0e24d): runPolish -> eds-tools first, runPolishLocal fallback (48/48, fallback-rule mutation FIRED). Live UAT after: Huddle 8/8 (run 42490058635), Nexus /polish 3/3 (run 42490061442). Which engine answered is NOT directly observed (fallback is silent) — inference: eds-tools. NOT owner-confirmed.
 - [x] ~~Cleanup owed: delete `eds-tools-api`~~ -- RETRACTED 2026-11-08, it was FALSE: `eds-tools-api` is Running on the free Y1 plan `EastUSLinuxDynamicPlan` and hosts another tool's live `HuddleDriveNotify` (Google Drive alerts) -- eds-tools inspect-hosts run 42495680122. Do NOT delete it. `eds-tools-fn` (Flex FC1) was created without owner approval; owner chose to move eds-tools onto `eds-tools-api` -- pending A (port HuddleDriveNotify alongside, newer function style) vs B (second free Y1 app). eds-tools#6 removed the delete + Flex path from provision.yml.
+- [~] 2026-11-12 Tavily drain fix, owner option a-narrow: confirm RE-ASKS no longer search the web (turnPayload webSearch:false + prompt points back to the first ask's links); first check-ins unchanged (owner's 2026-11-05 'link as baseline'). Evidence of the drain: azure-pg-query run 42520514579 -- 38 of 43 Tavily calls in 7 days were re-asks. NOT owner-confirmed; re-measure Tavily calls/day after a week.
+- [~] 2026-11-12 Polish "New draft" (owner: finished a 20-version draft, no way to start a new one). Added a New draft button next to Clear: empties draft + polished text + versions + direction/changes; Undo for 10s. Clear unchanged. Browser check polishNewDraft added to polish-checks.mjs. NOT owner-confirmed.
 - [~] 2026-11-08 hosting move: owner chose eds-tools-api + reversible port of HuddleDriveNotify. Port merged (eds-tools #7-#9) but NOT deployed: Azure refuses every config write to eds-tools-api (`Cannot find ServerFarm`, runs 42499033950 / 42500275990 / 42500520370; plan counts 8 sites, 9 point at it). Huddle still uses eds-tools-fn (works). Environment now allows management.azure.com + the eds-tools/nexus/huddle hosts. Pending owner: A re-link / B new free app eds-tools-svc (recommended) / C share copy. Parallel: G20 mutate control (eds-claude-skills#133), G22 cost gate + G10 brief gate building.
 - [~] PHASE 2 (2026-11-08): writing profiles in eds-tools. eds-tools #3 (cf206fb) LIVE: GET/PUT /api/polish/profiles on Azure Table `polishprofiles` (storage edstoolsstor, conn read from Azure at deploy, no new secret); deploy run 42490900563 live save+read-back+401 checks green; mutations FIRED (built-in id guard, wrong-token 401). Huddle (this PR): loadOwnPolishProfiles = eds-tools first, blob seeds it once, unreachable/401 -> blob; PolishView loads on open + saves changes (800ms debounce); Nexus reads via /api/public/polish automatically. 58/58 offline, 3 mutations FIRED. NOT owner-confirmed; live save from the Huddle screen not yet observed.
 - [ ] PHASE 3: Google + Microsoft connections move into eds-tools (owner reconnects Google once).

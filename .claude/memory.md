@@ -1,5 +1,17 @@
 # Project Memory — huddle-extension-app
 
+## Correspondence + proposals (ACT:correspondence-checklist) -- 2026-11-13, NOT live, branch claude_task-proposals
+- Owner decisions: ETL route A (OneDrive files -> Huddle ingest -> Azure PG chat.correspondence_ledger; no new
+  endpoint) + a file-staleness alert (built, flag correspondence.staleAlerts, default OFF, bell kind 'feed').
+- Real files (read via graph-permission-check, counts only -- public repo, never print content):
+  emails.json (complete:false at last read, 125 records Nov 6-13), sent.json (sentDateTime now filled 29/29),
+  /automation/Teams Chats/teams-chats.jsonl (source "teams", capturedAt; synthetic:false from Nov 13; messages only
+  Mon-Wed until the PA backfill runs). Code defaults follow the real Teams path/source (8a336404).
+- Owner-facing previews: proposals-preview.yml -> owner's OneDrive /automation/Huddle Preview/ and (email input) an HTML
+  email via Graph sendMail to the private feed-config mailbox. Logs print counts only.
+- Verifier loop 3 FIX FIRST -> D1-D6/M1/M2 fixed. Lesson: a subagent's stale index reverted another lane (4fc54efe);
+  agents sharing a branch must commit with `git commit --only -- <paths>` and diff --stat against origin before push.
+
 ## Fireflies meeting minutes (2026-11-10; #191 MERGED + DEPLOYED 2026-11-11 9c31f538; queue fixes D7/D8 follow; NOT owner-confirmed live)
 - Route `POST /api/public/fireflies-webhook` (from #188) only VERIFIES + QUEUES (`recordWebhook`). Fireflies docs:
   a 2xx is due within 30s and a timed-out request is NOT retried -- so no work happens in the request.
@@ -1756,6 +1768,7 @@ hard-headed. When a canned line is reported as "the agents sound robotic", check
 shared path before touching any prompt: the snapshot layer is not always the source of an agent's words.
 
 ## Active work — 1:1 VOICE latency (journey-speed) — plan + premise CONFIRMED, build next (2026-08-01)
+- **2026-11-12 Polish "New draft" (LIVE, #208, UAT 11/11 run 43268935452, NOT owner-confirmed).** Owner had a finished 20-version draft and no way to start over. New draft (Draft header, next to Clear) empties draft + polished text + versions + direction/changes; Undo for 10s via toast; disabled while a polish is in flight. Clear unchanged (draft box only). Browser check `polishNewDraft` in polish-checks.mjs.
 User complaint: "the delay for my convo with Flex to SPEAK takes way too long, much longer than journey."
 It's a VOICE latency ask (not text). Today's 1:1 voice is SLOW because Realtime is ears-only
 (`create_response:false`, remote track muted) → transcript → full Responses turn (5–10s) → 2500ms poll
@@ -3988,3 +4001,9 @@ here as fact three times before being checked.)
 - Trinnex tenant refused Huddle's Graph app; owner's own Power Automate (CDM Smith dev env) publishes snapshots to von.ellis@enterpriseds.io OneDrive `/automation/email/emails.json` + `/automation/appointments/appointments.json`. Huddle's app key (Files.ReadWrite.All) reads them (proved, run 42436209509). dev@'s OneDrive does NOT have them.
 - Feed records: email `from` is a STRING, headers `[{name,value}]` (68), `body` string + `isHtml`; no inferenceClassification. Appointments: `startWithTimeZone`/`endWithTimeZone`, `location`/`organizer` strings.
 - Feed ids are `feed:<mailbox>:<original id>` — never pass one to Graph. Config = server-only HUDDLE_ONEDRIVE_FEEDS (deploy secret). Repo is PUBLIC: never commit tenant/flow/calendar ids or the cdmsmith login.
+
+- 2026-11-13 ACT:correspondence-checklist (IN PROGRESS, unmerged, nothing live): real OneDrive files read (counts only):
+  Teams file is /automation/Teams Chats/teams-chats.jsonl (source "teams", capturedAt, synthetic:false from Nov 13);
+  sent.json exists but sentDateTime null on 29/29; emails.json last written Nov 11 14:02 UTC. Verifier loop 3 = FIX
+  FIRST; D1-D5/M1/M2 fixed (aa0d6ade), D6 in progress, loop 4 verifier next. Preview + open-vs-replied report go to
+  the owner's OneDrive only (proposals-preview.yml) -- never print item text in this public repo's logs.

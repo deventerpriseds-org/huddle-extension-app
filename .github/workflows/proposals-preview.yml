@@ -1,0 +1,80 @@
+name: Task proposals preview (owner's OneDrive only)
+
+# WHAT:       Runs scripts/proposals-preview.ts from a chosen ref against the owner's REAL work-email snapshot and
+#             Teams chat log, and writes a Markdown preview of the task proposals into the owner's own OneDrive
+#             (/automation/Huddle Preview/). Stores nothing in Huddle, creates no task, sends nothing.
+# WHY:        Owner 2026-11-13: "give me a preview of the action items you pulled from the email/chat". The
+#             proposals feature is unmerged and switched off; this previews its output on real data.
+#             THIS REPO'S LOGS ARE PUBLIC: the job prints counts and the file path only. Inputs carry no
+#             address, id or content.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/actions.md ACT:correspondence-checklist.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch holding scripts/proposals-preview.ts"
+        required: true
+        default: "claude_task-proposals"
+      days:
+        description: "How many days back to read"
+        required: false
+        default: "7"
+      max_sources:
+        description: "Cap on the number of messages sent to the model"
+        required: false
+        default: "60"
+      since:
+        description: "Open-vs-replied report start, ISO UTC (e.g. 2026-11-09T05:00:00Z = Monday 00:00 ET). Blank = the days window."
+        required: false
+        default: ""
+      email:
+        description: "Also email the HTML report to the owner (mailbox from the private feed config)"
+        required: false
+        type: boolean
+        default: false
+      accept_unmarked_teams:
+        description: "Preview only: read Teams lines that predate the synthetic:false marker"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci --no-audit --no-fund
+      - name: Build the preview (counts only in this log)
+        env:
+          TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          HUDDLE_ONEDRIVE_FEEDS: ${{ secrets.HUDDLE_ONEDRIVE_FEEDS }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PREVIEW_DAYS: ${{ inputs.days }}
+          PREVIEW_MAX_SOURCES: ${{ inputs.max_sources }}
+          PREVIEW_SINCE: ${{ inputs.since }}
+          PREVIEW_EMAIL: ${{ inputs.email && '1' || '0' }}
+          HUDDLE_EMAIL_FROM: ${{ secrets.HUDDLE_EMAIL_FROM }}
+          PREVIEW_ACCEPT_UNMARKED: ${{ inputs.accept_unmarked_teams && '1' || '0' }}
+        run: |
+          TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
+            -d "client_id=$CLIENT_ID" --data-urlencode "client_secret=$CLIENT_SECRET" \
+            -d "scope=https://graph.microsoft.com/.default" -d "grant_type=client_credentials" \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
+          if [ -z "$TOKEN" ]; then echo "::error::could not get an app-only Graph token"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          TOKEN="$TOKEN" bun scripts/proposals-preview.ts
