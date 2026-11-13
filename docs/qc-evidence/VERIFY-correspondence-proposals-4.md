@@ -138,3 +138,106 @@ class D6 exists for: an added word that changes the meaning.
 
 M1: re-checked above (claim 1). M2: "Friday-ish", "the 14th", "mon", "next time", "may 3" -> dueText null;
 "Nov 14" -> 2026-11-14; "this week" -> dueText kept, date null.
+
+## Claim 4: file-staleness alert (`correspondence.staleAlerts`) -- full depth
+
+Probes: `scripts/verify4-staleness-probes.ts` (pure) and `scripts/verify4-staleness-sql.ts` (the REAL
+`raiseFeedAttention` / `clearFeedAttention` / `listOpenAttention` / `settleAttentionForHuddle` SQL on a throwaway
+local PostgreSQL 16, driven through the real `applyFeedStaleness`).
+
+### 4a Working-hours math -- CONFIRMED
+
+| case | result |
+|---|---|
+| Fri 17:00 EDT -> Mon 09:00 EST (across DST end) | 2 h |
+| Fri 17:00 EST -> Mon 09:00 EDT (across DST start) | 2 h |
+| Sat noon -> Sun noon / Tue 18:00 -> Wed 08:00 / reversed | 0 / 0 / 0 |
+| Mon 07:00 -> Mon 19:00; Mon 00:00 -> next Mon 00:00 | 10; 50 |
+| the real incident: Wed 11/11 09:02 ET -> Fri 11/13 10:00 ET | 20.97 h -> "hasn't updated since Wed 9:02 AM (2 working days)" |
+| exactly 6.00 h | fresh (rule is strictly MORE than N) |
+| Fri 15:00 -> Mon 10:00 (5 h) / Mon 11:01 (6h01) | fresh / stale |
+| lastModified in the future / NaN | fresh / unreadable |
+| 2-year gap | bounded walk (400 days) -> 2850 h, still stale; label under-counts (cosmetic) |
+
+Teams 18:00 + 60 min, weekdays only: Mon 18:59 with Fri 18:05 file -> fresh; Mon 19:00 -> stale; Mon 18:30 file at
+19:00 -> fresh; Sat 10:00 with Fri 18:05 -> fresh, with Fri 17:00 -> stale (Friday missed); Mon 10:00 with Fri
+18:05 -> fresh (weekend not due); DST-end Monday 19:00 EST: 18:10 file fresh, 17:30 file stale; DST-start due
+instant 2026-03-09 18:00 EDT = 22:00Z. A flow that writes at 17:58 is stale every evening (by the rule as approved).
+Not modelled (owner-acceptable, noted): US holidays count as working days.
+
+### 4b One row per file, auto-clear, Iris -- CONFIRMED
+
+Row id `attn-feed-<file>-<hash(owner lower-cased, trimmed)>`; same id for `Owner@EDS.example ` and
+`owner@eds.example`. Same episode across checks writes once (`raised` 1,0,0 over three checks; the text refreshes
+only when the label changes). A fresh file settles the row `replied`. Talking to Iris (`settleAttentionForHuddle`
+on `dm-iris-chase`) settles 0 rows and the feed row stays `owed`. The implementer's SQL suite (S1-S13) also green.
+
+### 4c Dismiss semantics -- REFUTED (transient read failure)
+
+| step (real SQL) | row status | episode |
+|---|---|---|
+| stale raise | owed | `stale:2026-11-11T14:02:00.000Z` |
+| owner Dismiss | dismissed | same |
+| ONE check where the metadata GET fails (timeout / 5xx / 429 => `unreadable`) | **owed** | `unreadable` |
+| next check, same stale file | **owed** | `stale:2026-11-11T14:02:00.000Z` |
+
+So one transient Graph failure un-dismisses an alert the owner dismissed, and it stays open as the same stale
+alert. Cause: `feed-staleness.ts` `decideFeedStaleness` maps every non-404 failure (incl. timeout,
+`onedrive-feed.server.ts` `readFeedFileMeta` catch) to `unreadable`, a different episode; `raiseFeedAttention`
+(`email-replies.server.ts:459-462`) reopens a dismissed row on any different episode and refreshes an open row to
+the next one.
+
+Related, same cause: on a FRESH file, one transient failure raises "Work email file can't be read from OneDrive"
+(counted in the badge) until the next check (>= 10 min) clears it (V2a/V2b). The approved rule is about a file
+that "hasn't changed in N working hours"; a single failed read is not that. Severity: minor-to-moderate (bell
+badge flicker, no phone push -- no push path reads `chat.email_replies`).
+
+### 4d Ordering -- MINOR
+
+`listOpenAttention` (`email-replies.server.ts:342`) orders by `coalesce(received_at, created_at) DESC LIMIT 50`,
+and a stale row's `received_at` is the file's OLD lastModified. With 50 open items newer than that, the feed row
+is not returned at all (V3: `{"n":50,"feedListed":false}`). Unlikely for one owner, but it is the alert that
+says the inputs stopped.
+
+### 4e Flag OFF = zero effect -- CONFIRMED (one wording correction)
+
+- `staleAlerts`: only literal `true` enables (`"true"`, 1, "yes", null, `{}` -> off). `staleHours`: 0/-3/"abc"/null
+  -> 6, "8" -> 8, 8.9 -> 8, 500 -> 200.
+- `runFeedStalenessCheck(cfgOff, spy)` -> null with **0** calls to readMeta/store/now/log; null cfg likewise.
+- `ingest.server.ts` returns the untouched ingest promise before even importing the module when the flag is off.
+- Files checked: only configured ones (default config -> `["email"]`; teams/sent opt-in).
+- "existing drive metadata request byte-identical": `fetchDriveFile` selects `id,eTag,size` and is pinned by H8. That
+  is identical to the PRE-staleness branch. Versus **origin/main** it is NOT byte-identical: main sends
+  `?$select=eTag,size` (the `id,` came with the 2026-11-12 Teams commit) and now forces `method:"GET"`. Both are
+  harmless for Graph; stated so the claim is not over-read.
+- Logs: one line, file names + states + counts (`[feed-staleness] email=stale sent=unreadable teams=stale raised=3
+  cleared=0`); the failure path logs only `e.name`. CONFIRMED.
+
+### 4f Bell UI for existing users (radius challenge)
+
+- `feed` is a SYSTEM kind, not in `ATTENTION_KINDS`: the "What counts" list is unchanged by this feature; feed rows
+  are always listed and counted when present. With the flag off none exist.
+- Independent of the earlier `chat` change (loop-3 item, still true at head): every existing user sees a new
+  "Teams chats" checkbox; `DEFAULT_URGENT_KINDS` gains `chat`; `resolveStoredUrgentKinds` adds `chat` to a stored
+  list that predates it; the next Settings save stores `-chat` when left off. No chat rows exist while ingest is off,
+  so the visible change is the checkbox only.
+- A feed row's click opens Iris's chat (`dm-iris-chase`); talking there does not clear it (4b). Badge uses
+  `badgeCount` (excludes only uncertain chat rows).
+- UI rendering itself NOT TESTABLE OFFLINE (needs the deployed SPA).
+
+## Claim 5: `scripts/proposals-preview.ts` -- CONFIRMED confined, two notes
+
+- `PREVIEW_ACCEPT_UNMARKED` appears only in this script (grep over `src/` and `scripts/`: no other hit). Both
+  leniencies rewrite the script's OWN copy (`{...JSON.parse(e.text), complete:true}`; adds `synthetic:false` to a
+  local string) and then call the unchanged live validators/parsers. The live `readFeed` still calls
+  `validateEmailSnapshot` on the raw JSON and `parseTeamsLog` still skips unmarked lines (E-real-line-no-synthetic:
+  `synthetic_mismatch:1`).
+- It is run only by `proposals-preview.yml` on origin/main, `workflow_dispatch` only, with a `ref` input. Not on
+  this branch; nothing runs it on merge.
+- Printed: HTTP statuses, counts, reason names, the timestamped OneDrive path, model name. CONFIRMED counts-only on
+  the normal path.
+- Note 1: an uncaught `JSON.parse` on a non-JSON file prints V8's message, which quotes the first ~10 characters of
+  the content (`Unexpected token 'S', "Secret mer"... is not valid JSON`, measured with node). Only when a feed
+  file is not JSON at all.
+- Note 2: the header says "sends nothing", but `PREVIEW_EMAIL=1` calls Graph `sendMail` to the owner and the script
+  always PUTs a Markdown file to `/automation/Huddle Preview/`. Both are owner-requested; the header is stale.
