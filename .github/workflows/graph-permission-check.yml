@@ -183,6 +183,8 @@ jobs:
                   print("   from keys:", dict(fk), "| from.user keys:", dict(fu))
                   print("   body types:", dict(bt), "| contentType:", dict(ct), "| messageType:", dict(mt))
                   tsk=[k for k in ("createdDateTime","timestamp","lastModifiedDateTime") if mk.get(k)]
+                  ct_=sorted(str(m.get("createdDateTime")) for m in msgs if m.get("createdDateTime") and m.get("messageType")=="message")
+                  if ct_: print("   message createdDateTime range:", ct_[0], "->", ct_[-1], "| per day:", dict(sorted(Counter(t[:10] for t in ct_).items())))
                   print("   time keys present:", tsk, "| capturedAt range:", min((str(r.get("capturedAt",""))[:10] for r in recs), default="-"), "->", max((str(r.get("capturedAt",""))[:10] for r in recs), default="-"))
               else:
                   print("not JSON, not JSONL | lines", len(lines))
@@ -202,7 +204,11 @@ jobs:
           if isinstance(v,list) and v: print("   record[0] shape:", shape(v[0]))
           if isinstance(v,list) and v:
               keys=sorted({k for r in v if isinstance(r,dict) for k in r})
-              print("   non-empty per field (of", len(v), "records):", {k: sum(1 for r in v if isinstance(r,dict) and r.get(k) not in (None, "", [], {})) for k in keys})' 2>/dev/null || echo "-")
+              print("   non-empty per field (of", len(v), "records):", {k: sum(1 for r in v if isinstance(r,dict) and r.get(k) not in (None, "", [], {})) for k in keys})
+              for tk in ("receivedDateTime","sentDateTime"):
+                  ts=sorted(str(r.get(tk)) for r in v if isinstance(r,dict) and r.get(tk))
+                  if ts: print("   ", tk, "range:", ts[0], "->", ts[-1], "| per day:", dict(sorted(__import__("collections").Counter(t[:10] for t in ts).items())))
+          print("   window_start_utc:", d.get("window_start_utc"), "| published_utc:", d.get("published_utc"), "| retention_days:", d.get("retention_days"))' 2>/dev/null || echo "-")
                 echo "$u $p | item HTTP $M -> $MSUM | content HTTP $C -> $CSUM"
               done
             done
