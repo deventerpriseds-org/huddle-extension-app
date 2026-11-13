@@ -165,7 +165,15 @@ jobs:
                   except Exception as ex:
                       # json error text is position-only ("Expecting , delimiter: line 1 column 9"),
                       # never content -- safe for these PUBLIC logs.
-                      bad.append((i, len(l), type(ex).__name__ + ": " + str(ex)[:90]))
+                      # Shape of the failure without content: first/last code point, where the first
+                      # "{" sits, and whether the text from that brace on parses.
+                      b0=l.find("{")
+                      try:
+                          tail_ok=isinstance(json.loads(l[b0:]), dict) if b0 >= 0 else False
+                      except Exception:
+                          tail_ok=False
+                      shape="first U+%04X last U+%04X first-brace-at %d parses-from-brace %s" % (ord(l[0]), ord(l[-1]), b0, tail_ok)
+                      bad.append((i, len(l), type(ex).__name__ + ": " + str(ex)[:90] + " | " + shape))
               if bad:
                   print("JSONL UNPARSEABLE LINES:", len(bad), "of", len(lines), "| last line ok:", not bad or bad[-1][0] != len(lines))
                   for b in bad[:15]: print("   line", b[0], "| length", b[1], "|", b[2])
