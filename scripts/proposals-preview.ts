@@ -10,7 +10,18 @@
 // EVIDENCE:   run by .github/workflows/proposals-preview.yml; .claude/actions.md ACT:correspondence-checklist.
 // Env: TOKEN (app-only Graph), HUDDLE_ONEDRIVE_FEEDS (the app's config), OPENAI_API_KEY, PREVIEW_DAYS (default 7),
 //      PREVIEW_MAX_SOURCES (default 60). Run: npx -y tsx scripts/proposals-preview.ts
-import { parseFeedsConfig, validateEmailSnapshot, TEAMS_LOG_PATH_DEFAULT } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
+import {
+  latestSentByConversation,
+  mapFeedMessage,
+  mapSentRecords,
+  parseFeedsConfig,
+  sentReplySettles,
+  validateEmailSnapshot,
+  validateSentSnapshot,
+  TEAMS_LOG_PATH_DEFAULT,
+} from "../src/features/huddle/lib/external-feeds/onedrive-feed";
+import { INBOUND_EMAIL_MODE_DEFAULT, screenMessage } from "../src/features/huddle/lib/email/inbound-email";
+import { decideChatThread } from "../src/features/huddle/lib/correspondence/bell";
 import { parseTeamsLog } from "../src/features/huddle/lib/external-feeds/teams-log";
 import { ledgerEmailItems } from "../src/features/huddle/lib/correspondence/ingest-pass";
 import { teamsSourceItem, type SourceItem } from "../src/features/huddle/lib/correspondence/source-item";
@@ -151,6 +162,71 @@ for (const [, ps] of perSource) {
   }
   md.push(``);
 }
+// ── OPEN vs REPLIED since PREVIEW_SINCE (owner 2026-11-13: "I need all emails and chats open vs replies from
+// Monday forward analyzed"). The SAME decisions the bell will make: an email is open when it is from a person,
+// asks something, and no LATER sent message exists in its conversation (sentReplySettles); a chat is open when
+// someone asked after the owner's last message (decideChatThread).
+const sinceIso = process.env.PREVIEW_SINCE || "";
+const sinceMs = sinceIso ? Date.parse(sinceIso) : since;
+const sentRead = await read("/automation/email/sent.json");
+const sv = sentRead.status === 200 ? validateSentSnapshot(JSON.parse(sentRead.text), cfg) : null;
+const sentMapped = sv?.ok ? mapSentRecords(sv.snapshot.records, cfg) : { sent: [], skipped: 0 };
+const latestSent = latestSentByConversation(sentMapped.sent);
+console.log(`sent: HTTP ${sentRead.status} | ${sv ? (sv.ok ? "valid" : `REJECTED ${sv.reason}`) : "-"} | usable ${sentMapped.sent.length} | no time ${sentMapped.skipped}`);
+const emailRows: { status: string; m: ReturnType<typeof mapFeedMessage> }[] = [];
+const emailSkip: Record<string, number> = {};
+if (ev?.ok) {
+  for (const r of ev.snapshot.records) {
+    const m = mapFeedMessage(r, cfg.mailbox);
+    if (Date.parse(m.receivedDateTime ?? "") < sinceMs) continue;
+    const person = screenMessage(m, "people", cfg.mailbox);
+    if (!person.keep) {
+      emailSkip[person.reason] = (emailSkip[person.reason] ?? 0) + 1;
+      continue;
+    }
+    const asks = screenMessage(m, INBOUND_EMAIL_MODE_DEFAULT, cfg.mailbox).keep;
+    const replied = sentReplySettles({ conversation_id: m.conversationId ?? null, received_at: m.receivedDateTime ?? null }, latestSent);
+    emailRows.push({ m, status: replied ? "replied" : asks ? (sentMapped.sent.length ? "open" : "open?") : "fyi" });
+  }
+}
+const chatsById = new Map<string, typeof tp extends null ? never : NonNullable<typeof tp>["messages"]>();
+for (const m of tp?.messages ?? []) if (Date.parse(m.at) >= sinceMs) (chatsById.get(m.chatId) ?? chatsById.set(m.chatId, []).get(m.chatId)!).push(m);
+const chatRows = [...chatsById.entries()].map(([id, msgs]) => ({ id, msgs, d: decideChatThread(msgs, true) }));
+const n = (arr: { status?: string }[], st: string) => arr.filter((x) => x.status === st).length;
+console.log(
+  `open-vs-replied since ${new Date(sinceMs).toISOString().slice(0, 10)}: email open ${n(emailRows, "open") + n(emailRows, "open?")} replied ${n(emailRows, "replied")} fyi ${n(emailRows, "fyi")} | chats open ${chatRows.filter((c) => c.d.state === "open").length} answered ${chatRows.filter((c) => c.d.state === "answered").length} nothing ${chatRows.filter((c) => c.d.state === "nothing").length}`,
+);
+const clipLine = (s: string | null | undefined, k = 160) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, k);
+md.push(`---`, ``, `# Needs you: open vs replied since ${fmtAt(new Date(sinceMs).toISOString())} ET`, ``);
+md.push(
+  `**Coverage of the files this used:** work email received up to ${fmtAt(ev?.ok ? ev.snapshot.records.map((r) => String(r.receivedDateTime ?? "")).sort().pop() ?? null : null)}; ` +
+    `Teams messages up to ${fmtAt((tp?.messages ?? []).map((m) => m.at).sort().pop() ?? null)}; ` +
+    `Sent Items: ${sentMapped.sent.length} message(s) with a sent time, ${sentMapped.skipped} without. Anything after those times is not in the files yet.`,
+  ``,
+);
+if (!sentMapped.sent.length) md.push(`> Sent Items has no usable sent times, so NO email can show as replied yet. Emails marked **open?** may already be answered.`, ``);
+md.push(`## Emails (${emailRows.length} from people; skipped: ${Object.entries(emailSkip).map(([k, v]) => `${k} ${v}`).join(", ") || "none"})`, ``);
+for (const st of ["open", "open?", "fyi", "replied"]) {
+  const rowsSt = emailRows.filter((r) => r.status === st).sort((a, b) => String(b.m.receivedDateTime).localeCompare(String(a.m.receivedDateTime)));
+  if (!rowsSt.length) continue;
+  md.push(`### ${st === "open" ? "Open: asks you something, no reply found" : st === "open?" ? "Open? (asks you something; reply status unknown)" : st === "fyi" ? "From a person, no question detected" : "Replied"} (${rowsSt.length})`, ``);
+  for (const r of rowsSt) md.push(`- ${fmtAt(r.m.receivedDateTime ?? null)} | **${clipLine(r.m.fromName || r.m.fromAddress, 60)}** | ${clipLine(r.m.subject, 120)}`);
+  md.push(``);
+}
+md.push(`## Teams chats (${chatRows.length} with messages since then)`, ``);
+for (const [label, state] of [["Open: someone asked after your last message", "open"], ["Answered: you posted after the last ask", "answered"], ["No ask detected", "nothing"]] as const) {
+  const rowsSt = chatRows.filter((c) => c.d.state === state);
+  if (!rowsSt.length) continue;
+  md.push(`### ${label} (${rowsSt.length})`, ``);
+  for (const c of rowsSt) {
+    const last = [...c.msgs].sort((a, b) => a.at.localeCompare(b.at)).pop()!;
+    const name = c.msgs.find((m) => m.chatName)?.chatName ?? "(chat)";
+    const ask = c.d.state === "open" ? c.d.ask : null;
+    md.push(`- **${clipLine(name, 80)}** | last message ${fmtAt(last.at)}${ask ? ` | ask from ${clipLine(ask.senderName, 40)} ${fmtAt(ask.at)}: "${clipLine(ask.text)}"` : ""}`);
+  }
+  md.push(``);
+}
+
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const out = `/automation/Huddle Preview/task-proposals-preview-${stamp}.md`;
 const put = await fetch(`${drive}${enc(out)}:/content`, {
