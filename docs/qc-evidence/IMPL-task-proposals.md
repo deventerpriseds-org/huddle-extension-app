@@ -391,3 +391,31 @@ Source: `docs/qc-evidence/VERIFY-correspondence-proposals-3.md` on `claude_verif
 | `<font size>` not treated as re-sized | D1-V5 | FIRED (control EQUIVALENT), exit 0 |
 | max-height:0 hides without overflow | D1-V7 | FIRED (control EQUIVALENT), exit 0 |
 | visibility:visible descendants dropped | D1-V13 | FIRED (control EQUIVALENT), exit 0 |
+
+#### D2 -- `newTextOnly` cut real English content (commit 35296c11)
+`src/features/huddle/lib/email/inbound-email.ts` (LIVE: EDS main mailbox + work feed, via `asksSomething`)
+- English is main's exact rule again: attribution `^\s*On .+wrote:\s*$` (:97) and header `From:` + `Sent:|Date:`
+  within 4 lines (:77), no space before the colon, exactly as `origin/main`.
+- `HDR_PAIRS` (:77): each From-word pairs only with ITS language's Sent/Date words (en, fr, es, pt, de, nl, it, pl,
+  sv, da/no, fi, hu, ru, tr). "From: Marketing" + "Data: ..." (N4) is no longer a header block. The unexplained
+  `Fta` From-word was dropped (no language); no Sent/Date word was added.
+- `ATTRIBUTIONS` (:97): each foreign opener needs its own verb (Le/a écrit, Am/schrieb, El/escribió, Il/ha
+  scritto, Op/schreef, Em/escreveu, Den/skrev) AND a digit (the date every real attribution carries).
+- Two-line Gmail wrap (:123): only when the first line carries a digit, then the joined line must match one rule.
+- Behaviour vs main, measured: main's `inbound-email.test.ts` (byte-identical on both branches) runs 72/0 against
+  main's code and 72/0 against this branch. All 1232 string literals in the inbound-email, redteam, ingest and
+  task-proposals suites were run through main's and this branch's `newTextOnly` + `asksSomething`: 15 differ, and
+  all 15 are the deliberate F9 cuts (FR/DE/IT/PL/ES header blocks, FR/DE/ES/IT/NL/PT/SV attributions, the two-line
+  Gmail wrap). No English sentence differs from main.
+- Tests (redteam-correspondence): D2 N1-N9 survive (N1, N2, N3, N4, N7, N8, N8b, N9); D2 real openers still cut
+  (14 cases); D2 foreign opener + English verb; D2 two-line sentence without a date; D2 translated attribution needs
+  its date. Suites: task-proposals 188/0, redteam 64/0, ingest 149/0, onedrive-feed all passed, inbound-email 72/0,
+  cross-app-turn-gate 92/0; tsc clean.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| English rule loosened to the pre-fix `wrote ...:` form | D2 English 'wrote' sentences (N1-N9) | FIRED (control EQUIVALENT), exit 0 |
+| digit guard on the two-line join removed | D2 two-line sentence with no date | FIRED (control EQUIVALENT), exit 0 |
+| English header pair accepts `Data:` (cross-language pairing) | D2 English 'wrote' sentences (N4) | FIRED (control EQUIVALENT), exit 0 |
+| German opener accepts the English verb | D2 foreign opener with the ENGLISH verb | FIRED (control EQUIVALENT), exit 0 |
+| French attribution date requirement removed | D2 translated attribution needs its date | FIRED (control EQUIVALENT), exit 0 |
