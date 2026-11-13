@@ -4,9 +4,13 @@
 - Owner decisions: ETL route A (OneDrive files -> Huddle ingest -> Azure PG chat.correspondence_ledger; no new
   endpoint) + a file-staleness alert (built, flag correspondence.staleAlerts, default OFF, bell kind 'feed').
 - Real files (read via graph-permission-check, counts only -- public repo, never print content):
-  emails.json (complete:false at last read, 125 records Nov 6-13), sent.json (sentDateTime now filled 29/29),
-  /automation/Teams Chats/teams-chats.jsonl (source "teams", capturedAt; synthetic:false from Nov 13; messages only
-  Mon-Wed until the PA backfill runs). Code defaults follow the real Teams path/source (8a336404).
+  emails.json (complete:TRUE since 2026-11-13 15:18 UTC, 127 records Nov 6-13), sent.json (complete:true, 29/29
+  sentDateTime), /automation/Teams Chats/teams-chats.jsonl (source "teams", capturedAt; 107 good lines; the 117
+  backfill lines written 2026-11-13 are the PA formula as literal text `concat('{"...` -- unreadable until PA fixes
+  the append step). Code defaults follow the real Teams path/source (8a336404).
+- Hardening (2026-11-13): graph-permission-check judged a JSONL file by its LAST line only, so 117 bad lines read as
+  "not JSON" with no detail. Fixed in #227: every line parsed, failures reported content-safely (prefix only when it
+  is a known schema/function word; letters/digits masked a/9). A first draft would have printed a name-like prefix.
 - Owner-facing previews: proposals-preview.yml -> owner's OneDrive /automation/Huddle Preview/ and (email input) an HTML
   email via Graph sendMail to the private feed-config mailbox. Logs print counts only.
 - Verifier loop 3 FIX FIRST -> D1-D6/M1/M2 fixed. Lesson: a subagent's stale index reverted another lane (4fc54efe);
