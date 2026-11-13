@@ -324,3 +324,16 @@ Probe outputs on the branch:
   within 4 lines is cut from that point (probe -> `""`). Unlikely in an English-language org.
 The other probes behaved as designed: preheader dropped, `mso-hide:all` dropped, `hidden` attribute dropped,
 `<title>` dropped, FR/DE/Gmail-wrapped replies -> no ask, English From/Sent unchanged.
+
+### F8 over-match fix (commit b7b0c3c5, 2026-11-13)
+The finisher's existing-behaviour check found F8 blanking visible text: `<td style="font-size:0"><div style="font-size:14px">ask</div></td>` -> "" ; and an unclosed hidden element swallowing the rest of the email. Coordinator took the reversible, in-scope fix (option A) without a menu.
+- `font-size:0` is no longer in HIDDEN_STYLE; a font-size:0 element keeps ONLY descendants that set a real size again (`SIZED_STYLE`: non-zero number, size keywords, `initial`; `inherit`/`unset`/`0px` do not count) and their content is re-stripped for nested hidden elements. Its own zero-size text is still dropped.
+- An UNCLOSED hidden element ends where its parent closes (first close tag taking the all-tag depth below zero); with no parent close it still hides the rest (fail closed).
+- display:none / visibility:hidden / opacity:0 / max-height:0 / mso-hide:all / `hidden` unchanged.
+- Tests: 8 new F8b/F8c checks in scripts/task-proposals.test.ts (174/0); redteam 49/0, correspondence-ingest 148/0, onedrive-feed all passed, inbound-email 72/0, tsc clean.
+
+| Mutation (mutate.sh, anchors from files) | Named test | Verdict |
+|---|---|---|
+| font-size:0 element keeps nothing (re-sized descendants dropped) | F8b font-size:0 wrapper with a re-sized child | FIRED (control EQUIVALENT), exit 0 |
+| unclosed element never ends at its parent | F8c an UNCLOSED hidden element ends ... | FIRED (control EQUIVALENT), exit 0 |
+| every descendant counts as re-sized | F8b a font-size:0px / inherit child does NOT re-size | FIRED (control EQUIVALENT), exit 0 |
