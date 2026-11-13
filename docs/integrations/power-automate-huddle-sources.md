@@ -19,7 +19,12 @@ THIS REPO IS PUBLIC: no addresses, tenant, drive, flow or chat ids belong in thi
 - **Do not change the existing work-email flow's output file or the calendar flow.** Huddle reads them today and
   both are live. Everything below ADDS a file; nothing replaces one.
 - Do not touch the Fireflies webhook or the `Automation/transcripts` folder.
-- Keep the test filter (the `HUDDLE-PA-SBX-` subject/text prefix and `synthetic: true`) until the owner says go live.
+- **PRODUCTION, not test mode (owner, 2026-11-13: "I didn't want test mode we can go to production").** Write
+  `synthetic: false` and apply NO `HUDDLE-PA-SBX-` filter: every sent message and every chat message. Huddle's
+  feed has been live since 2026-11-08 (the feed config holds `synthetic: false`), and a file or line marked
+  `synthetic: true` is skipped while the feed is live, so a test-mode file would simply be ignored.
+  *(An earlier version of this doc said to keep the test filter. That was wrong: it was written without
+  checking the live config.)*
 - When you are done, report back the four items in **"Report back"** at the bottom. Huddle stays switched off
   until those are checked against the real files.
 
@@ -46,7 +51,7 @@ in the same conversation is newer than the received one, Huddle settles it.
 | `source` | `"power-automate-outlook"` (same as today) |
 | `mailbox` | the work mailbox address (same as today) |
 | `source_login` | same as today, if the existing file has it |
-| `synthetic` | `true` while testing, `false` at go-live (same rule as today) |
+| `synthetic` | `false` (production, same as the live `emails.json`) |
 | `complete` | `true` only when every message in the window was written (not capped / not paginated away) |
 | `published_utc` | when the file was written, ISO UTC |
 | `window_start_utc` | the oldest sent time the file covers, ISO UTC (≥ the email snapshot's window) |
@@ -59,17 +64,14 @@ in the same conversation is newer than the received one, Huddle settles it.
 | `id` | message id | yes |
 | `conversationId` | conversation id | **yes — this is how a reply is matched to the email** |
 | `sentDateTime` | sent time, ISO UTC (`receivedDateTime` is accepted if that is all the connector gives) | yes |
-| `subject` | subject | yes (used only for the test prefix while synthetic) |
+| `subject` | subject | optional in production (only read in test mode) |
 | `toRecipients` | recipients | optional |
 
-While testing, only write messages whose subject **contains** the test prefix — use "contains", NOT "starts
-with". A reply's subject is `RE: HUDDLE-PA-SBX-…`, so a "starts with" filter drops every reply, and replies are
-the only thing this file exists for. (Huddle removes `RE:` / `FW:` itself and then requires the prefix, so the
-safety rule is unchanged.) Keep the field name `conversationId` exactly; that one field is the whole match key.
+**No subject filter** — write every Sent Items message in the window. Keep the field name `conversationId`
+exactly; that one field is the whole match key.
 
-**Test it like this:** send yourself (from another account) an email whose subject starts with `HUDDLE-PA-SBX-`,
-reply to it from the work mailbox, run the flow, and confirm `sent.json` holds a record whose `conversationId`
-equals the `conversationId` of that email in `emails.json`.
+**Check it like this:** reply from the work mailbox to any email that is in today's `emails.json`, run the flow,
+and confirm `sent.json` has a record whose `conversationId` equals that email's `conversationId` in `emails.json`.
 
 ---
 
@@ -87,7 +89,7 @@ rewrite earlier lines. One line per chat per run is ideal.
 | Field | Value | Required |
 |---|---|---|
 | `source` | `"power-automate-teams"` | yes |
-| `synthetic` | `true` while testing, `false` at go-live | **yes** (a line without it is skipped) |
+| `synthetic` | `false` (production) | **yes** (a line without it is skipped) |
 | `chatId` | the Teams chat id | yes |
 | `chatName` | the chat's topic / name | optional (shown in the bell) |
 | `capturedUtc` | when this line was written, ISO UTC | yes (never used as identity) |
@@ -107,17 +109,14 @@ rewrite earlier lines. One line per chat per run is ideal.
 **Include the owner's own messages.** Huddle decides a chat is answered when the owner has posted after the
 other person. If the owner's messages are left out, every chat shows as "can't tell".
 
-**While testing:** `synthetic: true`, and only messages whose text starts with `HUDDLE-PA-SBX-`. That includes
-the owner's own replies: in a test chat, have someone post `HUDDLE-PA-SBX- question…`, then the owner replies
-`HUDDLE-PA-SBX- answer…`. An owner reply without the prefix is skipped in test mode, and the chat would then
-look unanswered.
+**No text filter** — every message in each chat for the day, including the owner's own.
 
 **Size:** the file only grows. Huddle reads the end of it, but if it can be trimmed (e.g. keep 30 days), do so.
 
-**Example line** (synthetic, from Huddle's own test fixture):
+**Example line** (made-up values, production shape):
 
 ```json
-{"source":"power-automate-teams","synthetic":true,"chatId":"19:chat-alpha@thread.example","chatName":"HUDDLE-PA-SBX- Alpha chat","capturedUtc":"2026-11-11T23:00:00Z","messages":[{"id":"1001","createdDateTime":"2026-11-10T14:00:00Z","body":{"contentType":"text","content":"HUDDLE-PA-SBX- Can you send me the Q3 deck by Friday?"},"from":{"user":{"id":"<other person's id>","displayName":"Pat Example"}}}]}
+{"source":"power-automate-teams","synthetic":false,"chatId":"19:chat-alpha@thread.example","chatName":"Alpha chat","capturedUtc":"2026-11-11T23:00:00Z","messages":[{"id":"1001","createdDateTime":"2026-11-10T14:00:00Z","body":{"contentType":"text","content":"Can you send me the Q3 deck by Friday?"},"from":{"user":{"id":"<other person's id>","displayName":"Pat Example"}}}]}
 ```
 
 ---
@@ -125,7 +124,8 @@ look unanswered.
 ## Report back (to the Huddle session)
 
 1. The exact OneDrive paths and casing of `sent.json` and `huddle-source-log.jsonl`.
-2. One real (synthetic) sample of each file — copied into the chat, not committed (this repo is public).
+2. ~~A sample of each file~~ — **not needed, and do not paste one:** production files hold real mail and chat
+   text. Huddle checks the real files itself, structure and counts only.
 3. ~~The owner's own Teams user id~~ — **already received (2026-11-13), skip.** Only report it if the flow logs
    a DIFFERENT work account than the one the owner pasted the id from.
 4. Whether the flows are saved, enabled, and ran successfully at least once.
