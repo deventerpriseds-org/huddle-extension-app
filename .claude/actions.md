@@ -55,7 +55,9 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
 - [ ] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history).
 - [x] PA emails.json: FIXED 2026-11-13 (run 43473391504): complete:true, 127 records Nov 6 08:24 -> Nov 13 15:17 UTC,
       published 15:18 UTC. sent.json: complete:true, 29 records, sentDateTime 29/29, published 15:37 UTC.
-- [ ] PA Teams backfill: RAN but WRITES BROKEN LINES. teams-chats.jsonl now 224 lines; the 117 new lines (108-224, written
+- [x] PA Teams backfill: FIXED 2026-11-13 23:13 UTC (run 43525408545, file modified 22:58 UTC): 166/166 lines parse,
+      626 messages Nov 9 14:03 -> Nov 13 19:39 UTC; Nov 9-11 counts exactly double (re-captured; reader dedups on
+      chatId+message.id); new per-line key ownerUserId on 59 lines (reader ignores it). HISTORY: RAN but WROTE BROKEN LINES. teams-chats.jsonl now 224 lines; the 117 new lines (108-224, written
       2026-11-13) all start with the literal text `concat('{"...` -- the append step stores its FORMULA as plain text
       instead of evaluating it (runs 43473581711/43474056808/43478709377, branch claude_teams-parse-diag). The Huddle
       Teams reader skips each as `not_json_line`, so none of today's backfill is usable. Fix is in PA: enter the line

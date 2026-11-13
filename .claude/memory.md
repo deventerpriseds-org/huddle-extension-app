@@ -4016,3 +4016,5 @@ here as fact three times before being checked.)
   (report -> branch claude_verify-correspondence-proposals-5, docs/qc-evidence/VERIFY-correspondence-proposals-5.md).
   Merge adds nullable chat.email_replies.feed_pending at bootstrap (live DDL, additive). Files: emails.json + sent.json
   complete:true; Teams still broken -- re-run at 22:19 UTC wrote 59 new concat(' text lines (108-166). Nothing live.
+  Teams FIXED 23:13 UTC: 166/166 parse, 626 msgs to Nov 13 19:39 UTC (Nov 9-11 duplicated by the re-run; dedup
+  on chatId+message.id handles it). Lines now carry ownerUserId (owner's Teams id -- never print/commit it).
