@@ -67,7 +67,24 @@ const e = await read(cfg.email.path);
 const ev = e.status === 200 ? validateEmailSnapshot(JSON.parse(e.text), cfg) : null;
 console.log(`email: HTTP ${e.status} | ${ev ? (ev.ok ? "valid" : `REJECTED ${ev.reason}`) : "-"}`);
 if (ev?.ok) items.push(...ledgerEmailItems(ev.snapshot.records, cfg, { path: cfg.email.path, etag: null }).items);
-const tp = t.status === 200 ? parseTeamsLog(t.text, cfg) : null;
+// PREVIEW ONLY (owner wants production; the flow added synthetic:false from 2026-11-13, but every message so far
+// sits in the 2026-11-12 lines that predate it). PREVIEW_ACCEPT_UNMARKED=1 treats a line with NO synthetic key as
+// production for this preview. The live parser is unchanged: it still skips unmarked lines.
+const teamsText =
+  process.env.PREVIEW_ACCEPT_UNMARKED === "1"
+    ? t.text
+        .split("\n")
+        .map((l) => {
+          try {
+            const o = JSON.parse(l);
+            return o && typeof o === "object" && !Array.isArray(o) && !("synthetic" in o) ? JSON.stringify({ ...o, synthetic: false }) : l;
+          } catch {
+            return l;
+          }
+        })
+        .join("\n")
+    : t.text;
+const tp = t.status === 200 ? parseTeamsLog(teamsText, cfg) : null;
 console.log(`teams: HTTP ${t.status} | messages kept ${tp?.messages.length ?? 0} | skipped lines ${tp?.skippedLines ?? 0} (${JSON.stringify(tp?.skipped ?? {})})`);
 for (const m of tp?.messages ?? []) items.push(teamsSourceItem(m, { path: teamsPath }));
 
