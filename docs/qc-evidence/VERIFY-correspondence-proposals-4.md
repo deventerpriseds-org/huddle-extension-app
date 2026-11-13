@@ -241,3 +241,88 @@ says the inputs stopped.
   file is not JSON at all.
 - Note 2: the header says "sends nothing", but `PREVIEW_EMAIL=1` calls Graph `sendMail` to the owner and the script
   always PUTs a Markdown file to `/automation/Huddle Preview/`. Both are owner-requested; the header is stale.
+
+## Claim 6: SQL suites, fireflies, independent mutations
+
+- Local PostgreSQL 16: `feed-staleness-sql` 13/0, `task-proposals-sql` 45/0, `correspondence-ledger-sql` 50/0,
+  `fireflies-queue-sql` all passed.
+- `fireflies-minutes`: 64 PASS, 3 FAIL (G3, G5, G8) on this branch. **Ground-truthed this loop:** the same suite
+  on a detached origin/main worktree (d55f2f72) gives the identical 64 PASS / G3, G5, G8 FAIL. Pre-existing, not this
+  branch (loop 3 had only inferred it). The branch's only fireflies change is `export` on `fetchTranscript`.
+- My own `mutate.sh` runs (beyond the implementer's 15): Teams grace removed (`due <= nowMs`) -> **FIRED (control
+  EQUIVALENT)** on C3; weekday skip removed from `workingMsBetween` -> **FIRED (control EQUIVALENT)** on A1.
+- Branch state: origin/main is 19 commits ahead of `claude_task-proposals` (ledger and preview-workflow commits);
+  this report covers 2cf5fa8d only.
+
+## What changes in the LIVE app on merge with every flag OFF
+
+| # | change | evidence |
+|---|---|---|
+| 1 | Work-email HTML -> text (`htmlToText`): hidden text removed (wanted), more entities decoded (wanted); **visible text dropped** in W1/W2/W3/W4/W7 shapes | claim 3, Chromium-checked |
+| 2 | `newTextOnly` (EDS main mailbox AND work feed): non-English quote headers cut (intended F9); **English content cut** in the X1/X2 two-line shape -> email screened "no ask" | claim 3 |
+| 3 | Bell settings: new "Teams chats" checkbox for everyone; `chat` in defaults; stored lists gain `chat`; next save writes `-chat` when left off | claim 4f |
+| 4 | Bell list items render `link` ("Open in Teams") and badge uses `badgeCount` -- no visible effect without chat rows | code read |
+| 5 | `settleAttentionForHuddle` excludes `chat`/`feed` -- no effect without such rows | code read |
+| 6 | `chat.email_replies` gains nullable `needs_context`, `source_link` columns at the next bootstrap (live DDL, additive) | code read `email-replies.server.ts:58-59` |
+| 7 | Drive metadata request `?$select=eTag,size` -> `?$select=id,eTag,size`, `method:"GET"` forced | claim 4e |
+| 8 | Heartbeat dynamically imports the ingest and proposals modules every tick; both return before any Graph/DB work | loop 3 6.1 + claim 4e |
+| 9 | `build_checklist` tool schema gains `proposals` (returns `not_enabled` when off); turn payload optional `checklist` | loop 3, code present at head (`tools.ts:99`, `huddle.functions.ts:7468`) |
+| 10 | Work-email (feed) owed rows: settle from sent.json only when `sent` is configured (opt-in) -> unchanged with it off | code read `loadFeedSent` |
+
+## Per-AC verdicts (head 2cf5fa8d)
+
+Basis: S = suite re-run green this loop; P = my probe this loop; R = code read; L3 = loop-3 basis re-checked by suite.
+
+| AC | verdict | basis |
+|---|---|---|
+| 1.1 | CONFIRMED (M1 fixed) | S + P |
+| 1.2 | CONFIRMED offline; DB row NOT TESTABLE OFFLINE | S + R |
+| 1.3-1.13 | CONFIRMED (1.8 tail-read design, 1.13 GET forced) | S + L3 |
+| 2.1-2.6 | CONFIRMED offline | S |
+| 2.7 | CONFIRMED on main's inbound-email suite (72/0); see 6.4 for the X1/X2 regression | S + P |
+| 3.1-3.10 | CONFIRMED offline (SQL 50/0) | S |
+| 4.1-4.13 | CONFIRMED offline; UI parts NOT TESTABLE OFFLINE | S |
+| 4.5 / 4.13 (owner replies) | CONFIRMED for image/emoji/Giphy/sticker; PARTIAL: `<customemoji>`-only reply still skipped (Graph shape is my inference) | P |
+| 4.7 | PARTIAL: superseded by owner option A | R |
+| 5.1, 5.2 | CONFIRMED | S + P (sanitize identical) |
+| 5.3-5.5, 5.7-5.13, 5.15-5.17, 5.21-5.23 | CONFIRMED offline (SQL 45/0); UI/DB parts NOT TESTABLE OFFLINE | S |
+| 5.6, 5.24 | NOT TESTABLE OFFLINE (UI) | -- |
+| 5.14 | CONFIRMED | L3 |
+| 5.18 | CONFIRMED | S |
+| 5.19 | PARTIAL: D5 "Nobody should send ..." accepted; D6 "Do not send the deck" accepted from "send the deck"; F5b and F7f still accepted (documented) | P |
+| 5.20 | CONFIRMED (M2 fixed) | P |
+| 6.1, 6.3 | CONFIRMED (0 calls, flag matrix incl. staleAlerts) | S + P |
+| 6.2 | NOT BUILT | R |
+| 6.4 | **REFUTED**: with every flag OFF the work-email screen drops visible text (W1-W4, W7) and the main-mailbox screen cuts English content (X1, X2) that main keeps | P (vs main, Chromium) |
+| 6.5 | CONFIRMED: fireflies-minutes failures are identical on origin/main | S (both trees) |
+| 6.6 | NOT BUILT | R |
+| 6.7 | CONFIRMED (92/0) | S |
+| 6.8 | NOT TESTABLE OFFLINE | -- |
+| 7.1, 7.2 | CONFIRMED | S |
+| 7.3 | CONFIRMED by code read (dry-run extended, counts/yes-no only); not run against the real file | R |
+| 7.4 | NOT TESTABLE OFFLINE | -- |
+| 8.1, 8.2 | CONFIRMED | S |
+| 8.3 | PARTIAL: staleness log and preview print counts; a non-JSON feed file makes the preview's uncaught `JSON.parse` print ~10 content chars | P + R |
+| STALE (owner-approved alert): working-hours math, Teams rule, one row per file, auto-clear, Iris does not clear, flag OFF zero effect, counts-only logs | CONFIRMED | P + real SQL |
+| STALE dismiss semantics | **REFUTED**: one transient read failure un-dismisses a dismissed alert; on a fresh file it raises a "can't be read" item | real SQL V1/V2 |
+| STALE ordering | MINOR: hidden by LIMIT 50 behind 50 newer open items | real SQL V3 |
+| proposals-preview leniencies | CONFIRMED confined to the script | R + grep |
+
+## Verdict: FIX FIRST
+
+Blocking for merge (live, flags OFF -- AC-6.4):
+1. `onedrive-feed.ts:459/485` W1-W3: unclosed hidden inline element inside `<p>`/`<li>` drops the visible ask.
+2. `onedrive-feed.ts:406` + `:596` W4: `mso-hide:all` copy and the `[if mso]` copy both removed.
+3. `inbound-email.ts:123` X1/X2: two-line join cuts hard-wrapped English lines starting "On <digit>...".
+(W7 is exotic; fix optional.)
+
+Before switching `staleAlerts` on (not merge-blocking: flag off = no rows):
+4. `feed-staleness.ts` / `email-replies.server.ts:459-462`: a transient `unreadable` must not reopen a dismissed
+   episode or raise an item on a fresh file (e.g. require N consecutive failures, or keep the previous episode).
+5. `email-replies.server.ts:342`: feed rows can fall outside `LIMIT 50`.
+
+Before switching `proposals` on: D5 "nobody"/"no one" negators; D6 a negating title ("Do not ...") is grounded
+because "do"/"not" are stopwords.
+
+UI-UNVERIFIED (needs a browser run on the deployed app, not done -- no live systems): "Teams chats" checkbox for
+existing users, feed/chat rows render in the bell, "Open in Teams" link, proposal rows (5.6, 5.24).
