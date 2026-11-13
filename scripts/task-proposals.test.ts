@@ -909,6 +909,19 @@ t("F8c an unclosed hidden element with no parent close still hides the rest", ht
     ["Please, send the contract to the client today.", "send the contract to the client today"],
   ];
   t("D5 neg: affirmative look-alikes are still accepted", kept.map(([s, ev]) => neg(s, ev)), kept.map(() => "accepted"));
+  // Verifier loop 4, D5: "nobody" / "no one" negate the action too.
+  const nobody: [string, string][] = [
+    ["Nobody should send the contract to the client today.", "send the contract to the client today"],
+    ["No one should send the contract to the client today.", "send the contract to the client today"],
+    ["No-one is to send the contract to the client today.", "send the contract to the client today"],
+    ["NOBODY send the contract to the client yet.", "send the contract to the client yet"],
+  ];
+  t("D5 loop 4: 'Nobody should send' / 'No one should send' are refused", nobody.map(([s, ev]) => neg(s, ev)), nobody.map(() => "evidence_negated"));
+  const nobodyKept: [string, string][] = [
+    ["No one has replied yet, so send the contract to the client today.", "send the contract to the client today"],
+    ["Nobody objected. Please send the contract to the client today.", "send the contract to the client today"],
+  ];
+  t("D5 loop 4 neg: 'no one' in an earlier clause or sentence does not negate", nobodyKept.map(([s, ev]) => neg(s, ev)), nobodyKept.map(() => "accepted"));
 }
 // Verifier loop 3, D6: a title may not ADD a content word the evidence lacks (majority was not enough).
 {

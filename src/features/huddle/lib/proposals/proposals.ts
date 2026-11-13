@@ -321,12 +321,12 @@ export function enclosingSentence(haystackNl: string, start: number, end: number
   return { text: haystackNl.slice(a, b).trim(), start: a };
 }
 
-/** Negations that put the action OFF ("do not send", "no need to send"); "don't forget to" and
- *  "don't hesitate to" are affirmative and are removed before the test. */
+/** Negations that put the action OFF ("do not send", "no need to send", "nobody should send"); "don't forget
+ *  to" and "don't hesitate to" (and "nobody forget to") are affirmative and are removed before the test. */
 const NEGATION =
-  /\b(do not|does not|don't|dont|doesn't|did not|didn't|never|no need to|not|shouldn't|should not|must not|mustn't|need not|needn't|won't|will not|cannot|can't|please don't|stop|hold off( on)?|no longer|under no circumstances|refrain from|no reason to|avoid(?=\s*$|\s+\p{L}+ing\b))\b/iu;
+  /\b(do not|does not|don't|dont|doesn't|did not|didn't|never|no need to|not|shouldn't|should not|must not|mustn't|need not|needn't|won't|will not|cannot|can't|please don't|stop|hold off( on)?|no longer|under no circumstances|refrain from|no reason to|nobody|no one|no-one|avoid(?=\s*$|\s+\p{L}+ing\b))\b/iu;
 const NOT_NEGATION =
-  /\b(do not|don't|dont|never|please don't)\s+(forget|hesitate|fail|miss)\b|\bnot only\b|\bif not\b|\b(don't|do not) worry\b|\bnever mind\b|\bno worries\b|\bnot a problem\b/gi;
+  /\b(do not|don't|dont|never|please don't|nobody|no one|no-one)\s+(forgets?|hesitates?|fails?|miss(?:es)?)\b|\bnot only\b|\bif not\b|\b(don't|do not) worry\b|\bnever mind\b|\bno worries\b|\bnot a problem\b/gi;
 const wordCount = (s: string) => (s.match(/[\p{L}\p{N}']+/gu) ?? []).length;
 
 /** Pure (red-team F7): does the sentence negate the action before the task's first grounded word?
