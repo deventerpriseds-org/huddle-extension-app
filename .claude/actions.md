@@ -12,6 +12,8 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       2026-11-13: owner confirmed option A (separate sent.json) and asked for a pasteable handoff. Doc corrected after
       reading the branch parser: Sent Items test filter must be "contains" the prefix (replies are "RE: <prefix>";
       a "starts with" filter would drop every reply), owner's own test Teams replies need the prefix, Teams id already received.
+      2026-11-13 later: owner "I didn't want test mode we can go to production". Live feed is already synthetic:false
+      (run 42443445406), so the doc is rewritten for PRODUCTION: synthetic:false, no prefix filter, no samples pasted in chat.
 - [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
       docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
 - [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
