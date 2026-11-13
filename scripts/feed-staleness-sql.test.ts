@@ -54,7 +54,7 @@ try {
   const R = await import("../src/features/huddle/lib/email/email-replies.server");
   const S = await import("../src/features/huddle/lib/correspondence/feed-staleness");
   const pool = getSharedPool();
-  const store = { raise: R.raiseFeedAttention, clear: R.clearFeedAttention };
+  const store = { raise: R.raiseFeedAttention, clear: R.clearFeedAttention, notePending: R.notePendingFeedAttention };
   const id = S.feedAttentionId(O, "email");
   const rowOf = async (rid = id) =>
     (await pool.query(`SELECT kind, status, graph_message_id AS episode, subject, from_name, received_at, huddle_id FROM chat.email_replies WHERE id=$1`, [rid])).rows[0];
@@ -85,12 +85,57 @@ try {
   await R.settleEmailReply(id, "dismissed"); // the bell's Dismiss path (dismissAttentionFn)
   const r8 = await S.applyFeedStaleness(O, stale2, U("2026-11-19T20:00:00Z"), 6, store);
   t("S8 dismissed: the same episode (even with new span text) does NOT reopen", [r8.raised, (await rowOf()).status], [0, "dismissed"]);
+  const r9a = await S.applyFeedStaleness(O, missing, U("2026-11-19T20:50:00Z"), 6, store);
+  const s9a = (await rowOf()).status;
   const r9 = await S.applyFeedStaleness(O, missing, U("2026-11-19T21:00:00Z"), 6, store);
-  t("S9 dismissed: a NEW episode (file now missing) reopens it", [r9.raised, (await rowOf()).status, (await rowOf()).episode, (await rowOf()).subject], [1, "owed", "missing", "Work email file is missing from OneDrive"]);
+  t("S9 dismissed: a NEW hard reason (missing on 2 consecutive checks) reopens it; the first sighting does not",
+    [r9a.raised, s9a, r9.raised, (await rowOf()).status, (await rowOf()).episode, (await rowOf()).subject], [0, "dismissed", 1, "owed", "missing", "Work email file is missing from OneDrive"]);
   await R.settleEmailReply(id, "dismissed");
   const r10 = await S.applyFeedStaleness(O, fresh("2026-11-19T21:30:00Z"), U("2026-11-19T21:40:00Z"), 6, store);
+  await S.applyFeedStaleness(O, missing, U("2026-11-20T14:50:00Z"), 6, store);
   const r11 = await S.applyFeedStaleness(O, missing, U("2026-11-20T15:00:00Z"), 6, store);
-  t("S10 dismissed + file restored ends the episode -> missing AGAIN later raises again", [r10.cleared, r11.raised, (await rowOf()).status], [1, 1, "owed"]);
+  t("S10 dismissed + file restored ends the episode -> missing AGAIN later (2 checks) raises again", [r10.cleared, r11.raised, (await rowOf()).status], [1, 1, "owed"]);
+
+  // Verifier loop 4, 4c (V1/V2), on the REAL SQL: a transient read changes nothing; hard reasons need 2 checks.
+  {
+    const vid = S.feedAttentionId(O, "sent");
+    const vrow = async () => (await pool.query(`SELECT status, graph_message_id AS episode, feed_pending FROM chat.email_replies WHERE id=$1`, [vid])).rows[0] ?? null;
+    const sentStale = [{ file: "sent" as const, meta: okMeta("2026-11-11T14:02:00Z") }];
+    const sentTransient = [{ file: "sent" as const, meta: { kind: "transient" as const } }];
+    const sentFresh = [{ file: "sent" as const, meta: okMeta("2026-11-13T14:30:00Z") }];
+    const sent403 = [{ file: "sent" as const, meta: { kind: "unreadable" as const } }];
+    await S.applyFeedStaleness(O, sentStale, NOW, 6, store);
+    await R.settleEmailReply(vid, "dismissed");
+    const a = await S.applyFeedStaleness(O, sentTransient, NOW + 600_000, 6, store);
+    const afterTransient = await vrow();
+    const b = await S.applyFeedStaleness(O, sentStale, NOW + 1_200_000, 6, store);
+    t("S14 (V1) dismissed stale alert + ONE transient read + same stale file: stays dismissed, same episode",
+      [a.raised, afterTransient, b.raised, await vrow()],
+      [0, { status: "dismissed", episode: "stale:2026-11-11T14:02:00.000Z", feed_pending: null }, 0, { status: "dismissed", episode: "stale:2026-11-11T14:02:00.000Z", feed_pending: null }]);
+    const tid = S.feedAttentionId(O, "teams");
+    const tFresh = [{ file: "teams" as const, meta: okMeta("2026-11-12T23:30:00Z") }];
+    await S.applyFeedStaleness(O, tFresh, NOW, 6, store);
+    const c = await S.applyFeedStaleness(O, [{ file: "teams", meta: { kind: "transient" } }], NOW + 600_000, 6, store);
+    t("S15 (V2) fresh file + one transient read: no row at all, nothing listed", [c.raised, (await pool.query(`SELECT count(*)::int n FROM chat.email_replies WHERE id=$1`, [tid])).rows[0].n, (await R.listOpenAttention(O)).map((r) => r.id).includes(tid)], [0, 0, false]);
+    const d1 = await S.applyFeedStaleness(O, [{ file: "teams", meta: { kind: "unreadable" } }], NOW + 1_200_000, 6, store);
+    const listedAfterFirst = (await R.listOpenAttention(O)).map((r) => r.id).includes(tid);
+    const d2 = await S.applyFeedStaleness(O, [{ file: "teams", meta: { kind: "unreadable" } }], NOW + 1_800_000, 6, store);
+    t("S16 a 403 on a fresh file: hidden pending row on the first check (not listed), alert on the 2nd",
+      [d1.raised, listedAfterFirst, d2.raised, (await R.listOpenAttention(O)).map((r) => r.id).includes(tid)], [0, false, 1, true]);
+    await S.applyFeedStaleness(O, sentFresh, NOW + 2_400_000, 6, store);
+    await S.applyFeedStaleness(O, sent403, NOW + 3_000_000, 6, store);
+    await S.applyFeedStaleness(O, sentFresh, NOW + 3_600_000, 6, store);
+    const e = await S.applyFeedStaleness(O, sent403, NOW + 4_200_000, 6, store);
+    t("S17 403 / fresh / 403 is NOT two consecutive: no alert, pending reset by the fresh check", [e.raised, (await vrow()).status, (await vrow()).feed_pending], [0, "replied", "unreadable"]);
+    await S.applyFeedStaleness(O, sentTransient, NOW + 4_800_000, 6, store);
+    const f = await S.applyFeedStaleness(O, sent403, NOW + 5_400_000, 6, store);
+    t("S18 403 / transient / 403 IS two consecutive (transient neither confirms nor resets)", [f.raised, (await vrow()).status, (await vrow()).episode], [1, "owed", "unreadable"]);
+    await R.settleEmailReply(vid, "dismissed");
+    const g = await S.applyFeedStaleness(O, sentStale, NOW + 6_000_000, 6, store);
+    t("S19 dismissed 'unreadable', then the SAME old last-modified again: stays dismissed (not new)", [g.raised, (await vrow()).status], [0, "dismissed"]);
+    const h = await S.applyFeedStaleness(O, [{ file: "sent", meta: okMeta("2026-11-12T14:02:00Z") }], U("2026-11-16T15:00:00Z"), 6, store);
+    t("S20 dismissed, then a LATER last-modified (still stale): reopens", [h.raised, (await vrow()).status, (await vrow()).episode], [1, "owed", "stale:2026-11-12T14:02:00.000Z"]);
+  }
   await pool.query(`INSERT INTO chat.email_replies (id, owner_email, mailbox, graph_message_id, kind, status) VALUES ('attn-feed-x', $1, '', 'm', 'chat', 'owed')`, [O]);
   t("S11 a raise never overwrites a non-feed row with the same id",
     [await R.raiseFeedAttention({ id: "attn-feed-x", ownerEmail: O, episode: "missing", title: "t", detail: "d", sinceIso: null, huddleId: "dm-iris-chase" }), (await rowOf("attn-feed-x")).kind], [false, "chat"]);

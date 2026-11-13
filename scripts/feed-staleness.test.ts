@@ -115,7 +115,8 @@ t("C9 Teams stale text",
 const now = U("2026-11-13T15:00:00Z");
 t("D1 missing file -> missing (every file kind)", ["email", "sent", "teams"].map((f) => decideFeedStaleness(f as "email", { kind: "missing" }, now, 6).state), ["missing", "missing", "missing"]);
 t("D2 unreadable file -> unreadable", decideFeedStaleness("sent", { kind: "unreadable" }, now, 6).state, "unreadable");
-t("D3 a lastModified that is not a number -> unreadable", decideFeedStaleness("email", { kind: "ok", lastModifiedMs: NaN }, now, 6).state, "unreadable");
+t("D3 a lastModified that is not a number -> transient (no information this check)", decideFeedStaleness("email", { kind: "ok", lastModifiedMs: NaN }, now, 6).state, "transient");
+t("D3b a transient read -> transient", decideFeedStaleness("teams", { kind: "transient" }, now, 6).state, "transient");
 t("D4 missing text", feedAlertText("sent", { state: "missing" }, now), { title: "Work sent-mail file is missing from OneDrive", detail: "Check the Power Automate sent-mail flow." });
 t("D5 unreadable text", feedAlertText("teams", { state: "unreadable" }, now).title, "Teams chat file can't be read from OneDrive");
 t("D6 episodes", [feedEpisode({ state: "missing" }), feedEpisode({ state: "unreadable" }), feedEpisode({ state: "stale", sinceMs: U("2026-11-11T14:02:00Z"), workingHours: 20 })], ["missing", "unreadable", "stale:2026-11-11T14:02:00.000Z"]);
@@ -124,32 +125,43 @@ t("D7 span labels", [workingSpanLabel(1), workingSpanLabel(9), workingSpanLabel(
 
 // ---------------------------------------------------------------------------------------------
 // E: bell -- ONE row per file, idempotent across heartbeats, auto-clear, dismiss holds per episode.
-// In-memory twin of raiseFeedAttention / clearFeedAttention (the SQL itself: feed-staleness-sql.test.ts).
+// In-memory twin of raiseFeedAttention / clearFeedAttention / notePendingFeedAttention (the SQL itself:
+// feed-staleness-sql.test.ts).
 // ---------------------------------------------------------------------------------------------
-type Row = { id: string; owner: string; episode: string; title: string; detail: string; since: string | null; status: string };
+type Row = { id: string; owner: string; episode: string; title: string; detail: string; since: string | null; status: string; pending: string | null };
 function twin() {
   const rows = new Map<string, Row>();
   let writes = 0;
   const store: FeedAlertStore = {
     async raise(r) {
       const e = rows.get(r.id);
+      if (e) e.pending = null;
       const open = e && (e.status === "owed" || e.status === "drafted");
+      const later = !e || r.sinceIso === null || e.since === null || r.sinceIso > e.since;
       const write =
         !e ||
         (open && (e.episode !== r.episode || e.title !== r.title || e.detail !== r.detail)) ||
         e.status === "replied" ||
-        (e.status === "dismissed" && e.episode !== r.episode);
+        (e.status === "dismissed" && e.episode !== r.episode && later);
       if (!write) return false;
-      rows.set(r.id, { id: r.id, owner: r.ownerEmail, episode: r.episode, title: r.title, detail: r.detail, since: r.sinceIso, status: open ? e!.status : "owed" });
+      rows.set(r.id, { id: r.id, owner: r.ownerEmail, episode: r.episode, title: r.title, detail: r.detail, since: r.sinceIso ?? e?.since ?? null, status: open ? e!.status : "owed", pending: null });
       writes++;
       return true;
     },
     async clear(id) {
       const e = rows.get(id);
+      if (e) e.pending = null;
       if (!e || !["owed", "drafted", "dismissed"].includes(e.status)) return false;
       e.status = "replied";
       writes++;
       return true;
+    },
+    async notePending(r) {
+      const e = rows.get(r.id);
+      const before = e?.pending ?? null;
+      if (e) e.pending = r.reason;
+      else rows.set(r.id, { id: r.id, owner: r.ownerEmail, episode: "", title: "", detail: "", since: null, status: "replied", pending: r.reason });
+      return before === r.reason;
     },
   };
   return { rows, store, writes: () => writes };
@@ -182,24 +194,90 @@ const open = (rows: Map<string, Row>) => [...rows.values()].filter((r) => r.stat
   tw.rows.get(feedAttentionId(O, "sent"))!.status = "dismissed"; // owner taps Dismiss
   const r1 = await applyFeedStaleness(O, stale, now + 3 * H, 6, tw.store);
   t("E5 dismissed: the same stale episode never reopens it", [r1.raised, open(tw.rows)], [0, 0]);
-  const r2 = await applyFeedStaleness(O, [{ file: "sent", meta: { kind: "missing" } }], now + 4 * H, 6, tw.store);
-  t("E6 dismissed: a NEW episode (file now missing) reopens the same row", [r2.raised, open(tw.rows), tw.rows.size], [1, 1, 1]);
+  const m = [{ file: "sent" as const, meta: { kind: "missing" } as FeedMeta }];
+  const r2a = await applyFeedStaleness(O, m, now + 4 * H, 6, tw.store);
+  const r2 = await applyFeedStaleness(O, m, now + 4 * H + 600_000, 6, tw.store);
+  t("E6 dismissed: a NEW hard reason (missing on 2 consecutive checks) reopens the same row; the first sighting does not",
+    [r2a.raised, r2a.pending, r2.raised, open(tw.rows), tw.rows.size], [0, 1, 1, 1, 1]);
 }
 {
   const tw = twin();
   const missing = [{ file: "teams" as const, meta: { kind: "missing" } as FeedMeta }];
   await applyFeedStaleness(O, missing, now, 6, tw.store);
+  await applyFeedStaleness(O, missing, now + 600_000, 6, tw.store);
   await applyFeedStaleness(O, [{ file: "teams", meta: ok("2026-11-12T23:30:00Z") }], now + H, 6, tw.store);
-  const r = await applyFeedStaleness(O, missing, now + 2 * H, 6, tw.store);
-  t("E7 missing -> restored (auto-clear) -> missing again raises again (same reason, new problem)", [r.raised, open(tw.rows)], [1, 1]);
+  const r1 = await applyFeedStaleness(O, missing, now + 2 * H, 6, tw.store);
+  const r = await applyFeedStaleness(O, missing, now + 2 * H + 600_000, 6, tw.store);
+  t("E7 missing -> restored (auto-clear) -> missing again (2 checks) raises again (same reason, new problem)", [r1.raised, r.raised, open(tw.rows)], [0, 1, 1]);
 }
 {
   const tw = twin();
   tw.store.raise = async () => {
     throw new Error("db down");
   };
-  const r = await applyFeedStaleness(O, [{ file: "email", meta: { kind: "missing" } }, { file: "teams", meta: ok("2026-11-12T23:30:00Z") }], now, 6, tw.store);
-  t("E8 one file's store failure does not stop the others", [r.failed, r.states], [1, { email: "missing", teams: "fresh" }]);
+  const r = await applyFeedStaleness(O, [{ file: "email", meta: ok("2026-11-11T14:02:00Z") }, { file: "teams", meta: ok("2026-11-12T23:30:00Z") }], now, 6, tw.store);
+  t("E8 one file's store failure does not stop the others", [r.failed, r.states], [1, { email: "stale", teams: "fresh" }]);
+}
+// Verifier loop 4, 4c: a transient read failure changes NOTHING; a hard reason needs 2 consecutive checks.
+const tr = (file: "email" | "sent" | "teams") => [{ file, meta: { kind: "transient" } as FeedMeta }];
+{
+  const tw = twin();
+  const stale = [{ file: "email" as const, meta: ok("2026-11-11T14:02:00Z") }];
+  await applyFeedStaleness(O, stale, now, 6, tw.store);
+  tw.rows.get(feedAttentionId(O, "email"))!.status = "dismissed";
+  const w0 = tw.writes();
+  const a = await applyFeedStaleness(O, tr("email"), now + 600_000, 6, tw.store);
+  const b = await applyFeedStaleness(O, stale, now + 1_200_000, 6, tw.store);
+  const row = tw.rows.get(feedAttentionId(O, "email"))!;
+  t("T1 dismissed stale alert + ONE transient failure + same stale file: stays dismissed, same episode, zero writes",
+    [a.raised, a.states.email, b.raised, row.status, row.episode, tw.writes() - w0], [0, "transient", 0, "dismissed", "stale:2026-11-11T14:02:00.000Z", 0]);
+}
+{
+  const tw = twin();
+  const fresh = [{ file: "email" as const, meta: ok("2026-11-13T14:30:00Z") }];
+  await applyFeedStaleness(O, fresh, now, 6, tw.store);
+  const a = await applyFeedStaleness(O, tr("email"), now + 600_000, 6, tw.store);
+  const b = await applyFeedStaleness(O, fresh, now + 1_200_000, 6, tw.store);
+  t("T2 fresh file + one transient failure: no 'can't be read' item, nothing written", [a.raised, b.raised, open(tw.rows), tw.writes()], [0, 0, 0, 0]);
+}
+{
+  const tw = twin();
+  const u = [{ file: "sent" as const, meta: { kind: "unreadable" } as FeedMeta }];
+  const fresh = [{ file: "sent" as const, meta: ok("2026-11-13T14:30:00Z") }];
+  const a = await applyFeedStaleness(O, u, now, 6, tw.store);
+  const openAfterFirst = open(tw.rows);
+  const b = await applyFeedStaleness(O, u, now + 600_000, 6, tw.store);
+  t("T3 a 403 raises 'can't be read' only on the 2nd consecutive check", [a.raised, a.pending, openAfterFirst, b.raised, open(tw.rows)], [0, 1, 0, 1, 1]);
+  const tw2 = twin();
+  await applyFeedStaleness(O, u, now, 6, tw2.store);
+  await applyFeedStaleness(O, tr("sent"), now + 600_000, 6, tw2.store);
+  const c = await applyFeedStaleness(O, u, now + 1_200_000, 6, tw2.store);
+  const tw3 = twin();
+  await applyFeedStaleness(O, u, now, 6, tw3.store);
+  await applyFeedStaleness(O, fresh, now + 600_000, 6, tw3.store);
+  const d = await applyFeedStaleness(O, u, now + 1_200_000, 6, tw3.store);
+  const tw4 = twin();
+  await applyFeedStaleness(O, u, now, 6, tw4.store);
+  const e = await applyFeedStaleness(O, [{ file: "sent", meta: { kind: "missing" } }], now + 600_000, 6, tw4.store);
+  t("T4 403/transient/403 raises (transient neither confirms nor resets); 403/fresh/403 and 403/404 do not",
+    [c.raised, d.raised, e.raised], [1, 0, 0]);
+}
+{
+  const tw = twin();
+  const staleA = [{ file: "email" as const, meta: ok("2026-11-11T14:02:00Z") }];
+  const m = [{ file: "email" as const, meta: { kind: "missing" } as FeedMeta }];
+  const id = feedAttentionId(O, "email");
+  await applyFeedStaleness(O, staleA, now, 6, tw.store);
+  tw.rows.get(id)!.status = "dismissed";
+  await applyFeedStaleness(O, m, now + 600_000, 6, tw.store);
+  await applyFeedStaleness(O, m, now + 1_200_000, 6, tw.store);
+  const reopenedMissing = tw.rows.get(id)!.status;
+  tw.rows.get(id)!.status = "dismissed";
+  const back = await applyFeedStaleness(O, staleA, now + 1_800_000, 6, tw.store);
+  const backStatus = tw.rows.get(id)!.status;
+  const later = await applyFeedStaleness(O, [{ file: "email", meta: ok("2026-11-12T14:02:00Z") }], U("2026-11-16T15:00:00Z"), 6, tw.store);
+  t("T5 dismissed reopens only on NEW: missing x2 reopens; back to the SAME old last-modified stays dismissed; a LATER last-modified reopens",
+    [reopenedMissing, back.raised, backStatus, later.raised, tw.rows.get(id)!.status], ["owed", 0, "dismissed", 1, "owed"]);
 }
 t("E9 ids: one per file, attn-feed- prefix, owner case-insensitive", [
   feedAttentionId(O, "email").startsWith("attn-feed-email-"),
@@ -248,7 +326,7 @@ function countingDeps(meta: FeedMeta) {
     n,
     deps: {
       readMeta: async () => (n.reads++, meta),
-      store: { raise: async () => (n.raises++, true), clear: async () => (n.clears++, false) },
+      store: { raise: async () => (n.raises++, true), clear: async () => (n.clears++, false), notePending: async () => (n.raises++, false) },
       now: () => now,
       log: () => void n.logs++,
     },
@@ -260,7 +338,7 @@ function countingDeps(meta: FeedMeta) {
   const b = await runFeedStalenessCheck(cfgWith({ ingest: true, bell: true, proposals: true }, { sent: true, teams: true }), off.deps);
   const c = await runFeedStalenessCheck(cfgWith({ staleAlerts: "true" }, { sent: true, teams: true }), off.deps);
   t("G6 flag OFF (absent config / everything else on / non-literal true): no result, ZERO reads, ZERO writes, ZERO logs", [a, b, c, off.n], [null, null, null, { reads: 0, raises: 0, clears: 0, logs: 0 }]);
-  const on = countingDeps({ kind: "missing" });
+  const on = countingDeps(ok("2026-11-11T14:02:00Z"));
   const r = await runFeedStalenessCheck(cfgWith({ staleAlerts: true }, { sent: true, teams: true }), on.deps);
   t("G7 flag ON: one metadata read per configured file, and the bell is written", [on.n.reads, on.n.raises, r?.raised], [3, 3, 3]);
 }
@@ -321,9 +399,13 @@ function countingDeps(meta: FeedMeta) {
       [seen.at(-1)?.method, seen.at(-1)?.url.endsWith("?$select=lastModifiedDateTime"), seen.some((s) => s.url.includes(":/content"))], ["GET", true, false]);
     t("H3 404 -> missing", await meta(() => new Response("", { status: 404 })), { kind: "missing" });
     t("H4 403 -> unreadable", await meta(() => new Response("", { status: 403 })), { kind: "unreadable" });
-    t("H5 500 -> unreadable", await meta(() => new Response("", { status: 500 })), { kind: "unreadable" });
-    t("H6 200 without a usable date -> unreadable", await meta(() => new Response(JSON.stringify({ lastModifiedDateTime: "soon" }), { status: 200 })), { kind: "unreadable" });
-    t("H7 network failure -> unreadable (never throws)", await meta(() => { throw new Error("ECONNRESET"); }), { kind: "unreadable" });
+    t("H5 500 / 503 / 429 / 401 -> transient (only 403 means unreadable)",
+      [await meta(() => new Response("", { status: 500 })), await meta(() => new Response("", { status: 503 })), await meta(() => new Response("", { status: 429 })), await meta(() => new Response("", { status: 401 }))],
+      [{ kind: "transient" }, { kind: "transient" }, { kind: "transient" }, { kind: "transient" }]);
+    t("H6 200 without a usable date -> transient", await meta(() => new Response(JSON.stringify({ lastModifiedDateTime: "soon" }), { status: 200 })), { kind: "transient" });
+    t("H7 network failure / timeout -> transient (never throws)",
+      [await meta(() => { throw new Error("ECONNRESET"); }), await meta(() => { throw new DOMException("timed out", "TimeoutError"); })],
+      [{ kind: "transient" }, { kind: "transient" }]);
     // Flag-OFF pin: the EXISTING reader's metadata request is byte-for-byte what it was (id,eTag,size).
     seen.length = 0;
     drive = () => new Response("", { status: 404 });

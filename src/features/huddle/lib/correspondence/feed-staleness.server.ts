@@ -61,7 +61,7 @@ export function runFeedStaleness(cfg: OneDriveFeedsConfig | null): Promise<Stale
       const ledger = await import("../email/email-replies.server");
       return await runFeedStalenessCheck(cfg, {
         readMeta: readFeedFileMeta,
-        store: { raise: ledger.raiseFeedAttention, clear: ledger.clearFeedAttention },
+        store: { raise: ledger.raiseFeedAttention, clear: ledger.clearFeedAttention, notePending: ledger.notePendingFeedAttention },
         now: () => Date.now(),
         log: (line) => console.log(line),
       });

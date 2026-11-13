@@ -57,6 +57,9 @@ CREATE INDEX IF NOT EXISTS email_replies_owner_kind_status_idx ON chat.email_rep
 -- thread. needs_context set = "can't tell if answered" (listed, not counted); source_link = Teams webUrl.
 ALTER TABLE chat.email_replies ADD COLUMN IF NOT EXISTS needs_context TEXT;
 ALTER TABLE chat.email_replies ADD COLUMN IF NOT EXISTS source_link TEXT;
+-- Feed-staleness rows (kind 'feed', 2026-11-13): the hard reason ('missing' | 'unreadable') seen by the last
+-- check and not yet confirmed. NULL on every other kind.
+ALTER TABLE chat.email_replies ADD COLUMN IF NOT EXISTS feed_pending TEXT;
 CREATE TABLE IF NOT EXISTS chat.attention_settings (
   owner_email  TEXT PRIMARY KEY,
   urgent_kinds TEXT[] NOT NULL,
@@ -433,8 +436,12 @@ export async function settleChatAttention(id: string, ownerEmail: string, ownerR
  * (kind 'feed'), `graph_message_id` = the episode (`stale:<lastModified ISO>` | `missing` | `unreadable`).
  *  - open row: refreshed in place only when the episode or the text changed (no write otherwise);
  *  - auto-cleared row ('replied', the file had updated): reopened by any raise -- a new problem;
- *  - dismissed row: reopened ONLY by a different episode -- re-reading the same stale file never un-dismisses.
- * Returns whether a row was written.
+ *  - dismissed row: reopened ONLY by something NEW (verifier loop 4, 4c): a stale episode whose last-modified
+ *    time is LATER than the latest one the row has seen, or a different hard reason (missing / unreadable --
+ *    those reach here only after HARD_REASON_CHECKS consecutive checks). Re-reading the same stale file, or
+ *    coming back to it after a hard reason, never un-dismisses.
+ * `received_at` keeps the latest last-modified time seen (a hard episode does not erase it). Any pending hard
+ * reason is forgotten (a non-hard check breaks the run). Returns whether a row was written.
  */
 export async function raiseFeedAttention(r: {
   id: string;
@@ -446,36 +453,78 @@ export async function raiseFeedAttention(r: {
   huddleId: string;
 }): Promise<boolean> {
   await ensureBootstrapped();
-  const q = await getPool().query(
+  const pool = getPool();
+  await pool.query(
+    `UPDATE chat.email_replies SET feed_pending = NULL
+      WHERE id = $1 AND owner_email = lower($2) AND kind = 'feed' AND feed_pending IS NOT NULL`,
+    [r.id, r.ownerEmail],
+  );
+  const q = await pool.query(
     `INSERT INTO chat.email_replies AS e
        (id, owner_email, mailbox, graph_message_id, subject, from_name, received_at, kind, huddle_id)
      VALUES ($1, lower($2), '', $3, $4, $5, $6, 'feed', $7)
      ON CONFLICT (id) DO UPDATE SET
        graph_message_id = EXCLUDED.graph_message_id, subject = EXCLUDED.subject, from_name = EXCLUDED.from_name,
-       received_at = EXCLUDED.received_at,
+       received_at = coalesce(EXCLUDED.received_at, e.received_at),
        status = CASE WHEN e.status IN ('owed','drafted') THEN e.status ELSE 'owed' END,
        settled_at = CASE WHEN e.status IN ('owed','drafted') THEN e.settled_at ELSE NULL END,
+       feed_pending = NULL,
        updated_at = now()
      WHERE e.kind = 'feed' AND e.owner_email = lower($2) AND (
        (e.status IN ('owed','drafted') AND (e.graph_message_id IS DISTINCT FROM EXCLUDED.graph_message_id
           OR e.subject IS DISTINCT FROM EXCLUDED.subject OR e.from_name IS DISTINCT FROM EXCLUDED.from_name))
        OR e.status = 'replied'
-       OR (e.status = 'dismissed' AND e.graph_message_id IS DISTINCT FROM EXCLUDED.graph_message_id))`,
+       OR (e.status = 'dismissed' AND e.graph_message_id IS DISTINCT FROM EXCLUDED.graph_message_id AND (
+            EXCLUDED.received_at IS NULL OR e.received_at IS NULL OR EXCLUDED.received_at > e.received_at)))`,
     [r.id, r.ownerEmail, r.episode, r.title.slice(0, 300), r.detail.slice(0, 300), r.sinceIso, r.huddleId],
   );
   return (q.rowCount ?? 0) > 0;
 }
 
 /** The feed file is fresh again: its open OR dismissed row settles 'replied' (auto-cleared), which ends the
- *  episode so a later problem raises a new item. Nothing to clear => no row touched. */
+ *  episode so a later problem raises a new item; any pending hard reason is forgotten. Returns whether a shown
+ *  or dismissed row was cleared (forgetting a pending reason alone is not a clear). */
 export async function clearFeedAttention(id: string, ownerEmail: string): Promise<boolean> {
   await ensureBootstrapped();
-  const q = await getPool().query(
+  const pool = getPool();
+  await pool.query(
+    `UPDATE chat.email_replies SET feed_pending = NULL
+      WHERE id = $1 AND owner_email = lower($2) AND kind = 'feed' AND feed_pending IS NOT NULL`,
+    [id, ownerEmail],
+  );
+  const q = await pool.query(
     `UPDATE chat.email_replies SET status = 'replied', settled_at = now(), updated_at = now()
       WHERE id = $1 AND owner_email = lower($2) AND kind = 'feed' AND status IN ('owed','drafted','dismissed')`,
     [id, ownerEmail],
   );
   return (q.rowCount ?? 0) > 0;
+}
+
+/**
+ * This check saw hard reason `reason` ('missing' | 'unreadable') for the file. Stores it as the row's pending
+ * reason and returns true when the row ALREADY held the same pending reason -- i.e. the previous non-transient
+ * check saw it too (HARD_REASON_CHECKS = 2 consecutive checks); false on a first sighting. With no row yet, a
+ * hidden settled row ('replied', never listed) is created to hold it. Never touches a non-feed row.
+ */
+export async function notePendingFeedAttention(r: {
+  id: string;
+  ownerEmail: string;
+  reason: "missing" | "unreadable";
+  huddleId: string;
+}): Promise<boolean> {
+  await ensureBootstrapped();
+  const q = await getPool().query<{ before: string | null }>(
+    `WITH prev AS (
+       SELECT feed_pending FROM chat.email_replies WHERE id = $1 AND owner_email = lower($2) AND kind = 'feed')
+     INSERT INTO chat.email_replies AS e
+       (id, owner_email, mailbox, graph_message_id, kind, huddle_id, status, settled_at, feed_pending)
+     VALUES ($1, lower($2), '', '', 'feed', $4, 'replied', now(), $3)
+     ON CONFLICT (id) DO UPDATE SET feed_pending = EXCLUDED.feed_pending
+     WHERE e.kind = 'feed' AND e.owner_email = lower($2)
+     RETURNING (SELECT feed_pending FROM prev) AS before`,
+    [r.id, r.ownerEmail, r.reason, r.huddleId],
+  );
+  return q.rows[0]?.before === r.reason;
 }
 
 export async function getUrgentKinds(ownerEmail: string): Promise<unknown> {

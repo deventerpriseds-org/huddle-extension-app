@@ -116,19 +116,23 @@ async function driveItemMeta(cfg: OneDriveFeedsConfig, path: string, select: str
 
 /**
  * Metadata only (no download): when the feed file last changed, for the file-staleness alert
- * (lib/correspondence/feed-staleness.ts). 404 => missing; any other failure (401/403, other HTTP error, network,
- * timeout) => unreadable. Called ONLY when correspondence.staleAlerts is true. Never throws; logs nothing.
+ * (lib/correspondence/feed-staleness.ts). 404 => missing; 403 => unreadable; any other failure (other HTTP
+ * error, network, timeout, no usable date) => transient. Called ONLY when correspondence.staleAlerts is true.
+ * Never throws; logs nothing.
  */
 export async function readFeedFileMeta(cfg: OneDriveFeedsConfig, path: string): Promise<FeedMeta> {
   try {
     const { meta } = await driveItemMeta(cfg, path, "lastModifiedDateTime");
+    // Only 404 / 403 say something about the FILE. Every other failure (5xx, 429, 401 -- Huddle's own token --,
+    // timeout, network, a 200 without a usable date) is transient: it must not move the alert (verifier loop 4).
     if (meta.status === 404) return { kind: "missing" };
-    if (!meta.ok) return { kind: "unreadable" };
+    if (meta.status === 403) return { kind: "unreadable" };
+    if (!meta.ok) return { kind: "transient" };
     const item = (await meta.json()) as { lastModifiedDateTime?: unknown };
     const ms = typeof item.lastModifiedDateTime === "string" ? Date.parse(item.lastModifiedDateTime) : NaN;
-    return Number.isFinite(ms) ? { kind: "ok", lastModifiedMs: ms } : { kind: "unreadable" };
+    return Number.isFinite(ms) ? { kind: "ok", lastModifiedMs: ms } : { kind: "transient" };
   } catch {
-    return { kind: "unreadable" };
+    return { kind: "transient" };
   }
 }
 

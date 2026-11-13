@@ -30,17 +30,26 @@ export const TEAMS_GRACE_MINUTES = 60;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 
-/** What the drive said about one file (metadata only -- never the content). */
+/** What the drive said about one file (metadata only -- never the content). Only a 404 means missing and only
+ *  a 403 means unreadable; every other failure (timeout, network, 5xx, 429, 401 -- Huddle's own token -- or a
+ *  200 without a usable date) is `transient`: it says nothing about the file (verifier loop 4, 4c). */
 export type FeedMeta =
   | { kind: "ok"; lastModifiedMs: number }
   | { kind: "missing" } // 404
-  | { kind: "unreadable" }; // 401/403, any other HTTP error, network, timeout
+  | { kind: "unreadable" } // 403
+  | { kind: "transient" }; // anything else: no information this check
 
 export type StaleDecision =
   | { state: "fresh" }
   | { state: "stale"; sinceMs: number; workingHours: number | null }
   | { state: "missing" }
-  | { state: "unreadable" };
+  | { state: "unreadable" }
+  | { state: "transient" };
+/** A decision that is shown on the bell. */
+export type AlertDecision = Extract<StaleDecision, { state: "stale" | "missing" | "unreadable" }>;
+/** A missing / unreadable file is alerted only once the SAME reason is seen on this many consecutive checks
+ *  (a transient check in between neither confirms nor resets it), so one blip never raises or reopens. */
+export const HARD_REASON_CHECKS = 2;
 
 // ---------------------------------------------------------------------------------------------
 // Time-zone arithmetic (no library): wall-clock parts in WORK_TZ, and wall-clock -> instant.
@@ -120,13 +129,15 @@ export function teamsDueInstant(nowMs: number): number {
  * Pure: one file's staleness.
  *  - email / sent: stale when unchanged for MORE than `staleHours` working hours.
  *  - teams: stale when not changed since the most recent weekday 18:00 local, once its 60-minute grace has passed.
- *  - a file the drive says is not there is `missing`; one that cannot be read is `unreadable` (own reasons).
+ *  - a file the drive says is not there (404) is `missing`; one it refuses (403) is `unreadable` (own reasons).
+ *  - any other failed read is `transient`: no information, so nothing about the alert changes.
  * A modification time in the future (clock skew) or one that does not parse as a number is handled safely:
- * future => fresh; non-finite => unreadable (the drive did not give a usable answer).
+ * future => fresh; non-finite => transient (the drive did not give a usable answer this time).
  */
 export function decideFeedStaleness(file: FeedFile, meta: FeedMeta, nowMs: number, staleHours: number): StaleDecision {
   if (meta.kind === "missing") return { state: "missing" };
-  if (meta.kind === "unreadable" || !Number.isFinite(meta.lastModifiedMs)) return { state: "unreadable" };
+  if (meta.kind === "unreadable") return { state: "unreadable" };
+  if (meta.kind === "transient" || !Number.isFinite(meta.lastModifiedMs)) return { state: "transient" };
   const lm = meta.lastModifiedMs;
   if (lm >= nowMs) return { state: "fresh" };
   if (file === "teams") {
@@ -167,7 +178,7 @@ export function workingSpanLabel(hours: number): string {
 }
 
 /** The bell row's title + detail for a non-fresh decision. */
-export function feedAlertText(file: FeedFile, d: Exclude<StaleDecision, { state: "fresh" }>, nowMs: number): { title: string; detail: string } {
+export function feedAlertText(file: FeedFile, d: AlertDecision, nowMs: number): { title: string; detail: string } {
   const label = FEED_FILE_LABEL[file];
   const check = `Check the Power Automate ${FLOW_NAME[file]} flow.`;
   if (d.state === "missing") return { title: `${label} is missing from OneDrive`, detail: check };
@@ -178,7 +189,7 @@ export function feedAlertText(file: FeedFile, d: Exclude<StaleDecision, { state:
 }
 
 /** The episode a raised row stands for. Dismiss holds for the rest of its episode; a new one reopens. */
-export function feedEpisode(d: Exclude<StaleDecision, { state: "fresh" }>): string {
+export function feedEpisode(d: AlertDecision): string {
   return d.state === "stale" ? `stale:${new Date(d.sinceMs).toISOString()}` : d.state;
 }
 
@@ -191,8 +202,9 @@ export const feedAttentionId = (owner: string, file: FeedFile) => `attn-feed-${f
 // ---------------------------------------------------------------------------------------------
 
 export interface FeedAlertStore {
-  /** Open (or refresh, or reopen) the file's ONE row. Returns whether a row was written. Idempotent: the same
-   *  episode with the same text writes nothing; a row the owner dismissed reopens only for a NEW episode; a row
+  /** Open (or refresh, or reopen) the file's ONE row, and forget any pending hard reason. Returns whether a row
+   *  was written. Idempotent: the same episode with the same text writes nothing; a row the owner dismissed
+   *  reopens only for something NEW (a later last-modified time, or a different hard reason); a row
    *  auto-cleared by a fresh file reopens on any raise. */
   raise(r: {
     id: string;
@@ -203,8 +215,12 @@ export interface FeedAlertStore {
     sinceIso: string | null;
     huddleId: string;
   }): Promise<boolean>;
-  /** The file is fresh: settle its open (or dismissed) row as auto-cleared. No row / already clear => no write. */
+  /** The file is fresh: settle its open (or dismissed) row as auto-cleared, and forget any pending hard reason.
+   *  Returns whether a shown or dismissed row was cleared. */
   clear(id: string, ownerEmail: string): Promise<boolean>;
+  /** Record that THIS check saw hard reason `reason`. Returns true when the previous non-transient check had
+   *  recorded the same reason (HARD_REASON_CHECKS consecutive checks), false on a first sighting. */
+  notePending(r: { id: string; ownerEmail: string; reason: "missing" | "unreadable"; huddleId: string }): Promise<boolean>;
 }
 
 export interface StalenessReport {
@@ -212,6 +228,8 @@ export interface StalenessReport {
   raised: number;
   cleared: number;
   failed: number;
+  /** Hard reasons seen for the first time this check (not alerted yet). */
+  pending?: number;
 }
 
 /** Apply each checked file's decision to the bell. One file's store failure never stops the others. */
@@ -222,15 +240,20 @@ export async function applyFeedStaleness(
   staleHours: number,
   store: FeedAlertStore,
 ): Promise<StalenessReport> {
-  const rep: StalenessReport = { states: {}, raised: 0, cleared: 0, failed: 0 };
+  const rep: StalenessReport = { states: {}, raised: 0, cleared: 0, failed: 0, pending: 0 };
   for (const { file, meta } of checked) {
     const d = decideFeedStaleness(file, meta, nowMs, staleHours);
     rep.states[file] = d.state;
     const id = feedAttentionId(owner, file);
     try {
+      if (d.state === "transient") continue; // no information: the alert state is left exactly as it is
       if (d.state === "fresh") {
         if (await store.clear(id, owner)) rep.cleared++;
       } else {
+        if (d.state !== "stale" && !(await store.notePending({ id, ownerEmail: owner, reason: d.state, huddleId: EMAIL_ALERT_HUDDLE }))) {
+          rep.pending = (rep.pending ?? 0) + 1;
+          continue; // first sighting of a hard reason: the next check must confirm it
+        }
         const { title, detail } = feedAlertText(file, d, nowMs);
         const ok = await store.raise({
           id,
@@ -253,5 +276,5 @@ export async function applyFeedStaleness(
 /** Pure: the public-safe log line (file names, states and counts only). */
 export function stalenessLogLine(rep: StalenessReport): string {
   const s = FEED_FILES.filter((f) => rep.states[f]).map((f) => `${f}=${rep.states[f]}`);
-  return `[feed-staleness] ${s.join(" ")} raised=${rep.raised} cleared=${rep.cleared}${rep.failed ? ` failed=${rep.failed}` : ""}`;
+  return `[feed-staleness] ${s.join(" ")} raised=${rep.raised} cleared=${rep.cleared}${rep.pending ? ` pending=${rep.pending}` : ""}${rep.failed ? ` failed=${rep.failed}` : ""}`;
 }
