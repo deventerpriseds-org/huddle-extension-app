@@ -136,6 +136,25 @@ try {
     const h = await S.applyFeedStaleness(O, [{ file: "sent", meta: okMeta("2026-11-12T14:02:00Z") }], U("2026-11-16T15:00:00Z"), 6, store);
     t("S20 dismissed, then a LATER last-modified (still stale): reopens", [h.raised, (await vrow()).status, (await vrow()).episode], [1, "owed", "stale:2026-11-12T14:02:00.000Z"]);
   }
+  // Verifier loop 4, 4d (V3): 50 newer open items must not push the feed alert out of the list.
+  {
+    const P = "busy@eds.example";
+    for (let i = 0; i < 60; i++) {
+      await pool.query(
+        `INSERT INTO chat.email_replies (id, owner_email, mailbox, graph_message_id, kind, status, subject, received_at)
+         VALUES ($1, $2, 'busy@eds.example', $1, 'email', 'owed', 'Synthetic', $3)`,
+        [`busy-${i}`, P, new Date(U("2026-11-13T12:00:00Z") + i * 60_000).toISOString()],
+      );
+    }
+    await S.applyFeedStaleness(P, stale, NOW, 6, store);
+    const list = await R.listOpenAttention(P);
+    const fid = S.feedAttentionId(P, "email");
+    t("S21 (V3) a stale feed row is listed (first) even behind 60 newer open items; the list stays capped at 50",
+      [list.length, list[0]?.id === fid, list.filter((r) => r.kind === "feed").length], [50, true, 1]);
+    t("S22 without a feed row the order is unchanged: newest first", (await R.listOpenAttention(O.replace("owner", "nobody"))).length, 0);
+    const emailsOnly = (await R.listOpenAttention(P)).filter((r) => r.kind === "email").map((r) => r.id);
+    t("S23 the email rows after the feed row are still newest first", emailsOnly.slice(0, 3), ["busy-59", "busy-58", "busy-57"]);
+  }
   await pool.query(`INSERT INTO chat.email_replies (id, owner_email, mailbox, graph_message_id, kind, status) VALUES ('attn-feed-x', $1, '', 'm', 'chat', 'owed')`, [O]);
   t("S11 a raise never overwrites a non-feed row with the same id",
     [await R.raiseFeedAttention({ id: "attn-feed-x", ownerEmail: O, episode: "missing", title: "t", detail: "d", sinceIso: null, huddleId: "dm-iris-chase" }), (await rowOf("attn-feed-x")).kind], [false, "chat"]);

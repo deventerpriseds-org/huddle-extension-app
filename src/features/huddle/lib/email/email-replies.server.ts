@@ -338,14 +338,16 @@ export interface AttentionRow {
   source_link?: string | null;
 }
 
-/** Every OPEN item (any kind) for the owner, newest first. The bell filters by the owner's kinds. */
+/** Every OPEN item (any kind) for the owner, newest first. The bell filters by the owner's kinds. A feed
+ *  file-staleness row (at most one per feed file) always comes FIRST, so the LIMIT can never push out the alert
+ *  that says the inputs stopped -- its received_at is the file's OLD last-modified time (verifier loop 4, 4d). */
 export async function listOpenAttention(ownerEmail: string, limit = 50): Promise<AttentionRow[]> {
   await ensureBootstrapped();
   const r = await getPool().query<AttentionRow>(
     `SELECT id, kind, huddle_id, subject, from_name, from_address, received_at, created_at, needs_context, source_link
        FROM chat.email_replies
       WHERE owner_email = lower($1) AND status IN ('owed','drafted')
-      ORDER BY coalesce(received_at, created_at) DESC
+      ORDER BY (kind = 'feed') DESC, coalesce(received_at, created_at) DESC
       LIMIT $2`,
     [ownerEmail, limit],
   );
