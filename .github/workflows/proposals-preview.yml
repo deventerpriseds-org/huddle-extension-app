@@ -25,6 +25,10 @@ on:
         description: "Cap on the number of messages sent to the model"
         required: false
         default: "60"
+      since:
+        description: "Open-vs-replied report start, ISO UTC (e.g. 2026-11-09T05:00:00Z = Monday 00:00 ET). Blank = the days window."
+        required: false
+        default: ""
       accept_unmarked_teams:
         description: "Preview only: read Teams lines that predate the synthetic:false marker"
         required: false
@@ -57,6 +61,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PREVIEW_DAYS: ${{ inputs.days }}
           PREVIEW_MAX_SOURCES: ${{ inputs.max_sources }}
+          PREVIEW_SINCE: ${{ inputs.since }}
           PREVIEW_ACCEPT_UNMARKED: ${{ inputs.accept_unmarked_teams && '1' || '0' }}
         run: |
           TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
