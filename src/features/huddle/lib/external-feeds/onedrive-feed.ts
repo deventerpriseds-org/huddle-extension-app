@@ -44,6 +44,11 @@ export interface CorrespondenceConfig {
   maxAttempts: number;
   /** Minimum gap between two eTag checks of the Teams log (the flow writes once a weekday evening). */
   minIntervalMinutes: number;
+  /** File-staleness alert on the bell (owner decision 2026-11-13). OFF unless literally `true`; independent of
+   *  `ingest`. lib/correspondence/feed-staleness.ts. */
+  staleAlerts: boolean;
+  /** email / sent are stale after MORE than this many working hours (Mon-Fri 8-18 ET) unchanged. */
+  staleHours: number;
 }
 
 /** The REAL file the owner's Teams flow writes (read from the drive 2026-11-13, graph-permission-check run
@@ -56,6 +61,8 @@ export const SENT_PATH_DEFAULT = "/automation/email/sent.json";
 export const TEAMS_SOURCE_EXPECTED = "teams";
 export const CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT = 5;
 export const CORRESPONDENCE_MIN_INTERVAL_DEFAULT = 10;
+/** Owner decision 2026-11-13: email/sent stale after N working hours; N defaults to 6. */
+export const CORRESPONDENCE_STALE_HOURS_DEFAULT = 6;
 
 export interface OneDriveFeedsConfig {
   enabled: boolean;
@@ -210,6 +217,8 @@ function correspondenceFlags(v: unknown): CorrespondenceConfig {
     proposals: o.proposals === true,
     maxAttempts: n(o.maxAttempts, CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT, 20),
     minIntervalMinutes: n(o.minIntervalMinutes, CORRESPONDENCE_MIN_INTERVAL_DEFAULT, 24 * 60),
+    staleAlerts: o.staleAlerts === true,
+    staleHours: n(o.staleHours, CORRESPONDENCE_STALE_HOURS_DEFAULT, 200),
   };
 }
 

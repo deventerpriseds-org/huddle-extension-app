@@ -351,12 +351,14 @@ export async function listOpenAttention(ownerEmail: string, limit = 50): Promise
 
 /** "Dealt with in the chat": the owner sent a message in `huddleId`, so that conversation's open
  *  MEETING/APPOINTMENT items settle. Emails keep their own rules (reply detected / Dismiss), and so do Teams
- *  chats: talking to Iris is not answering the Teams chat (a later owner message in THAT chat, or Dismiss). */
+ *  chats: talking to Iris is not answering the Teams chat (a later owner message in THAT chat, or Dismiss).
+ *  Feed-staleness rows (2026-11-13) too: talking to Iris does not fix a Power Automate flow -- they clear
+ *  when the file updates, or on Dismiss. */
 export async function settleAttentionForHuddle(ownerEmail: string, huddleId: string): Promise<number> {
   await ensureBootstrapped();
   const r = await getPool().query(
     `UPDATE chat.email_replies SET status = 'replied', settled_at = now(), updated_at = now()
-      WHERE owner_email = lower($1) AND huddle_id = $2 AND kind NOT IN ('email','chat') AND status IN ('owed','drafted')`,
+      WHERE owner_email = lower($1) AND huddle_id = $2 AND kind NOT IN ('email','chat','feed') AND status IN ('owed','drafted')`,
     [ownerEmail, huddleId],
   );
   return r.rowCount ?? 0;
@@ -422,6 +424,56 @@ export async function settleChatAttention(id: string, ownerEmail: string, ownerR
       WHERE id = $1 AND owner_email = lower($2) AND kind = 'chat' AND status IN ('owed','drafted')
         AND received_at <= $3`,
     [id, ownerEmail, ownerReplyAt],
+  );
+  return (q.rowCount ?? 0) > 0;
+}
+
+/**
+ * A OneDrive feed file is stale / missing / unreadable (feed-staleness.ts, 2026-11-13): ONE row per owner+file
+ * (kind 'feed'), `graph_message_id` = the episode (`stale:<lastModified ISO>` | `missing` | `unreadable`).
+ *  - open row: refreshed in place only when the episode or the text changed (no write otherwise);
+ *  - auto-cleared row ('replied', the file had updated): reopened by any raise -- a new problem;
+ *  - dismissed row: reopened ONLY by a different episode -- re-reading the same stale file never un-dismisses.
+ * Returns whether a row was written.
+ */
+export async function raiseFeedAttention(r: {
+  id: string;
+  ownerEmail: string;
+  episode: string;
+  title: string;
+  detail: string;
+  sinceIso: string | null;
+  huddleId: string;
+}): Promise<boolean> {
+  await ensureBootstrapped();
+  const q = await getPool().query(
+    `INSERT INTO chat.email_replies AS e
+       (id, owner_email, mailbox, graph_message_id, subject, from_name, received_at, kind, huddle_id)
+     VALUES ($1, lower($2), '', $3, $4, $5, $6, 'feed', $7)
+     ON CONFLICT (id) DO UPDATE SET
+       graph_message_id = EXCLUDED.graph_message_id, subject = EXCLUDED.subject, from_name = EXCLUDED.from_name,
+       received_at = EXCLUDED.received_at,
+       status = CASE WHEN e.status IN ('owed','drafted') THEN e.status ELSE 'owed' END,
+       settled_at = CASE WHEN e.status IN ('owed','drafted') THEN e.settled_at ELSE NULL END,
+       updated_at = now()
+     WHERE e.kind = 'feed' AND e.owner_email = lower($2) AND (
+       (e.status IN ('owed','drafted') AND (e.graph_message_id IS DISTINCT FROM EXCLUDED.graph_message_id
+          OR e.subject IS DISTINCT FROM EXCLUDED.subject OR e.from_name IS DISTINCT FROM EXCLUDED.from_name))
+       OR e.status = 'replied'
+       OR (e.status = 'dismissed' AND e.graph_message_id IS DISTINCT FROM EXCLUDED.graph_message_id))`,
+    [r.id, r.ownerEmail, r.episode, r.title.slice(0, 300), r.detail.slice(0, 300), r.sinceIso, r.huddleId],
+  );
+  return (q.rowCount ?? 0) > 0;
+}
+
+/** The feed file is fresh again: its open OR dismissed row settles 'replied' (auto-cleared), which ends the
+ *  episode so a later problem raises a new item. Nothing to clear => no row touched. */
+export async function clearFeedAttention(id: string, ownerEmail: string): Promise<boolean> {
+  await ensureBootstrapped();
+  const q = await getPool().query(
+    `UPDATE chat.email_replies SET status = 'replied', settled_at = now(), updated_at = now()
+      WHERE id = $1 AND owner_email = lower($2) AND kind = 'feed' AND status IN ('owed','drafted','dismissed')`,
+    [id, ownerEmail],
   );
   return (q.rowCount ?? 0) > 0;
 }

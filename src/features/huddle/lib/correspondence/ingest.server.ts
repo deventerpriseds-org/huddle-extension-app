@@ -32,6 +32,16 @@ let running: Promise<PassResult | null> | null = null;
  *  across instances the ledger's claim/lease makes concurrent passes safe (AC-3.9). */
 export function runCorrespondenceIngest(): Promise<PassResult | null> {
   const cfg = getFeedsConfig();
+  const pass = runIngestOnly(cfg);
+  // File-staleness alert (2026-11-13): rides this heartbeat hook, independent of `ingest`. Flag OFF => exactly
+  // the previous behaviour (not even the import). ON => the returned promise also waits for the check (the
+  // heartbeat awaits it at the end of the tick), which never throws.
+  if (cfg?.correspondence.staleAlerts !== true) return pass;
+  const stale = import("./feed-staleness.server").then((m) => m.runFeedStaleness(cfg)).catch(() => null);
+  return Promise.all([pass, stale]).then(([r]) => r);
+}
+
+function runIngestOnly(cfg: ReturnType<typeof getFeedsConfig>): Promise<PassResult | null> {
   if (!cfg || !cfg.correspondence.ingest) return Promise.resolve(null); // AC-6.1: zero work
   if (running) return running;
   running = (async () => {

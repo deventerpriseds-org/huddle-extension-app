@@ -92,6 +92,9 @@ t("AC-6.1 correspondence switches all OFF by default", noTeams.correspondence, {
   proposals: false,
   maxAttempts: 5,
   minIntervalMinutes: 10,
+  // File-staleness alert (2026-11-13, scripts/feed-staleness.test.ts): OFF by default like every switch.
+  staleAlerts: false,
+  staleHours: 6,
 });
 t("AC-6.1 only a literal true turns a switch on", parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { ingest: "yes", bell: 1 } }))!.correspondence.ingest, false);
 const perm = (c: Record<string, unknown>) => {

@@ -41,3 +41,36 @@ Extend these, and build no parallel system:
    row. A fresh file settles it as `replied` (auto-clear).
 4. **`settleAttentionForHuddle` excludes `feed`.** Messaging Iris is not fixing a Power Automate flow, so it must not
    clear the alert. With the flag OFF no `feed` row exists, so this SQL change touches nothing.
+
+### Incident during step 1 (recorded, not hidden)
+Commit `4fc54efe` (step 1) staged ONE file by name, but its tree reverted the D6 work in `proposals.ts`,
+`task-proposals.test.ts` and `IMPL-task-proposals.md`. Mechanism: the commit's recorded parent is `2a98a02f` (D6),
+yet the reflog shows HEAD moving straight from `aa0d6ade`. The branch ref moved to D6 underneath this worktree
+while the index still held `aa0d6ade`'s tree, and `git commit` wrote that stale index. The coordinator restored
+D6 in `648e6f64`; this lane fast-forwarded onto it. **Guard from now on:** commit with
+`git commit --only -- <named paths>`, which builds from HEAD's tree plus the named paths, never a stale index.
+Before every push, check `git show --stat HEAD` and `git diff origin/claude_task-proposals --stat` (they must list
+only this lane's files).
+
+### Step 2: implementation + offline and SQL tests
+Files:
+- NEW `src/features/huddle/lib/correspondence/feed-staleness.ts`: pure decision (`decideFeedStaleness`,
+  `workingMsBetween`, `teamsDueInstant`), the text (`feedAlertText`), episode/id, and `applyFeedStaleness` over an
+  injected `FeedAlertStore`.
+- NEW `src/features/huddle/lib/correspondence/feed-staleness.server.ts`: `runFeedStalenessCheck` (DI, gate) and
+  `runFeedStaleness` (real deps, a 10-min per-instance throttle, never throws).
+- `lib/correspondence/ingest.server.ts`: `runCorrespondenceIngest` returns the old promise unchanged when
+  `staleAlerts !== true`. When ON, the returned promise also waits for the check.
+- `lib/external-feeds/onedrive-feed.server.ts`: `driveItemMeta` (shared metadata GET; `fetchDriveFile` still selects
+  `id,eTag,size`) plus `readFeedFileMeta` (`$select=lastModifiedDateTime`; 404 => missing, other failure => unreadable).
+- `lib/external-feeds/onedrive-feed.ts`: config `correspondence.staleAlerts` (literal `true` only) and
+  `correspondence.staleHours` (int >= 1, cap 200, default 6).
+- `lib/email/email-replies.server.ts`: `raiseFeedAttention` / `clearFeedAttention`. `settleAttentionForHuddle`
+  now excludes `feed`.
+- `lib/attention/attention.ts` + `components/AttentionBell.tsx`: `feed` system kind (icon `FileWarning`).
+- `scripts/correspondence-ingest.test.ts` AC-6.1: the pinned default shape is extended with
+  `staleAlerts:false, staleHours:6` (still all OFF).
+
+Tests: `bun scripts/feed-staleness.test.ts` 58/58; `bun scripts/feed-staleness-sql.test.ts` 13/13 (real SQL, local PG16).
+Two expectations in my first draft were wrong and the code was right: E3 (two more hours on a Friday does not
+change "2 working days", so correctly no write) and E3b ("Wed" is the label within 6 days).

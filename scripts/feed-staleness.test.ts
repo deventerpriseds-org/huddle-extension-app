@@ -1,0 +1,292 @@
+// WHAT:       Offline checks for the OneDrive feed file-staleness alert: the pure working-hours decision
+//             (lib/correspondence/feed-staleness.ts), the bell text, one-row-per-file idempotency and
+//             auto-clear (through an in-memory twin of the bell store), the bell display of the `feed` system
+//             kind, the config keys, and the OFF gate (zero calls, zero writes).
+// WHY:        Owner decision 2026-11-13: emails.json stopped updating 2026-11-11 14:02 UTC and nobody noticed for
+//             two days. The real bell SQL is exercised separately in scripts/feed-staleness-sql.test.ts.
+// SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+// EVIDENCE:   docs/qc-evidence/IMPL-feed-staleness.md.
+//
+// Run: bun scripts/feed-staleness.test.ts      All data synthetic (.example).
+import {
+  applyFeedStaleness,
+  decideFeedStaleness,
+  feedAlertText,
+  feedAttentionId,
+  feedEpisode,
+  sinceLabel,
+  stalenessLogLine,
+  teamsDueInstant,
+  workingMsBetween,
+  workingSpanLabel,
+  type FeedAlertStore,
+  type FeedMeta,
+} from "../src/features/huddle/lib/correspondence/feed-staleness";
+import { feedFilesToCheck, runFeedStalenessCheck } from "../src/features/huddle/lib/correspondence/feed-staleness.server";
+import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
+import {
+  ATTENTION_KINDS,
+  DEFAULT_URGENT_KINDS,
+  badgeCount,
+  bellItems,
+  toAttentionItem,
+} from "../src/features/huddle/lib/attention/attention";
+
+let fail = 0;
+let pass = 0;
+const t = (name: string, got: unknown, want: unknown) => {
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  if (ok) pass++;
+  else fail++;
+  console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : `\n   got:  ${JSON.stringify(got)}\n   want: ${JSON.stringify(want)}`}`);
+};
+
+// Fixed instants, written in UTC. November 2026 is EST (UTC-5): Mon 9, Tue 10, Wed 11, Thu 12, Fri 13, Sat 14.
+const U = (iso: string) => Date.parse(iso);
+const H = 3_600_000;
+const ok = (iso: string): FeedMeta => ({ kind: "ok", lastModifiedMs: U(iso) });
+
+// ---------------------------------------------------------------------------------------------
+// A: working hours (Mon-Fri 08:00-18:00 America/New_York)
+// ---------------------------------------------------------------------------------------------
+t("A1 Fri 18:00 -> Mon 09:00 counts 1 working hour (weekend + nights not counted)",
+  workingMsBetween(U("2026-11-06T23:00:00Z"), U("2026-11-09T14:00:00Z")) / H, 1);
+t("A2 weekend gap: Fri 17:00 -> Mon 10:00 = 3 working hours",
+  workingMsBetween(U("2026-11-06T22:00:00Z"), U("2026-11-09T15:00:00Z")) / H, 3);
+t("A3 overnight: Tue 17:00 -> Wed 09:00 = 2 working hours",
+  workingMsBetween(U("2026-11-10T22:00:00Z"), U("2026-11-11T14:00:00Z")) / H, 2);
+t("A4 inside one working day: Wed 09:00 -> 12:30 = 3.5 h",
+  workingMsBetween(U("2026-11-11T14:00:00Z"), U("2026-11-11T17:30:00Z")) / H, 3.5);
+t("A5 entirely at night / weekend counts nothing (Sat 10:00 -> Sun 20:00)",
+  workingMsBetween(U("2026-11-14T15:00:00Z"), U("2026-11-16T01:00:00Z")), 0);
+t("A6 reversed range counts nothing", workingMsBetween(U("2026-11-12T15:00:00Z"), U("2026-11-11T15:00:00Z")), 0);
+t("A7 DST boundary: Fri Oct 30 17:00 EDT -> Mon Nov 2 09:00 EST = 2 working hours",
+  workingMsBetween(U("2026-10-30T21:00:00Z"), U("2026-11-02T14:00:00Z")) / H, 2);
+
+// ---------------------------------------------------------------------------------------------
+// B: email / sent decision
+// ---------------------------------------------------------------------------------------------
+t("B1 Friday 18:00 -> Monday 09:00 is NOT stale (default 6 h)",
+  decideFeedStaleness("email", ok("2026-11-06T23:00:00Z"), U("2026-11-09T14:00:00Z"), 6).state, "fresh");
+t("B2 overnight is NOT stale: Tue 17:00 -> Wed 10:00 (3 h)",
+  decideFeedStaleness("email", ok("2026-11-10T22:00:00Z"), U("2026-11-11T15:00:00Z"), 6).state, "fresh");
+t("B3 exactly 6 working hours is NOT stale (MORE than N)",
+  decideFeedStaleness("email", ok("2026-11-11T14:00:00Z"), U("2026-11-11T20:00:00Z"), 6).state, "fresh");
+t("B4 6 h + 1 min IS stale",
+  decideFeedStaleness("email", ok("2026-11-11T14:00:00Z"), U("2026-11-11T20:01:00Z"), 6),
+  { state: "stale", sinceMs: U("2026-11-11T14:00:00Z"), workingHours: 6 });
+t("B5 staleHours is honoured (2 h)",
+  decideFeedStaleness("sent", ok("2026-11-11T14:00:00Z"), U("2026-11-11T16:30:00Z"), 2).state, "stale");
+const trigger = decideFeedStaleness("email", ok("2026-11-11T14:02:00Z"), U("2026-11-13T15:00:00Z"), 6);
+t("B6 the trigger case: emails.json last changed Wed 14:02 UTC, checked Fri 10:00 ET -> stale, 20 working hours",
+  trigger, { state: "stale", sinceMs: U("2026-11-11T14:02:00Z"), workingHours: 20 });
+t("B7 trigger case text names the file, the time and the span; no content",
+  trigger.state === "stale" ? feedAlertText("email", trigger, U("2026-11-13T15:00:00Z")) : null,
+  { title: "Work email file hasn't updated since Wed 9:02 AM (2 working days)", detail: "Check the Power Automate email flow." });
+t("B8 a weekend-long quiet sent.json (Fri 17:30 -> Mon 11:00) is NOT stale (3.5 h)",
+  decideFeedStaleness("sent", ok("2026-11-06T22:30:00Z"), U("2026-11-09T16:00:00Z"), 6).state, "fresh");
+t("B9 a modification time in the future (clock skew) is fresh",
+  decideFeedStaleness("email", ok("2026-11-13T16:00:00Z"), U("2026-11-13T15:00:00Z"), 6).state, "fresh");
+
+// ---------------------------------------------------------------------------------------------
+// C: Teams 6pm rule (no change since the most recent weekday 18:00, after a 60-minute grace)
+// ---------------------------------------------------------------------------------------------
+t("C1 due instant on Fri 10:00 ET is Thu 18:00 ET", new Date(teamsDueInstant(U("2026-11-13T15:00:00Z"))).toISOString(), "2026-11-12T23:00:00.000Z");
+t("C2 due instant on Mon 10:00 ET is the previous Friday 18:00 ET", new Date(teamsDueInstant(U("2026-11-09T15:00:00Z"))).toISOString(), "2026-11-06T23:00:00.000Z");
+t("C3 due instant on Thu 18:59 ET (grace not over) is still Wed 18:00", new Date(teamsDueInstant(U("2026-11-12T23:59:00Z"))).toISOString(), "2026-11-11T23:00:00.000Z");
+t("C4 updated Thu 18:30, checked Fri 10:00 -> fresh",
+  decideFeedStaleness("teams", ok("2026-11-12T23:30:00Z"), U("2026-11-13T15:00:00Z"), 6).state, "fresh");
+t("C5 last updated Thu 17:55, checked Thu 19:01 -> stale (nothing after 6pm)",
+  decideFeedStaleness("teams", ok("2026-11-12T22:55:00Z"), U("2026-11-13T00:01:00Z"), 6).state, "stale");
+t("C6 last updated Thu 17:55, checked Thu 18:59 -> fresh (grace)",
+  decideFeedStaleness("teams", ok("2026-11-12T22:55:00Z"), U("2026-11-12T23:59:00Z"), 6).state, "fresh");
+t("C7 updated Fri 18:20, checked Mon 10:00 -> fresh (no weekend expectation)",
+  decideFeedStaleness("teams", ok("2026-11-06T23:20:00Z"), U("2026-11-09T15:00:00Z"), 6).state, "fresh");
+t("C8 last updated Fri 17:00, checked Sat 12:00 -> stale (Friday evening missed)",
+  decideFeedStaleness("teams", ok("2026-11-06T22:00:00Z"), U("2026-11-07T17:00:00Z"), 6).state, "stale");
+const teamsStale = decideFeedStaleness("teams", ok("2026-11-11T23:12:00Z"), U("2026-11-13T15:00:00Z"), 6);
+t("C9 Teams stale text",
+  teamsStale.state === "stale" ? feedAlertText("teams", teamsStale, U("2026-11-13T15:00:00Z")).title : null,
+  "Teams chat file hasn't updated since Wed 6:12 PM (expected after 6 PM each weekday)");
+
+// ---------------------------------------------------------------------------------------------
+// D: missing / unreadable are their own reasons
+// ---------------------------------------------------------------------------------------------
+const now = U("2026-11-13T15:00:00Z");
+t("D1 missing file -> missing (every file kind)", ["email", "sent", "teams"].map((f) => decideFeedStaleness(f as "email", { kind: "missing" }, now, 6).state), ["missing", "missing", "missing"]);
+t("D2 unreadable file -> unreadable", decideFeedStaleness("sent", { kind: "unreadable" }, now, 6).state, "unreadable");
+t("D3 a lastModified that is not a number -> unreadable", decideFeedStaleness("email", { kind: "ok", lastModifiedMs: NaN }, now, 6).state, "unreadable");
+t("D4 missing text", feedAlertText("sent", { state: "missing" }, now), { title: "Work sent-mail file is missing from OneDrive", detail: "Check the Power Automate sent-mail flow." });
+t("D5 unreadable text", feedAlertText("teams", { state: "unreadable" }, now).title, "Teams chat file can't be read from OneDrive");
+t("D6 episodes", [feedEpisode({ state: "missing" }), feedEpisode({ state: "unreadable" }), feedEpisode({ state: "stale", sinceMs: U("2026-11-11T14:02:00Z"), workingHours: 20 })], ["missing", "unreadable", "stale:2026-11-11T14:02:00.000Z"]);
+t("D8 since label: weekday within 6 days, month+day beyond", [sinceLabel(U("2026-11-11T14:02:00Z"), now), sinceLabel(U("2026-11-03T14:02:00Z"), now)], ["Wed 9:02 AM", "Nov 3, 9:02 AM"]);
+t("D7 span labels", [workingSpanLabel(1), workingSpanLabel(9), workingSpanLabel(10), workingSpanLabel(25)], ["1 working hour", "9 working hours", "1 working day", "2 working days"]);
+
+// ---------------------------------------------------------------------------------------------
+// E: bell -- ONE row per file, idempotent across heartbeats, auto-clear, dismiss holds per episode.
+// In-memory twin of raiseFeedAttention / clearFeedAttention (the SQL itself: feed-staleness-sql.test.ts).
+// ---------------------------------------------------------------------------------------------
+type Row = { id: string; owner: string; episode: string; title: string; detail: string; since: string | null; status: string };
+function twin() {
+  const rows = new Map<string, Row>();
+  let writes = 0;
+  const store: FeedAlertStore = {
+    async raise(r) {
+      const e = rows.get(r.id);
+      const open = e && (e.status === "owed" || e.status === "drafted");
+      const write =
+        !e ||
+        (open && (e.episode !== r.episode || e.title !== r.title || e.detail !== r.detail)) ||
+        e.status === "replied" ||
+        (e.status === "dismissed" && e.episode !== r.episode);
+      if (!write) return false;
+      rows.set(r.id, { id: r.id, owner: r.ownerEmail, episode: r.episode, title: r.title, detail: r.detail, since: r.sinceIso, status: open ? e!.status : "owed" });
+      writes++;
+      return true;
+    },
+    async clear(id) {
+      const e = rows.get(id);
+      if (!e || !["owed", "drafted", "dismissed"].includes(e.status)) return false;
+      e.status = "replied";
+      writes++;
+      return true;
+    },
+  };
+  return { rows, store, writes: () => writes };
+}
+const O = "owner@eds.example";
+const open = (rows: Map<string, Row>) => [...rows.values()].filter((r) => r.status === "owed").length;
+{
+  const tw = twin();
+  const stale = [{ file: "email" as const, meta: ok("2026-11-11T14:02:00Z") }];
+  const r1 = await applyFeedStaleness(O, stale, now, 6, tw.store);
+  const r2 = await applyFeedStaleness(O, stale, now + 60_000, 6, tw.store);
+  const r3 = await applyFeedStaleness(O, stale, now + 120_000, 6, tw.store);
+  t("E1 stale file raises ONE row on the first heartbeat", [r1.raised, open(tw.rows)], [1, 1]);
+  t("E2 next heartbeats with the same episode and text write nothing (no duplicate)", [r2.raised, r3.raised, tw.writes(), tw.rows.size], [0, 0, 1, 1]);
+  const r4a = await applyFeedStaleness(O, stale, now + 2 * H, 6, tw.store);
+  t("E3a two more hours, same '2 working days' text -> no write", [r4a.raised, tw.writes()], [0, 1]);
+  const r4 = await applyFeedStaleness(O, stale, U("2026-11-16T15:00:00Z"), 6, tw.store);
+  t("E3b Monday: text becomes '3 working days' -> the SAME row refreshed in place (still one row)",
+    [r4.raised, tw.rows.size, open(tw.rows), tw.rows.get(feedAttentionId(O, "email"))?.title],
+    [1, 1, 1, "Work email file hasn't updated since Wed 9:02 AM (3 working days)"]);
+  const fresh = [{ file: "email" as const, meta: ok("2026-11-13T16:30:00Z") }];
+  const r5 = await applyFeedStaleness(O, fresh, now + 2 * H, 6, tw.store);
+  const r6 = await applyFeedStaleness(O, fresh, now + 2 * H + 60_000, 6, tw.store);
+  t("E4 file updates -> the row clears itself; clearing again writes nothing", [r5.cleared, r6.cleared, open(tw.rows), tw.rows.get(feedAttentionId(O, "email"))?.status], [1, 0, 0, "replied"]);
+}
+{
+  const tw = twin();
+  const stale = [{ file: "sent" as const, meta: ok("2026-11-11T14:02:00Z") }];
+  await applyFeedStaleness(O, stale, now, 6, tw.store);
+  tw.rows.get(feedAttentionId(O, "sent"))!.status = "dismissed"; // owner taps Dismiss
+  const r1 = await applyFeedStaleness(O, stale, now + 3 * H, 6, tw.store);
+  t("E5 dismissed: the same stale episode never reopens it", [r1.raised, open(tw.rows)], [0, 0]);
+  const r2 = await applyFeedStaleness(O, [{ file: "sent", meta: { kind: "missing" } }], now + 4 * H, 6, tw.store);
+  t("E6 dismissed: a NEW episode (file now missing) reopens the same row", [r2.raised, open(tw.rows), tw.rows.size], [1, 1, 1]);
+}
+{
+  const tw = twin();
+  const missing = [{ file: "teams" as const, meta: { kind: "missing" } as FeedMeta }];
+  await applyFeedStaleness(O, missing, now, 6, tw.store);
+  await applyFeedStaleness(O, [{ file: "teams", meta: ok("2026-11-12T23:30:00Z") }], now + H, 6, tw.store);
+  const r = await applyFeedStaleness(O, missing, now + 2 * H, 6, tw.store);
+  t("E7 missing -> restored (auto-clear) -> missing again raises again (same reason, new problem)", [r.raised, open(tw.rows)], [1, 1]);
+}
+{
+  const tw = twin();
+  tw.store.raise = async () => {
+    throw new Error("db down");
+  };
+  const r = await applyFeedStaleness(O, [{ file: "email", meta: { kind: "missing" } }, { file: "teams", meta: ok("2026-11-12T23:30:00Z") }], now, 6, tw.store);
+  t("E8 one file's store failure does not stop the others", [r.failed, r.states], [1, { email: "missing", teams: "fresh" }]);
+}
+t("E9 ids: one per file, attn-feed- prefix, owner case-insensitive", [
+  feedAttentionId(O, "email").startsWith("attn-feed-email-"),
+  feedAttentionId(O, "email") === feedAttentionId("OWNER@eds.example", "email"),
+  new Set(["email", "sent", "teams"].map((f) => feedAttentionId(O, f as "email"))).size,
+], [true, true, 3]);
+t("E10 log line carries file names, states and counts only",
+  stalenessLogLine({ states: { email: "stale", teams: "missing" }, raised: 2, cleared: 0, failed: 0 }),
+  "[feed-staleness] email=stale teams=missing raised=2 cleared=0");
+
+// ---------------------------------------------------------------------------------------------
+// F: bell display -- `feed` is a system kind: shown and counted outside the owner's "What counts" list,
+// and the list itself is unchanged.
+// ---------------------------------------------------------------------------------------------
+const row = (o: Record<string, unknown>) => ({ id: "x", kind: null, huddle_id: null, subject: null, from_name: null, from_address: null, received_at: null, created_at: null, ...o });
+const feedRow = row({ id: feedAttentionId(O, "email"), kind: "feed", subject: "Work email file hasn't updated since Wed 9:02 AM (2 working days)", from_name: "Check the Power Automate email flow.", huddle_id: "dm-iris-chase", received_at: "2026-11-11T14:02:00.000Z" });
+t("F1 the owner's kind list is unchanged (no new 'What counts' checkbox)", ATTENTION_KINDS, ["email", "meeting", "appointment", "chat"]);
+t("F2 default urgent kinds unchanged", DEFAULT_URGENT_KINDS, ["email", "meeting", "appointment", "chat"]);
+t("F3 a feed row becomes a bell item with its title, detail and stale-since time", toAttentionItem(feedRow), {
+  id: feedAttentionId(O, "email"), kind: "feed", title: "Work email file hasn't updated since Wed 9:02 AM (2 working days)",
+  detail: "Check the Power Automate email flow.", huddleId: "dm-iris-chase", at: "2026-11-11T14:02:00.000Z",
+});
+t("F4 a feed row is listed and counted even when the owner counts NO kinds", [bellItems([feedRow], []).length, badgeCount(bellItems([feedRow], []))], [1, 1]);
+const legacy = [row({ id: "e1", kind: "email", subject: "Hi", received_at: "2026-11-12T10:00:00Z" }), row({ id: "m1", kind: "meeting", subject: "Standup", received_at: "2026-11-12T11:00:00Z" }), row({ id: "z1", kind: "mystery" })];
+t("F5 flag OFF => no feed rows => bell output for existing rows is exactly as before", bellItems(legacy, ["email"]).map((i) => i.id), ["e1"]);
+t("F6 an unknown kind is still dropped", toAttentionItem(row({ kind: "mystery" })), null);
+
+// ---------------------------------------------------------------------------------------------
+// G: config keys + the OFF gate (zero calls, zero writes)
+// ---------------------------------------------------------------------------------------------
+const base = { enabled: true, ownerLogins: [O], driveUser: "drive@eds.example", mailbox: "work@corp.example", synthetic: true, subjectPrefix: "[TEST]" };
+const cfgWith = (correspondence: unknown, extra: Record<string, unknown> = {}) => parseFeedsConfig(JSON.stringify({ ...base, ...extra, correspondence }))!;
+t("G1 staleAlerts defaults OFF; staleHours defaults 6", [cfgWith(undefined).correspondence.staleAlerts, cfgWith(undefined).correspondence.staleHours], [false, 6]);
+t("G2 only a literal true switches staleAlerts on", ["true", 1, "yes", null, false, {}, true].map((v) => cfgWith({ staleAlerts: v }).correspondence.staleAlerts), [false, false, false, false, false, false, true]);
+t("G3 staleHours: integer >= 1, capped 200; junk -> 6", [3, "4", 0, -2, "abc", 2.9, 999].map((v) => cfgWith({ staleHours: v }).correspondence.staleHours), [3, 4, 6, 6, 6, 2, 200]);
+t("G4 staleAlerts does not switch ingest on", cfgWith({ staleAlerts: true }).correspondence.ingest, false);
+t("G5 files checked = the enabled ones only (email default on; sent/teams opt-in)", [
+  feedFilesToCheck(cfgWith({ staleAlerts: true })).map((f) => f.file),
+  feedFilesToCheck(cfgWith({ staleAlerts: true }, { sent: true, teams: true })).map((f) => f.file),
+  feedFilesToCheck(cfgWith({ staleAlerts: true }, { email: { enabled: false }, teams: true })).map((f) => f.file),
+], [["email"], ["email", "sent", "teams"], ["teams"]]);
+
+function countingDeps(meta: FeedMeta) {
+  const n = { reads: 0, raises: 0, clears: 0, logs: 0 };
+  return {
+    n,
+    deps: {
+      readMeta: async () => (n.reads++, meta),
+      store: { raise: async () => (n.raises++, true), clear: async () => (n.clears++, false) },
+      now: () => now,
+      log: () => void n.logs++,
+    },
+  };
+}
+{
+  const off = countingDeps({ kind: "missing" });
+  const a = await runFeedStalenessCheck(null, off.deps);
+  const b = await runFeedStalenessCheck(cfgWith({ ingest: true, bell: true, proposals: true }, { sent: true, teams: true }), off.deps);
+  const c = await runFeedStalenessCheck(cfgWith({ staleAlerts: "true" }, { sent: true, teams: true }), off.deps);
+  t("G6 flag OFF (absent config / everything else on / non-literal true): no result, ZERO reads, ZERO writes, ZERO logs", [a, b, c, off.n], [null, null, null, { reads: 0, raises: 0, clears: 0, logs: 0 }]);
+  const on = countingDeps({ kind: "missing" });
+  const r = await runFeedStalenessCheck(cfgWith({ staleAlerts: true }, { sent: true, teams: true }), on.deps);
+  t("G7 flag ON: one metadata read per configured file, and the bell is written", [on.n.reads, on.n.raises, r?.raised], [3, 3, 3]);
+}
+
+// The heartbeat entry with the flag OFF: no Graph call, nothing awaited beyond the old path.
+{
+  let fetches = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    fetches++;
+    throw new Error("no network in tests");
+  }) as typeof fetch;
+  const saved = process.env.HUDDLE_ONEDRIVE_FEEDS;
+  try {
+    const { runCorrespondenceIngest } = await import("../src/features/huddle/lib/correspondence/ingest.server");
+    process.env.HUDDLE_ONEDRIVE_FEEDS = JSON.stringify({ ...base, sent: true, teams: true, correspondence: { staleAlerts: false } });
+    const r1 = await runCorrespondenceIngest();
+    delete process.env.HUDDLE_ONEDRIVE_FEEDS;
+    const r2 = await runCorrespondenceIngest();
+    t("G8 runCorrespondenceIngest with staleAlerts OFF / no config: null and ZERO fetches", [r1, r2, fetches], [null, null, 0]);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (saved === undefined) delete process.env.HUDDLE_ONEDRIVE_FEEDS;
+    else process.env.HUDDLE_ONEDRIVE_FEEDS = saved;
+  }
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+if (fail) process.exit(1);

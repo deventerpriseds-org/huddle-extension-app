@@ -12,6 +12,11 @@
 //             docs/ac/AC-correspondence-checklist.md section 4. A chat row may be UNCERTAIN ("can't tell if
 //             answered": the owner's own Teams messages are not available) -- shown, never counted in the
 //             badge. Stored settings saved before `chat` existed still count it (AC-4.3).
+// 2026-11-13: a `feed` SYSTEM kind (a OneDrive feed file stopped updating / is missing / unreadable --
+//             lib/correspondence/feed-staleness.ts). Deliberately NOT in ATTENTION_KINDS: it is not an owner
+//             choice in "What counts" (the HUDDLE_ONEDRIVE_FEEDS.correspondence.staleAlerts flag is the switch),
+//             so the settings list and the stored kinds are unchanged. A feed row is listed and counted whenever
+//             one exists; with the flag OFF none is ever written.
 
 export const ATTENTION_KINDS = ["email", "meeting", "appointment", "chat"] as const;
 export type AttentionKind = (typeof ATTENTION_KINDS)[number];
@@ -29,6 +34,13 @@ export const DEFAULT_URGENT_KINDS: AttentionKind[] = ["email", "meeting", "appoi
 /** Kinds added after owners could already save a setting. A saved list that predates one of these did not
  *  choose to exclude it; saving the setting again records an explicit opt-out as "-<kind>". */
 export const LATE_KINDS: AttentionKind[] = ["chat"];
+
+/** Kinds the bell always shows when a row exists, outside the owner's "What counts" choice. */
+export const SYSTEM_KINDS = ["feed"] as const;
+export type SystemKind = (typeof SYSTEM_KINDS)[number];
+export type BellKind = AttentionKind | SystemKind;
+export const isSystemKind = (v: unknown): v is SystemKind =>
+  typeof v === "string" && (SYSTEM_KINDS as readonly string[]).includes(v);
 
 export const isAttentionKind = (v: unknown): v is AttentionKind =>
   typeof v === "string" && (ATTENTION_KINDS as readonly string[]).includes(v);
@@ -79,7 +91,7 @@ export interface AttentionRowLike {
 
 export interface AttentionItem {
   id: string;
-  kind: AttentionKind;
+  kind: BellKind;
   title: string;
   detail: string | null;
   /** The conversation "Open in chat" switches to. Email alerts are Iris's. */
@@ -110,6 +122,17 @@ export const EMAIL_ALERT_HUDDLE = "dm-iris-chase";
 
 export function toAttentionItem(r: AttentionRowLike): AttentionItem | null {
   const kind = r.kind ?? "email";
+  if (isSystemKind(kind)) {
+    // feed: title names the file and how long; detail says which flow to check. No message content.
+    return {
+      id: r.id,
+      kind,
+      title: r.subject?.trim() || "A data feed file needs checking",
+      detail: r.from_name?.trim() || null,
+      huddleId: r.huddle_id || EMAIL_ALERT_HUDDLE,
+      at: r.received_at ?? r.created_at ?? null,
+    };
+  }
   if (!isAttentionKind(kind)) return null;
   if (kind === "email") {
     const who = r.from_name || r.from_address || "someone";
@@ -155,7 +178,7 @@ export function bellItems(rows: AttentionRowLike[], urgent: AttentionKind[]): At
   const want = new Set(urgent);
   return rows
     .map(toAttentionItem)
-    .filter((x): x is AttentionItem => !!x && want.has(x.kind))
+    .filter((x): x is AttentionItem => !!x && (isSystemKind(x.kind) || want.has(x.kind)))
     .sort((a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0));
 }
 

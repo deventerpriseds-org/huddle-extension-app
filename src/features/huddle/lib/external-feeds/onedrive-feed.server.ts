@@ -8,6 +8,8 @@
 //             into fetchDriveFile so the rolling Teams log (readTeamsLogFile) uses the SAME single download
 //             path, token, deadline and size cap (AC-1.2). readFeed's behaviour is unchanged; its ok result
 //             now also carries the eTag it served. AC: docs/ac/AC-correspondence-checklist.md section 1.
+// 2026-11-13: the metadata GET moved into driveItemMeta (fetchDriveFile still selects exactly id,eTag,size),
+//             shared with readFeedFileMeta (lastModifiedDateTime only) for the file-staleness alert.
 //
 // Contract with the flows (owner's Power Automate): the files are REPLACE-IN-PLACE snapshots refreshed on
 // source events. Huddle never cleans up, never writes, and never scans an unbounded log. A change is
@@ -32,6 +34,7 @@ import {
 } from "./onedrive-feed";
 import type { InboundMessage } from "../email/inbound-email";
 import type { TeamsFileRead } from "./teams-log";
+import type { FeedMeta } from "../correspondence/feed-staleness";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 /** ONE deadline per file read (metadata + content together): a slow or hung drive must never hold up
@@ -99,6 +102,36 @@ export type DriveFile =
   | { kind: "text"; etag: string; itemId: string | null; text: string; tailSkippedBytes?: number }
   | { kind: "fail"; reason: string; error?: string | null };
 
+/** The metadata GET of one drive item (the first step of every feed read), with ONE deadline, the existing app
+ *  token, and the caller's `$select`. Returns the response plus the deadline-bound fetch and auth header, so a
+ *  content download that follows shares the same deadline. GET only. Throws only on network/abort. */
+async function driveItemMeta(cfg: OneDriveFeedsConfig, path: string, select: string) {
+  const { getAppToken } = await import("../email/graph-email.server");
+  const deadline = AbortSignal.timeout(FEED_READ_DEADLINE_MS);
+  const timedFetch = (url: string, init: RequestInit) => fetch(url, { ...init, method: "GET", signal: deadline });
+  const auth = { Authorization: `Bearer ${await getAppToken()}` };
+  const meta = await timedFetch(`${drivePath(cfg, path)}?$select=${select}`, { headers: auth });
+  return { timedFetch, auth, meta };
+}
+
+/**
+ * Metadata only (no download): when the feed file last changed, for the file-staleness alert
+ * (lib/correspondence/feed-staleness.ts). 404 => missing; any other failure (401/403, other HTTP error, network,
+ * timeout) => unreadable. Called ONLY when correspondence.staleAlerts is true. Never throws; logs nothing.
+ */
+export async function readFeedFileMeta(cfg: OneDriveFeedsConfig, path: string): Promise<FeedMeta> {
+  try {
+    const { meta } = await driveItemMeta(cfg, path, "lastModifiedDateTime");
+    if (meta.status === 404) return { kind: "missing" };
+    if (!meta.ok) return { kind: "unreadable" };
+    const item = (await meta.json()) as { lastModifiedDateTime?: unknown };
+    const ms = typeof item.lastModifiedDateTime === "string" ? Date.parse(item.lastModifiedDateTime) : NaN;
+    return Number.isFinite(ms) ? { kind: "ok", lastModifiedMs: ms } : { kind: "unreadable" };
+  } catch {
+    return { kind: "unreadable" };
+  }
+}
+
 /**
  * THE one place Huddle downloads a feed file from the owner's drive (email, appointments, Teams log).
  * GET only: Huddle never writes, renames, moves or deletes a feed file (AC-1.13, AC-2.6). `knownEtag`
@@ -110,11 +143,7 @@ async function fetchDriveFile(
   knownEtag: string | null,
   opts: { tailWhenTooLarge?: boolean } = {},
 ): Promise<DriveFile> {
-  const { getAppToken } = await import("../email/graph-email.server");
-  const deadline = AbortSignal.timeout(FEED_READ_DEADLINE_MS);
-  const timedFetch = (url: string, init: RequestInit) => fetch(url, { ...init, method: "GET", signal: deadline });
-  const auth = { Authorization: `Bearer ${await getAppToken()}` };
-  const meta = await timedFetch(`${drivePath(cfg, path)}?$select=id,eTag,size`, { headers: auth });
+  const { timedFetch, auth, meta } = await driveItemMeta(cfg, path, "id,eTag,size");
   if (meta.status === 404) return { kind: "fail", reason: "missing" };
   if (!meta.ok) return { kind: "fail", reason: "error", error: `drive item read failed (${meta.status})` };
   const item = (await meta.json()) as { id?: string; eTag?: string; size?: number };
