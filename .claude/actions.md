@@ -9,6 +9,9 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       Section 5 corrected to EXTEND the existing build_checklist (owner caught the miss; accuracy-log row).
 - [x] Power Automate instructions: docs/integrations/power-automate-huddle-sources.md (separate sent.json, sent_snapshot;
       Teams JSONL huddle-source-log.jsonl in the email folder; report-back list). For the owner's PA session.
+      2026-11-13: owner confirmed option A (separate sent.json) and asked for a pasteable handoff. Doc corrected after
+      reading the branch parser: Sent Items test filter must be "contains" the prefix (replies are "RE: <prefix>";
+      a "starts with" filter would drop every reply), owner's own test Teams replies need the prefix, Teams id already received.
 - [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
       docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
 - [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
