@@ -42,6 +42,10 @@ on:
         description: "Section 5b: comma-separated drive-relative folders to LIST (names/sizes/modified only; needs feed_drive_users)."
         required: false
         default: ""
+      mail_probe_subject:
+        description: "Section 7: find messages whose subject STARTS WITH this text in each mailbox (all folders, incl. Junk). Prints count, folder, time only."
+        required: false
+        default: ""
       feed_dry_run:
         description: "Section 6: dry-run the REAL feed files through the shipped code, using the HUDDLE_ONEDRIVE_FEEDS repo secret (masked in logs). Verdicts and counts only."
         required: false
@@ -66,6 +70,7 @@ jobs:
           FEED_USERS: ${{ inputs.feed_drive_users }}
           FEED_PATHS: ${{ inputs.feed_paths }}
           FEED_FOLDERS: ${{ inputs.feed_list_folders }}
+          MAIL_PROBE: ${{ inputs.mail_probe_subject }}
           # A SECRET, never a workflow input: inputs are printed in this public log's env block
           # (VERIFY-trinnex-onedrive-feed-1 D1 -- an earlier run printed the config that way).
           FEED_CONFIG: ${{ inputs.feed_dry_run && secrets.HUDDLE_ONEDRIVE_FEEDS || '' }}
@@ -238,6 +243,38 @@ jobs:
               kind="folder" if c.get("folder") is not None else "file"
               print("   ", kind, n, "| size", c.get("size","-"), "| modified", c.get("lastModifiedDateTime","-"))' 2>/dev/null || echo "   (unreadable listing)"
               done
+            done
+          fi
+
+          # 7. Did a message arrive? Subject-prefix search per mailbox across ALL folders (Inbox, Junk, ...).
+          #    Prints count, folder display name and received time only.
+          if [ -n "${MAIL_PROBE// /}" ]; then
+            echo "=== 7. Mail delivery probe (subject prefix; counts, folders, times only) ==="
+            IFS=',' read -ra MB <<< "$MAILBOXES"
+            Q=$(python3 -c 'import os,urllib.parse;p=os.environ["MAIL_PROBE"].replace("\x27","\x27\x27");print(urllib.parse.quote(f"startswith(subject,\x27{p}\x27)"))')
+            for m in "${MB[@]}"; do
+              m=$(echo "$m" | xargs)
+              P=$(curl -s -o /tmp/p.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+                "https://graph.microsoft.com/v1.0/users/$m/messages?\$filter=$Q&\$select=receivedDateTime,parentFolderId&\$top=25")
+              echo "$m | search HTTP $P"
+              python3 - "$TOKEN" "$m" <<'PY2'
+          import json, sys, urllib.request
+          tok, mb = sys.argv[1], sys.argv[2]
+          d = json.load(open("/tmp/p.json"))
+          if d.get("error"): print("   error", d["error"].get("code")); raise SystemExit
+          v = d.get("value") or []
+          print("   matches:", len(v))
+          names = {}
+          for x in v:
+              fid = x.get("parentFolderId")
+              if fid not in names:
+                  try:
+                      r = urllib.request.Request(f"https://graph.microsoft.com/v1.0/users/{mb}/mailFolders/{fid}?$select=displayName", headers={"Authorization": f"Bearer {tok}"})
+                      names[fid] = json.load(urllib.request.urlopen(r)).get("displayName", "?")
+                  except Exception:
+                      names[fid] = "?"
+              print("   -", x.get("receivedDateTime"), "| folder", names[fid])
+          PY2
             done
           fi
 
