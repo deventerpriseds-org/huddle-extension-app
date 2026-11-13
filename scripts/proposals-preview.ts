@@ -235,4 +235,103 @@ const put = await fetch(`${drive}${enc(out)}:/content`, {
   body: md.join("\n"),
 });
 console.log(`preview file: HTTP ${put.status} -> OneDrive ${out}`);
-if (!put.ok) process.exit(1);
+if (!put.ok) process.exitCode = 1;
+
+// ── HTML email of the same report (owner 2026-11-13: "Email me a clean html version of the Monday forward
+// report"). PREVIEW_EMAIL=1 sends it from Huddle's sender mailbox (HUDDLE_EMAIL_FROM, default the dev sender)
+// to the owner's EDS mailbox from the PRIVATE feed config (driveUser). Nothing about it is printed but HTTP status.
+if (process.env.PREVIEW_EMAIL === "1") {
+  const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const sinceLabel = fmtAt(new Date(sinceMs).toISOString());
+  const pill = (txt: string, bg: string, fg: string) =>
+    `<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:${bg};color:${fg};font-size:12px;font-weight:600">${esc(txt)}</span>`;
+  const th = (cols: string[]) => `<tr>${cols.map((c) => `<th align="left" style="padding:8px 10px;border-bottom:2px solid #d0d7de;font-size:12px;color:#57606a;text-transform:uppercase;letter-spacing:.03em">${c}</th>`).join("")}</tr>`;
+  const td = (cells: string[]) => `<tr>${cells.map((c) => `<td valign="top" style="padding:8px 10px;border-bottom:1px solid #eaeef2;font-size:14px;color:#1f2328">${c}</td>`).join("")}</tr>`;
+  const table = (head: string[], rows: string[]) =>
+    rows.length ? `<table role="presentation" cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;margin:8px 0 20px">${th(head)}${rows.join("")}</table>` : `<p style="color:#57606a;font-size:14px">None.</p>`;
+  const h2 = (t: string) => `<h2 style="font-size:18px;margin:28px 0 6px;color:#1f2328">${esc(t)}</h2>`;
+  const h3 = (t: string) => `<h3 style="font-size:15px;margin:18px 0 4px;color:#1f2328">${t}</h3>`;
+  const emailStatus: Record<string, { label: string; pill: string }> = {
+    open: { label: "Open: asks you something, no reply found", pill: pill("Open", "#ffebe9", "#cf222e") },
+    "open?": { label: "Open? Asks you something, reply status unknown", pill: pill("Open?", "#fff8c5", "#9a6700") },
+    fyi: { label: "From a person, no question detected", pill: pill("FYI", "#ddf4ff", "#0969da") },
+    replied: { label: "Replied", pill: pill("Replied", "#dafbe1", "#1a7f37") },
+  };
+  const emailOpen = n(emailRows, "open") + n(emailRows, "open?");
+  const chatOpen = chatRows.filter((c) => c.d.state === "open").length;
+  const chatAns = chatRows.filter((c) => c.d.state === "answered").length;
+  const stat = (num: number | string, label: string, color: string) =>
+    `<td align="center" style="padding:12px;border:1px solid #d0d7de;border-radius:8px;width:25%"><div style="font-size:26px;font-weight:700;color:${color}">${esc(num)}</div><div style="font-size:12px;color:#57606a">${esc(label)}</div></td>`;
+  const lastEmail = ev?.ok ? ev.snapshot.records.map((r) => String(r.receivedDateTime ?? "")).sort().pop() ?? null : null;
+  const lastChat = (tp?.messages ?? []).map((m) => m.at).sort().pop() ?? null;
+  const parts: string[] = [];
+  parts.push(`<div style="font-family:Segoe UI,Helvetica,Arial,sans-serif;max-width:760px;margin:0 auto;color:#1f2328">`);
+  parts.push(`<h1 style="font-size:22px;margin:0 0 4px">Needs you: open vs replied since ${esc(sinceLabel)} ET</h1>`);
+  parts.push(`<p style="margin:0 0 16px;color:#57606a;font-size:13px">Huddle preview, generated ${esc(fmtAt(new Date().toISOString()))} ET from your work email and Teams chats. Nothing was added to your board.</p>`);
+  parts.push(`<table role="presentation" cellspacing="8" cellpadding="0" width="100%"><tr>${stat(emailOpen, "emails open", "#cf222e")}${stat(n(emailRows, "replied"), "emails replied", "#1a7f37")}${stat(chatOpen, "chats open", "#cf222e")}${stat(chatAns, "chats answered", "#1a7f37")}</tr></table>`);
+  const gaps: string[] = [
+    `Work email received up to <b>${esc(fmtAt(lastEmail))}</b> ET`,
+    `Teams messages up to <b>${esc(fmtAt(lastChat))}</b> ET`,
+    `Sent Items: <b>${sentMapped.sent.length}</b> message(s) with a sent time, <b>${sentMapped.skipped}</b> without`,
+  ];
+  parts.push(`<div style="background:#fff8c5;border:1px solid #d4a72c;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px"><b>What this covers.</b> ${gaps.join(" &middot; ")}. Anything after those times is not in the files yet${sentMapped.sent.length ? "" : `, and because Sent Items has no sent times, <b>no email can show as replied yet</b>: every "Open?" may already be answered`}.</div>`);
+  parts.push(h2(`Emails from people (${emailRows.length})`));
+  for (const st of ["open", "open?", "fyi", "replied"]) {
+    const rs = emailRows.filter((r) => r.status === st).sort((a, b) => String(b.m.receivedDateTime).localeCompare(String(a.m.receivedDateTime)));
+    if (!rs.length) continue;
+    parts.push(h3(`${emailStatus[st].pill} &nbsp;${esc(emailStatus[st].label)} (${rs.length})`));
+    parts.push(table(["Received", "From", "Subject"], rs.map((r) => td([esc(fmtAt(r.m.receivedDateTime ?? null)), `<b>${esc(clipLine(r.m.fromName || r.m.fromAddress, 60))}</b>`, esc(clipLine(r.m.subject, 140))]))));
+  }
+  if (Object.keys(emailSkip).length) parts.push(`<p style="font-size:12px;color:#57606a">Not counted: ${esc(Object.entries(emailSkip).map(([k, v]) => `${k.replace(/-/g, " ")} ${v}`).join(", "))}.</p>`);
+  parts.push(h2(`Teams chats (${chatRows.length} with messages)`));
+  for (const [label, state, p] of [
+    ["Open: someone asked after your last message", "open", pill("Open", "#ffebe9", "#cf222e")],
+    ["Answered: you posted after the last ask", "answered", pill("Answered", "#dafbe1", "#1a7f37")],
+    ["No question detected", "nothing", pill("No ask", "#f6f8fa", "#57606a")],
+  ] as const) {
+    const rs = chatRows.filter((c) => c.d.state === state);
+    if (!rs.length) continue;
+    parts.push(h3(`${p} &nbsp;${esc(label)} (${rs.length})`));
+    parts.push(
+      table(
+        state === "open" ? ["Chat", "Last message", "The ask"] : ["Chat", "Last message"],
+        rs.map((c) => {
+          const last = [...c.msgs].sort((a, b) => a.at.localeCompare(b.at)).pop()!;
+          const name = c.msgs.find((m) => m.chatName)?.chatName ?? "(chat)";
+          const ask = c.d.state === "open" ? c.d.ask : null;
+          const cells = [`<b>${esc(clipLine(name, 80))}</b>`, esc(fmtAt(last.at))];
+          if (state === "open") cells.push(ask ? `${esc(clipLine(ask.senderName, 40))}, ${esc(fmtAt(ask.at))}:<br><i>&ldquo;${esc(clipLine(ask.text, 220))}&rdquo;</i>` : "");
+          return td(cells);
+        }),
+      ),
+    );
+  }
+  parts.push(h2(`Proposed to-dos (${rows.length})`));
+  parts.push(`<p style="font-size:13px;color:#57606a;margin:0 0 8px">What Iris's checklist would offer. Each quote is the exact sentence it came from.</p>`);
+  for (const [, ps] of perSource) {
+    parts.push(h3(`${ps.kind === "email" ? "Email" : "Teams"}: ${esc(ps.context ?? "(no subject / chat name)")} <span style="font-weight:400;color:#57606a;font-size:12px">${esc(fmtAt(ps.at))}</span>`));
+    parts.push(`<ul style="margin:4px 0 12px;padding-left:20px">`);
+    for (const id of ps.titles) {
+      const p = rows.find((r) => r.id === id)!;
+      const due = p.dueDate ? ` &middot; due ${esc(p.dueDate)}` : p.dueText ? ` &middot; due &ldquo;${esc(p.dueText)}&rdquo;` : "";
+      parts.push(`<li style="margin:0 0 8px;font-size:14px"><b>${esc(p.title)}</b>${p.assignee ? ` &middot; for ${esc(p.assignee)}` : ""}${due}<br><span style="color:#57606a;font-size:13px">&ldquo;${esc(clipLine(p.evidence, 300))}&rdquo;</span></li>`);
+    }
+    parts.push(`</ul>`);
+  }
+  parts.push(`<p style="font-size:12px;color:#8c959f;margin-top:28px">Preview only. Your own Teams messages were identified by a best guess for this run; at switch-on Huddle uses your Teams id.</p></div>`);
+  const from = (process.env.HUDDLE_EMAIL_FROM || "dev@enterpriseds.io").split(",")[0].trim();
+  const send = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(from)}/sendMail`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: {
+        subject: `Huddle: open vs replied since ${sinceLabel} (preview)`,
+        body: { contentType: "HTML", content: parts.join("\n") },
+        toRecipients: [{ emailAddress: { address: cfg.driveUser } }],
+      },
+      saveToSentItems: false,
+    }),
+  });
+  console.log(`email: sendMail HTTP ${send.status}`);
+  if (!send.ok) process.exit(1);
+}
