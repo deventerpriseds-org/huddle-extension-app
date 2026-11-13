@@ -231,6 +231,11 @@ const tr = (file: "email" | "sent" | "teams") => [{ file, meta: { kind: "transie
   const row = tw.rows.get(feedAttentionId(O, "email"))!;
   t("T1 dismissed stale alert + ONE transient failure + same stale file: stays dismissed, same episode, zero writes",
     [a.raised, a.states.email, b.raised, row.status, row.episode, tw.writes() - w0], [0, "transient", 0, "dismissed", "stale:2026-11-11T14:02:00.000Z", 0]);
+  const c1 = await applyFeedStaleness(O, tr("email"), now + 1_800_000, 6, tw.store);
+  const c2 = await applyFeedStaleness(O, tr("email"), now + 2_400_000, 6, tw.store);
+  const c3 = await applyFeedStaleness(O, tr("email"), now + 3_000_000, 6, tw.store);
+  t("T6 a run of transient failures (a 30-minute Graph outage) still changes nothing: no raise, no pending, still dismissed",
+    [c1.raised + c2.raised + c3.raised, (c1.pending ?? 0) + (c2.pending ?? 0) + (c3.pending ?? 0), row.status, row.pending], [0, 0, "dismissed", null]);
 }
 {
   const tw = twin();
