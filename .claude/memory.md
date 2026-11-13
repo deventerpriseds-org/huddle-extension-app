@@ -1,5 +1,17 @@
 # Project Memory — huddle-extension-app
 
+## Correspondence + proposals (ACT:correspondence-checklist) -- 2026-11-13, NOT live, branch claude_task-proposals
+- Owner decisions: ETL route A (OneDrive files -> Huddle ingest -> Azure PG chat.correspondence_ledger; no new
+  endpoint) + a file-staleness alert (built, flag correspondence.staleAlerts, default OFF, bell kind 'feed').
+- Real files (read via graph-permission-check, counts only -- public repo, never print content):
+  emails.json (complete:false at last read, 125 records Nov 6-13), sent.json (sentDateTime now filled 29/29),
+  /automation/Teams Chats/teams-chats.jsonl (source "teams", capturedAt; synthetic:false from Nov 13; messages only
+  Mon-Wed until the PA backfill runs). Code defaults follow the real Teams path/source (8a336404).
+- Owner-facing previews: proposals-preview.yml -> owner's OneDrive /automation/Huddle Preview/ and (email input) an HTML
+  email via Graph sendMail to the private feed-config mailbox. Logs print counts only.
+- Verifier loop 3 FIX FIRST -> D1-D6/M1/M2 fixed. Lesson: a subagent's stale index reverted another lane (4fc54efe);
+  agents sharing a branch must commit with `git commit --only -- <paths>` and diff --stat against origin before push.
+
 ## Fireflies meeting minutes (2026-11-10; #191 MERGED + DEPLOYED 2026-11-11 9c31f538; queue fixes D7/D8 follow; NOT owner-confirmed live)
 - Route `POST /api/public/fireflies-webhook` (from #188) only VERIFIES + QUEUES (`recordWebhook`). Fireflies docs:
   a 2xx is due within 30s and a timed-out request is NOT retried -- so no work happens in the request.
