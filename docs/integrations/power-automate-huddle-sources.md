@@ -62,8 +62,14 @@ in the same conversation is newer than the received one, Huddle settles it.
 | `subject` | subject | yes (used only for the test prefix while synthetic) |
 | `toRecipients` | recipients | optional |
 
-While testing, only messages whose subject starts with the test prefix should be written (same filter as the
-existing flow).
+While testing, only write messages whose subject **contains** the test prefix — use "contains", NOT "starts
+with". A reply's subject is `RE: HUDDLE-PA-SBX-…`, so a "starts with" filter drops every reply, and replies are
+the only thing this file exists for. (Huddle removes `RE:` / `FW:` itself and then requires the prefix, so the
+safety rule is unchanged.) Keep the field name `conversationId` exactly; that one field is the whole match key.
+
+**Test it like this:** send yourself (from another account) an email whose subject starts with `HUDDLE-PA-SBX-`,
+reply to it from the work mailbox, run the flow, and confirm `sent.json` holds a record whose `conversationId`
+equals the `conversationId` of that email in `emails.json`.
 
 ---
 
@@ -101,7 +107,10 @@ rewrite earlier lines. One line per chat per run is ideal.
 **Include the owner's own messages.** Huddle decides a chat is answered when the owner has posted after the
 other person. If the owner's messages are left out, every chat shows as "can't tell".
 
-**While testing:** `synthetic: true`, and only messages whose text starts with `HUDDLE-PA-SBX-`.
+**While testing:** `synthetic: true`, and only messages whose text starts with `HUDDLE-PA-SBX-`. That includes
+the owner's own replies: in a test chat, have someone post `HUDDLE-PA-SBX- question…`, then the owner replies
+`HUDDLE-PA-SBX- answer…`. An owner reply without the prefix is skipped in test mode, and the chat would then
+look unanswered.
 
 **Size:** the file only grows. Huddle reads the end of it, but if it can be trimmed (e.g. keep 30 days), do so.
 
@@ -117,6 +126,6 @@ other person. If the owner's messages are left out, every chat shows as "can't t
 
 1. The exact OneDrive paths and casing of `sent.json` and `huddle-source-log.jsonl`.
 2. One real (synthetic) sample of each file — copied into the chat, not committed (this repo is public).
-3. The owner's own Teams **user id** as it appears in `from.user.id` on one of the owner's messages (Huddle needs
-   it to tell "the owner replied" apart from "someone else replied"). Send it privately; do not commit it.
+3. ~~The owner's own Teams user id~~ — **already received (2026-11-13), skip.** Only report it if the flow logs
+   a DIFFERENT work account than the one the owner pasted the id from.
 4. Whether the flows are saved, enabled, and ran successfully at least once.
