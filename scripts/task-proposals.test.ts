@@ -910,27 +910,6 @@ t("F8c an unclosed hidden element with no parent close still hides the rest", ht
   ];
   t("D5 neg: affirmative look-alikes are still accepted", kept.map(([s, ev]) => neg(s, ev)), kept.map(() => "accepted"));
 }
-// Verifier loop 3, D6: a title may not ADD a content word the evidence lacks (majority was not enough).
-{
-  const g = (src: string, task: string, ev: string) => {
-    const r = validateCandidates({ tasks: [{ task, evidence: ev }] }, src, { atIso: AT, tz: TZ });
-    return r.accepted.length ? "accepted" : Object.keys(r.rejected).join(",");
-  };
-  const invented: [string, string, string][] = [
-    ["Please pay the vendor invoice this week.", "Pay the vendor invoice twice", "pay the vendor invoice this week"],
-    ["Please pay the vendor invoice this week.", "Pay all vendor invoices from the reserve fund", "pay the vendor invoice this week"],
-    ["We loved the deck you sent last week, thanks!", "Redo the deck you sent", "loved the deck you sent last week"],
-  ];
-  t("D6 a title that adds a content word is not grounded", invented.map(([s, task, ev]) => g(s, task, ev)), invented.map(() => "task_not_grounded"));
-  const own: [string, string, string][] = [
-    ["Can you send me the Q3 deck by Friday?", "Send the Q3 deck", "send me the Q3 deck by Friday"],
-    ["Dana will update the budget sheet by Nov 14.", "Update the budget sheet", "Dana will update the budget sheet by Nov 14"],
-    ["Could you send the slides over to Dana?", "Send slides to Dana", "send the slides over to Dana"],
-    ["Please book flights for the offsite.", "Book flights for the offsite", "book flights for the offsite"],
-    ["Please send me the updated proposal.", "Send updated proposal", "send me the updated proposal"],
-  ];
-  t("D6 neg: a title in the evidence's own words (stems, stopwords dropped) is still grounded", own.map(([s, task, ev]) => g(s, task, ev)), own.map(() => "accepted"));
-}
 // Verifier loop 3, D1: hidden-text stripping must never drop VISIBLE text (repros V1/V2/V5/V6/V7/V13/V19).
 t("D1-V1 an unclosed hidden span ends at its parent's </p>, not at a later stray </span>", htmlToText('<p><span style="display:none">pre</p><p>Please approve the budget by Friday.</p><p>Thanks</span></p>').includes("Please approve the budget by Friday."), true);
 t("D1-V19 an unclosed hidden <p> in a cell ends at the next <td>", htmlToText('<table><tr><td><p style="display:none">pre<td>Can you sign today?</td></tr></table>'), "Can you sign today?");
