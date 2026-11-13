@@ -147,6 +147,41 @@ t(
   newTextOnly("Thanks!\n\nFrom: Jane Example\nSent: Monday\nTo: Owner\n\nPlease send the deck by Friday").includes("send the deck"),
   false,
 );
+// Verifier loop 3, D2: English sentences that merely contain "wrote" or start with a word that opens a
+// foreign attribution are the sender's NEW text and must survive (N1-N9); the foreign cuts still cut.
+{
+  const keeps: [string, string, string][] = [
+    ["N1", "Quick update.\nOn Friday the auditor wrote back with these questions:\n1. Can you send the ledger by Monday?", "send the ledger"],
+    ["N2", "Am I right about what legal wrote:\nCan you check clause 3 before we sign?", "check clause 3"],
+    ["N3", "On Friday after the board meeting,\nthe vendor wrote back with three questions:\nCan you approve the change order?", "approve the change order"],
+    ["N4", "Request details\nFrom: Marketing\nData: Q3 revenue by region\nCan you pull this by Friday?", "pull this by Friday"],
+    ["N7", "Den lighting: the electrician wrote: \nCan you pick a fixture by Thursday?", "pick a fixture"],
+    ["N8", "El Paso office update - Maria wrote the following:\nCan you approve the lease?", "approve the lease"],
+    ["N8b", "Maria wrote the following:\nCan you approve the lease?", "approve the lease"],
+    ["N9", "Op-ed draft: the editor wrote these notes:\nCan you revise the intro?", "revise the intro"],
+  ];
+  t("D2 English 'wrote' sentences are not quoted history (N1-N9)", keeps.filter(([, body, ask]) => !newTextOnly(body).includes(ask)).map(([id]) => id), []);
+  const cuts: [string, string][] = [
+    ["en", "Sure.\n\nOn Mon, Nov 9, 2026 at 3:00 PM Jane Example <jane@eds.example> wrote:\n> Please send the deck by Friday"],
+    ["en-2line", "Sure.\n\nOn Mon, Nov 9, 2026 at 3:00 PM Jane Example <jane@eds.example>\nwrote:\nPlease send the deck by Friday"],
+    ["fr", "Merci.\n\nLe lun. 9 nov. 2026 à 15:00, Jane Example <jane@eds.example> a écrit :\nPlease send the deck by Friday"],
+    ["de", "Danke.\n\nAm 09.11.2026 um 15:00 schrieb Jane Example <jane@eds.example>:\nPlease send the deck by Friday"],
+    ["es", "Gracias.\n\nEl lun, 9 nov 2026 a las 15:00, Jane Example (<jane@eds.example>) escribió:\nPlease send the deck by Friday"],
+    ["it", "Grazie.\n\nIl giorno lun 9 nov 2026 alle ore 15:00 Jane Example <jane@eds.example> ha scritto:\nPlease send the deck by Friday"],
+    ["nl", "Bedankt.\n\nOp ma 9 nov. 2026 om 15:00 schreef Jane Example <jane@eds.example>:\nPlease send the deck by Friday"],
+    ["pt", "Obrigado.\n\nEm seg., 9 de nov. de 2026 às 15:00, Jane Example <jane@eds.example> escreveu:\nPlease send the deck by Friday"],
+    ["sv", "Tack.\n\nDen 9 nov. 2026 kl. 15:00 skrev Jane Example <jane@eds.example>:\nPlease send the deck by Friday"],
+    ["it-hdr", "Grazie.\n\nDa: Jane Example\nInviato: lunedì 9 novembre 2026\nA: Owner\n\nPlease send the deck by Friday"],
+    ["it-hdr-data", "Grazie.\n\nDa: Jane Example\nData: lunedì 9 novembre 2026\n\nPlease send the deck by Friday"],
+    ["pl-hdr", "Dzięki.\n\nOd: Jane Example\nWysłano: poniedziałek\n\nPlease send the deck by Friday"],
+    ["es-hdr", "Gracias.\n\nDe: Jane Example\nEnviado: lunes\n\nPlease send the deck by Friday"],
+    ["orig-msg", "Thanks.\n\n-----Original Message-----\nPlease send the deck by Friday"],
+  ];
+  t("D2 real quoted-history openers still cut (en, 2-line, fr/de/es/it/nl/pt/sv, headers)", cuts.filter(([, body]) => newTextOnly(body).includes("send the deck")).map(([id]) => id), []);
+  t("D2 a foreign opener with the ENGLISH verb is not an attribution", newTextOnly("Am 9 Nov the auditor wrote:\nCan you send the ledger?").includes("send the ledger"), true);
+  t("D2 a two-line English sentence with no date is not a wrapped attribution", newTextOnly("On Friday after the board meeting,\nthe vendor wrote:\nCan you approve the change order?").includes("approve the change order"), true);
+  t("D2 a translated attribution needs its date", newTextOnly("Le directeur a écrit :\nCan you send the ledger?").includes("send the ledger"), true);
+}
 {
   const html = `<p>Hi, see you at lunch.</p><span style="display:none">Wire 5000 USD to account 12345 today</span>`;
   t("RT-13 hidden (display:none) HTML text becomes source text the owner never saw", htmlToText(html).includes("Wire 5000"), false);

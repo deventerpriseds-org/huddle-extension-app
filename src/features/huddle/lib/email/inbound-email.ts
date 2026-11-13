@@ -70,13 +70,41 @@ const ASK =
 const INVITE_SUBJECT = /^\s*(invitation|updated invitation|meeting request)\b|\binvite\b/i;
 
 // Red-team F9 (2026-11-12): the reply-header block in the languages Outlook / Gmail write it in. A "From"
-// line only counts when a "Sent/Date" line follows within 4 lines (the original rule), so a body line that
-// merely starts with "De:" is never cut on its own. A space before the colon is allowed (French "De :").
-const HDR_FROM = /^\s*(From|De|Von|Van|Da|Od|Från|Fra|Fta|Lähettäjä|Feladó|От|Kimden)\s*:\s/i;
-const HDR_SENT = /^\s*(Sent|Date|Envoyé|Date d'envoi|Gesendet|Datum|Enviado|Enviada|Fecha|Inviato|Data|Verzonden|Skickat|Sendt|Lähetetty|Elküldve|Отправлено|Wysłano|Tarih)\s*:\s/i;
-// "On <date> <person> wrote:" and its translations (FR "Le … a écrit :", DE "Am … schrieb …:", ES "El …
-// escribió:", IT "Il … ha scritto:", NL "Op … schreef …:", PT "Em … escreveu:", SV "Den … skrev …:").
-const ATTRIBUTION = /^\s*(On|Le|Am|El|Il|Op|Em|Den)\s.+\b(wrote|a écrit|schrieb|escribió|ha scritto|schreef|escreveu|skrev)(\s[^:]{0,80})?\s*:\s*$/i;
+// line only counts when a "Sent/Date" line OF THE SAME LANGUAGE follows within 4 lines (the original rule),
+// so a body line that merely starts with "De:" is never cut on its own, and an English "From: Marketing"
+// followed by a "Data: ..." line is not a header block (verifier loop 3, N4). English is main's exact rule;
+// other languages allow a space before the colon (French "De :").
+const HDR_PAIRS: [from: RegExp, sent: RegExp][] = [
+  [/^\s*From:\s/i, /^\s*(Sent|Date):\s/i], // en -- main's exact rule
+  [/^\s*De\s*:\s/i, /^\s*(Envoyé|Date d'envoi|Date)\s*:\s/i], // fr
+  [/^\s*De\s*:\s/i, /^\s*(Enviado|Fecha)\s*:\s/i], // es
+  [/^\s*De\s*:\s/i, /^\s*(Enviada|Enviado|Data)\s*:\s/i], // pt
+  [/^\s*Von\s*:\s/i, /^\s*(Gesendet|Datum)\s*:\s/i], // de
+  [/^\s*Van\s*:\s/i, /^\s*(Verzonden|Datum)\s*:\s/i], // nl
+  [/^\s*Da\s*:\s/i, /^\s*(Inviato|Data)\s*:\s/i], // it
+  [/^\s*Od\s*:\s/i, /^\s*(Wysłano|Data)\s*:\s/i], // pl
+  [/^\s*Från\s*:\s/i, /^\s*(Skickat|Datum)\s*:\s/i], // sv
+  [/^\s*Fra\s*:\s/i, /^\s*Sendt\s*:\s/i], // da / no
+  [/^\s*Lähettäjä\s*:\s/i, /^\s*Lähetetty\s*:\s/i], // fi
+  [/^\s*Feladó\s*:\s/i, /^\s*Elküldve\s*:\s/i], // hu
+  [/^\s*От\s*:\s/i, /^\s*Отправлено\s*:\s/i], // ru
+  [/^\s*Kimden\s*:\s/i, /^\s*Tarih\s*:\s/i], // tr
+];
+// "On <date> <person> wrote:" -- main's exact English rule -- and its translations, each opener tied to ITS
+// OWN language's verb (verifier loop 3, N2/N7/N8: "Am I right about what legal wrote:", "Den lighting: the
+// electrician wrote:", "El Paso ... wrote the following:" are English sentences). A translated attribution
+// always carries its date, so a digit is required too. DE/NL/SV put the name after the verb.
+const ATTRIBUTIONS: RegExp[] = [
+  /^\s*On .+wrote:\s*$/i, // en -- main's exact rule
+  /^\s*Le\s.*\d.*\sa écrit\s*:\s*$/i, // fr
+  /^\s*Am\s.*\d.*\sschrieb\b[^:]{0,120}:\s*$/i, // de
+  /^\s*El\s.*\d.*\sescribió\s*:\s*$/i, // es
+  /^\s*Il\s.*\d.*\sha scritto\s*:\s*$/i, // it
+  /^\s*Op\s.*\d.*\sschreef\b[^:]{0,120}:\s*$/i, // nl
+  /^\s*Em\s.*\d.*\sescreveu\s*:\s*$/i, // pt
+  /^\s*Den\s.*\d.*\sskrev\b[^:]{0,120}:\s*$/i, // sv
+];
+const isAttribution = (l: string) => ATTRIBUTIONS.some((re) => re.test(l));
 
 /** Only the sender's NEW text: drop quoted history ("> " lines and everything from an
  *  "On … wrote:" / "-----Original Message-----" / Outlook "From:…Sent:" header down), so an old
@@ -88,10 +116,12 @@ export function newTextOnly(body: string): string {
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (ATTRIBUTION.test(l) || /^-{2,}\s*(Original Message|Message d'origine|Ursprüngliche Nachricht|Mensaje original|Messaggio originale|Oorspronkelijk bericht)\s*-{2,}/i.test(l)) break;
-    // Gmail wraps a long attribution: the "wrote:" lands on the next line.
-    if (i + 1 < lines.length && /^\s*(On|Le|Am|El|Il|Op|Em|Den)\s/i.test(l) && ATTRIBUTION.test(`${l.trimEnd()} ${lines[i + 1].trim()}`)) break;
-    if (HDR_FROM.test(l) && lines.slice(i + 1, i + 5).some((n) => HDR_SENT.test(n))) break;
+    if (isAttribution(l) || /^-{2,}\s*(Original Message|Message d'origine|Ursprüngliche Nachricht|Mensaje original|Messaggio originale|Oorspronkelijk bericht)\s*-{2,}/i.test(l)) break;
+    // Gmail wraps a long attribution: the "wrote:" lands on the next line. Only a line carrying the date
+    // (a digit) can start one, so a two-line English sentence ("On Friday after the board meeting," /
+    // "the vendor wrote back with three questions:") is never cut (verifier loop 3, N3).
+    if (i + 1 < lines.length && /\d/.test(l) && isAttribution(`${l.trimEnd()} ${lines[i + 1].trim()}`)) break;
+    if (HDR_PAIRS.some(([from, sent]) => from.test(l) && lines.slice(i + 1, i + 5).some((n) => sent.test(n)))) break;
     if (/^\s*>/.test(l)) continue;
     out.push(l);
   }
