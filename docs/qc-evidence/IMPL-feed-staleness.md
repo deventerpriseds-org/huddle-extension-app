@@ -172,3 +172,34 @@ Suites: feed-staleness 73/0, feed-staleness-sql 23/0 (PG16), task-proposals-sql 
 | SQL: "later last-modified" condition -> TRUE | S19 dismissed 'unreadable', then the SAME old last-modified | FIRED (control EQUIVALENT), exit 0 |
 | SQL: notePending always confirms | S16 a 403 on a fresh file ... alert on the 2nd | FIRED (control EQUIVALENT), exit 0 |
 | ORDER BY without the feed-first key | S21 (V3) a stale feed row is listed ... | FIRED (control EQUIVALENT), exit 0 |
+
+## Urgent incomplete-file alert (owner 2026-11-13, commit 84b4a613)
+
+Owner: "Don't worry about changing how incomplete is handled. It just needs to have a huddle chat and email alert
+as well as the bell so I know about it because it's urgent." The reader still REFUSES a `complete: false` file
+exactly as before; this only announces it.
+
+- **Where:** the existing file-health check (`feed-staleness.ts` / `.server.ts`), on the existing heartbeat. It reads
+  the reader's own recorded status (`chat.external_feed_state.last_status`, via new `readFeedStatus`) -- no download,
+  no new Graph call. Email and sent files only (the Teams log has no complete flag). Calendar is not covered.
+- **Decision:** `rejected:incomplete` read at/after the file's last-modified time -> `incomplete` (beats stale; loses
+  to missing/unreadable). A copy re-published after that read waits up to 2 h for the reader (`transient`), so a
+  republish never clears and re-raises.
+- **Channels:** bell row "URGENT: Work email file is incomplete -- Huddle is not using it" (fixed text). When THIS
+  check writes that row (new incident, reopen after a complete file cleared it, or an open stale row turning
+  incomplete) -> one Iris turn in `dm-iris-chase` (durable turn, `notify: "push"`) AND one self-email via
+  `sendGraphEmail` (owner-only recipients pass the send gate). A row already showing, or dismissed during the same
+  incident, is never re-announced. Stale / missing / unreadable stay bell-only.
+- **Flag:** unchanged -- OFF unless `correspondence.staleAlerts` is literally true.
+
+| check | result |
+|---|---|
+| `bun scripts/feed-staleness.test.ts` | 95 passed, 0 failed (I1-I22 new) |
+| neighbours | onedrive-feed all passed; correspondence-ingest 149/0; task-proposals 203/0; attention all passed |
+| `npx tsc --noEmit` | exit 0 |
+| mutate.sh M1 `checkedMs >= lm` -> `false` | FIRED (control EQUIVALENT), exit 0 -- I1 |
+| mutate.sh M2 drop `ok &&` before announce | FIRED (control EQUIVALENT), exit 0 -- I12 |
+| mutate.sh M3 drop the 2 h reader wait | FIRED (control EQUIVALENT), exit 0 -- I4 |
+| mutate.sh M4 drop the teams exclusion | FIRED (control EQUIVALENT), exit 0 -- I3 |
+
+NOT verified: a real Iris turn and a real email (needs the flag on, live). Independent verifier loop 5 covers this commit.
