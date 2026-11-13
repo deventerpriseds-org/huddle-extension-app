@@ -287,3 +287,40 @@ Notes on the non-0 rows (none of them is a broken guard):
   assignee shown, display-only), not a safety gain. Observation only; not changed in this pass.
 - **S4 NOT-APPLIED -> re-run.** The release line appears twice in `engine.ts` (lines 242 and 283). Re-anchored
   on the unique `if (!done) {` + release block: FIRED.
+
+### Fix-pass existing-behaviour check (what changes on main once merged, LIVE config = no correspondence/teams/sent keys)
+
+Source: `git diff origin/main...HEAD` (39 files; 15 exist on main), every diff read, plus a probe
+(`bun` on the branch functions, inputs below). With the live config, `teams.enabled`, `sent.enabled` and every
+`correspondence.*` flag are false (RT-21c), so the ingest and proposals passes return before any DB or Graph
+call (`runCorrespondenceIngest` / `runProposalsPass` gates read).
+
+| main file | live behaviour changes? | what changes (plain words) |
+|---|---|---|
+| `external-feeds/onedrive-feed.ts` -- **F8** `htmlToText` hidden-element strip | **YES** (work-mailbox feed email only; EDS mail uses Graph's own body, not this function) | Text Outlook hides is no longer read: preheaders (`display:none`), `mso-hide:all` fallbacks, the `hidden` attribute, `<head>`/`<title>`, comments. So Iris's summary of a work email and the "does it ask something" screen no longer see hidden text. **OVER-MATCH FOUND, see below.** |
+| same -- **F19** entity decode | **YES** (work feed email) | `&#8217;`, `&rsquo;`, `&mdash;`, `&#63;` and the like now show as the real characters instead of literal codes; `&amp;lt;` now shows `&lt;` (main decoded it twice, to `<`); a raw non-breaking space becomes a plain space. Note: `&#8217;` becomes a curly apostrophe but `&rsquo;` becomes a plain one. |
+| same -- config parse, Sent/Teams readers, F18, S1 | no | New keys default OFF; email/appointments keep main's default-on rule; `validateEnvelope` email branch unchanged; F18/S1 run only on Sent/Teams paths. |
+| `email/inbound-email.ts` -- **F9** `newTextOnly` | **YES** (both the EDS mailbox watcher and the work feed; the live default screen mode `needs-reply` runs `asksSomething`) | A reply whose quoted history sits under a French/German/Spanish/Italian/Dutch/Portuguese/Nordic/Polish/Russian/Turkish header, a translated "... a écrit :" line, or a Gmail "On ... <addr>" / "wrote:" split over two lines, no longer counts the OLD question as a new ask. So fewer "thanks!" replies get announced as needing a reply. English From:/Sent: behaviour is unchanged. |
+| `onedrive-feed.server.ts` | no | `readFeed` refactored onto `fetchDriveFile`; email/appointments read the same (meta now also selects `id`, explicit GET). Teams/sent readers unused when off. |
+| `email/email-replies.server.ts` | schema only | On first bootstrap after deploy, two nullable columns (`needs_context`, `source_link`) are added to `chat.email_replies` (additive, `IF NOT EXISTS`). Sent-Items settle for feed rows returns null when `sent` is off -> rows skipped, same as main. |
+| `attention/attention.ts`, `attention.functions.ts`, `AttentionBell.tsx` | **YES (visible, small)** | The bell's "What counts" list shows a new **"Teams chats"** checkbox (no rows can appear while off). Saving that list now also stores `-chat` when it is unticked. Badge = known items; with no chat rows that is the same number as main. |
+| `tasks/tools.ts`, `huddle.functions.ts` (Lovable tool schema) | **YES (agent-facing)** | The checklist tool now has a `proposals` option in BOTH tool schemas, which every agent sees. If a model sets it while the feature is off, the tool returns "Task proposals are not switched on". Each turn's prompt also carries a few more tool-schema tokens. |
+| `huddle.functions.ts` checklist sanitize / payload checklist | no | Rows with no `kind` map field-by-field as before (`sanitizeChecklistPayload`). The payload `checklist` is optional and nothing live sends it. |
+| `HuddleView.tsx`, `stream-context.ts`, `seed.ts`, `store.ts` | no | A checklist with no proposal rows makes the same single board read and the same context line. |
+| `tasks/scheduler.server.ts` | no (negligible) | Two dynamic imports per tick, which return at once when off. |
+| `fireflies/fireflies.server.ts` | no | `fetchTranscript` exported; body unchanged. |
+
+**OVER-MATCH in F8 (found by this check, NOT fixed here: it changes live behaviour, so it is a decision).**
+Probe outputs on the branch:
+- `<td style="font-size:0"><div style="font-size:14px">Can you review the deck?</div></td>` -> `""`.
+  Responsive email templates commonly set `font-size:0` on a wrapper to kill inline-block gaps and then set the
+  real size on the children. F8 drops the whole subtree, so a VISIBLE ask disappears. The work-feed screen then
+  sees no ask, and Iris's summary gets an empty body: `bodyText` is `""`, not null, so `bodyPreview` is not used.
+  On main (read from the code: no hidden strip) that text is kept.
+- An unclosed hidden element swallows the rest: `<p>Hello</p><div style="display:none">x<p>Can you call me?</p>`
+  -> `"Hello"`. This is the documented fail-closed choice, but on the live screen it means a real ask is lost
+  on malformed HTML.
+- Smaller F9 over-match: a body whose own lines start `Da: ...` and then `Data: ...` (Italian "from / date")
+  within 4 lines is cut from that point (probe -> `""`). Unlikely in an English-language org.
+The other probes behaved as designed: preheader dropped, `mso-hide:all` dropped, `hidden` attribute dropped,
+`<title>` dropped, FR/DE/Gmail-wrapped replies -> no ask, English From/Sent unchanged.
