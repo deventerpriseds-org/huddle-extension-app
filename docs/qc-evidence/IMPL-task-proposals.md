@@ -233,4 +233,57 @@ fixture's `upsert` keys on the exact title and has no read of decided rows.
 | fireflies-minutes.test.ts | bun | 64 PASS / **3 FAIL: G3, G5, G8** -- the same three recorded on untouched main (IMPL-correspondence-ingest.md); not from this branch |
 | `npx tsc --noEmit -p .` | tsc | **clean** (rc 0, no output) |
 
-No production fix was needed in this step.
+No production fix was needed in this step. (After the F5 isolating checks below, task-proposals is **166 passed, 0 failed**.)
+
+### Fix-pass mutation proofs (`mutate.sh`, controlled; anchors generated from the live source lines, never typed)
+
+Exit 0 = FIRED with an equivalent comment-only control (the failure is about behaviour, not the file's
+identity). 1 = INERT. 3 = NOT-APPLIED (nothing tested). Every run restored the file to HEAD and re-ran the
+test command clean. Rows are in run order, and every non-0 row is kept.
+
+| guard | file | mutation | test that failed | exit code |
+|---|---|---|---|---|
+| F1 teams opt-in (optInFile) | `external-feeds/onedrive-feed.ts` | `` if (!v \|\| typeof v !== "object" \|\| Array.isArray(v)) return { enabled: false, ... `` -> `` if (false) return { enabled: false, path: fallback }; `` | `` RT-22 `"teams": false` `` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F2 sent opt-in (optInFile) | `external-feeds/onedrive-feed.ts` | `` sent: optInFile(j.sent, SENT_PATH_DEFAULT, file), `` -> `` sent: file(j.sent, SENT_PATH_DEFAULT), `` | `RT-22c` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F8 hidden-HTML strip | `external-feeds/onedrive-feed.ts` | `` const visible = stripHiddenElements( `` -> `` const visible = String( `` | `RT-13` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F19 numeric entity decode | `external-feeds/onedrive-feed.ts` | `` return String.fromCodePoint(cp); `` -> `` return whole; `` | `RT-14` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F18 reply-prefix strip | `external-feeds/onedrive-feed.ts` | `` const next = s.replace(/^\s*(re\|fw\|fwd\|aw\|tr\|wg\|sv\|rv\|antw)(\[\d+\])?\s*:\s*/i, ""); `` -> `` const next = s; `` | `RT-23` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F9 non-English header cut | `email/inbound-email.ts` | `` const HDR_FROM = /^\s*(From\|De\|Von\|Van\|Da\|Od\|...)\s*:\s/i; `` -> `` const HDR_FROM = /^\s*(From)\s*:\s/i; `` | `RT-12` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F16 null sender -> fromOwner null | `external-feeds/teams-log.ts` | `` fromOwner: owners.size && who.id ? owners.has(who.id) : null, `` -> `` fromOwner: owners.size ? owners.has(who.id) : null, `` | `RT-16` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F17 URL strip before ask test | `correspondence/bell.ts` | `` bodyText: m.text.replace(/\b(?:https?:\/\/\|www\.)\S+/gi, "[link]") `` -> `` bodyText: m.text `` | `RT-17` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| S2 per-chat owner presence | `correspondence/bell.ts` | `` const ownerMessagesExported = thread.some((m) => m.fromOwner === true); `` -> `` ... = teams.some(...) `` (the old cross-chat rule) | `AC-7.1 fixture: exactly ONE open row` (correspondence-ingest.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F3 validYmd round-trip | `proposals/proposals.ts` | `` return utcToYmd(ymdToUtc(ymd)) === ymd ? ymd : null; `` -> `` return ymd; `` | `RT-8` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F3 per-row write isolation | `proposals/engine.ts` | `` out.failed++; `` -> `` throw code("proposals:store_failed"); `` | `F3 ...and the OTHER to-do` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F4 number grounding | `proposals/proposals.ts` | `` if (/\d/.test(w) && !evTokens.has(w)) return "task_number_not_grounded"; `` -> `` if (false) return ...; `` | `F4 numbers:` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F4 strict majority | `proposals/proposals.ts` | `` return hit * 2 > tw.length ? "ok" : "task_not_grounded"; `` -> `` return hit > 0 ? "ok" : ...; `` | `F4 majority:` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F5 min evidence words -- BEFORE the isolating checks | `proposals/proposals.ts` | `` evidence.length < EVIDENCE_MIN \|\| words(evidence).length < EVIDENCE_MIN_WORDS `` -> `` evidence.length < EVIDENCE_MIN `` | `F5 size:` (task-proposals.test.ts) | **1** INERT (see notes) |
+| F6 whole-word stem (no 5-letter prefix) | `proposals/proposals.ts` | `` if (/\d/.test(w)) return w; `` -> `` ...; if (w.length > 5) return w.slice(0, 5); `` (main's prefix stem) | `F6 a prefix collision` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F5 min evidence words (>= 4) | `proposals/proposals.ts` | words floor removed (as above) | `F5 size (words)` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F5 min evidence chars (>= 15) | `proposals/proposals.ts` | `` evidence.length < EVIDENCE_MIN \|\| `` removed | `F5 size (chars)` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F7 negation refusal | `proposals/proposals.ts` | `` if (negatesAction(sentence.text, at - sentence.start, evidence, title)) { `` -> `` if (false) { `` | `RT-4` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F10 due_text date-words only | `proposals/proposals.ts` | `` dueRaw && isDateWords(dueRaw) && ... `` -> `` dueRaw && ... `` | `RT-10` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F11 negated date term dropped | `proposals/proposals.ts` | `` terms.filter((t) => !negated(t)) `` -> `` terms.filter((t) => true) `` | `F11 every date term negated` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F12 assignee role -- wrong test named | `proposals/proposals.ts` | `` return roles.some((r) => re(r).test(ev)) ? a : null; `` -> `` return a; `` | `RT-11b` (redteam-correspondence.test.ts) | **1** INERT (see notes) |
+| F12 assignee role required | `proposals/proposals.ts` | same mutation | `F12 a name that is only the RECIPIENT` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F12 requester veto ("Bob asked me") | `proposals/proposals.ts` | `` if (re(...REQUESTER_VERBS...).test(ev)) return null; `` -> `` if (false) return null; `` | `RT-11b` (redteam-correspondence.test.ts) | **1** INERT -- NOT PROVEN (see notes) |
+| F13 sanitizeTitle (NFKC + invisible strip) | `proposals/proposals.ts` | `` String(raw ?? "").normalize("NFKC").replace(INVISIBLE, "") `` -> `` String(raw ?? "") `` | `RT-7` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F13 titleKey uses sanitizeTitle | `proposals/proposals.ts` | `` normalizeTaskTitle(sanitizeTitle(title)) `` -> `` normalizeTaskTitle(title) `` | `F13 titleKey folds` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F14 reworded re-extraction suppressed | `proposals/engine.ts` | `` const reworded = prior.find(...similarTitleKeys...) `` -> `` const reworded = undefined as any; `` | `RT-24` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F15 dismissed suppressed cross-source | `proposals/engine.ts` | `` const dismissed = prior.find(...) `` -> `` const dismissed = undefined as any; `` | `RT-24b` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| S4 lease release after finishApprove fails | `proposals/engine.ts` | `` await deps.store.releaseApprove(id).catch(() => {}); `` -> `` void 0; `` | `S4 ...and the lease is RELEASED` (task-proposals.test.ts) | **3** NOT-APPLIED (anchor matched 2 places) |
+| S4 lease release after finishApprove fails | `proposals/engine.ts` | `` if (!done) { await deps.store.releaseApprove(id)... `` -> `` if (!done) { void 0; `` (unique 2-line anchor) | `S4 ...and the lease is RELEASED` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+
+Notes on the non-0 rows (none of them is a broken guard):
+- **F5 INERT -> split.** The only F5 test ("send the deck") is 3 words AND 13 characters, so each floor
+  masked the other and neither could be proved alone. Two isolating checks were added to
+  `task-proposals.test.ts`: `F5 size (chars)` (4 words, 13 chars) and `F5 size (words)` (22 chars, 2 words).
+  No existing check was changed. Both floors then FIRED.
+- **F12 role mutation INERT against RT-11b.** The wrong test was named: "Bob asked me ..." returns at the
+  requester check before the role check runs. Re-run against `F12 a name that is only the RECIPIENT`: FIRED.
+- **F12 requester veto: INERT, NOT PROVEN.** Removing the line changes no tested answer, because on "Bob asked
+  me ..." / "Bob asked Dana ..." no role pattern matches either. The line IS reachable. Probed directly,
+  `groundedAssignee("Bob", "Ask Bob to send the deck, Bob said he can.")` returns null, where the hand-off role
+  alone would give "Bob". So today it only vetoes inputs where a role did match: a recall loss (no
+  assignee shown, display-only), not a safety gain. Observation only; not changed in this pass.
+- **S4 NOT-APPLIED -> re-run.** The release line appears twice in `engine.ts` (lines 242 and 283). Re-anchored
+  on the unique `if (!done) {` + release block: FIRED.
