@@ -4011,3 +4011,8 @@ here as fact three times before being checked.)
   sent.json exists but sentDateTime null on 29/29; emails.json last written Nov 11 14:02 UTC. Verifier loop 3 = FIX
   FIRST; D1-D5/M1/M2 fixed (aa0d6ade), D6 in progress, loop 4 verifier next. Preview + open-vs-replied report go to
   the owner's OneDrive only (proposals-preview.yml) -- never print item text in this public repo's logs.
+  UPDATE 2026-11-13 ~23:00 UTC: loop-4 repair pass DONE at claude_task-proposals 03cabacc (12 items; implementer
+  reports all suites green, 33 mutations FIRED) -- CLAIMED, NOT yet independently verified. Verifier LOOP 5 running
+  (report -> branch claude_verify-correspondence-proposals-5, docs/qc-evidence/VERIFY-correspondence-proposals-5.md).
+  Merge adds nullable chat.email_replies.feed_pending at bootstrap (live DDL, additive). Files: emails.json + sent.json
+  complete:true; Teams still broken -- re-run at 22:19 UTC wrote 59 new concat(' text lines (108-166). Nothing live.
