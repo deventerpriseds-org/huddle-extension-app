@@ -57,6 +57,9 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       instead of evaluating it (runs 43473581711/43474056808/43478709377, branch claude_teams-parse-diag). The Huddle
       Teams reader skips each as `not_json_line`, so none of today's backfill is usable. Fix is in PA: enter the line
       content through the expression editor (fx), then clear lines 108-224 and re-run the backfill.
+      RE-CHECK 2026-11-13 22:31 UTC (run 43519970343, file modified 22:19 UTC): old bad lines were cleared, but the
+      re-run appended 59 NEW lines (108-166) with the identical `concat('` prefix and char-313 break -- formula still
+      stored as text. Still 107 usable lines / 271 messages (Nov 9 14:03 -> Nov 11 21:04 UTC). Still blocked on PA.
 - [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
       docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
 - [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
