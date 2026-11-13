@@ -73,7 +73,7 @@ const noTeams = parseFeedsConfig(JSON.stringify(baseJson))!;
 t("AC-1.1 teams entry parsed with the same path rule", [cfg.teams.enabled, cfg.teams.path, cfg.teams.source, cfg.teams.ownerSenderIds], [
   true,
   "/automation/email/huddle-source-log.jsonl",
-  "power-automate-teams",
+  "teams",
   ["user-owner-1"],
 ]);
 t("AC-1.1 teams path without leading / -> disabled", parseFeedsConfig(JSON.stringify({ ...baseJson, teams: { path: "automation/x.jsonl" } }))!.teams.enabled, false);
@@ -107,7 +107,8 @@ t("AC-3.6 maxAttempts configurable, bounded", [perm({}) && parseFeedsConfig(JSON
 t("AC-6.3 sources filter rejects unknown names", parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { sources: ["teams", "fax"] } }))!.correspondence.sources, ["teams"]);
 
 t("PA contract: teams.ownerIds accepted as an alias of ownerSenderIds, merged, lower-cased", parseFeedsConfig(JSON.stringify({ ...baseJson, teams: { ownerSenderIds: ["A"], ownerIds: ["b", "a"] } }))!.teams.ownerSenderIds, ["a", "b"]);
-t("PA contract: teams entry with no path -> the email folder default", parseFeedsConfig(JSON.stringify({ ...baseJson, teams: {} }))!.teams.path, "/automation/email/huddle-source-log.jsonl");
+t("PA contract: teams entry with no path -> the REAL file's default (own folder, with a space)", parseFeedsConfig(JSON.stringify({ ...baseJson, teams: {} }))!.teams.path, "/automation/Teams Chats/teams-chats.jsonl");
+t("PA contract: the real default path passes the path rule (a space is allowed)", parseFeedsConfig(JSON.stringify({ ...baseJson, teams: {} }))!.teams.enabled, true);
 t("AC-6.4 / owner decision 2: absent `sent` key -> Sent Items OFF", noTeams.sent, { enabled: false, path: "/automation/email/sent.json" });
 t("PA contract: `sent` entry -> same path rule as email", [parseFeedsConfig(JSON.stringify({ ...baseJson, sent: {} }))!.sent, parseFeedsConfig(JSON.stringify({ ...baseJson, sent: { path: "sent.json" } }))!.sent.enabled], [{ enabled: true, path: "/automation/email/sent.json" }, false]);
 
@@ -144,7 +145,7 @@ t("AC-1.4 note names COUNTS and reasons only, no content", (() => {
 
 console.log("C. TEAMS ADAPTER — spelling table rows (S-1..S-16)");
 const L = (over: Record<string, unknown> = {}, msgs: unknown[] = [{ id: "m1", timestamp: "2026-11-11T10:00:00Z", body: "HUDDLE-PA-SBX- hello?", sender: "u1" }]) =>
-  JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "c1", capturedUtc: "2026-11-11T23:00:00Z", status: "pending", messages: msgs, ...over });
+  JSON.stringify({ source: "teams", synthetic: true, chatId: "c1", capturedUtc: "2026-11-11T23:00:00Z", status: "pending", messages: msgs, ...over });
 const parse = (text: string, c = cfg) => parseTeamsLog(text, c);
 t("S-1 planned shape accepted, one item per message", parse(L()).messages.length, 1);
 t("AC-1.6 / S-3 different capturedUtc, same ids -> one item", parse([L(), L({ capturedUtc: "2026-11-12T23:00:00Z" })].join("\n")).messages.length, 1);
@@ -173,9 +174,9 @@ t("S-9 (provisional) blank lines ignored, not counted", (() => {
 t("S-10 (provisional) CRLF line endings accepted", parse([L(), L({ chatId: "c2" })].join("\r\n")).messages.length, 2);
 t("S-14 a URL-only body maps to [link] (its '?' is not a question)", parse(L({}, [{ id: "m1", timestamp: "2026-11-11T10:00:00Z", body: { contentType: "html", content: "HUDDLE-PA-SBX- https://x.example/form?id=1" }, sender: "u1" }])).messages[0].text, "HUDDLE-PA-SBX- [link]");
 t("S-16 (provisional) deleted message skipped", parse(L({}, [{ id: "m1", timestamp: "2026-11-11T10:00:00Z", deletedDateTime: "2026-11-11T11:00:00Z", body: "HUDDLE-PA-SBX- x" }])).skipped.deleted, 1);
-t("Graph createdDateTime / value aliases accepted", parse(JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "c9", value: [{ id: "g1", createdDateTime: "2026-11-11T10:00:00Z", body: { contentType: "text", content: "HUDDLE-PA-SBX- hi" }, from: { user: { id: "U1", displayName: "N" } } }] })).messages[0].senderId, "u1");
+t("Graph createdDateTime / value aliases accepted", parse(JSON.stringify({ source: "teams", synthetic: true, chatId: "c9", value: [{ id: "g1", createdDateTime: "2026-11-11T10:00:00Z", body: { contentType: "text", content: "HUDDLE-PA-SBX- hi" }, from: { user: { id: "U1", displayName: "N" } } }] })).messages[0].senderId, "u1");
 t("PA contract: the doc's exact Graph message shape (createdDateTime, from.user, body object, webUrl, messageType)", (() => {
-  const line = JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-alpha@thread.example", chatName: "HUDDLE-PA-SBX- Alpha chat", capturedUtc: "2026-11-11T23:00:00Z", messages: [{ id: "1001", createdDateTime: "2026-11-10T14:00:00Z", messageType: "message", webUrl: "https://teams.example/l/message/1001", body: { contentType: "text", content: "HUDDLE-PA-SBX- Can you send me the Q3 deck by Friday?" }, from: { user: { id: "USER-OWNER-1", displayName: "Owner Example" } } }] });
+  const line = JSON.stringify({ source: "teams", synthetic: true, chatId: "19:chat-alpha@thread.example", chatName: "HUDDLE-PA-SBX- Alpha chat", capturedUtc: "2026-11-11T23:00:00Z", messages: [{ id: "1001", createdDateTime: "2026-11-10T14:00:00Z", messageType: "message", webUrl: "https://teams.example/l/message/1001", body: { contentType: "text", content: "HUDDLE-PA-SBX- Can you send me the Q3 deck by Friday?" }, from: { user: { id: "USER-OWNER-1", displayName: "Owner Example" } } }] });
   const m = parse(line).messages[0];
   return [m.messageId, m.at, m.senderId, m.fromOwner, m.webUrl, m.text, m.chatName];
 })(), ["1001", "2026-11-10T14:00:00.000Z", "user-owner-1", true, "https://teams.example/l/message/1001", "HUDDLE-PA-SBX- Can you send me the Q3 deck by Friday?", "HUDDLE-PA-SBX- Alpha chat"]);
@@ -383,7 +384,7 @@ t("AC-1.6 re-capture (new capture time) -> 0 new, 0 changed, rows unchanged", [r
 
 // AC-3.4 an edit in a later file -> SAME row, changed
 tw1.tick(11 * 60_000);
-files.teamsText += `\n${JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-bravo@thread.example", messages: [{ id: "2001", timestamp: "2026-11-11T09:00:00Z", body: "HUDDLE-PA-SBX- FYI the nightly build is RED.", sender: { id: "user-other-2" } }] })}`;
+files.teamsText += `\n${JSON.stringify({ source: "teams", synthetic: true, chatId: "19:chat-bravo@thread.example", messages: [{ id: "2001", timestamp: "2026-11-11T09:00:00Z", body: "HUDDLE-PA-SBX- FYI the nightly build is RED.", sender: { id: "user-other-2" } }] })}`;
 files.teamsEtag = '"{t},3"';
 const r5 = await runIngestPass(onCfg(), deps(tw1));
 t("AC-3.4 edited Teams message -> 1 changed, still 7 rows", [r5.sources.teams?.changed, tw1.rows.size], [1, 7]);
@@ -513,7 +514,7 @@ console.log("I. SERVER READ — Graph spy (AC-1.2, 1.8, 1.13)");
     t("AC-1.2 unchanged eTag -> no download", [b.ok && !b.changed, seen.filter((s) => s.path.endsWith(":/content")).length], [true, 1]);
     // AC-1.8 as amended by the PA contract doc ("Huddle reads the end of it"): an oversized rolling log is
     // read from its END with a Range request; the parse then drops the partial first line.
-    const line = (i: number) => JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: `c${i}`, messages: [{ id: "m", createdDateTime: "2026-11-11T10:00:00Z", body: "HUDDLE-PA-SBX- x", from: { user: { id: "u" } } }] });
+    const line = (i: number) => JSON.stringify({ source: "teams", synthetic: true, chatId: `c${i}`, messages: [{ id: "m", createdDateTime: "2026-11-11T10:00:00Z", body: "HUDDLE-PA-SBX- x", from: { user: { id: "u" } } }] });
     body = Array.from({ length: 40 }, (_, i) => line(i)).join("\n");
     const c2 = { ...c, maxBytes: 1000 };
     size = body.length;
@@ -628,9 +629,9 @@ console.log("J. SECTION 4 — unanswered correspondence -> the EXISTING bell (AC
 
   // AC-4.13 two passes: an ask, then the owner's reply in a later file, settles with no action in Huddle
   bellRows.clear();
-  const line1 = JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-golf@thread.example", chatName: "HUDDLE-PA-SBX- Golf", messages: [{ id: "g1", createdDateTime: "2026-11-11T10:00:00Z", body: { contentType: "text", content: "HUDDLE-PA-SBX- Could you approve the PO today?" }, from: { user: { id: "user-other-7", displayName: "Gale" } }, webUrl: "https://teams.example/l/m/g1" }] });
+  const line1 = JSON.stringify({ source: "teams", synthetic: true, chatId: "19:chat-golf@thread.example", chatName: "HUDDLE-PA-SBX- Golf", messages: [{ id: "g1", createdDateTime: "2026-11-11T10:00:00Z", body: { contentType: "text", content: "HUDDLE-PA-SBX- Could you approve the PO today?" }, from: { user: { id: "user-other-7", displayName: "Gale" } }, webUrl: "https://teams.example/l/m/g1" }] });
   // Red-team S2: the owner's earlier message is in THE SAME chat (presence is per chat), before the ask.
-  const ownerLine = JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-golf@thread.example", messages: [{ id: "h1", createdDateTime: "2026-11-11T09:00:00Z", body: "HUDDLE-PA-SBX- morning all", from: { user: { id: "USER-OWNER-1" } } }] });
+  const ownerLine = JSON.stringify({ source: "teams", synthetic: true, chatId: "19:chat-golf@thread.example", messages: [{ id: "h1", createdDateTime: "2026-11-11T09:00:00Z", body: "HUDDLE-PA-SBX- morning all", from: { user: { id: "USER-OWNER-1" } } }] });
   const tw2 = makeTwin();
   files.teamsText = [line1, ownerLine].join("\n");
   files.teamsEtag = '"{g},1"';
@@ -638,7 +639,7 @@ console.log("J. SECTION 4 — unanswered correspondence -> the EXISTING bell (AC
   const golf = B.chatAttentionId("login@eds.example", "19:chat-golf@thread.example");
   t("AC-4.13 pass 1: the ask is an open (owed, certain) row", [bellRows.get(golf)?.status, bellRows.get(golf)?.needs], ["owed", null]);
   tw2.tick(11 * 60_000);
-  files.teamsText += `\n${JSON.stringify({ source: "power-automate-teams", synthetic: true, chatId: "19:chat-golf@thread.example", messages: [{ id: "g2", createdDateTime: "2026-11-11T12:00:00Z", body: "HUDDLE-PA-SBX- approved", from: { user: { id: "USER-OWNER-1" } } }] })}`;
+  files.teamsText += `\n${JSON.stringify({ source: "teams", synthetic: true, chatId: "19:chat-golf@thread.example", messages: [{ id: "g2", createdDateTime: "2026-11-11T12:00:00Z", body: "HUDDLE-PA-SBX- approved", from: { user: { id: "USER-OWNER-1" } } }] })}`;
   files.teamsEtag = '"{g},2"';
   await runIngestPass(onCfg({ bell: true, sources: ["teams"] }), deps(tw2, [B.makeBellProcessor(store)]));
   t("AC-4.13 pass 2: the owner's later message settles it 'replied'", bellRows.get(golf)?.status, "replied");

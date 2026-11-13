@@ -167,8 +167,28 @@ t(
 
 // ── 4. Bell: Teams settle / unanswered ───────────────────────────────────────────────────────────
 console.log("\n# 4. bell");
-const tcfg = { synthetic: false, subjectPrefix: undefined, notBeforeUtc: undefined, teams: { source: "power-automate-teams", ownerSenderIds: ["user-owner-1"] } };
-const line = (msgs: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ source: "power-automate-teams", synthetic: false, chatId: "chat-1", messages: msgs, ...extra });
+const tcfg = { synthetic: false, subjectPrefix: undefined, notBeforeUtc: undefined, teams: { source: "teams", ownerSenderIds: ["user-owner-1"] } };
+const line = (msgs: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ source: "teams", synthetic: false, chatId: "chat-1", messages: msgs, ...extra });
+// REAL-FILE SHAPE (graph-permission-check run 43408812837 on the owner's /automation/Teams Chats/teams-chats.jsonl,
+// key names and enum counts only): line keys source/chatId/status/capturedAt/messages, source "teams", status
+// "Pending", NO synthetic key; messages carry Graph fields incl. body {content, contentType,
+// messageBodyContentType}, systemEventMessage entries, from.user {id, displayName, userIdentityType, tenantId}.
+{
+  const realMsg = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, etag: id, messageType: "message", createdDateTime: "2026-11-12T13:00:00.123Z", lastModifiedDateTime: "2026-11-12T13:00:00.123Z",
+    chatId: "19:chat-real@unq.gbl.spaces", importance: "normal", locale: "en-us", webUrl: "https://teams.example/l/message/" + id,
+    from: { user: { "@odata.type": "#microsoft.graph.teamworkUserIdentity", id: "user-other-9", displayName: "Rae", userIdentityType: "aadUser", tenantId: "t" } },
+    body: { content: "<p>Can you send the Q3 deck today?</p>", contentType: "html", messageBodyContentType: "html" },
+    attachments: [], mentions: [], citations: [], reactions: [], ...extra,
+  });
+  const sys = { ...realMsg("s1"), messageType: "systemEventMessage", from: null, eventDetail: { "@odata.type": "#x" }, body: { content: "<systemEventMessage/>", contentType: "html", messageBodyContentType: "html" } };
+  const realLine = (extra: Record<string, unknown>) => JSON.stringify({ source: "teams", chatId: "19:chat-real@unq.gbl.spaces", status: "Pending", capturedAt: "2026-11-12T14:00:00Z", messages: [realMsg("r1"), sys], ...extra });
+  const asIs = parseTeamsLog(realLine({}), tcfg);
+  t("REAL-1 a real line with NO synthetic key is skipped while live (fail closed: needs synthetic:false)", [asIs.messages.length, asIs.skipped.synthetic_mismatch], [0, 1]);
+  const fixed = parseTeamsLog(realLine({ synthetic: false }), tcfg);
+  t("REAL-2 the same line + synthetic:false parses: 1 message, the system event skipped", [fixed.messages.length, fixed.skipped.not_a_message], [1, 1]);
+  t("REAL-3 html body -> text, sender id, not owner", [fixed.messages[0]?.text, fixed.messages[0]?.senderId, fixed.messages[0]?.fromOwner], ["Can you send the Q3 deck today?", "user-other-9", false]);
+}
 {
   const p = parseTeamsLog(
     [
@@ -201,7 +221,7 @@ const line = (msgs: unknown[], extra: Record<string, unknown> = {}) => JSON.stri
     [
       line([{ id: "1", timestamp: "2026-11-10T14:00:00Z", from: { user: { id: "USER-OTHER-1" } }, body: "Can you send the deck?" }]),
       line([{ id: "2", timestamp: "2026-11-10T16:00:00+02:00", from: { user: { id: "USER-OWNER-1" } }, body: "done" }]), // = 14:00Z
-      '{"source":"power-automate-teams","synthetic":false,"chatId":"chat-1","messages":[{"id":"3"', // truncated last line
+      '{"source":"teams","synthetic":false,"chatId":"chat-1","messages":[{"id":"3"', // truncated last line
     ].join("\n"),
     tcfg,
   );

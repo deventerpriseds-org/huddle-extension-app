@@ -46,12 +46,14 @@ export interface CorrespondenceConfig {
   minIntervalMinutes: number;
 }
 
-/** Same folder as the work-email snapshot (owner 2026-11-12; docs/integrations/power-automate-huddle-sources.md). */
-export const TEAMS_LOG_PATH_DEFAULT = "/automation/email/huddle-source-log.jsonl";
+/** The REAL file the owner's Teams flow writes (read from the drive 2026-11-13, graph-permission-check run
+ *  43407021220 folder listing): its own "Teams Chats" folder, not the email folder the first contract named. */
+export const TEAMS_LOG_PATH_DEFAULT = "/automation/Teams Chats/teams-chats.jsonl";
 /** Sent Items snapshot (owner decision 2026-11-12, option A): a SEPARATE replace-in-place file beside the
  *  inbox snapshot, feed_type "sent_snapshot". */
 export const SENT_PATH_DEFAULT = "/automation/email/sent.json";
-export const TEAMS_SOURCE_EXPECTED = "power-automate-teams";
+/** The `source` value every line of the real file carries (run 43408812837: 50/50 lines "teams"). */
+export const TEAMS_SOURCE_EXPECTED = "teams";
 export const CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT = 5;
 export const CORRESPONDENCE_MIN_INTERVAL_DEFAULT = 10;
 

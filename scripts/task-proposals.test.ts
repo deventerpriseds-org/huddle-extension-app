@@ -877,7 +877,7 @@ t("S1 an explicit offset is kept", parseUtcMs("2026-11-10T10:00:00+02:00") === D
 {
   const base = { enabled: true, ownerLogins: ["owner@eds.example"], driveUser: "owner@eds.example", mailbox: "owner@work.example", synthetic: false };
   const c = (x: Record<string, unknown>) => parseCfg(JSON.stringify({ ...base, ...x }));
-  t("F1 teams:true -> on at the default path; teams:{} -> on", [c({ teams: true })?.teams.enabled, c({ teams: true })?.teams.path, c({ teams: {} })?.teams.enabled], [true, "/automation/email/huddle-source-log.jsonl", true]);
+  t("F1 teams:true -> on at the default path; teams:{} -> on", [c({ teams: true })?.teams.enabled, c({ teams: true })?.teams.path, c({ teams: {} })?.teams.enabled], [true, "/automation/Teams Chats/teams-chats.jsonl", true]);
   t("F1/F2 teams:0 / [] / {enabled:false}, sent:\"on\" -> off", [c({ teams: 0 })?.teams.enabled, c({ teams: [] })?.teams.enabled, c({ teams: { enabled: false } })?.teams.enabled, c({ sent: "on" })?.sent.enabled], [false, false, false, false]);
 }
 
