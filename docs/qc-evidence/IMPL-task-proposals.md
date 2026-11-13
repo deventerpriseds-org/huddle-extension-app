@@ -562,3 +562,29 @@ vendor?", "Can you sign the NDA?" once, "Can you approve the PO?"). W1b: `""`, a
 | void skip moved back before the close checks | TRUTH every p-end-tag-omission closer ... | FIRED (control EQUIVALENT), exit 0 |
 | `mso-hide:all` back in `HIDDEN_STYLE` | TRUTH W4 + mso | FIRED (control EQUIVALENT), exit 0 |
 | `styleOf` back to the in-tag regex | TRUTH W7 + attributes | FIRED (control EQUIVALENT), exit 0 |
+
+#### Item 3 (X1/X2) -- wrapped plain-text English cut as quoted history (commit 1a75905f)
+`src/features/huddle/lib/email/inbound-email.ts` `isWrappedAttribution` (LIVE: EDS main mailbox + work feed)
+- The two-line Gmail join now needs, on the FIRST line, a weekday or month name (English, plus 3+-letter
+  abbreviations in the attribution languages, so no 2-letter English word counts), a 1-2 digit day, and a year or
+  a time; and on the joined line an email address, or a capitalised name (not "I") right before `wrote:`. The
+  joined line must still match an attribution rule. A bare digit is no longer enough.
+- X1 (`On Nov 12 the auditor sent ... and Pat` / `also wrote:`) and X2 (`On 3 occasions the client` / `complained,
+  and today she wrote:`) now keep their ask, as main does; both screen as asks.
+- Still cut: all 14 loop-3 real openers (unchanged test green), RT-12c, plus 5 wrapped attributions (email,
+  name-only, day-month-year + time, email split across the wrap, French wrap).
+- Main-vs-branch over every string literal in the inbound-email, redteam, ingest and task-proposals suites
+  (TypeScript AST, 1436 literals, `newTextOnly` + `asksSomething`): **19 differ**. All 19 are deliberate cuts of
+  quoted history main misses: 8 foreign header blocks / attributions on one line (fr/de/es/it/nl/pt/sv, it/pl/es
+  headers), 2 FR/DE header blocks from older tests, and 9 two-line wrapped attributions (Gmail English with email or
+  name, French). No sentence of the sender's own text differs from main. (Loop 3 counted 15 of 1232; the 4 new ones
+  are this pass's wrapped-cut fixtures.)
+- Tests (redteam-correspondence): D2 X1/X2 hard-wrapped lines kept (X1, X2, lower-case word before wrote, no year,
+  "I" before wrote); D2 X1/X2 still screened as asks; D2 real two-line wrapped attributions still cut. 73/0.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| shape check back to "any digit" | D2 X1/X2 hard-wrapped English lines ... | FIRED (control EQUIVALENT), exit 0 |
+| year-or-time requirement removed | D2 X1/X2 hard-wrapped English lines ... | FIRED (control EQUIVALENT), exit 0 |
+| name-before-verb check always true | D2 X1/X2 hard-wrapped English lines ... | FIRED (control EQUIVALENT), exit 0 |
+| name-before-verb check always false | D2 real two-line wrapped attributions are still cut | FIRED (control EQUIVALENT), exit 0 |
