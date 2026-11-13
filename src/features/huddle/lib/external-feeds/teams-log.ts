@@ -38,7 +38,9 @@ export type TeamsSkipReason =
   | "before_not_before"
   | "prefix_mismatch"
   | "not_a_message"
-  | "deleted";
+  | "deleted"
+  /** No readable text after HTML -> text AND no attachment (a file-only reply is kept: it can be the owner's answer). */
+  | "empty";
 
 /** What the server's drive read of the Teams log returns (onedrive-feed.server.ts readTeamsLogFile). */
 export type TeamsFileRead =
@@ -57,6 +59,10 @@ export interface TeamsLogParse {
   skipped: Partial<Record<TeamsSkipReason, number>>;
   /** Same (chatId, messageId) seen again in this file (a flow rerun / repeated line): kept once. */
   duplicates: number;
+  /** Capture coverage (owner 2026-11-13: "capture counts should be monitored"): distinct chats per capture
+   *  day (UTC date of the line's capturedAt/capturedUtc; "unknown" when absent), over lines that passed the
+   *  source/synthetic/chatId checks -- a chat with an empty day still counts as captured. */
+  captureChats: Record<string, number>;
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "");
@@ -107,7 +113,8 @@ export function parseTeamsLog(
   },
   opts: { dropFirstLine?: boolean } = {},
 ): TeamsLogParse {
-  const out: TeamsLogParse = { messages: [], lines: 0, skippedLines: 0, skippedMessages: 0, skipped: {}, duplicates: 0 };
+  const out: TeamsLogParse = { messages: [], lines: 0, skippedLines: 0, skippedMessages: 0, skipped: {}, duplicates: 0, captureChats: {} };
+  const chatsByDay = new Map<string, Set<string>>();
   const skip = (r: TeamsSkipReason, kind: "line" | "message") => {
     out.skipped[r] = (out.skipped[r] ?? 0) + 1;
     if (kind === "line") out.skippedLines++;
@@ -153,6 +160,10 @@ export function parseTeamsLog(
       skip("missing_chat_id", "line");
       continue;
     }
+    const capMs = parseUtcMs(pick(rec, "capturedUtc", "captured_utc", "capturedAt"));
+    const day = Number.isFinite(capMs) ? new Date(capMs).toISOString().slice(0, 10) : "unknown";
+    if (!chatsByDay.has(day)) chatsByDay.set(day, new Set());
+    chatsByDay.get(day)!.add(chatId);
     const msgs = pick(rec, "messages", "value");
     if (!Array.isArray(msgs)) {
       skip("missing_messages", "line");
@@ -190,6 +201,10 @@ export function parseTeamsLog(
         continue;
       }
       const textOut = bodyText(m);
+      if (!textOut.trim() && !(Array.isArray(m.attachments) && m.attachments.length)) {
+        skip("empty", "message");
+        continue;
+      }
       if (cfg.synthetic && !textOut.startsWith(cfg.subjectPrefix ?? "\u0000")) {
         skip("prefix_mismatch", "message");
         continue;
@@ -218,12 +233,33 @@ export function parseTeamsLog(
   }
   if (out.lines > 0 && parsedLines === 0 && !opts.dropFirstLine) return { ...out, rejected: "not_jsonl" };
   out.messages = [...byKey.values()];
+  for (const [d, set] of chatsByDay) out.captureChats[d] = set.size;
   return out;
+}
+
+/** Pure: the newest dated capture and the one before it, with a DROP flag when the newest captured fewer
+ *  than half the chats of the previous one (a flow that silently stopped paging, lost a permission, or
+ *  logged a different account). Below `minPrevious` chats the ratio is noise and never flags. */
+export function captureCoverage(
+  captureChats: Record<string, number>,
+  minPrevious = 10,
+): { latest: { day: string; chats: number } | null; previous: { day: string; chats: number } | null; drop: boolean } {
+  const days = Object.keys(captureChats).filter((d) => d !== "unknown").sort();
+  const at = (i: number) => (i >= 0 ? { day: days[i], chats: captureChats[days[i]] } : null);
+  const latest = at(days.length - 1);
+  const previous = at(days.length - 2);
+  const drop = !!latest && !!previous && previous.chats >= minPrevious && latest.chats * 2 < previous.chats;
+  return { latest, previous, drop };
 }
 
 /** Pure: a log-safe one-line note (counts and reason NAMES only -- never a line, an id or a body). */
 export function teamsParseNote(p: TeamsLogParse, tailSkippedBytes = 0): string | null {
   const parts: string[] = [];
+  const chats = new Set(p.messages.map((m) => m.chatId)).size;
+  parts.push(`kept ${p.messages.length} message(s) in ${chats} chat(s) from ${p.lines} line(s)`);
+  const cov = captureCoverage(p.captureChats ?? {});
+  if (cov.latest) parts.push(`latest capture ${cov.latest.day}: ${cov.latest.chats} chat(s)`);
+  if (cov.drop && cov.previous) parts.push(`COVERAGE DROP: ${cov.latest!.chats} chat(s) vs ${cov.previous.chats} on ${cov.previous.day}`);
   if (p.skippedLines) parts.push(`skipped ${p.skippedLines} line(s)`);
   if (p.skippedMessages) parts.push(`skipped ${p.skippedMessages} message(s)`);
   const reasons = Object.entries(p.skipped)

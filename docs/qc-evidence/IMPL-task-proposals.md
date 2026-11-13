@@ -337,3 +337,21 @@ The finisher's existing-behaviour check found F8 blanking visible text: `<td sty
 | font-size:0 element keeps nothing (re-sized descendants dropped) | F8b font-size:0 wrapper with a re-sized child | FIRED (control EQUIVALENT), exit 0 |
 | unclosed element never ends at its parent | F8c an UNCLOSED hidden element ends ... | FIRED (control EQUIVALENT), exit 0 |
 | every descendant counts as re-sized | F8b a font-size:0px / inherit child does NOT re-size | FIRED (control EQUIVALENT), exit 0 |
+
+### Teams adapter: empty messages + capture coverage (commit 3f6bb5fb, 2026-11-13)
+Owner: "ignore empty and system-event records ... the observed Teams listing returned 50 chats, so capture counts
+should be monitored." System events were already skipped (`not_a_message`); dedup by (chatId, id) already existed.
+- New skip `empty`: no readable text after HTML -> text AND no attachment. A file-only message is KEPT (it can be
+  the owner's reply, which is what settles a chat).
+- `captureChats`: distinct chats per capture day (capturedAt/capturedUtc UTC date) over lines that passed the
+  source/synthetic/chatId checks. `captureCoverage()` flags a DROP when the newest capture has under half the
+  previous one's chats (previous >= 10). `teamsParseNote` now leads with totals ("kept M message(s) in C chat(s) from
+  L line(s)", "latest capture <day>: N chat(s)", "COVERAGE DROP: ...") -- counts only.
+- Tests EMPTY-1/2, COVER-1..5 (redteam-correspondence 59/0); all other suites unchanged and green; tsc clean.
+
+| Mutation (mutate.sh) | Named test | Verdict |
+|---|---|---|
+| empty skip removed | EMPTY-1 | FIRED (control EQUIVALENT), exit 0 |
+| attachment exemption removed | EMPTY-2 | FIRED (control EQUIVALENT), exit 0 |
+| drop flag never set | COVER-2 | FIRED (control EQUIVALENT), exit 0 |
+| small-capture floor removed | COVER-5 | FIRED (control EQUIVALENT), exit 0 |

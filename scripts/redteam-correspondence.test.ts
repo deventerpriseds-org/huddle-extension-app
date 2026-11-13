@@ -18,7 +18,7 @@ import { approveProposal, decideProposal, proposeFromSource } from "../src/featu
 import { newTextOnly } from "../src/features/huddle/lib/email/inbound-email";
 import { normalizeTaskTitle } from "../src/features/huddle/lib/tasks/scoring";
 import { htmlToText, mapFeedMessage, mapSentRecords, parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
-import { parseTeamsLog } from "../src/features/huddle/lib/external-feeds/teams-log";
+import { captureCoverage, parseTeamsLog, teamsParseNote } from "../src/features/huddle/lib/external-feeds/teams-log";
 import { chatMessageAsks, decideChatThread } from "../src/features/huddle/lib/correspondence/bell";
 import { runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
 import type { SourceItem, TeamsMessage } from "../src/features/huddle/lib/correspondence/source-item";
@@ -188,6 +188,23 @@ const line = (msgs: unknown[], extra: Record<string, unknown> = {}) => JSON.stri
   const fixed = parseTeamsLog(realLine({ synthetic: false }), tcfg);
   t("REAL-2 the same line + synthetic:false parses: 1 message, the system event skipped", [fixed.messages.length, fixed.skipped.not_a_message], [1, 1]);
   t("REAL-3 html body -> text, sender id, not owner", [fixed.messages[0]?.text, fixed.messages[0]?.senderId, fixed.messages[0]?.fromOwner], ["Can you send the Q3 deck today?", "user-other-9", false]);
+  // Owner 2026-11-13: "ignore empty and system-event records".
+  const emptyLine = realLine({ synthetic: false, messages: [
+    realMsg("e1", { body: { content: "<p>&nbsp;</p>", contentType: "html", messageBodyContentType: "html" } }),
+    realMsg("e2", { body: { content: "<attachment id=\"a1\"></attachment>", contentType: "html", messageBodyContentType: "html" }, attachments: [{ id: "a1", contentType: "reference", name: "deck.pptx" }] }),
+    realMsg("e3"),
+  ] });
+  const em = parseTeamsLog(emptyLine, tcfg);
+  t("EMPTY-1 a message with no readable text and no attachment is skipped as empty", [em.skipped.empty, em.messages.map((m) => m.messageId)], [1, ["e2", "e3"]]);
+  t("EMPTY-2 a file-only message is KEPT (it can be the owner's reply)", em.messages.some((m) => m.messageId === "e2"), true);
+  // Owner 2026-11-13: "the observed Teams listing returned 50 chats, so capture counts should be monitored".
+  const day = (d: string, chat: string) => realLine({ synthetic: false, capturedAt: `${d}T23:00:00Z`, chatId: chat, messages: [] });
+  const cover = parseTeamsLog([...Array.from({ length: 50 }, (_, k) => day("2026-11-12", `c${k}`)), ...Array.from({ length: 12 }, (_, k) => day("2026-11-13", `c${k}`))].join("\n"), tcfg);
+  t("COVER-1 distinct chats per capture day, counted even when the day had no messages", cover.captureChats, { "2026-11-12": 50, "2026-11-13": 12 });
+  t("COVER-2 a capture with under half the previous chats is flagged", captureCoverage(cover.captureChats), { latest: { day: "2026-11-13", chats: 12 }, previous: { day: "2026-11-12", chats: 50 }, drop: true });
+  t("COVER-3 the note carries totals + the drop, counts only", /kept 0 message\(s\) in 0 chat\(s\) from 62 line\(s\) latest capture 2026-11-13: 12 chat\(s\) COVERAGE DROP: 12 chat\(s\) vs 50 on 2026-11-12/.test(teamsParseNote(cover) ?? ""), true);
+  t("COVER-4 a normal day-to-day wobble is not flagged", captureCoverage({ "2026-11-12": 50, "2026-11-13": 41 }).drop, false);
+  t("COVER-5 a tiny previous capture never flags (noise)", captureCoverage({ "2026-11-12": 4, "2026-11-13": 1 }).drop, false);
 }
 {
   const p = parseTeamsLog(
