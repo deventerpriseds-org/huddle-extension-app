@@ -150,3 +150,60 @@ Cause: `htmlToText` drops `<img>` and `<emoji>` with their `alt`, then `:204` tr
 Mitigation worth stating: every accepted row shows the WHOLE enclosing sentence as evidence, and nothing reaches the
 board without the owner's Approve. So F4/F5/F7 put a wrong to-do in front of the owner with the contradicting
 sentence beside it; they do not create a board task on their own.
+
+## Live-app changes that do not depend on any flag (what merging changes)
+
+1. Work-email HTML conversion (`htmlToText`, F8/F19): drops visible text in the V1/V2/V5/V6/V7/V13/V19 shapes above;
+   decodes more entities (wanted).
+2. `newTextOnly` (F9): cuts English content in the N1-N8 shapes above, for the EDS main mailbox AND the work feed.
+3. Attention bell: "Teams chats" checkbox in Settings; `DEFAULT_URGENT_KINDS` gains `chat`; the next Settings save
+   stores `-chat` for an owner who leaves it off (stored-value shape change). No chat rows exist while ingest is off.
+4. `build_checklist` tool schema gains `proposals` (every model sees it; when off it returns `not_enabled`).
+5. Turn payload schema gains optional `checklist`; when present, the target agent's reply carries it and, if the
+   model said nothing, a canned "Hello Sir, here is what's waiting for your review." reply is added
+   (`ensureChecklistDelivered`). Only the evening proposals delivery sets it.
+6. Legacy checklist rows: `sanitizeChecklistPayload` output is byte-identical to main's mapping on 5 legacy shapes
+   (`scripts/verify3-sanitize-probe.ts`); a `kind:"proposal"` row with a non-`prop-` id is now dropped (correct,
+   AC-5.2). A `prop-` id with no `kind` is still a task row (note).
+
+## Per-AC verdicts
+
+Basis key: S = named test in a suite I re-ran green at 870c74c3; P = my probe; R = code read; UI/DB = needs the
+deployed app or Azure PG, not done (no live systems).
+
+| AC | verdict | basis |
+|---|---|---|
+| 1.1 | CONFIRMED (minor M1: `{"enabled":"false"}` enables) | S + P |
+| 1.2 | CONFIRMED offline; DB row part NOT TESTABLE OFFLINE | S + R (`fetchDriveFile` single download site) |
+| 1.3, 1.4, 1.5, 1.6, 1.7, 1.10, 1.11, 1.12 | CONFIRMED | S |
+| 1.8 | CONFIRMED (design changed: tail read instead of reject, documented) | S + R `onedrive-feed.server.ts:124-131` |
+| 1.9 | CONFIRMED | S + P (real line without `synthetic` skipped) |
+| 1.13 | CONFIRMED | R: `timedFetch` forces `method:"GET"` |
+| S-16 (system/deleted/edited) | CONFIRMED on real Graph shape | P E-graph-shape |
+| 2.1 | CONFIRMED | R `ingest.server.ts` readEmail -> `readFeed(c,"email")` |
+| 2.2-2.7 | CONFIRMED offline (2.7 via inbound-email 72/0) | S |
+| 3.1-3.10 | CONFIRMED offline (SQL on PG16: 50/0) | S |
+| 4.1-4.6, 4.8-4.13 | CONFIRMED offline; UI rows NOT TESTABLE OFFLINE | S |
+| 4.5 / 4.13 with real owner replies | **REFUTED by 3f6bb5fb**: an image-only or Teams-emoji-only owner reply is skipped, so the chat stays OWED | P E-empty-consequence |
+| 4.7 | PARTIAL: superseded by owner option A (Sent Items settles; no `needs_context` for email) | R `email-replies.server.ts` |
+| 5.1, 5.2 | CONFIRMED | S + P sanitize probe |
+| 5.3-5.5, 5.7-5.13, 5.15-5.17, 5.21-5.23 | CONFIRMED offline (SQL 45/0); UI/DB parts NOT TESTABLE OFFLINE | S |
+| 5.6, 5.24 | NOT TESTABLE OFFLINE (UI) | -- |
+| 5.14 | CONFIRMED (documented as separate, untouched) | R IMPL note |
+| 5.18 | CONFIRMED on its fixtures | S |
+| 5.19 | PARTIAL: verbatim guard holds; F5/F7 classes still admit a real span supporting a wrong task | P |
+| 5.20 | CONFIRMED for dates; MINOR: `dueText` keeps "may"/"3" | P |
+| 6.1, 6.3 | CONFIRMED | S + P (0 calls, flag matrix) |
+| 6.2 | NOT BUILT (implementer says so) | R |
+| 6.4 | **REFUTED** for the email path: htmlToText and newTextOnly behave differently from main with everything OFF | P V*/N* |
+| 6.5 | PARTIAL: queue-sql green; fireflies-minutes 3 failures, inferred pre-existing (only an `export` added) | S + R |
+| 6.6 | NOT BUILT (status note text only) | R |
+| 6.7 | CONFIRMED | cross-app-turn-gate 92/0 |
+| 6.8 | NOT TESTABLE OFFLINE (release) | -- |
+| 7.1, 7.2 | CONFIRMED | S |
+| 7.3, 7.4, 8.3 | NOT REACHED | -- |
+| 8.1, 8.2 | CONFIRMED | S |
+
+Red-team: F1, F2, F3, F11, F12, F13, F14, F15 (decision), F16, F17, F18, F19, S1, S2, S4, S5 CLOSED on probes/suites.
+F8 PARTIAL (now over-hides visible text, still keeps several hiding styles). F9 PARTIAL (non-English cut, English
+over-cut). F4, F5, F7 OPEN on new spellings. F10 minor residue.
