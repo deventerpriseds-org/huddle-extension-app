@@ -509,12 +509,30 @@ const DATE_WORDS = new Set(
     "am", "pm", "st", "nd", "rd", "th", "et", "est", "edt", "pt", "pst", "pdt", "ct", "utc", "gmt",
   ],
 );
+const DAY_NUM = String.raw`\d{1,2}(?:st|nd|rd|th)?`;
+/** A real date term (verifier loop 3, M2): a weekday; a month name next to a day number (either order,
+ *  "the"/"of" allowed between); today / tomorrow / tonight; EOD / EOW (or "end of [the] day/week",
+ *  "close of business", COB); a numeric date (2026-11-14, 11/14, 11/14/2026); "next"/"this" + a unit. */
+const REAL_DATE_TERM = new RegExp(
+  [
+    `\\b(?:${WEEKDAYS.join("|")})\\b`,
+    `\\b${MONTH_WORD}\\s+(?:the\\s+)?${DAY_NUM}\\b`,
+    `\\b${DAY_NUM}\\s+(?:of\\s+)?${MONTH_WORD}(?![a-z])`,
+    `\\b(?:today|tomorrow|tonight|eod|eow|cob)\\b`,
+    `\\bend\\s+of\\s+(?:the\\s+)?(?:day|week|business)\\b|\\bclose\\s+of\\s+business\\b`,
+    `\\b\\d{4}-\\d{1,2}-\\d{1,2}\\b|\\b\\d{1,2}/\\d{1,2}(?:/\\d{2,4})?\\b`,
+    `\\b(?:next|this)\\s+(?:day|week|month|${WEEKDAYS.join("|")})\\b`,
+  ].join("|"),
+  "i",
+);
 /** Pure (red-team F10): due_text is ONLY date words (weekdays, months, numbers, ordinals, ISO dates and
- *  connective words like "by", "end of day") -- at most 8 words. A whole sentence is not a due text. */
+ *  connective words like "by", "end of day") -- at most 8 words. A whole sentence is not a due text.
+ *  Verifier loop 3, M2: it must also hold a REAL date term, so "may" (a verb) or "3" (a quantity) alone is
+ *  never kept as a due text. */
 export function isDateWords(s: string): boolean {
   const ws = String(s ?? "").toLowerCase().match(/[a-z]+|\d+(?:st|nd|rd|th)?|\d{4}-\d{2}-\d{2}/g) ?? [];
   if (!ws.length || ws.length > 8) return false;
-  return ws.every((w) => /^\d/.test(w) || DATE_WORDS.has(w));
+  return ws.every((w) => /^\d/.test(w) || DATE_WORDS.has(w)) && REAL_DATE_TERM.test(String(s));
 }
 
 /** YYYY-MM-DD of an instant in a zone. */

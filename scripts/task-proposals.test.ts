@@ -17,6 +17,7 @@ import {
   proposalId,
   proposalSourceFromItem,
   resolveDueDate,
+  isDateWords,
   sanitizeChecklistPayload,
   transcriptProposalText,
   validateCandidates,
@@ -871,6 +872,17 @@ t("F8b a 0.9em child re-sizes", htmlToText('<div style="font-size:0"><span style
 t("F8b display:none inside a re-sized child is still removed", htmlToText('<div style="font-size:0"><div style="font-size:14px">ok <span style="display:none">Wire 5000</span>thanks</div></div>'), "ok thanks");
 t("F8c an UNCLOSED hidden element ends at its parent's close, real text after it kept", htmlToText('<table><tr><td><span style="display:none">Wire 5000</td><td>Can you review the deck?</td></tr></table>'), "Can you review the deck?");
 t("F8c an unclosed hidden element with no parent close still hides the rest", htmlToText('<p>shown</p><div style="display:none">Wire 5000 now'), "shown");
+// Verifier loop 3, M2: a due text needs a REAL date term, not just date-ish words.
+{
+  const no = ["may", "3", "by 3", "asap", "soon", "in May", "the 3rd"];
+  const yes = ["by Friday", "this Friday", "Nov 14", "14 November", "the 14th of November", "May 3", "today", "by EOD", "end of day", "2026-11-14", "11/14", "next Monday", "next week", "this month"];
+  t("M2 non-date words are not a due text", no.filter((s) => isDateWords(s)), []);
+  t("M2 real date terms still are", yes.filter((s) => !isDateWords(s)), []);
+  t("M2 end to end: due_text 'may' / '3' is dropped, the task kept", validateCandidates({ tasks: [
+    { task: "Send the Q3 deck", evidence: "send me the Q3 deck", assignee: null, due_text: "may" },
+    { task: "Update the budget sheet", evidence: "Dana will update the budget sheet", assignee: null, due_text: "3" },
+  ] }, "Hi! Can you send me the Q3 deck? We may need 3 copies. Also Dana will update the budget sheet.", { atIso: AT, tz: TZ }).accepted.map((c) => [c.title, c.dueText]), [["Send the Q3 deck", null], ["Update the budget sheet", null]]);
+}
 // Verifier loop 3, D1: hidden-text stripping must never drop VISIBLE text (repros V1/V2/V5/V6/V7/V13/V19).
 t("D1-V1 an unclosed hidden span ends at its parent's </p>, not at a later stray </span>", htmlToText('<p><span style="display:none">pre</p><p>Please approve the budget by Friday.</p><p>Thanks</span></p>').includes("Please approve the budget by Friday."), true);
 t("D1-V19 an unclosed hidden <p> in a cell ends at the next <td>", htmlToText('<table><tr><td><p style="display:none">pre<td>Can you sign today?</td></tr></table>'), "Can you sign today?");
