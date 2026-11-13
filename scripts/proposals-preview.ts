@@ -1,15 +1,20 @@
 // WHAT:       A ONE-OFF PREVIEW of the task proposals Huddle would put in Iris's checklist, from the owner's REAL
 //             work-email snapshot and Teams chat log. Runs the shipped extraction + validation (proposeFromSource,
-//             the same model call the live feature uses) and writes the result as a Markdown file into the
-//             owner's OWN OneDrive. Stores nothing in Huddle, creates no task, sends nothing.
+//             the same model call the live feature uses). It WRITES one Markdown file to the owner's OWN OneDrive
+//             (/automation/Huddle Preview/task-proposals-preview-<timestamp>.md, a new file every run) and, with
+//             PREVIEW_EMAIL=1, EMAILS the same report as HTML (Graph sendMail from HUDDLE_EMAIL_FROM to the owner's
+//             mailbox in the private feed config). Stores nothing in Huddle and creates no task.
 // WHY:        Owner 2026-11-13: "give me a preview of the action items you pulled from the email/chat". The
 //             feature is still switched off and unmerged; a preview on real data is the cheapest check of its
 //             quality before switch-on. THIS REPO'S LOGS ARE PUBLIC: the action items, subjects, senders and
-//             ids go ONLY into the owner's OneDrive file; the log prints counts and the file path.
+//             ids go ONLY into the owner's OneDrive file / email; the log prints counts, HTTP statuses and the
+//             file path. Feed content is never printed, not even inside a parse error (verifier loop 4, 8.3).
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
-// EVIDENCE:   run by .github/workflows/proposals-preview.yml; .claude/actions.md ACT:correspondence-checklist.
+// EVIDENCE:   run by .github/workflows/proposals-preview.yml; .claude/actions.md ACT:correspondence-checklist;
+//             scripts/proposals-preview.test.ts.
 // Env: TOKEN (app-only Graph), HUDDLE_ONEDRIVE_FEEDS (the app's config), OPENAI_API_KEY, PREVIEW_DAYS (default 7),
-//      PREVIEW_MAX_SOURCES (default 60). Run: npx -y tsx scripts/proposals-preview.ts
+//      PREVIEW_MAX_SOURCES (default 60), PREVIEW_SINCE, PREVIEW_EMAIL=1, PREVIEW_ACCEPT_UNMARKED=1, HUDDLE_EMAIL_FROM.
+//      Run: npx -y tsx scripts/proposals-preview.ts
 import {
   latestSentByConversation,
   mapFeedMessage,
@@ -28,6 +33,18 @@ import { teamsSourceItem, type SourceItem } from "../src/features/huddle/lib/cor
 import { proposalSourceFromItem, type NewProposal, type ProposalStore } from "../src/features/huddle/lib/proposals/proposals";
 import { proposeFromSource } from "../src/features/huddle/lib/proposals/engine";
 import { extract, EXTRACT_MODEL } from "../src/features/huddle/lib/proposals/proposals.server";
+
+/** Parse a feed file WITHOUT ever printing its content: a JSON.parse error message quotes the first characters
+ *  of the input (V8: `Unexpected token 'S', "Secret mer"... is not valid JSON`), and these logs are public. A
+ *  non-JSON file logs only "<label>: not JSON" and yields undefined (verifier loop 4, 8.3). */
+function parseFeedJson(label: string, text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    console.log(`${label}: not JSON`);
+    return undefined;
+  }
+}
 
 const cfg0 = parseFeedsConfig(process.env.HUDDLE_ONEDRIVE_FEEDS);
 if (!cfg0) {
@@ -78,9 +95,10 @@ const e = await read(cfg.email.path);
 // PREVIEW ONLY: PREVIEW_ACCEPT_UNMARKED=1 also reads an email file the flow marked complete:false (the live
 // validator still refuses it); the report says so up front.
 let emailIncomplete = false;
-let ev = e.status === 200 ? validateEmailSnapshot(JSON.parse(e.text), cfg) : null;
-if (ev && !ev.ok && ev.reason === "incomplete" && process.env.PREVIEW_ACCEPT_UNMARKED === "1") {
-  ev = validateEmailSnapshot({ ...JSON.parse(e.text), complete: true }, cfg);
+const eJson = e.status === 200 ? parseFeedJson("email", e.text) : undefined;
+let ev = eJson !== undefined ? validateEmailSnapshot(eJson, cfg) : null;
+if (ev && !ev.ok && ev.reason === "incomplete" && process.env.PREVIEW_ACCEPT_UNMARKED === "1" && eJson && typeof eJson === "object") {
+  ev = validateEmailSnapshot({ ...(eJson as Record<string, unknown>), complete: true }, cfg);
   emailIncomplete = !!ev?.ok;
 }
 console.log(`email: HTTP ${e.status} | ${ev ? (ev.ok ? (emailIncomplete ? "valid (flow marked it incomplete; read for the preview only)" : "valid") : `REJECTED ${ev.reason}`) : "-"}`);
@@ -176,7 +194,8 @@ for (const [, ps] of perSource) {
 const sinceIso = process.env.PREVIEW_SINCE || "";
 const sinceMs = sinceIso ? Date.parse(sinceIso) : since;
 const sentRead = await read("/automation/email/sent.json");
-const sv = sentRead.status === 200 ? validateSentSnapshot(JSON.parse(sentRead.text), cfg) : null;
+const sentJson = sentRead.status === 200 ? parseFeedJson("sent", sentRead.text) : undefined;
+const sv = sentJson !== undefined ? validateSentSnapshot(sentJson, cfg) : null;
 const sentMapped = sv?.ok ? mapSentRecords(sv.snapshot.records, cfg) : { sent: [], skipped: 0 };
 const latestSent = latestSentByConversation(sentMapped.sent);
 console.log(`sent: HTTP ${sentRead.status} | ${sv ? (sv.ok ? "valid" : `REJECTED ${sv.reason}`) : "-"} | usable ${sentMapped.sent.length} | no time ${sentMapped.skipped}`);
