@@ -19,6 +19,15 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       (50 lines, 271 msgs, source "teams", capturedAt, status "Pending", NO synthetic key -> all lines would be skipped).
       Code defaults moved to the real path/source (claude_task-proposals 8a336404); PA needs ONE change: add synthetic:false.
       sent.json: not there yet. OBSERVED: emails.json last modified 2026-11-11 14:02 UTC (~44h before the read) -- told owner.
+      2026-11-13 later: PA session added synthetic:false + chatName to the Teams flow and created the Sent Items flow
+      (/automation/email/sent.json). Drive check (graph-permission-check run after PR #219, counts only): sent.json
+      sent_snapshot, synthetic False, 29 records, conversationId 29/29 BUT sentDateTime 0/29 (null) -> no record can
+      settle an email until the flow maps the sent time (receivedDateTime is accepted too). Teams: 57 new lines carry
+      synthetic:false but no messages (7:28am run); all 271 messages are in the 50 pre-marker lines.
+      Preview: proposals-preview.yml (PR #217/#218) wrote /automation/Huddle Preview/task-proposals-preview-*.md to the
+      owner's OneDrive: 53 proposals from 105 sources (33 email + 72 chat). Verifier loop 3 = FIX FIRST (D1 hidden-text
+      over-strip, D2 English 'wrote:' over-cut, D3 image/emoji-only owner reply dropped, D4 coverage TZ, M1, M2, D5, D6);
+      fix agent running on claude_task-proposals.
 - [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
       docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
 - [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
