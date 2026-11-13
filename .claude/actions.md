@@ -48,10 +48,15 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       (redundant outer gate, recorded). Evidence docs/qc-evidence/IMPL-feed-staleness.md. NOT live.
 - [x] Verifier loop-3 fixes D1-D6, M1, M2 all on claude_task-proposals (D6 restored at 648e6f64 after a stale-base
       revert by 4fc54efe). NOT live.
-- [ ] Independent verifier loop 4 over the whole branch (next).
+- [x] Independent verifier loop 4 over the whole branch: FIX FIRST; repair agent running (commits through 18:03 UTC).
 - [ ] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history).
-- [ ] PA: emails.json complete:false (125 records Nov 6 -> Nov 13 13:11 UTC); Teams backfill from Mon still pending.
-      sent.json FIXED: sentDateTime 29/29.
+- [x] PA emails.json: FIXED 2026-11-13 (run 43473391504): complete:true, 127 records Nov 6 08:24 -> Nov 13 15:17 UTC,
+      published 15:18 UTC. sent.json: complete:true, 29 records, sentDateTime 29/29, published 15:37 UTC.
+- [ ] PA Teams backfill: RAN but WRITES BROKEN LINES. teams-chats.jsonl now 224 lines; the 117 new lines (108-224, written
+      2026-11-13) all start with the literal text `concat('{"...` -- the append step stores its FORMULA as plain text
+      instead of evaluating it (runs 43473581711/43474056808/43478709377, branch claude_teams-parse-diag). The Huddle
+      Teams reader skips each as `not_json_line`, so none of today's backfill is usable. Fix is in PA: enter the line
+      content through the expression editor (fx), then clear lines 108-224 and re-run the backfill.
 - [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
       docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
 - [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
