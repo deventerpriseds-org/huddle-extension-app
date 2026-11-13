@@ -39,14 +39,28 @@ export type FeedMeta =
   | { kind: "unreadable" } // 403
   | { kind: "transient" }; // anything else: no information this check
 
+/** What the EXISTING feed reader (onedrive-feed.server.ts `readFeed`) last recorded for a file in
+ *  chat.external_feed_state: its `last_status` and when it read. Read from the database only -- the staleness
+ *  check never downloads a file. Owner 2026-11-13: an incomplete file is urgent and must be announced. */
+export interface FeedReadStatus {
+  status: string;
+  checkedMs: number;
+}
+/** The reader's status for a snapshot the flow marked `complete: false` (it is refused, exactly as before). */
+export const INCOMPLETE_STATUS = "rejected:incomplete";
+/** The file was re-published after the reader last saw it incomplete: wait this long for the reader to look at
+ *  the new copy before trusting the plain staleness decision again (so one republish never clears + re-raises). */
+export const READ_LAG_MS = 2 * 3_600_000;
+
 export type StaleDecision =
   | { state: "fresh" }
   | { state: "stale"; sinceMs: number; workingHours: number | null }
   | { state: "missing" }
   | { state: "unreadable" }
+  | { state: "incomplete"; sinceMs: number }
   | { state: "transient" };
 /** A decision that is shown on the bell. */
-export type AlertDecision = Extract<StaleDecision, { state: "stale" | "missing" | "unreadable" }>;
+export type AlertDecision = Extract<StaleDecision, { state: "stale" | "missing" | "unreadable" | "incomplete" }>;
 /** A missing / unreadable file is alerted only once the SAME reason is seen on this many consecutive checks
  *  (a transient check in between neither confirms nor resets it), so one blip never raises or reopens. */
 export const HARD_REASON_CHECKS = 2;
@@ -134,11 +148,23 @@ export function teamsDueInstant(nowMs: number): number {
  * A modification time in the future (clock skew) or one that does not parse as a number is handled safely:
  * future => fresh; non-finite => transient (the drive did not give a usable answer this time).
  */
-export function decideFeedStaleness(file: FeedFile, meta: FeedMeta, nowMs: number, staleHours: number): StaleDecision {
+export function decideFeedStaleness(
+  file: FeedFile,
+  meta: FeedMeta,
+  nowMs: number,
+  staleHours: number,
+  read?: FeedReadStatus | null,
+): StaleDecision {
   if (meta.kind === "missing") return { state: "missing" };
   if (meta.kind === "unreadable") return { state: "unreadable" };
   if (meta.kind === "transient" || !Number.isFinite(meta.lastModifiedMs)) return { state: "transient" };
   const lm = meta.lastModifiedMs;
+  // Incomplete (email / sent only -- the Teams log has no complete flag): the reader refused the CURRENT copy.
+  // A copy published after that read has not been judged yet: hold the alert state until the reader looks.
+  if (file !== "teams" && read && read.status === INCOMPLETE_STATUS && Number.isFinite(read.checkedMs)) {
+    if (read.checkedMs >= lm) return { state: "incomplete", sinceMs: lm };
+    if (nowMs - read.checkedMs < READ_LAG_MS) return { state: "transient" };
+  }
   if (lm >= nowMs) return { state: "fresh" };
   if (file === "teams") {
     return lm < teamsDueInstant(nowMs) ? { state: "stale", sinceMs: lm, workingHours: null } : { state: "fresh" };
@@ -183,6 +209,13 @@ export function feedAlertText(file: FeedFile, d: AlertDecision, nowMs: number): 
   const check = `Check the Power Automate ${FLOW_NAME[file]} flow.`;
   if (d.state === "missing") return { title: `${label} is missing from OneDrive`, detail: check };
   if (d.state === "unreadable") return { title: `${label} can't be read from OneDrive`, detail: `Check the file's sharing, or the Power Automate ${FLOW_NAME[file]} flow.` };
+  // Fixed text (no "now"-dependent label), so an open incomplete row is never rewritten -- and never re-announced.
+  if (d.state === "incomplete") {
+    return {
+      title: `URGENT: ${label} is incomplete -- Huddle is not using it`,
+      detail: `The Power Automate ${FLOW_NAME[file]} flow marked its latest file "complete: false" (it likely hit a page or size limit). ${check}`,
+    };
+  }
   const since = sinceLabel(d.sinceMs, nowMs);
   const how = d.workingHours != null ? workingSpanLabel(d.workingHours) : "expected after 6 PM each weekday";
   return { title: `${label} hasn't updated since ${since} (${how})`, detail: check };
@@ -190,7 +223,7 @@ export function feedAlertText(file: FeedFile, d: AlertDecision, nowMs: number): 
 
 /** The episode a raised row stands for. Dismiss holds for the rest of its episode; a new one reopens. */
 export function feedEpisode(d: AlertDecision): string {
-  return d.state === "stale" ? `stale:${new Date(d.sinceMs).toISOString()}` : d.state;
+  return d.state === "stale" ? `stale:${new Date(d.sinceMs).toISOString()}` : d.state; // "incomplete": one episode until a complete read clears it
 }
 
 /** The bell row id of one feed file for one owner: `attn-feed-<file>-<hash>`. Cannot equal an email row (bare
@@ -230,19 +263,26 @@ export interface StalenessReport {
   failed: number;
   /** Hard reasons seen for the first time this check (not alerted yet). */
   pending?: number;
+  /** Urgent announcements (Iris chat + email) sent this check: one per NEW incomplete episode. */
+  urgent?: number;
 }
+
+/** Announce an urgent file problem beyond the bell (Iris's chat + an email to the owner). Called ONCE per
+ *  newly written incomplete row -- never for a row that was already showing. Returns whether anything was sent. */
+export type FeedUrgentNotifier = (r: { file: FeedFile; ownerEmail: string; title: string; detail: string; id: string; nowMs: number }) => Promise<boolean>;
 
 /** Apply each checked file's decision to the bell. One file's store failure never stops the others. */
 export async function applyFeedStaleness(
   owner: string,
-  checked: { file: FeedFile; meta: FeedMeta }[],
+  checked: { file: FeedFile; meta: FeedMeta; read?: FeedReadStatus | null }[],
   nowMs: number,
   staleHours: number,
   store: FeedAlertStore,
+  notifyUrgent?: FeedUrgentNotifier,
 ): Promise<StalenessReport> {
-  const rep: StalenessReport = { states: {}, raised: 0, cleared: 0, failed: 0, pending: 0 };
-  for (const { file, meta } of checked) {
-    const d = decideFeedStaleness(file, meta, nowMs, staleHours);
+  const rep: StalenessReport = { states: {}, raised: 0, cleared: 0, failed: 0, pending: 0, urgent: 0 };
+  for (const { file, meta, read } of checked) {
+    const d = decideFeedStaleness(file, meta, nowMs, staleHours, read);
     rep.states[file] = d.state;
     const id = feedAttentionId(owner, file);
     try {
@@ -250,7 +290,7 @@ export async function applyFeedStaleness(
       if (d.state === "fresh") {
         if (await store.clear(id, owner)) rep.cleared++;
       } else {
-        if (d.state !== "stale" && !(await store.notePending({ id, ownerEmail: owner, reason: d.state, huddleId: EMAIL_ALERT_HUDDLE }))) {
+        if ((d.state === "missing" || d.state === "unreadable") && !(await store.notePending({ id, ownerEmail: owner, reason: d.state, huddleId: EMAIL_ALERT_HUDDLE }))) {
           rep.pending = (rep.pending ?? 0) + 1;
           continue; // first sighting of a hard reason: the next check must confirm it
         }
@@ -265,6 +305,15 @@ export async function applyFeedStaleness(
           huddleId: EMAIL_ALERT_HUDDLE,
         });
         if (ok) rep.raised++;
+        // Urgent: only when THIS check wrote the row (a new episode, a reopen after it cleared, or a switch from
+        // another reason). A row already showing "incomplete" writes nothing, so it is never re-announced.
+        if (ok && d.state === "incomplete" && notifyUrgent) {
+          try {
+            if (await notifyUrgent({ file, ownerEmail: owner, title, detail, id, nowMs })) rep.urgent = (rep.urgent ?? 0) + 1;
+          } catch {
+            rep.failed++;
+          }
+        }
       }
     } catch {
       rep.failed++;
@@ -276,5 +325,5 @@ export async function applyFeedStaleness(
 /** Pure: the public-safe log line (file names, states and counts only). */
 export function stalenessLogLine(rep: StalenessReport): string {
   const s = FEED_FILES.filter((f) => rep.states[f]).map((f) => `${f}=${rep.states[f]}`);
-  return `[feed-staleness] ${s.join(" ")} raised=${rep.raised} cleared=${rep.cleared}${rep.pending ? ` pending=${rep.pending}` : ""}${rep.failed ? ` failed=${rep.failed}` : ""}`;
+  return `[feed-staleness] ${s.join(" ")} raised=${rep.raised} cleared=${rep.cleared}${rep.pending ? ` pending=${rep.pending}` : ""}${rep.urgent ? ` urgent=${rep.urgent}` : ""}${rep.failed ? ` failed=${rep.failed}` : ""}`;
 }

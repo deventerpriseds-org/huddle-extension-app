@@ -21,8 +21,11 @@ import {
   workingSpanLabel,
   type FeedAlertStore,
   type FeedMeta,
+  type FeedReadStatus,
+  type FeedUrgentNotifier,
+  INCOMPLETE_STATUS,
 } from "../src/features/huddle/lib/correspondence/feed-staleness";
-import { feedFilesToCheck, runFeedStalenessCheck } from "../src/features/huddle/lib/correspondence/feed-staleness.server";
+import { feedFilesToCheck, runFeedStalenessCheck, urgentFeedDirective, urgentFeedEmailBody } from "../src/features/huddle/lib/correspondence/feed-staleness.server";
 import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import {
   ATTENTION_KINDS,
@@ -421,6 +424,98 @@ function countingDeps(meta: FeedMeta) {
     globalThis.fetch = realFetch;
     envKeys.forEach((k, i) => (savedEnv[i] === undefined ? delete process.env[k] : (process.env[k] = savedEnv[i])));
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// I: incomplete file = URGENT (owner 2026-11-13): bell row + Iris chat + email, once per episode. The file is
+// still refused by the reader exactly as before; the check only reads the reader's recorded status.
+// ---------------------------------------------------------------------------------------------
+{
+  const lm = U("2026-11-13T14:30:00Z");
+  const inc = (checked: string): FeedReadStatus => ({ status: INCOMPLETE_STATUS, checkedMs: U(checked) });
+  t("I1 email: reader saw the CURRENT copy incomplete -> incomplete (even though the file is fresh)",
+    decideFeedStaleness("email", ok("2026-11-13T14:30:00Z"), now, 6, inc("2026-11-13T14:31:00Z")), { state: "incomplete", sinceMs: lm });
+  t("I2 sent: same rule", decideFeedStaleness("sent", ok("2026-11-13T14:30:00Z"), now, 6, inc("2026-11-13T14:35:00Z")).state, "incomplete");
+  t("I3 teams has no complete flag: an incomplete status is ignored", decideFeedStaleness("teams", ok("2026-11-13T14:30:00Z"), now, 6, inc("2026-11-13T14:31:00Z")).state, "fresh");
+  t("I4 a copy published AFTER the incomplete read, read < 2h ago -> transient (wait for the reader; no clear, no re-raise)",
+    decideFeedStaleness("email", ok("2026-11-13T14:30:00Z"), now, 6, inc("2026-11-13T14:00:00Z")).state, "transient");
+  t("I5 ...but if the reader has not looked for 2h+, the plain staleness decision applies again",
+    decideFeedStaleness("email", ok("2026-11-13T14:30:00Z"), now, 6, inc("2026-11-13T12:30:00Z")).state, "fresh");
+  t("I6 any other reader status (ok / unchanged / rejected:other) -> plain staleness",
+    ["ok", "unchanged", "rejected:not_json", "error"].map((st) => decideFeedStaleness("email", ok("2026-11-13T14:30:00Z"), now, 6, { status: st, checkedMs: U("2026-11-13T14:31:00Z") }).state),
+    ["fresh", "fresh", "fresh", "fresh"]);
+  t("I7 missing / unreadable still win over a stale incomplete status",
+    [decideFeedStaleness("email", { kind: "missing" }, now, 6, inc("2026-11-13T14:31:00Z")).state, decideFeedStaleness("email", { kind: "unreadable" }, now, 6, inc("2026-11-13T14:31:00Z")).state],
+    ["missing", "unreadable"]);
+  t("I8 incomplete takes precedence over stale (an old AND incomplete file says incomplete)",
+    decideFeedStaleness("email", ok("2026-11-11T14:02:00Z"), now, 6, inc("2026-11-13T14:31:00Z")).state, "incomplete");
+  const txt = feedAlertText("email", { state: "incomplete", sinceMs: lm }, now);
+  t("I9 bell text: URGENT, names the file and the flow, carries no content and no clock-dependent label",
+    [txt.title, /complete: false/.test(txt.detail), /Power Automate email flow/.test(txt.detail), feedAlertText("email", { state: "incomplete", sinceMs: lm }, now + 9 * 86_400_000).title === txt.title],
+    ["URGENT: Work email file is incomplete -- Huddle is not using it", true, true, true]);
+  t("I10 episode is one 'incomplete' incident (not per republish)", feedEpisode({ state: "incomplete", sinceMs: lm }), "incomplete");
+
+  // Apply: once per episode.
+  const tw = twin();
+  const sentTo: string[] = [];
+  const notify: FeedUrgentNotifier = async (r) => (sentTo.push(`${r.file}:${r.title}`), true);
+  const incNow = [{ file: "email" as const, meta: ok("2026-11-13T14:30:00Z"), read: inc("2026-11-13T14:31:00Z") }];
+  const a = await applyFeedStaleness(O, incNow, now, 6, tw.store, notify);
+  const b = await applyFeedStaleness(O, incNow, now + 60_000, 6, tw.store, notify);
+  const c = await applyFeedStaleness(O, [{ file: "email" as const, meta: ok("2026-11-13T15:30:00Z"), read: inc("2026-11-13T15:31:00Z") }], now + H, 6, tw.store, notify);
+  t("I11 first incomplete check: ONE bell row AND one urgent announcement", [a.raised, a.urgent, open(tw.rows), sentTo.length], [1, 1, 1, 1]);
+  t("I12 later checks while still incomplete (even a re-published incomplete copy): no rewrite, no repeat announcement",
+    [b.raised, b.urgent, c.raised, c.urgent, sentTo.length], [0, 0, 0, 0, 1]);
+  const d = await applyFeedStaleness(O, [{ file: "email" as const, meta: ok("2026-11-13T16:00:00Z"), read: { status: "ok", checkedMs: U("2026-11-13T16:01:00Z") } }], now + 2 * H, 6, tw.store, notify);
+  t("I13 a complete file read OK -> the row clears itself", [d.cleared, open(tw.rows)], [1, 0]);
+  const e = await applyFeedStaleness(O, [{ file: "email" as const, meta: ok("2026-11-13T17:00:00Z"), read: inc("2026-11-13T17:01:00Z") }], now + 3 * H, 6, tw.store, notify);
+  t("I14 incomplete AGAIN after it cleared = a new incident -> announced again", [e.raised, e.urgent, sentTo.length], [1, 1, 2]);
+  tw.rows.get(feedAttentionId(O, "email"))!.status = "dismissed";
+  const f = await applyFeedStaleness(O, [{ file: "email" as const, meta: ok("2026-11-13T17:30:00Z"), read: inc("2026-11-13T17:31:00Z") }], now + 4 * H, 6, tw.store, notify);
+  t("I15 dismissed during the same incomplete incident: stays dismissed, no announcement", [f.raised, f.urgent, sentTo.length], [0, 0, 2]);
+  const tw2 = twin();
+  const sent2: string[] = [];
+  const n2: FeedUrgentNotifier = async (r) => (sent2.push(r.file), true);
+  await applyFeedStaleness(O, [{ file: "sent" as const, meta: ok("2026-11-11T14:02:00Z") }], now, 6, tw2.store, n2);
+  const g = await applyFeedStaleness(O, [{ file: "sent" as const, meta: ok("2026-11-11T14:02:00Z") }], now + 60_000, 6, tw2.store, n2);
+  t("I16 stale / missing alerts stay bell-only: never announced by chat or email", [g.urgent, sent2.length], [0, 0]);
+  const h = await applyFeedStaleness(O, [{ file: "sent" as const, meta: ok("2026-11-13T14:30:00Z"), read: inc("2026-11-13T14:31:00Z") }], now + 2 * H, 6, tw2.store, n2);
+  t("I17 an open STALE row that turns incomplete is a new incident: rewritten AND announced", [h.raised, h.urgent, sent2], [1, 1, ["sent"]]);
+  const tw3 = twin();
+  const thrower: FeedUrgentNotifier = async () => {
+    throw new Error("graph down");
+  };
+  const k = await applyFeedStaleness(O, [...incNow, { file: "sent" as const, meta: ok("2026-11-13T14:30:00Z"), read: inc("2026-11-13T14:31:00Z") }], now, 6, tw3.store, thrower);
+  t("I18 a failing announcement never blocks the bell row or the other file", [k.raised, k.urgent, k.failed, open(tw3.rows)], [2, 0, 2, 2]);
+  t("I19 log line counts urgent announcements (names/counts only)", stalenessLogLine({ states: { email: "incomplete" }, raised: 1, cleared: 0, failed: 0, urgent: 1 }),
+    "[feed-staleness] email=incomplete raised=1 cleared=0 urgent=1");
+}
+{
+  // Wiring: the server check reads the reader status for email/sent only and passes the notifier through.
+  const asked: string[] = [];
+  const urgent: string[] = [];
+  const r = await runFeedStalenessCheck(cfgWith({ staleAlerts: true }, { sent: true, teams: true }), {
+    readMeta: async () => ok("2026-11-13T14:30:00Z"),
+    store: twin().store,
+    now: () => now,
+    log: () => {},
+    readStatus: async (_c, file) => (asked.push(file), { status: INCOMPLETE_STATUS, checkedMs: U("2026-11-13T14:31:00Z") }),
+    notifyUrgent: async (x) => (urgent.push(x.file), true),
+  });
+  t("I20 server check: reader status asked for email + sent (never teams); both announced once; teams fresh",
+    [asked, urgent, r?.states, r?.urgent], [["email", "sent"], ["email", "sent"], { email: "incomplete", sent: "incomplete", teams: "fresh" }, 2]);
+  const off = await runFeedStalenessCheck(cfgWith({ staleAlerts: false }, { sent: true }), {
+    readMeta: async () => ok("2026-11-13T14:30:00Z"),
+    store: twin().store,
+    now: () => now,
+    log: () => {},
+    readStatus: async (_c, file) => (asked.push(`OFF-${file}`), null),
+    notifyUrgent: async () => (urgent.push("OFF"), true),
+  });
+  t("I21 flag OFF: no status read, no announcement", [off, asked.filter((a) => a.startsWith("OFF")).length, urgent.includes("OFF")], [null, 0, false]);
+  t("I22 chat directive + email body name the problem and the fix, and say it is not from the user",
+    [/not a message from the user/.test(urgentFeedDirective("T", "D")), /Do not call any tools/.test(urgentFeedDirective("T", "D")), urgentFeedEmailBody("T", "D").startsWith("T.\n\nD")],
+    [true, true, true]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
