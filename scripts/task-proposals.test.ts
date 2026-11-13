@@ -832,6 +832,10 @@ console.log("\n# L. red-team fix pass");
   t("F4 majority: one shared verb + an invented object (no numbers) -> task_not_grounded", why("Send the signed lease to Morgan", "Please send the invoice to Dana by Friday", "Please send the invoice to Dana by Friday."), ["task_not_grounded"]);
   t("F4 numbers: majority grounded but an invented number ('Q4' vs 'Q3') -> task_number_not_grounded", why("Send the Q4 deck", "Can you send me the Q3 deck by Friday?", "Can you send me the Q3 deck by Friday?"), ["task_number_not_grounded"]);
   t("F5 size: a 3-word fragment is refused even when every word matches the title", why("Send the deck", "send the deck", "Thanks for offering to send the deck."), ["evidence_too_short"]);
+  // Isolating checks (fix-pass mutation proofs): the 3-word case above is ALSO under 15 chars, so each
+  // floor masked the other. One check per floor: 4 words but 13 chars; 22 chars but 2 words.
+  t("F5 size (chars): 4 words but under 15 characters is refused", why("Pay 3 tabs", "pay my 3 tabs", "Can you pay my 3 tabs today?"), ["evidence_too_short"]);
+  t("F5 size (words): over 15 characters but only 2 words is refused", why("Approve reimbursements", "approve reimbursements", "Please approve reimbursements today."), ["evidence_too_short"]);
   t("F4 over-match negative: a fully grounded imperative title is accepted",ok("Update the budget sheet", "Dana will update the budget sheet", "Dana will update the budget sheet by Nov 14.").length, 1);
 }
 // Isolating checks: each one fails if ONLY its own guard is removed (the red-team probes are also caught
