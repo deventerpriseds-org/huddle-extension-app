@@ -199,7 +199,10 @@ jobs:
                   return "[" + (str(len(o)) + "x " + (shape(o[0], depth+1) if depth < 1 else (sorted(o[0].keys()).__str__() if isinstance(o[0], dict) else type(o[0]).__name__)) if o else "") + "]"
               return type(o).__name__
           print("   envelope keys:", sorted(d.keys()) if isinstance(d,dict) else "-")
-          if isinstance(v,list) and v: print("   record[0] shape:", shape(v[0]))' 2>/dev/null || echo "-")
+          if isinstance(v,list) and v: print("   record[0] shape:", shape(v[0]))
+          if isinstance(v,list) and v:
+              keys=sorted({k for r in v if isinstance(r,dict) for k in r})
+              print("   non-empty per field (of", len(v), "records):", {k: sum(1 for r in v if isinstance(r,dict) and r.get(k) not in (None, "", [], {})) for k in keys})' 2>/dev/null || echo "-")
                 echo "$u $p | item HTTP $M -> $MSUM | content HTTP $C -> $CSUM"
               done
             done
