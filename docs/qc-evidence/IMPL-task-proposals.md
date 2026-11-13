@@ -486,3 +486,27 @@ tonight; EOD / EOW / COB or "end of [the] day/week", "close of business"; a nume
 | new negators removed | D5 negation spellings are refused | FIRED (control EQUIVALENT), exit 0 |
 | previous-clause length cap lifted (3 -> 99) | D5 neg: affirmative look-alikes accepted | FIRED (control EQUIVALENT), exit 0 |
 | "don't worry" exemption removed | D5 neg: affirmative look-alikes accepted | FIRED (control EQUIVALENT), exit 0 |
+
+#### D6 -- an added word rode on a majority of grounded words
+`src/features/huddle/lib/proposals/proposals.ts` `titleGrounding`: EVERY title content word (light stem, stopwords
+dropped) must be in the evidence; it used to be a strict majority. The number rule (`task_number_not_grounded`) is
+unchanged. This enforces what `EXTRACTION_INSTRUCTIONS` already asks the model for: "a short imperative in the text's
+own words".
+- Now refused: "Pay the vendor invoice twice", "Pay all vendor invoices from the reserve fund" (from "pay the vendor
+  invoice this week"), "Redo the deck you sent" (from "loved the deck you sent last week").
+- False-reject cost, measured: 0 of the existing tests broke (task-proposals, redteam, ingest unchanged and green).
+  On 12 realistic model-style paraphrases (scratch probe, deleted), 3 that the majority rule accepted are now
+  refused because each adds one verb: "Return the signed NDA" ("I need the signed NDA back"), "Schedule a call with
+  Pat" ("set up a call with Pat"), "Reply to Pat about the budget" ("Pat is waiting on your answer about the
+  budget"). These fail closed: no proposal, nothing reaches the board. The other 9 are unchanged (8 accepted, 1
+  already refused).
+- Still accepted (not in the verifier's must-fail list): verifier F5b, "Send the budget review" from "Thanks for
+  sending the budget review yesterday". Every word is grounded ("sending" -> "send"); refusing it needs a "thanks for
+  <verb>ing" / past-event rule, not grounding.
+- Tests (task-proposals): D6 three invented titles -> `task_not_grounded`; D6 neg five own-words titles accepted.
+  Suites: task-proposals 198/0, redteam 70/0, ingest 149/0, onedrive-feed all passed, inbound-email 72/0,
+  cross-app-turn-gate 92/0; tsc clean.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| every-word rule back to strict majority | D6 a title that adds a content word is not grounded | FIRED (control EQUIVALENT), exit 0 |

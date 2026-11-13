@@ -235,17 +235,20 @@ export function contentWords(s: string): Set<string> {
 export const contentStems = contentWords;
 
 /** Pure (red-team F4): is the task title grounded in the evidence? Every number / amount / account-like
- *  token of the title must appear in the evidence as a whole token, and a STRICT MAJORITY of the title's
- *  content words must appear (whole word, light stem) -- one shared verb no longer carries an invented
- *  object ("Send $40,000 wire to account 99-1234" on "Please send the invoice ..."). */
+ *  token of the title must appear in the evidence as a whole token, and EVERY one of the title's content
+ *  words must appear (whole word, light stem) -- one shared verb no longer carries an invented object
+ *  ("Send $40,000 wire to account 99-1234" on "Please send the invoice ..."), and since verifier loop 3 (D6)
+ *  no added word rides on a majority either ("Pay the vendor invoice twice"). This is what
+ *  EXTRACTION_INSTRUCTIONS already asks for: "a short imperative in the text's own words". */
 export function titleGrounding(title: string, evidence: string): "ok" | "task_not_grounded" | "task_number_not_grounded" {
   const evTokens = new Set(words(evidence));
   for (const w of words(title)) if (/\d/.test(w) && !evTokens.has(w)) return "task_number_not_grounded";
   const ev = contentWords(evidence);
   const tw = [...contentWords(title)];
   if (!tw.length) return "task_not_grounded";
-  const hit = tw.filter((w) => ev.has(w)).length;
-  return hit * 2 > tw.length ? "ok" : "task_not_grounded";
+  // Verifier loop 3, D6: a title may not ADD a content word the evidence does not have ("Pay the vendor
+  // invoice twice", "Redo the deck you sent") -- every content word must be grounded, not just a majority.
+  return tw.every((w) => ev.has(w)) ? "ok" : "task_not_grounded";
 }
 
 // ── Title normalisation for dedup (red-team F13) ────────────────────────────────────────────────────
