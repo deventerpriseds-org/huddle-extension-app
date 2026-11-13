@@ -465,3 +465,24 @@ tonight; EOD / EOW / COB or "end of [the] day/week", "close of business"; a nume
 | Mutation | Named test | Verdict |
 |---|---|---|
 | real-date-term requirement removed | M2 non-date words are not a due text | FIRED (control EQUIVALENT), exit 0 |
+
+#### D5 -- negation spellings accepted as a "send" to-do
+`src/features/huddle/lib/proposals/proposals.ts` `NEGATION` / `NOT_NEGATION` / `negatesAction`:
+- New negators: "under no circumstances", "refrain from", "no reason to", "avoid" directly before the action or a
+  gerund ("avoid sending"; "To avoid delays, send ..." is NOT negated).
+- Comma asides: while the clause leading into the action is <= 4 words, the previous clause joins it if it is <= 3
+  words ("Never, ever send", "Please don't, under any circumstances, send"). A longer earlier clause never joins,
+  so "If you can't make it, send ..." / "I can't believe it, send ..." stay accepted.
+- Affirmative phrases removed before the test: "don't worry", "never mind", "no worries", "not a problem".
+- All six verifier spellings refused. False-reject cost measured on 11 affirmative controls: 10 accepted; the one
+  new false reject is "Not yet, send the contract ..." (fails closed: no proposal, nothing reaches the board).
+  Existing suites unchanged (task-proposals 196/0 incl. new tests; redteam 70/0; ingest 149/0).
+- Not addressed (not in the verifier list): a negation on a PREVIOUS line ("Do not do this\nsend the contract ...",
+  probe F7f) -- the newline is a sentence boundary by design.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| comma-aside join disabled | D5 negation spellings are refused | FIRED (control EQUIVALENT), exit 0 |
+| new negators removed | D5 negation spellings are refused | FIRED (control EQUIVALENT), exit 0 |
+| previous-clause length cap lifted (3 -> 99) | D5 neg: affirmative look-alikes accepted | FIRED (control EQUIVALENT), exit 0 |
+| "don't worry" exemption removed | D5 neg: affirmative look-alikes accepted | FIRED (control EQUIVALENT), exit 0 |
