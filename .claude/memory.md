@@ -3989,3 +3989,9 @@ here as fact three times before being checked.)
 - Trinnex tenant refused Huddle's Graph app; owner's own Power Automate (CDM Smith dev env) publishes snapshots to von.ellis@enterpriseds.io OneDrive `/automation/email/emails.json` + `/automation/appointments/appointments.json`. Huddle's app key (Files.ReadWrite.All) reads them (proved, run 42436209509). dev@'s OneDrive does NOT have them.
 - Feed records: email `from` is a STRING, headers `[{name,value}]` (68), `body` string + `isHtml`; no inferenceClassification. Appointments: `startWithTimeZone`/`endWithTimeZone`, `location`/`organizer` strings.
 - Feed ids are `feed:<mailbox>:<original id>` — never pass one to Graph. Config = server-only HUDDLE_ONEDRIVE_FEEDS (deploy secret). Repo is PUBLIC: never commit tenant/flow/calendar ids or the cdmsmith login.
+
+- 2026-11-13 ACT:correspondence-checklist (IN PROGRESS, unmerged, nothing live): real OneDrive files read (counts only):
+  Teams file is /automation/Teams Chats/teams-chats.jsonl (source "teams", capturedAt, synthetic:false from Nov 13);
+  sent.json exists but sentDateTime null on 29/29; emails.json last written Nov 11 14:02 UTC. Verifier loop 3 = FIX
+  FIRST; D1-D5/M1/M2 fixed (aa0d6ade), D6 in progress, loop 4 verifier next. Preview + open-vs-replied report go to
+  the owner's OneDrive only (proposals-preview.yml) -- never print item text in this public repo's logs.

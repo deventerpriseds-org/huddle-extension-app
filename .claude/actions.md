@@ -28,6 +28,15 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       owner's OneDrive: 53 proposals from 105 sources (33 email + 72 chat). Verifier loop 3 = FIX FIRST (D1 hidden-text
       over-strip, D2 English 'wrote:' over-cut, D3 image/emoji-only owner reply dropped, D4 coverage TZ, M1, M2, D5, D6);
       fix agent running on claude_task-proposals.
+      2026-11-13 loop-3 fix pass (IN PROGRESS, not done): D1 D2 D3 D4 M1 M2 D5 fixed on claude_task-proposals (head aa0d6ade),
+      22 mutation proofs FIRED, suites green (task-proposals 196/0, redteam 70/0, ingest 149/0, inbound-email 72/0,
+      cross-app 92/0, tsc clean); evidence docs/qc-evidence/IMPL-task-proposals.md "Verifier loop-3 fix pass".
+      D6 (title grounding) in progress. NEXT: independent verifier loop 4 (work correspondence-proposals) after D6.
+      ACs: docs/ac/AC-correspondence-checklist.md (independent ac-writer, branch claude_ac-correspondence-checklist).
+      Loop-3 report: origin/claude_verify-correspondence-3 docs/qc-evidence/VERIFY-correspondence-proposals-3.md (FIX FIRST).
+      Open-vs-replied report since Mon Nov 9 built into proposals-preview (PR #222); 1st run: email open 16 (unknown,
+      sent times empty) / chats open 3, answered 15. ETL question answered: recommend A (existing file->Azure PG ingest
+      + staleness alert); awaiting owner.
 - [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
       docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
 - [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
