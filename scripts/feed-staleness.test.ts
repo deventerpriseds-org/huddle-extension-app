@@ -288,5 +288,53 @@ function countingDeps(meta: FeedMeta) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// H: the metadata read (readFeedFileMeta) and the UNCHANGED existing read request, against a stubbed fetch.
+// Dummy credentials (.example); no network.
+// ---------------------------------------------------------------------------------------------
+{
+  const envKeys = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"] as const;
+  const savedEnv = envKeys.map((k) => process.env[k]);
+  process.env.AZURE_TENANT_ID = "tenant.example";
+  process.env.AZURE_CLIENT_ID = "client.example";
+  process.env.AZURE_CLIENT_SECRET = "secret.example";
+  const realFetch = globalThis.fetch;
+  const seen: { url: string; method: string }[] = [];
+  let drive: () => Response = () => new Response("{}", { status: 200 });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/oauth2/")) return new Response(JSON.stringify({ access_token: "tok" }), { status: 200 });
+    seen.push({ url, method: String(init?.method ?? "GET") });
+    return drive();
+  }) as typeof fetch;
+  try {
+    const srv = await import("../src/features/huddle/lib/external-feeds/onedrive-feed.server");
+    const cfg = cfgWith({ staleAlerts: true }, { teams: true });
+    const meta = async (resp: () => Response) => {
+      drive = resp;
+      return srv.readFeedFileMeta(cfg, cfg.email.path);
+    };
+    t("H1 200 with lastModifiedDateTime -> ok with that instant",
+      await meta(() => new Response(JSON.stringify({ lastModifiedDateTime: "2026-11-11T14:02:00Z" }), { status: 200 })),
+      { kind: "ok", lastModifiedMs: U("2026-11-11T14:02:00Z") });
+    t("H2 the metadata read is a GET of $select=lastModifiedDateTime only (no download)",
+      [seen.at(-1)?.method, seen.at(-1)?.url.endsWith("?$select=lastModifiedDateTime"), seen.some((s) => s.url.includes(":/content"))], ["GET", true, false]);
+    t("H3 404 -> missing", await meta(() => new Response("", { status: 404 })), { kind: "missing" });
+    t("H4 403 -> unreadable", await meta(() => new Response("", { status: 403 })), { kind: "unreadable" });
+    t("H5 500 -> unreadable", await meta(() => new Response("", { status: 500 })), { kind: "unreadable" });
+    t("H6 200 without a usable date -> unreadable", await meta(() => new Response(JSON.stringify({ lastModifiedDateTime: "soon" }), { status: 200 })), { kind: "unreadable" });
+    t("H7 network failure -> unreadable (never throws)", await meta(() => { throw new Error("ECONNRESET"); }), { kind: "unreadable" });
+    // Flag-OFF pin: the EXISTING reader's metadata request is byte-for-byte what it was (id,eTag,size).
+    seen.length = 0;
+    drive = () => new Response("", { status: 404 });
+    const tr = await srv.readTeamsLogFile(cfg, null);
+    t("H8 existing fetchDriveFile metadata request still selects exactly id,eTag,size",
+      [tr, seen.length, seen[0]?.url.endsWith("?$select=id,eTag,size")], [{ ok: false, reason: "missing" }, 1, true]);
+  } finally {
+    globalThis.fetch = realFetch;
+    envKeys.forEach((k, i) => (savedEnv[i] === undefined ? delete process.env[k] : (process.env[k] = savedEnv[i])));
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
