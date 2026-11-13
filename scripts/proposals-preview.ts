@@ -75,8 +75,15 @@ const cfg = { ...cfg0, teams: { ...cfg0.teams, enabled: true, path: teamsPath, o
 // ── Sources (the ledger's own mappers), newest first, within the window.
 const items: SourceItem[] = [];
 const e = await read(cfg.email.path);
-const ev = e.status === 200 ? validateEmailSnapshot(JSON.parse(e.text), cfg) : null;
-console.log(`email: HTTP ${e.status} | ${ev ? (ev.ok ? "valid" : `REJECTED ${ev.reason}`) : "-"}`);
+// PREVIEW ONLY: PREVIEW_ACCEPT_UNMARKED=1 also reads an email file the flow marked complete:false (the live
+// validator still refuses it); the report says so up front.
+let emailIncomplete = false;
+let ev = e.status === 200 ? validateEmailSnapshot(JSON.parse(e.text), cfg) : null;
+if (ev && !ev.ok && ev.reason === "incomplete" && process.env.PREVIEW_ACCEPT_UNMARKED === "1") {
+  ev = validateEmailSnapshot({ ...JSON.parse(e.text), complete: true }, cfg);
+  emailIncomplete = !!ev?.ok;
+}
+console.log(`email: HTTP ${e.status} | ${ev ? (ev.ok ? (emailIncomplete ? "valid (flow marked it incomplete; read for the preview only)" : "valid") : `REJECTED ${ev.reason}`) : "-"}`);
 if (ev?.ok) items.push(...ledgerEmailItems(ev.snapshot.records, cfg, { path: cfg.email.path, etag: null }).items);
 // PREVIEW ONLY (owner wants production; the flow added synthetic:false from 2026-11-13, but every message so far
 // sits in the 2026-11-12 lines that predate it). PREVIEW_ACCEPT_UNMARKED=1 treats a line with NO synthetic key as
@@ -274,6 +281,7 @@ if (process.env.PREVIEW_EMAIL === "1") {
     `Teams messages up to <b>${esc(fmtAt(lastChat))}</b> ET`,
     `Sent Items: <b>${sentMapped.sent.length}</b> message(s) with a sent time, <b>${sentMapped.skipped}</b> without`,
   ];
+  if (emailIncomplete) gaps.push(`the email flow marked its file <b>incomplete</b>, so some emails in that range may be missing`);
   parts.push(`<div style="background:#fff8c5;border:1px solid #d4a72c;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px"><b>What this covers.</b> ${gaps.join(" &middot; ")}. Anything after those times is not in the files yet${sentMapped.sent.length ? "" : `, and because Sent Items has no sent times, <b>no email can show as replied yet</b>: every "Open?" may already be answered`}.</div>`);
   parts.push(h2(`Emails from people (${emailRows.length})`));
   for (const st of ["open", "open?", "fyi", "replied"]) {
