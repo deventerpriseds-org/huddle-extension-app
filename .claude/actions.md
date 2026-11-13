@@ -37,6 +37,21 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       Open-vs-replied report since Mon Nov 9 built into proposals-preview (PR #222); 1st run: email open 16 (unknown,
       sent times empty) / chats open 3, answered 15. ETL question answered: recommend A (existing file->Azure PG ingest
       + staleness alert); awaiting owner.
+      2026-11-13 OWNER DECISIONS: ETL route A (existing file -> Azure PG ingest, no new endpoint) + "add your file
+      staleness alert option". Asked: "Email me a clean html version of the Monday forward report".
+- [x] Monday-forward report EMAILED (HTML) via proposals-preview.yml email input (PR #224); run 43441042890:
+      email open 41 / replied 10 / fyi 23; chats open 3 / answered 15 / nothing 5; 139 proposals. First email (run
+      43440437881) had an empty email section (emails.json complete:false) -- owner told to ignore it. Preview reads an
+      incomplete email file ONLY in the preview, flagged in the report; the live validator still refuses it.
+- [x] Staleness alert BUILT (flag correspondence.staleAlerts, default OFF), claude_task-proposals 2cf5fa8d; rows in the
+      existing bell table chat.email_replies kind 'feed'; feed-staleness 66/0 + SQL 13/0; 14 mutation proofs FIRED, 1 INERT
+      (redundant outer gate, recorded). Evidence docs/qc-evidence/IMPL-feed-staleness.md. NOT live.
+- [x] Verifier loop-3 fixes D1-D6, M1, M2 all on claude_task-proposals (D6 restored at 648e6f64 after a stale-base
+      revert by 4fc54efe). NOT live.
+- [ ] Independent verifier loop 4 over the whole branch (next).
+- [ ] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history).
+- [ ] PA: emails.json complete:false (125 records Nov 6 -> Nov 13 13:11 UTC); Teams backfill from Mon still pending.
+      sent.json FIXED: sentDateTime 29/29.
 - [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
       docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
 - [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
