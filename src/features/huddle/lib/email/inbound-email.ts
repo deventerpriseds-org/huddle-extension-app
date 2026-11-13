@@ -106,6 +106,27 @@ const ATTRIBUTIONS: RegExp[] = [
 ];
 const isAttribution = (l: string) => ATTRIBUTIONS.some((re) => re.test(l));
 
+// A real attribution's date: a weekday or month name (English, plus the abbreviations Outlook / Gmail write in
+// the languages above, 3+ letters so no English 2-letter word counts), a 1-2 digit day, and a year or a time.
+const DATE_NAME =
+  /(?<!\p{L})(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december|lun|mer|jeu|ven|sam|dim|janv|févr|fév|mars|avr|mai|juin|juil|août|déc|mié|jue|vie|sáb|dom|ene|abr|ago|dic|gio|gen|mag|giu|lug|ott|seg|ter|qua|qui|sex|fev|set|out|dez|mån|tis|ons|tor|fre|lör|sön|maj|okt|mrt|mei|mär)\.?(?!\p{L})/iu;
+const DAY_NUMBER = /(?<!\d)\d{1,2}(?!\d)/;
+const YEAR_OR_TIME = /(?<!\d)(?:19|20)\d{2}(?!\d)|(?<!\d)\d{1,2}:\d{2}(?!\d)/;
+const EMAIL = /[^\s<>()@]+@[^\s<>()@]+\.[a-z]{2,}/i;
+/** Pure: is `first` + `next` a Gmail attribution hard-wrapped over two lines? The joined line must match an
+ *  attribution rule AND have the shape of one: the date (a weekday or month name, a day number, a year or a
+ *  time) on the first line, and an email address or a capitalised name right before the verb. A bare digit is
+ *  not enough: "On 3 occasions the client" / "complained, and today she wrote:" is English content that main
+ *  keeps (verifier loop 4, X1/X2). */
+function isWrappedAttribution(first: string, next: string): boolean {
+  const joined = `${first.trimEnd()} ${next.trim()}`;
+  if (!isAttribution(joined)) return false;
+  if (!(DATE_NAME.test(first) && DAY_NUMBER.test(first) && YEAR_OR_TIME.test(first))) return false;
+  if (EMAIL.test(joined)) return true;
+  const before = /(\S+)\s+wrote:\s*$/i.exec(joined);
+  return !!before && /^\p{Lu}[\p{L}'’.-]*$/u.test(before[1]) && before[1] !== "I";
+}
+
 /** Only the sender's NEW text: drop quoted history ("> " lines and everything from an
  *  "On … wrote:" / "-----Original Message-----" / Outlook "From:…Sent:" header down), so an old
  *  question in the thread does not make a "thanks!" reply look like an ask (verifier loop 1).
@@ -117,10 +138,10 @@ export function newTextOnly(body: string): string {
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
     if (isAttribution(l) || /^-{2,}\s*(Original Message|Message d'origine|Ursprüngliche Nachricht|Mensaje original|Messaggio originale|Oorspronkelijk bericht)\s*-{2,}/i.test(l)) break;
-    // Gmail wraps a long attribution: the "wrote:" lands on the next line. Only a line carrying the date
-    // (a digit) can start one, so a two-line English sentence ("On Friday after the board meeting," /
-    // "the vendor wrote back with three questions:") is never cut (verifier loop 3, N3).
-    if (i + 1 < lines.length && /\d/.test(l) && isAttribution(`${l.trimEnd()} ${lines[i + 1].trim()}`)) break;
+    // Gmail wraps a long attribution: the "wrote:" lands on the next line. Only a line with a real
+    // attribution's shape can start one (`isWrappedAttribution`), so a hard-wrapped English sentence is never
+    // cut (verifier loop 3, N3; loop 4, X1/X2).
+    if (i + 1 < lines.length && isWrappedAttribution(l, lines[i + 1])) break;
     if (HDR_PAIRS.some(([from, sent]) => from.test(l) && lines.slice(i + 1, i + 5).some((n) => sent.test(n)))) break;
     if (/^\s*>/.test(l)) continue;
     out.push(l);
