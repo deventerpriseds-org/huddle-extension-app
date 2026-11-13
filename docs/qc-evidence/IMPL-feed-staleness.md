@@ -117,8 +117,58 @@ Nothing observable:
 - The parsed config object gains `staleAlerts:false, staleHours:6`. Nothing reads them while OFF.
 
 ### Known limitations (rows, not fixes)
-- A transient Graph error raises an "unreadable" item that auto-clears on the next good check, which is up to 10
-  minutes later (per-instance throttle). Taken literally from the requirement "(404, 403, error) is its own alert reason".
+- ~~A transient Graph error raises an "unreadable" item that auto-clears on the next good check.~~ SUPERSEDED by the
+  verifier loop-4 fix pass below: a transient failure now changes nothing, and 404/403 need 2 consecutive checks.
 - US holidays count as working days.
 - The throttle is per instance and in memory. Several instances can each check, which is safe because the store is
   idempotent and a duplicate check writes nothing.
+
+### Verifier loop-4 fix pass
+Source: `docs/qc-evidence/VERIFY-correspondence-proposals-4.md` (claim 4c, 4d) on `claude_verify-correspondence-4`.
+Everything below is behind `correspondence.staleAlerts` (off by default) EXCEPT the additive column noted under 5.
+
+#### Item 5 (4c) -- dismiss must hold across transient failures (commits 81e5fc41, 572d00d7)
+- `readFeedFileMeta` (`onedrive-feed.server.ts`): 404 -> `missing`; 403 -> `unreadable`; every other failure
+  (5xx, 429, 401 -- Huddle's own app token --, timeout/abort, network, a 200 without a usable date) -> `transient`.
+- `decideFeedStaleness` (`feed-staleness.ts`): `transient` (and a non-finite last-modified) -> state `transient`.
+  `applyFeedStaleness` makes NO store call for it: the alert, its episode, its dismissal and any pending reason are
+  left exactly as they are.
+- Hard reasons need `HARD_REASON_CHECKS = 2` consecutive non-transient checks: `missing`/`unreadable` call
+  `store.notePending`, which returns true only when the previous non-transient check recorded the same reason. A
+  transient check in between neither confirms nor resets; a fresh or stale check resets. First sighting:
+  `pending=1` in the log line, no bell row shown.
+- Store (`email-replies.server.ts`): `notePendingFeedAttention` keeps the pending reason in a NEW nullable column
+  `chat.email_replies.feed_pending` (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, in the existing bootstrap -- this
+  DDL runs on the live table at the next bootstrap even with the flag off; additive, NULL for every existing row,
+  nothing reads it outside the three feed functions). With no row yet it inserts a hidden row with status
+  `replied` (never listed). `raiseFeedAttention` / `clearFeedAttention` forget the pending reason.
+  `raiseFeedAttention` keeps the LATEST last-modified in `received_at` (a hard episode no longer erases it), and a
+  dismissed row reopens only for a stale episode with a LATER last-modified, or a different hard reason (which can
+  only arrive after 2 checks).
+- Verifier sequences on the REAL SQL (local PG16, `feed-staleness-sql.test.ts`): S14 = V1 (dismissed stale + one
+  transient + same stale file -> stays dismissed, same episode); S15 = V2 (fresh file + one transient -> no row at
+  all). S16 403 on a fresh file: hidden pending row, alert on the 2nd check. S17 403/fresh/403 no alert. S18
+  403/transient/403 alerts. S19 dismissed `unreadable`, then the same old last-modified: stays dismissed. S20 a later
+  last-modified reopens. S9/S10 updated to the 2-check rule.
+- Unit (`feed-staleness.test.ts`, in-memory twin updated to the same rules): T1-T6, H5 (500/503/429/401), H6, H7
+  (network + TimeoutError), E6/E7 (2 checks), E8/G7 switched to a stale input (a single `missing` no longer writes).
+
+#### Item 6 (4d) -- the alert pushed out of the 50-item list (commit 04356a0e)
+- `listOpenAttention`: `ORDER BY (kind = 'feed') DESC, coalesce(received_at, created_at) DESC LIMIT 50`. At most one
+  feed row per file, so they always fit. With no feed row (flag off) the order is exactly as before (S22/S23).
+- The bell client (`bellItems`) still sorts by time, so the row is SHOWN but not pinned to the top of the list;
+  pinning it would change the bell's display for everyone and was not asked.
+- S21 (V3): 60 newer open email rows + a stale feed row -> the list is 50 long and the feed row is in it (first).
+
+Suites: feed-staleness 73/0, feed-staleness-sql 23/0 (PG16), task-proposals-sql 45/0, correspondence-ledger-sql
+50/0; all other suites unchanged; tsc clean.
+
+| Mutation (mutate.sh) | Named test | Verdict |
+|---|---|---|
+| non-ok HTTP back to `unreadable` | H5 500 / 503 / 429 / 401 -> transient | FIRED (control EQUIVALENT), exit 0 |
+| transient decided as `unreadable` | T6 a run of transient failures ... changes nothing | FIRED (control EQUIVALENT), exit 0 |
+| transient skip removed in apply | T6 a run of transient failures ... changes nothing | FIRED (control EQUIVALENT), exit 0 |
+| 2-check gate removed (`false &&`) | T3 a 403 raises ... only on the 2nd consecutive check | FIRED (control EQUIVALENT), exit 0 |
+| SQL: "later last-modified" condition -> TRUE | S19 dismissed 'unreadable', then the SAME old last-modified | FIRED (control EQUIVALENT), exit 0 |
+| SQL: notePending always confirms | S16 a 403 on a fresh file ... alert on the 2nd | FIRED (control EQUIVALENT), exit 0 |
+| ORDER BY without the feed-first key | S21 (V3) a stale feed row is listed ... | FIRED (control EQUIVALENT), exit 0 |
