@@ -154,13 +154,36 @@ jobs:
               except Exception:
                   last=None
               if isinstance(last, dict):
-                  m=last.get("messages")
-                  m0=m[0] if isinstance(m,list) and m and isinstance(m[0],dict) else {}
-                  fr=m0.get("from") if isinstance(m0.get("from"),dict) else {}
-                  print("JSONL | lines", len(lines), "| last line keys", sorted(last.keys()), "| synthetic", last.get("synthetic"),
-                        "| source", last.get("source"), "| messages", len(m) if isinstance(m,list) else "-")
-                  print("   message[0] keys", sorted(m0.keys()), "| from keys", sorted(fr.keys()),
-                        "| from.user keys", sorted((fr.get("user") or {}).keys()) if isinstance(fr.get("user"),dict) else "-")
+                  from collections import Counter
+                  recs=[]
+                  for l in lines:
+                      try:
+                          o=json.loads(l)
+                          if isinstance(o, dict): recs.append(o)
+                      except Exception:
+                          pass
+                  short=lambda v: v if isinstance(v,(bool,int)) or v is None or (isinstance(v,str) and len(v)<=24 and "@" not in v) else "<long/other>"
+                  lk=Counter(k for r in recs for k in r)
+                  st=Counter(str(short(r.get("status"))) for r in recs)
+                  src=Counter(str(short(r.get("source"))) for r in recs)
+                  syn=Counter(str(r.get("synthetic","<absent>")) for r in recs)
+                  msgs=[m for r in recs for m in (r.get("messages") if isinstance(r.get("messages"),list) else []) if isinstance(m,dict)]
+                  withm=sum(1 for r in recs if isinstance(r.get("messages"),list) and r.get("messages"))
+                  mk=Counter(k for m in msgs for k in m)
+                  fk=Counter(k for m in msgs if isinstance(m.get("from"),dict) for k in m["from"])
+                  fu=Counter(k for m in msgs if isinstance(m.get("from"),dict) and isinstance(m["from"].get("user"),dict) for k in m["from"]["user"])
+                  bt=Counter(("dict:"+",".join(sorted(m["body"].keys()))) if isinstance(m.get("body"),dict) else type(m.get("body")).__name__ for m in msgs)
+                  mt=Counter(str(short(m.get("messageType"))) for m in msgs)
+                  ct=Counter(str(short((m.get("body") or {}).get("contentType"))) for m in msgs if isinstance(m.get("body"),dict))
+                  ids=Counter((r.get("chatId") is not None) for r in recs)
+                  print("JSONL | lines", len(lines), "| parsed", len(recs), "| lines with messages", withm, "| messages total", len(msgs))
+                  print("   line keys (count):", dict(lk))
+                  print("   status values:", dict(st), "| source values:", dict(src), "| synthetic:", dict(syn), "| chatId present:", dict(ids))
+                  print("   message keys (count):", dict(mk))
+                  print("   from keys:", dict(fk), "| from.user keys:", dict(fu))
+                  print("   body types:", dict(bt), "| contentType:", dict(ct), "| messageType:", dict(mt))
+                  tsk=[k for k in ("createdDateTime","timestamp","lastModifiedDateTime") if mk.get(k)]
+                  print("   time keys present:", tsk, "| capturedAt range:", min((str(r.get("capturedAt",""))[:10] for r in recs), default="-"), "->", max((str(r.get("capturedAt",""))[:10] for r in recs), default="-"))
               else:
                   print("not JSON, not JSONL | lines", len(lines))
               raise SystemExit
