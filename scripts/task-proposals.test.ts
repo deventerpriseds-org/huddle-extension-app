@@ -895,6 +895,11 @@ t("S1 an explicit offset is kept", parseUtcMs("2026-11-10T10:00:00+02:00") === D
   const c = (x: Record<string, unknown>) => parseCfg(JSON.stringify({ ...base, ...x }));
   t("F1 teams:true -> on at the default path; teams:{} -> on", [c({ teams: true })?.teams.enabled, c({ teams: true })?.teams.path, c({ teams: {} })?.teams.enabled], [true, "/automation/Teams Chats/teams-chats.jsonl", true]);
   t("F1/F2 teams:0 / [] / {enabled:false}, sent:\"on\" -> off", [c({ teams: 0 })?.teams.enabled, c({ teams: [] })?.teams.enabled, c({ teams: { enabled: false } })?.teams.enabled, c({ sent: "on" })?.sent.enabled], [false, false, false, false]);
+  // Verifier loop 3, M1: an opt-in object is on only when `enabled` is absent or literally true.
+  const offVals = ["false", 0, "off", null, "true", 1, "0"];
+  t("M1 teams/sent {enabled:<anything but true>} -> off", offVals.flatMap((e) => [c({ teams: { enabled: e } })?.teams.enabled, c({ sent: { enabled: e } })?.sent.enabled]), offVals.flatMap(() => [false, false]));
+  t("M1 teams/sent {enabled:true} / {} -> on", [c({ teams: { enabled: true } })?.teams.enabled, c({ sent: { enabled: true } })?.sent.enabled, c({ teams: {} })?.teams.enabled, c({ sent: {} })?.sent.enabled], [true, true, true, true]);
+  t("M1 email/appointments keep their rule ({enabled:\"false\"} still on, {enabled:false} off)", [c({ email: { enabled: "false" } })?.email.enabled, c({ appointments: { enabled: 0 } })?.appointments.enabled, c({ email: { enabled: false } })?.email.enabled], [true, true, false]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

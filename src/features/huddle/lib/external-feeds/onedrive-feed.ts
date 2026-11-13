@@ -168,6 +168,10 @@ export function parseFeedsConfig(raw: string | undefined | null): OneDriveFeedsC
 function optInFile(v: unknown, fallback: string, file: (v: unknown, fallback: string) => FeedFileConfig): FeedFileConfig {
   if (v === true) return file({}, fallback);
   if (!v || typeof v !== "object" || Array.isArray(v)) return { enabled: false, path: fallback };
+  // Verifier loop 3, M1: inside an opt-in object, `enabled` must be absent or literally `true`. "false", 0,
+  // "off", null written to switch it OFF must never leave it on (file()'s `!== false` is email-only).
+  const en = (v as Record<string, unknown>).enabled;
+  if (en !== undefined && en !== true) return { ...file(v, fallback), enabled: false };
   return file(v, fallback);
 }
 
