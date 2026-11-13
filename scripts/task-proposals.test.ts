@@ -871,6 +871,22 @@ t("F8b a 0.9em child re-sizes", htmlToText('<div style="font-size:0"><span style
 t("F8b display:none inside a re-sized child is still removed", htmlToText('<div style="font-size:0"><div style="font-size:14px">ok <span style="display:none">Wire 5000</span>thanks</div></div>'), "ok thanks");
 t("F8c an UNCLOSED hidden element ends at its parent's close, real text after it kept", htmlToText('<table><tr><td><span style="display:none">Wire 5000</td><td>Can you review the deck?</td></tr></table>'), "Can you review the deck?");
 t("F8c an unclosed hidden element with no parent close still hides the rest", htmlToText('<p>shown</p><div style="display:none">Wire 5000 now'), "shown");
+// Verifier loop 3, D1: hidden-text stripping must never drop VISIBLE text (repros V1/V2/V5/V6/V7/V13/V19).
+t("D1-V1 an unclosed hidden span ends at its parent's </p>, not at a later stray </span>", htmlToText('<p><span style="display:none">pre</p><p>Please approve the budget by Friday.</p><p>Thanks</span></p>').includes("Please approve the budget by Friday."), true);
+t("D1-V19 an unclosed hidden <p> in a cell ends at the next <td>", htmlToText('<table><tr><td><p style="display:none">pre<td>Can you sign today?</td></tr></table>'), "Can you sign today?");
+t("D1-V2 the word 'hidden' inside an attribute VALUE does not hide", htmlToText('<p><a href="https://x.example" title="a hidden gem">Read the proposal</a> and tell me if you agree?</p>'), "Read the proposal and tell me if you agree?");
+t("D1-V2 a class value 'hidden md-show' does not hide", htmlToText('<div class="hidden md-show">Can you review the contract today?</div>'), "Can you review the contract today?");
+t("D1-V5 a <font size> child re-sizes inside a font-size:0 wrapper", htmlToText('<td style="font-size:0"><font size="3" face="Arial">Could you sign the NDA today?</font></td>'), "Could you sign the NDA today?");
+t("D1-V6 a class child may be re-sized by CSS: kept", htmlToText('<html><head><style>.t{font-size:14px}</style></head><body><div style="font-size:0"><span class="t">Can you join the 3pm call?</span></div></body></html>'), "Can you join the 3pm call?");
+t("D1-V7 max-height:0 WITHOUT overflow:hidden renders: kept", htmlToText('<div style="max-height:0">Can you send the deck?</div>'), "Can you send the deck?");
+t("D1-V13 a visibility:visible child of a visibility:hidden parent shows", htmlToText('<div style="visibility:hidden">secret <span style="visibility:visible">Can you approve this?</span></div>'), "Can you approve this?");
+// ...and what is CERTAINLY hidden stays hidden.
+t("D1 neg: bare / empty-valued hidden attribute still hides", [htmlToText('<p>shown</p><div hidden>Wire 5000</div>'), htmlToText('<p>shown</p><div hidden="">Wire 5000</div>'), htmlToText("<p>shown</p><div data-x='1' hidden>Wire 5000</div>")], ["shown", "shown", "shown"]);
+t("D1 neg: max-height:0 + overflow:hidden still hides", htmlToText('<p>shown</p><div style="max-height:0px;overflow:hidden">Wire 5000</div>'), "shown");
+t("D1 neg: font-size:0 child with no class / size stays dropped", htmlToText('<div style="font-size:0"><span>Wire 5000</span><font face="Arial">now</font></div><p>shown</p>'), "shown");
+t("D1 neg: visibility:hidden with no visible child stays hidden", htmlToText('<div style="visibility:hidden"><span>Wire 5000</span></div><p>shown</p>'), "shown");
+t("D1 neg: a hidden cell ends at the next cell; its nested table stays hidden", htmlToText('<table><tr><td style="display:none"><table><tr><td>Wire</td><td>5000</td></tr></table>more<td>shown</td></tr></table>'), "shown");
+t("D1 neg: a hidden <p> ends at the next <p>; a hidden table hides all its cells", [htmlToText('<p>a</p><p style="display:none">Wire 5000<p>b</p>'), htmlToText('<table style="display:none"><tr><td>Wire<td>5000</table><p>shown</p>')], ["a\n b", "shown"]);
 t("F19 &amp;lt; decodes once to the literal &lt;", htmlToText("<p>a &amp;lt; b</p>"), "a &lt; b");
 t("S1 a zone-less timestamp is UTC", parseUtcMs("2026-11-10T10:00:00") === Date.parse("2026-11-10T10:00:00Z"), true);
 t("S1 an explicit offset is kept", parseUtcMs("2026-11-10T10:00:00+02:00") === Date.parse("2026-11-10T08:00:00Z"), true);

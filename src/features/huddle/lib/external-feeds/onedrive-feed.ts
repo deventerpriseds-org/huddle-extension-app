@@ -390,7 +390,14 @@ function stripBlockquotes(html: string): string {
  *  SEPARATE: responsive templates set it on a wrapper to kill inline-block gaps and give the real size to
  *  the content inside, so on its own it hides only what is not re-sized (fix-pass F8 over-match). */
 const HIDDEN_STYLE =
-  /(?:^|[;\s"'])(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\s*(?:!important)?\s*(?:;|$)|max-height\s*:\s*0(?:px)?\s*(?:!important)?\s*(?:;|$)|mso-hide\s*:\s*all)/i;
+  /(?:^|[;\s"'])(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\s*(?:!important)?\s*(?:;|$)|mso-hide\s*:\s*all)/i;
+/** max-height:0 hides ONLY together with overflow:hidden (the Gmail preheader trick). On its own the text
+ *  overflows the zero box and renders (verifier loop 3, V7). */
+const MAX_HEIGHT_ZERO = /(?:^|[;\s"'])max-height\s*:\s*0(?:px)?\s*(?:!important)?\s*(?:;|$)/i;
+const OVERFLOW_HIDDEN = /(?:^|[;\s"'])overflow(?:-y)?\s*:\s*(?:hidden|clip)\b/i;
+/** A descendant that sets visibility:visible shows inside a visibility:hidden parent (CSS rule; V13). */
+const VISIBLE_AGAIN = /(?:^|[;\s"'])visibility\s*:\s*visible\b/i;
+const VIS_HIDDEN_ONLY = /(?:^|[;\s"'])visibility\s*:\s*hidden\b/i;
 const FONT_ZERO_STYLE = /(?:^|[;\s"'])font-size\s*:\s*0(?:\.0+)?(?:px|pt|em|rem|%)?\s*(?:!important)?\s*(?:;|$)/i;
 /** A declaration that gives text a real (non-zero) size again. `inherit`/`unset` inherit the zero. */
 const SIZED_STYLE =
@@ -399,43 +406,106 @@ const styleOf = (tag: string): string => {
   const style = /\sstyle\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
   return style ? ` ${style[2] ?? style[3] ?? style[4] ?? ""}` : "";
 };
-const hiddenKind = (tag: string): "hidden" | "font0" | null => {
-  if (/\shidden(\s|=|\/?>)/i.test(tag)) return "hidden";
+/** Pure: does the tag carry the `hidden` ATTRIBUTE? Attribute values are blanked first, so the word
+ *  inside a value (`title="a hidden gem"`, `class="hidden md-show"`) never counts (verifier loop 3, V2). */
+const hasHiddenAttr = (tag: string): boolean =>
+  /\shidden(?=[\s/>]|$)/i.test(tag.replace(/^<[a-z][a-z0-9]*/i, " ").replace(/=\s*("[^"]*"|'[^']*'|[^\s"'>]+)/g, " "));
+type HiddenKind = "hidden" | "font0" | "vis";
+const hiddenKind = (tag: string): HiddenKind | null => {
+  if (hasHiddenAttr(tag)) return "hidden";
   const v = styleOf(tag);
   if (!v.trim()) return null;
-  if (HIDDEN_STYLE.test(v)) return "hidden";
+  if (HIDDEN_STYLE.test(v)) {
+    // visibility:hidden ALONE lets a visibility:visible descendant show (V13); every other hiding rule wins.
+    const other = v.replace(/(?:^|[;\s"'])visibility\s*:\s*hidden\b/gi, " ");
+    return VIS_HIDDEN_ONLY.test(v) && !HIDDEN_STYLE.test(other) && !(MAX_HEIGHT_ZERO.test(v) && OVERFLOW_HIDDEN.test(v)) ? "vis" : "hidden";
+  }
+  if (MAX_HEIGHT_ZERO.test(v) && OVERFLOW_HIDDEN.test(v)) return "hidden";
   return FONT_ZERO_STYLE.test(v) ? "font0" : null;
 };
 const VOID_TAGS = new Set(["br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"]);
 const OPEN_TAG = /<([a-z][a-z0-9]*)\b[^>]*>/gi;
 const isSelfContained = (name: string, tag: string) => VOID_TAGS.has(name) || tag.endsWith("/>");
 
-/** Pure: where the element opened at `openEnd` ends. Its matching close tag (nested same-name tags
- *  counted) -> the index just after it. UNCLOSED -> where its PARENT closes (the first close tag that
- *  takes the depth of all tags below zero), the way a browser implies the end; no parent close -> the end
- *  of the document. `inner` is the content between the open tag and that end. */
-function elementEnd(html: string, name: string, openEnd: number): { end: number; inner: string } {
-  const same = new RegExp(`<(/?)${name}\\b[^>]*>`, "gi");
-  same.lastIndex = openEnd;
-  let depth = 1;
-  for (let t = same.exec(html); t; t = same.exec(html)) {
-    depth += t[1] ? -1 : t[0].endsWith("/>") ? 0 : 1;
-    if (depth === 0) return { end: t.index + t[0].length, inner: html.slice(openEnd, t.index) };
+/** Start tags that close an open <p> (HTML parsing spec, "in body" insertion mode). */
+const P_CLOSERS = new Set([
+  "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "fieldset",
+  "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "li",
+  "main", "menu", "nav", "ol", "p", "pre", "section", "summary", "table", "ul", "dd", "dt",
+]);
+const HEADINGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
+const CELL = new Set(["td", "th"]);
+const SECTION = new Set(["tbody", "thead", "tfoot"]);
+/** Elements a <p> close-by-block-start cannot reach past (scope boundaries). */
+const SCOPE_BARRIERS = new Set(["table", "td", "th", "caption", "button", "object", "marquee", "applet", "template"]);
+
+/** Pure: does start tag `x` end the open element `e` (with `inner` = the tags opened inside `e` and still
+ *  open) the way a browser implies it? `<p>` is closed by the next block, a cell by the next cell or row,
+ *  a row by the next row, an `<li>` by the next `<li>`, and any non-table element sitting in a cell by the
+ *  start of the next cell or row (verifier loop 3, V19). A table opened inside `e` shields its own parts. */
+function startTagEnds(e: string, x: string, inner: string[]): boolean {
+  const tablePart = CELL.has(x) || x === "tr" || SECTION.has(x) || x === "caption";
+  if (tablePart && !inner.includes("table") && e !== "table") {
+    if (e === "tr") return !CELL.has(x);
+    if (SECTION.has(e)) return SECTION.has(x) || x === "caption";
+    return true; // a cell, or anything sitting in one, ends at the next cell / row
   }
+  if (e === "p") return P_CLOSERS.has(x) && !inner.some((n) => SCOPE_BARRIERS.has(n));
+  if (HEADINGS.has(e)) return HEADINGS.has(x) && inner.length === 0;
+  if (e === "li") return x === "li" && !inner.some((n) => n === "ul" || n === "ol");
+  if (e === "dt" || e === "dd") return (x === "dt" || x === "dd") && !inner.includes("dl");
+  return false;
+}
+/** Siblings that implicitly close each other INSIDE the hidden element (keeps the inner stack honest). */
+const SELF_SIBLING = new Set(["p", "li", "td", "th", "tr", "dt", "dd", "option"]);
+
+/** Pure: where the element `name` opened at `openEnd` ends, the way a browser builds the tree.
+ *  One walk over every tag with a stack of the tags opened inside it:
+ *  - its own close tag with nothing of that name open inside -> just after that close tag;
+ *  - a close tag for something NOT open inside it (its parent's `</p>`, `</td>`, `</tr>`, a stray close)
+ *    -> it ends just BEFORE that tag (a browser closes it there; a later stray same-name close tag no
+ *    longer captures the visible text in between -- verifier loop 3, V1);
+ *  - a start tag that implies its end (`startTagEnds`) -> just before that tag (V19);
+ *  - none of these -> the end of the document (an unclosed hidden tail stays hidden).
+ *  `inner` is the content between the open tag and that end. Errors lean toward ending EARLY, so text
+ *  that may be visible is kept rather than dropped. */
+function elementEnd(html: string, name: string, openEnd: number): { end: number; inner: string } {
   const any = /<(\/?)([a-z][a-z0-9]*)\b[^>]*>/gi;
   any.lastIndex = openEnd;
-  let d = 0;
+  const stack: string[] = [];
   for (let t = any.exec(html); t; t = any.exec(html)) {
-    if (isSelfContained(t[2].toLowerCase(), t[0])) continue;
-    d += t[1] ? -1 : 1;
-    if (d < 0) return { end: t.index, inner: html.slice(openEnd, t.index) };
+    const x = t[2].toLowerCase();
+    if (!t[1]) {
+      if (isSelfContained(x, t[0])) continue;
+      if (startTagEnds(name, x, stack)) return { end: t.index, inner: html.slice(openEnd, t.index) };
+      if (SELF_SIBLING.has(x) && stack[stack.length - 1] === x) stack.pop();
+      stack.push(x);
+      continue;
+    }
+    const at = stack.lastIndexOf(x);
+    if (at >= 0) {
+      stack.length = at;
+      continue;
+    }
+    if (x === name) return { end: t.index + t[0].length, inner: html.slice(openEnd, t.index) };
+    return { end: t.index, inner: html.slice(openEnd, t.index) };
   }
   return { end: html.length, inner: html.slice(openEnd) };
 }
 
-/** Pure: inside a font-size:0 element, keep ONLY the descendants that set a real size again (with
- *  their content); every other text node and element there is zero-size and dropped. */
-function keepResizedDescendants(inner: string): string {
+/** Pure: may this tag give text a real size again inside a font-size:0 wrapper? An inline size, a legacy
+ *  `<font size=...>`, or ANY class (a `<style>` rule may size it -- this converter cannot see CSS
+ *  classes). When in doubt the text is KEPT; only text certainly at size 0 is dropped (verifier loop 3,
+ *  V5/V6). */
+const mayResize = (name: string, tag: string): boolean =>
+  SIZED_STYLE.test(styleOf(tag)) ||
+  /\sclass\s*=\s*("[^"]*\S[^"]*"|'[^']*\S[^']*'|[^\s"'>]+)/i.test(tag) ||
+  (name === "font" && /\ssize\s*=/i.test(tag));
+
+/** Pure: inside a font-size:0 element, keep ONLY the descendants that may set a real size again (with
+ *  their content); every other text node and element there is zero-size and dropped. With `vis`, the
+ *  wrapper is visibility:hidden and the kept descendants are the ones set visibility:visible. */
+function keepResizedDescendants(inner: string, keep: (name: string, tag: string) => boolean = mayResize): string {
   let out = "";
   let pos = 0;
   for (let guard = 0; guard < 10_000; guard++) {
@@ -444,7 +514,7 @@ function keepResizedDescendants(inner: string): string {
     if (!m) break;
     const name = m[1].toLowerCase();
     const openEnd = m.index + m[0].length;
-    if (isSelfContained(name, m[0]) || !SIZED_STYLE.test(styleOf(m[0]))) {
+    if (isSelfContained(name, m[0]) || !keep(name, m[0])) {
       pos = openEnd;
       continue;
     }
@@ -478,6 +548,7 @@ export function stripHiddenElements(html: string): string {
     const { end, inner } = elementEnd(html, name, openEnd);
     out += html.slice(pos, m.index) + " ";
     if (kind === "font0") out += stripHiddenElements(keepResizedDescendants(inner)) + " ";
+    if (kind === "vis") out += stripHiddenElements(keepResizedDescendants(inner, (_n, tag) => VISIBLE_AGAIN.test(styleOf(tag)))) + " ";
     pos = end;
   }
   return out + html.slice(pos);
