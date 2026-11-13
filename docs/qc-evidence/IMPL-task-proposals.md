@@ -419,3 +419,25 @@ Source: `docs/qc-evidence/VERIFY-correspondence-proposals-3.md` on `claude_verif
 | English header pair accepts `Data:` (cross-language pairing) | D2 English 'wrote' sentences (N4) | FIRED (control EQUIVALENT), exit 0 |
 | German opener accepts the English verb | D2 foreign opener with the ENGLISH verb | FIRED (control EQUIVALENT), exit 0 |
 | French attribution date requirement removed | D2 translated attribution needs its date | FIRED (control EQUIVALENT), exit 0 |
+
+#### D3 + D4 -- Teams empty-skip and capture coverage (commit 380f0440, one commit: same file)
+`src/features/huddle/lib/external-feeds/teams-log.ts`
+- D3: `hasNonTextContent` (:111) -- a body holding `<img>`, `<emoji>`, `hostedContents` or a Giphy itemtype is not
+  empty; the `empty` skip (:224) now needs no text, no attachment AND no such media. An image-only, emoji-only or
+  Giphy owner reply is kept and settles the chat ("answered"), as before 3f6bb5fb. Its stored `text` stays "" (the
+  converter still drops `<img>`/`<emoji>`); nothing downstream needed text to settle a chat.
+- D4: capture days are the America/New_York date (`easternDay`, :120, :183). A 7:30pm-Eastern rerun no longer
+  lands on the next UTC day and raises a false drop. Lines with no capture time are counted
+  (`noCaptureTimeLines`, optional field) and the note says "N line(s) with no capture time" (:283). The drop rule
+  is unchanged (newest < half of previous, previous >= 10); "unknown" is still excluded from it.
+- Tests (redteam-correspondence): D3 image/emoji/Giphy kept + answered; D3 neg whitespace-only still empty; D4 rerun
+  no false drop; D4 Eastern-midnight boundary splits; D4 untimed lines named; D4 neg no note when all timed.
+  EMPTY-1/2 and COVER-1..5 unchanged and green. Suites: task-proposals 188/0, redteam 70/0, ingest 149/0,
+  onedrive-feed all passed, inbound-email 72/0, cross-app-turn-gate 92/0; tsc clean.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| media check removed from the empty skip | D3 image/emoji/Giphy reply kept | FIRED (control EQUIVALENT), exit 0 |
+| `<emoji>` not counted as content | D3 image/emoji/Giphy reply kept | FIRED (control EQUIVALENT), exit 0 |
+| capture day back to the UTC date | D4 7:30pm-Eastern rerun | FIRED (control EQUIVALENT), exit 0 |
+| untimed-lines note suppressed | D4 lines with no capture time named | FIRED (control EQUIVALENT), exit 0 |
