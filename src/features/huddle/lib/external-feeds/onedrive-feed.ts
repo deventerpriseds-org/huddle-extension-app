@@ -401,9 +401,12 @@ function stripBlockquotes(html: string): string {
 
 /** An inline style or attribute that hides an element from the reader (red-team F8). font-size:0 is kept
  *  SEPARATE: responsive templates set it on a wrapper to kill inline-block gaps and give the real size to
- *  the content inside, so on its own it hides only what is not re-sized (fix-pass F8 over-match). */
+ *  the content inside, so on its own it hides only what is not re-sized (fix-pass F8 over-match).
+ *  `mso-hide:all` is NOT here: it hides only in Outlook desktop, and this converter reads the mail the way a
+ *  browser does. Outlook's own copy sits in an `<!--[if mso]>` comment, which is dropped, so each piece of
+ *  text survives exactly once (verifier loop 4, W4). */
 const HIDDEN_STYLE =
-  /(?:^|[;\s"'])(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\s*(?:!important)?\s*(?:;|$)|mso-hide\s*:\s*all)/i;
+  /(?:^|[;\s"'])(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\s*(?:!important)?\s*(?:;|$))/i;
 /** max-height:0 hides ONLY together with overflow:hidden (the Gmail preheader trick). On its own the text
  *  overflows the zero box and renders (verifier loop 3, V7). */
 const MAX_HEIGHT_ZERO = /(?:^|[;\s"'])max-height\s*:\s*0(?:px)?\s*(?:!important)?\s*(?:;|$)/i;
@@ -415,14 +418,27 @@ const FONT_ZERO_STYLE = /(?:^|[;\s"'])font-size\s*:\s*0(?:\.0+)?(?:px|pt|em|rem|
 /** A declaration that gives text a real (non-zero) size again. `inherit`/`unset` inherit the zero. */
 const SIZED_STYLE =
   /(?:^|[;\s"'])(?:font-size\s*:\s*(?:(?!0(?:\.0+)?(?![0-9.]))\d*\.?\d+|xx-small|x-small|small|medium|large|x-large|xx-large|larger|initial)|font\s*:[^;]*?(?:^|[\s/:])(?!0(?:\.0+)?(?![0-9.]))\d*\.?\d+(?:px|pt|em|rem|%))/i;
+/** Pure: the attributes of one start tag, tokenized the way a browser does it -- a name, then an optional
+ *  `=value` (double-quoted, single-quoted or bare). A quoted value is opaque, so ` style="display:none"`
+ *  written INSIDE another attribute's value is never a style (verifier loop 4, W7), and the word `hidden`
+ *  inside a value is never the attribute (loop 3, V2). The FIRST occurrence of a name wins, as in a browser. */
+export function attrsOf(tag: string): Map<string, string> {
+  const attrs = new Map<string, string>();
+  const body = tag.replace(/^<[a-z][a-z0-9]*/i, " ").replace(/\/?>$/, "");
+  // A name may hold a stray quote (`<div "style="...">` names an attribute `"style`), as in the HTML tokenizer.
+  const re = /([^\s/>][^\s/>=]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]*)))?/g;
+  for (let a = re.exec(body); a; a = re.exec(body)) {
+    const name = a[1].toLowerCase();
+    if (!attrs.has(name)) attrs.set(name, a[2] ?? a[3] ?? a[4] ?? "");
+  }
+  return attrs;
+}
 const styleOf = (tag: string): string => {
-  const style = /\sstyle\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
-  return style ? ` ${style[2] ?? style[3] ?? style[4] ?? ""}` : "";
+  const style = attrsOf(tag).get("style");
+  return style === undefined ? "" : ` ${style}`;
 };
-/** Pure: does the tag carry the `hidden` ATTRIBUTE? Attribute values are blanked first, so the word
- *  inside a value (`title="a hidden gem"`, `class="hidden md-show"`) never counts (verifier loop 3, V2). */
-const hasHiddenAttr = (tag: string): boolean =>
-  /\shidden(?=[\s/>]|$)/i.test(tag.replace(/^<[a-z][a-z0-9]*/i, " ").replace(/=\s*("[^"]*"|'[^']*'|[^\s"'>]+)/g, " "));
+/** Pure: does the tag carry the `hidden` ATTRIBUTE (bare or with any value)? */
+const hasHiddenAttr = (tag: string): boolean => attrsOf(tag).has("hidden");
 type HiddenKind = "hidden" | "font0" | "vis";
 const hiddenKind = (tag: string): HiddenKind | null => {
   if (hasHiddenAttr(tag)) return "hidden";
@@ -444,13 +460,80 @@ const isSelfContained = (name: string, tag: string) => VOID_TAGS.has(name) || ta
 const P_CLOSERS = new Set([
   "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "fieldset",
   "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "li",
-  "main", "menu", "nav", "ol", "p", "pre", "section", "summary", "table", "ul", "dd", "dt",
+  "main", "menu", "nav", "ol", "p", "pre", "section", "summary", "table", "ul", "dd", "dt", "search", "listing", "xmp",
 ]);
 const HEADINGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 const CELL = new Set(["td", "th"]);
 const SECTION = new Set(["tbody", "thead", "tfoot"]);
 /** Elements a <p> close-by-block-start cannot reach past (scope boundaries). */
-const SCOPE_BARRIERS = new Set(["table", "td", "th", "caption", "button", "object", "marquee", "applet", "template"]);
+const SCOPE_BARRIERS = new Set(["table", "td", "th", "caption", "button", "object", "marquee", "applet", "template", "html"]);
+/** The HTML parsing spec's "special" elements: an <li> / <dd> / <dt> start tag's search for the item it
+ *  closes stops at any of these except address, div and p. */
+const SPECIAL = new Set([
+  "address", "applet", "area", "article", "aside", "base", "basefont", "bgsound", "blockquote", "body", "br", "button",
+  "caption", "center", "col", "colgroup", "dd", "details", "dir", "div", "dl", "dt", "embed", "fieldset", "figcaption",
+  "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr",
+  "html", "iframe", "img", "input", "keygen", "li", "link", "listing", "main", "marquee", "menu", "meta", "nav",
+  "noembed", "noframes", "noscript", "object", "ol", "p", "param", "plaintext", "pre", "script", "search", "section",
+  "select", "source", "style", "summary", "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead",
+  "title", "tr", "track", "ul", "wbr", "xmp",
+]);
+/** Formatting elements. The parser RE-OPENS these after an implied close (the "active formatting elements"
+ *  list), so a hidden `<b>`/`<font>` keeps hiding the text after its `<p>` closes (Chromium-checked, W1b). */
+const FORMATTING = new Set(["a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]);
+
+/** Pure: the open-element stack's length after the implied closes a start tag `x` causes, before `x` itself
+ *  is pushed (HTML parsing spec, "in body" / table modes): an `<li>` closes the open `<li>` it reaches past
+ *  only non-special elements (and address/div/p); `<dd>`/`<dt>` likewise; every p-end-tag-omission start tag
+ *  closes a `<p>` in button scope; a heading closes a heading; a cell, row or section closes the open cell,
+ *  row or section of the same table. Used for the ANCESTORS of a hidden element (verifier loop 4, W1-W3). */
+function lengthAfterStartTag(stack: readonly string[], x: string): number {
+  let len = stack.length;
+  if (x === "li" || x === "dd" || x === "dt") {
+    for (let i = len - 1; i >= 0; i--) {
+      const n = stack[i];
+      if (x === "li" ? n === "li" : n === "dd" || n === "dt") {
+        len = i;
+        break;
+      }
+      if (SPECIAL.has(n) && n !== "address" && n !== "div" && n !== "p") break;
+    }
+  }
+  if (P_CLOSERS.has(x)) {
+    for (let i = len - 1; i >= 0; i--) {
+      if (stack[i] === "p") {
+        len = i;
+        break;
+      }
+      if (SCOPE_BARRIERS.has(stack[i])) break;
+    }
+  }
+  if (HEADINGS.has(x) && len > 0 && HEADINGS.has(stack[len - 1])) len--;
+  if (CELL.has(x) || x === "tr" || SECTION.has(x) || x === "caption") {
+    for (let i = len - 1; i >= 0; i--) {
+      const n = stack[i];
+      if (n === "table" || (CELL.has(x) && n === "tr") || (x === "tr" && SECTION.has(n))) {
+        len = i + 1;
+        break;
+      }
+      if ((CELL.has(x) && CELL.has(n)) || (x === "tr" && n === "tr") || (SECTION.has(x) && SECTION.has(n))) {
+        len = i;
+        break;
+      }
+    }
+  }
+  return len;
+}
+/** Pure: the stack after an end tag `x` -- popped to the matching open element when one is in scope
+ *  (table parts reach past cells to their table; anything else stops at a scope barrier); else unchanged. */
+function lengthAfterEndTag(stack: readonly string[], x: string): number {
+  const tablePart = CELL.has(x) || x === "tr" || SECTION.has(x) || x === "caption" || x === "table";
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (stack[i] === x) return i;
+    if (tablePart ? stack[i] === "table" : SCOPE_BARRIERS.has(stack[i])) break;
+  }
+  return stack.length;
+}
 
 /** Pure: does start tag `x` end the open element `e` (with `inner` = the tags opened inside `e` and still
  *  open) the way a browser implies it? `<p>` is closed by the next block, a cell by the next cell or row,
@@ -479,18 +562,26 @@ const SELF_SIBLING = new Set(["p", "li", "td", "th", "tr", "dt", "dd", "option"]
  *    -> it ends just BEFORE that tag (a browser closes it there; a later stray same-name close tag no
  *    longer captures the visible text in between -- verifier loop 3, V1);
  *  - a start tag that implies its end (`startTagEnds`) -> just before that tag (V19);
+ *  - a start tag whose implied closes pop one of its ANCESTORS (`ancestors`, outermost first: the `<p>` it
+ *    sits in closed by the next block, the `<li>` closed by the next `<li>`) -> just before that tag, since
+ *    the browser pops it together with that ancestor (verifier loop 4, W1-W3). A formatting element is the
+ *    exception: the browser re-opens it after the close, so it keeps hiding (W1b);
  *  - none of these -> the end of the document (an unclosed hidden tail stays hidden).
  *  `inner` is the content between the open tag and that end. Errors lean toward ending EARLY, so text
  *  that may be visible is kept rather than dropped. */
-function elementEnd(html: string, name: string, openEnd: number): { end: number; inner: string } {
+function elementEnd(html: string, name: string, openEnd: number, ancestors: readonly string[] = []): { end: number; inner: string } {
   const any = /<(\/?)([a-z][a-z0-9]*)\b[^>]*>/gi;
   any.lastIndex = openEnd;
   const stack: string[] = [];
   for (let t = any.exec(html); t; t = any.exec(html)) {
     const x = t[2].toLowerCase();
     if (!t[1]) {
-      if (isSelfContained(x, t[0])) continue;
+      // Checked before the void skip: a void <hr> closes an open <p> too (Chromium-checked, PCLOSE-hr).
       if (startTagEnds(name, x, stack)) return { end: t.index, inner: html.slice(openEnd, t.index) };
+      if (ancestors.length && !FORMATTING.has(name) && lengthAfterStartTag([...ancestors, name, ...stack], x) <= ancestors.length) {
+        return { end: t.index, inner: html.slice(openEnd, t.index) };
+      }
+      if (isSelfContained(x, t[0])) continue;
       if (SELF_SIBLING.has(x) && stack[stack.length - 1] === x) stack.pop();
       stack.push(x);
       continue;
@@ -510,10 +601,10 @@ function elementEnd(html: string, name: string, openEnd: number): { end: number;
  *  `<font size=...>`, or ANY class (a `<style>` rule may size it -- this converter cannot see CSS
  *  classes). When in doubt the text is KEPT; only text certainly at size 0 is dropped (verifier loop 3,
  *  V5/V6). */
-const mayResize = (name: string, tag: string): boolean =>
-  SIZED_STYLE.test(styleOf(tag)) ||
-  /\sclass\s*=\s*("[^"]*\S[^"]*"|'[^']*\S[^']*'|[^\s"'>]+)/i.test(tag) ||
-  (name === "font" && /\ssize\s*=/i.test(tag));
+const mayResize = (name: string, tag: string): boolean => {
+  const attrs = attrsOf(tag);
+  return SIZED_STYLE.test(styleOf(tag)) || /\S/.test(attrs.get("class") ?? "") || (name === "font" && attrs.has("size"));
+};
 
 /** Pure: inside a font-size:0 element, keep ONLY the descendants that may set a real size again (with
  *  their content); every other text node and element there is zero-size and dropped. With `vis`, the
@@ -539,26 +630,39 @@ function keepResizedDescendants(inner: string, keep: (name: string, tag: string)
 }
 
 /** Pure (red-team F8): remove every element the reader cannot see -- inline-style hidden (display:none,
- *  visibility:hidden, opacity:0, max-height:0, mso-hide:all) or the `hidden` attribute -- together with
+ *  visibility:hidden, opacity:0, max-height:0 with overflow hidden) or the `hidden` attribute -- together with
  *  everything inside it, matching nested same-name tags. An element at font-size:0 keeps only the
  *  descendants that set a real size again (fix pass). An UNCLOSED hidden element ends where its parent
  *  closes, not at the end of the email (fix pass: it used to swallow every real ask after broken HTML). */
 export function stripHiddenElements(html: string): string {
   let out = "";
   let pos = 0;
-  for (let guard = 0; guard < 10_000; guard++) {
-    OPEN_TAG.lastIndex = pos;
-    const m = OPEN_TAG.exec(html);
+  // The open elements around the current position (outermost first), so a hidden element knows which
+  // ancestor closes would pop it (verifier loop 4, W1-W3).
+  const ancestors: string[] = [];
+  const anyTag = /<(\/?)([a-z][a-z0-9]*)\b[^>]*>/gi;
+  for (let guard = 0; guard < 200_000; guard++) {
+    anyTag.lastIndex = pos;
+    const m = anyTag.exec(html);
     if (!m) break;
-    const name = m[1].toLowerCase();
+    const name = m[2].toLowerCase();
     const openEnd = m.index + m[0].length;
-    const kind = isSelfContained(name, m[0]) ? null : hiddenKind(m[0]);
-    if (!kind) {
+    if (m[1]) {
+      ancestors.length = lengthAfterEndTag(ancestors, name);
       out += html.slice(pos, openEnd);
       pos = openEnd;
       continue;
     }
-    const { end, inner } = elementEnd(html, name, openEnd);
+    const selfContained = isSelfContained(name, m[0]);
+    ancestors.length = lengthAfterStartTag(ancestors, name); // a void <hr> closes a <p> too
+    const kind = selfContained ? null : hiddenKind(m[0]);
+    if (!kind) {
+      if (!selfContained) ancestors.push(name);
+      out += html.slice(pos, openEnd);
+      pos = openEnd;
+      continue;
+    }
+    const { end, inner } = elementEnd(html, name, openEnd, ancestors);
     out += html.slice(pos, m.index) + " ";
     if (kind === "font0") out += stripHiddenElements(keepResizedDescendants(inner)) + " ";
     if (kind === "vis") out += stripHiddenElements(keepResizedDescendants(inner, (_n, tag) => VISIBLE_AGAIN.test(styleOf(tag)))) + " ";
