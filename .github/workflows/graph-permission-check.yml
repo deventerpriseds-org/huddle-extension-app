@@ -154,19 +154,23 @@ jobs:
               d=json.loads(raw)
           except Exception:
               lines=[l for l in raw.splitlines() if l.strip()]
-              try:
-                  last=json.loads(lines[-1]) if lines else None
-              except Exception:
-                  last=None
-              if isinstance(last, dict):
+              # Parse EVERY line. The old gate tried only the last line, so one bad trailing
+              # line (a half-written append) hid an otherwise readable JSONL file entirely.
+              recs=[]; bad=[]
+              for i, l in enumerate(lines, 1):
+                  try:
+                      o=json.loads(l)
+                      if isinstance(o, dict): recs.append(o)
+                      else: bad.append((i, len(l), "not an object: " + type(o).__name__))
+                  except Exception as ex:
+                      # json error text is position-only ("Expecting , delimiter: line 1 column 9"),
+                      # never content -- safe for these PUBLIC logs.
+                      bad.append((i, len(l), type(ex).__name__ + ": " + str(ex)[:90]))
+              if bad:
+                  print("JSONL UNPARSEABLE LINES:", len(bad), "of", len(lines), "| last line ok:", not bad or bad[-1][0] != len(lines))
+                  for b in bad[:15]: print("   line", b[0], "| length", b[1], "|", b[2])
+              if recs:
                   from collections import Counter
-                  recs=[]
-                  for l in lines:
-                      try:
-                          o=json.loads(l)
-                          if isinstance(o, dict): recs.append(o)
-                      except Exception:
-                          pass
                   short=lambda v: v if isinstance(v,(bool,int)) or v is None or (isinstance(v,str) and len(v)<=24 and "@" not in v) else "<long/other>"
                   lk=Counter(k for r in recs for k in r)
                   st=Counter(str(short(r.get("status"))) for r in recs)
