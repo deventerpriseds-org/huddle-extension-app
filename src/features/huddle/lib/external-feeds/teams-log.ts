@@ -106,12 +106,13 @@ function bodyText(m: Record<string, unknown>): string {
 }
 
 /** Pure (verifier loop 3, D3): does the body carry content the text converter cannot show as words -- a
- *  pasted inline image (`<img ... hostedContents ...>`, attachments []), a Teams emoji (`<emoji alt=...>`) or
- *  a Giphy? Such a message is a real reply (often the owner's), never "empty". */
+ *  pasted inline image (`<img ... hostedContents ...>`, attachments []), a Teams emoji (`<emoji alt=...>`), any
+ *  other element whose NAME contains "emoji" (`<customemoji ...>`, verifier loop 4) or a Giphy? Such a message
+ *  is a real reply (often the owner's), never "empty". */
 function hasNonTextContent(m: Record<string, unknown>): boolean {
   const b = m.body;
   const content = typeof b === "string" ? b : b && typeof b === "object" ? (b as Record<string, unknown>).content : "";
-  return typeof content === "string" && /<(?:img|emoji)\b|hostedContents|schema\.skype\.com\/Giphy/i.test(content);
+  return typeof content === "string" && /<(?:img|[a-z0-9-]*emoji[a-z0-9-]*)\b|hostedContents|schema\.skype\.com\/Giphy/i.test(content);
 }
 
 /** Pure: the America/New_York calendar date (YYYY-MM-DD) of an instant -- the owner's day, so a flow rerun

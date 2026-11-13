@@ -280,6 +280,26 @@ const line = (msgs: unknown[], extra: Record<string, unknown> = {}) => JSON.stri
     ["giphy", ["q1", "a1"], "answered"],
   ]);
   t("D3 neg: a whitespace-only body with no media is still empty", parseTeamsLog(realLine({ synthetic: false, messages: [realMsg("w1", html("<p>&nbsp;</p><p> </p>"))] }), tcfg).skipped.empty, 1);
+  // Verifier loop 4, D3: an owner reply that is ONLY a custom emoji (or any <...emoji...> element) is content.
+  const customReplies: [string, string][] = [
+    ["customemoji", `<p><customemoji id="dGVzdA==" alt="partyparrot" source="https://teams.example/emoji.png"></customemoji></p>`],
+    ["CUSTOMEMOJI", `<CUSTOMEMOJI ID="x" ALT="shipit"></CUSTOMEMOJI>`],
+    ["emoji-x", `<p><teams-emoji alt="wave"></teams-emoji></p>`],
+  ];
+  const customStates = customReplies.map(([id, content]) => {
+    const p = parseTeamsLog(realLine({ synthetic: false, messages: [
+      realMsg("q1", { createdDateTime: "2026-11-12T14:00:00Z" }),
+      realMsg("a1", { createdDateTime: "2026-11-12T14:05:00Z", from: owner, ...html(content) }),
+    ] }), tcfg);
+    return [id, p.messages.map((m) => m.messageId), p.skipped.empty ?? 0, decideChatThread(p.messages, true).state];
+  });
+  t("D3 loop 4: a <customemoji>-only (or any <...emoji...>) owner reply is kept and settles the chat", customStates, [
+    ["customemoji", ["q1", "a1"], 0, "answered"],
+    ["CUSTOMEMOJI", ["q1", "a1"], 0, "answered"],
+    ["emoji-x", ["q1", "a1"], 0, "answered"],
+  ]);
+  t("D3 loop 4 neg: 'emoji' in an attribute or comment (not an element name) is not media: still empty",
+    parseTeamsLog(realLine({ synthetic: false, messages: [realMsg("w2", html(`<p><span class="emoji-row" title="emoji"> </span><!-- emoji --></p>`))] }), tcfg).skipped.empty, 1);
   // Verifier loop 3, D4: capture days are Eastern dates; a missing capture time is reported, not hidden.
   const capLine = (at: string | null, chat: string) => realLine({ synthetic: false, capturedAt: at ?? undefined, chatId: chat, messages: [] });
   const rerun = parseTeamsLog([...Array.from({ length: 12 }, (_, k) => capLine("2026-11-12T23:00:00Z", `c${k}`)), ...Array.from({ length: 3 }, (_, k) => capLine("2026-11-13T00:30:00Z", `c${k}`))].join("\n"), tcfg);
