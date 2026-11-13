@@ -452,3 +452,16 @@ Source: `docs/qc-evidence/VERIFY-correspondence-proposals-3.md` on `claude_verif
 | Mutation | Named test | Verdict |
 |---|---|---|
 | guard narrowed back to `enabled === false` | M1 teams/sent {enabled:<anything but true>} -> off | FIRED (control EQUIVALENT), exit 0 |
+
+#### M2 -- non-date words kept as `due_text`
+`src/features/huddle/lib/proposals/proposals.ts` `isDateWords`: still all-date-words and <= 8 words, AND now needs one
+`REAL_DATE_TERM`: a weekday; a month name next to a day number (either order, "the"/"of" between); today / tomorrow /
+tonight; EOD / EOW / COB or "end of [the] day/week", "close of business"; a numeric date (2026-11-14, 11/14,
+11/14/2026); "next"/"this" + day/week/month/weekday. Now rejected: "may", "3", "by 3", "asap", "soon", "in May",
+"the 3rd". `asap`/`soon` were accepted as `dueText` before (date stayed null); they now leave `dueText` null too.
+- Tests (task-proposals): M2 non-date words (7), M2 real date terms (14), M2 end to end (`due_text` "may"/"3" dropped,
+  tasks kept). Suites: task-proposals 194/0, others unchanged; tsc clean.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| real-date-term requirement removed | M2 non-date words are not a due text | FIRED (control EQUIVALENT), exit 0 |
