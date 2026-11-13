@@ -575,10 +575,10 @@ vendor?", "Can you sign the NDA?" once, "Can you approve the PO?"). W1b: `""`, a
   name-only, day-month-year + time, email split across the wrap, French wrap).
 - Main-vs-branch over every string literal in the inbound-email, redteam, ingest and task-proposals suites
   (TypeScript AST, 1436 literals, `newTextOnly` + `asksSomething`): **19 differ**. All 19 are deliberate cuts of
-  quoted history main misses: 8 foreign header blocks / attributions on one line (fr/de/es/it/nl/pt/sv, it/pl/es
-  headers), 2 FR/DE header blocks from older tests, and 9 two-line wrapped attributions (Gmail English with email or
-  name, French). No sentence of the sender's own text differs from main. (Loop 3 counted 15 of 1232; the 4 new ones
-  are this pass's wrapped-cut fixtures.)
+  quoted history main misses: 7 one-line foreign attributions (fr, de, es, it, nl, pt, sv), 6 foreign header blocks
+  (fr, de, it `Inviato`, it `Data`, pl, es), and 6 two-line wrapped attributions (RT-12c, en-2line, name-only,
+  day-month-year + time, email split across the wrap, French wrap). No sentence of the sender's own text differs
+  from main. (Loop 3 counted 15 of 1232; the 4 new ones are this pass's wrapped-cut fixtures.)
 - Tests (redteam-correspondence): D2 X1/X2 hard-wrapped lines kept (X1, X2, lower-case word before wrote, no year,
   "I" before wrote); D2 X1/X2 still screened as asks; D2 real two-line wrapped attributions still cut. 73/0.
 
