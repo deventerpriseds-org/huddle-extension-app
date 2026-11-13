@@ -60,9 +60,13 @@ export interface TeamsLogParse {
   /** Same (chatId, messageId) seen again in this file (a flow rerun / repeated line): kept once. */
   duplicates: number;
   /** Capture coverage (owner 2026-11-13: "capture counts should be monitored"): distinct chats per capture
-   *  day (UTC date of the line's capturedAt/capturedUtc; "unknown" when absent), over lines that passed the
-   *  source/synthetic/chatId checks -- a chat with an empty day still counts as captured. */
+   *  day (America/New_York date of the line's capturedAt/capturedUtc -- the flow runs on Eastern time;
+   *  "unknown" when absent), over lines that passed the source/synthetic/chatId checks -- a chat with an
+   *  empty day still counts as captured. */
   captureChats: Record<string, number>;
+  /** Lines (that passed the same checks) with no readable capture time. Reported in the note so a flow
+   *  that stops writing capturedAt cannot hide a coverage drop (verifier loop 3, D4). */
+  noCaptureTimeLines?: number;
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "");
@@ -100,6 +104,21 @@ function bodyText(m: Record<string, unknown>): string {
   }
   return "";
 }
+
+/** Pure (verifier loop 3, D3): does the body carry content the text converter cannot show as words -- a
+ *  pasted inline image (`<img ... hostedContents ...>`, attachments []), a Teams emoji (`<emoji alt=...>`) or
+ *  a Giphy? Such a message is a real reply (often the owner's), never "empty". */
+function hasNonTextContent(m: Record<string, unknown>): boolean {
+  const b = m.body;
+  const content = typeof b === "string" ? b : b && typeof b === "object" ? (b as Record<string, unknown>).content : "";
+  return typeof content === "string" && /<(?:img|emoji)\b|hostedContents|schema\.skype\.com\/Giphy/i.test(content);
+}
+
+/** Pure: the America/New_York calendar date (YYYY-MM-DD) of an instant -- the owner's day, so a flow rerun
+ *  at 7:30pm Eastern files under the same day as the 6pm run, not the next UTC day (verifier loop 3, D4). */
+const CAPTURE_TZ = "America/New_York";
+const easternDay = (ms: number): string =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: CAPTURE_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
 
 /**
  * Pure: parse the Teams log text. `dropFirstLine` is set when the text is a TAIL read (it starts mid-line).
@@ -161,7 +180,8 @@ export function parseTeamsLog(
       continue;
     }
     const capMs = parseUtcMs(pick(rec, "capturedUtc", "captured_utc", "capturedAt"));
-    const day = Number.isFinite(capMs) ? new Date(capMs).toISOString().slice(0, 10) : "unknown";
+    const day = Number.isFinite(capMs) ? easternDay(capMs) : "unknown";
+    if (day === "unknown") out.noCaptureTimeLines = (out.noCaptureTimeLines ?? 0) + 1;
     if (!chatsByDay.has(day)) chatsByDay.set(day, new Set());
     chatsByDay.get(day)!.add(chatId);
     const msgs = pick(rec, "messages", "value");
@@ -201,7 +221,7 @@ export function parseTeamsLog(
         continue;
       }
       const textOut = bodyText(m);
-      if (!textOut.trim() && !(Array.isArray(m.attachments) && m.attachments.length)) {
+      if (!textOut.trim() && !(Array.isArray(m.attachments) && m.attachments.length) && !hasNonTextContent(m)) {
         skip("empty", "message");
         continue;
       }
@@ -260,6 +280,7 @@ export function teamsParseNote(p: TeamsLogParse, tailSkippedBytes = 0): string |
   const cov = captureCoverage(p.captureChats ?? {});
   if (cov.latest) parts.push(`latest capture ${cov.latest.day}: ${cov.latest.chats} chat(s)`);
   if (cov.drop && cov.previous) parts.push(`COVERAGE DROP: ${cov.latest!.chats} chat(s) vs ${cov.previous.chats} on ${cov.previous.day}`);
+  if (p.noCaptureTimeLines) parts.push(`${p.noCaptureTimeLines} line(s) with no capture time`);
   if (p.skippedLines) parts.push(`skipped ${p.skippedLines} line(s)`);
   if (p.skippedMessages) parts.push(`skipped ${p.skippedMessages} message(s)`);
   const reasons = Object.entries(p.skipped)

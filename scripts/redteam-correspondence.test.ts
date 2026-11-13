@@ -240,6 +240,35 @@ const line = (msgs: unknown[], extra: Record<string, unknown> = {}) => JSON.stri
   t("COVER-3 the note carries totals + the drop, counts only", /kept 0 message\(s\) in 0 chat\(s\) from 62 line\(s\) latest capture 2026-11-13: 12 chat\(s\) COVERAGE DROP: 12 chat\(s\) vs 50 on 2026-11-12/.test(teamsParseNote(cover) ?? ""), true);
   t("COVER-4 a normal day-to-day wobble is not flagged", captureCoverage({ "2026-11-12": 50, "2026-11-13": 41 }).drop, false);
   t("COVER-5 a tiny previous capture never flags (noise)", captureCoverage({ "2026-11-12": 4, "2026-11-13": 1 }).drop, false);
+  // Verifier loop 3, D3: an owner reply that is only a pasted image, a Teams emoji or a Giphy is a REAL reply.
+  const owner = { user: { "@odata.type": "#microsoft.graph.teamworkUserIdentity", id: "user-owner-1", displayName: "Owner", userIdentityType: "aadUser", tenantId: "t" } };
+  const html = (content: string) => ({ body: { content, contentType: "html", messageBodyContentType: "html" } });
+  const replies: [string, string][] = [
+    ["image", `<p><img src="https://graph.microsoft.example/v1.0/chats/19:c1/messages/7/hostedContents/aaa/$value" alt="image" width="250" height="150"></p>`],
+    ["emoji", `<p><emoji id="1f44d_thumbsup" alt="\u{1F44D}" title="Thumbs up"></emoji></p>`],
+    ["giphy", `<p><img alt="GIF" src="https://media.giphy.example/x.gif" itemtype="http://schema.skype.com/Giphy"></p>`],
+  ];
+  const states = replies.map(([id, content]) => {
+    const p = parseTeamsLog(realLine({ synthetic: false, messages: [
+      realMsg("q1", { createdDateTime: "2026-11-12T14:00:00Z" }),
+      realMsg("a1", { createdDateTime: "2026-11-12T14:05:00Z", from: owner, ...html(content) }),
+    ] }), tcfg);
+    return [id, p.messages.map((m) => m.messageId), decideChatThread(p.messages, true).state];
+  });
+  t("D3 an image-only / emoji-only / Giphy owner reply is kept and settles the chat", states, [
+    ["image", ["q1", "a1"], "answered"],
+    ["emoji", ["q1", "a1"], "answered"],
+    ["giphy", ["q1", "a1"], "answered"],
+  ]);
+  t("D3 neg: a whitespace-only body with no media is still empty", parseTeamsLog(realLine({ synthetic: false, messages: [realMsg("w1", html("<p>&nbsp;</p><p> </p>"))] }), tcfg).skipped.empty, 1);
+  // Verifier loop 3, D4: capture days are Eastern dates; a missing capture time is reported, not hidden.
+  const capLine = (at: string | null, chat: string) => realLine({ synthetic: false, capturedAt: at ?? undefined, chatId: chat, messages: [] });
+  const rerun = parseTeamsLog([...Array.from({ length: 12 }, (_, k) => capLine("2026-11-12T23:00:00Z", `c${k}`)), ...Array.from({ length: 3 }, (_, k) => capLine("2026-11-13T00:30:00Z", `c${k}`))].join("\n"), tcfg);
+  t("D4 a 7:30pm-Eastern rerun (00:30Z next UTC day) files under the same Eastern day: no false drop", [rerun.captureChats, captureCoverage(rerun.captureChats).drop], [{ "2026-11-12": 12 }, false]);
+  t("D4 an Eastern-midnight boundary still splits days (04:59Z vs 05:00Z in EST)", parseTeamsLog([capLine("2026-11-13T04:59:00Z", "a"), capLine("2026-11-13T05:00:00Z", "b")].join("\n"), tcfg).captureChats, { "2026-11-12": 1, "2026-11-13": 1 });
+  const noCap = parseTeamsLog([...Array.from({ length: 12 }, (_, k) => capLine("2026-11-11T23:00:00Z", `c${k}`)), capLine(null, "c0"), capLine(null, "c1")].join("\n"), tcfg);
+  t("D4 lines with no capture time are counted and named in the note", [noCap.noCaptureTimeLines, /2 line\(s\) with no capture time/.test(teamsParseNote(noCap) ?? "")], [2, true]);
+  t("D4 neg: every line timed -> no 'no capture time' note", /no capture time/.test(teamsParseNote(rerun) ?? ""), false);
 }
 {
   const p = parseTeamsLog(
