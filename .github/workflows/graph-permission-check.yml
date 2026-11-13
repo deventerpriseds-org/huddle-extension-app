@@ -154,19 +154,45 @@ jobs:
               d=json.loads(raw)
           except Exception:
               lines=[l for l in raw.splitlines() if l.strip()]
-              try:
-                  last=json.loads(lines[-1]) if lines else None
-              except Exception:
-                  last=None
-              if isinstance(last, dict):
-                  from collections import Counter
-                  recs=[]
-                  for l in lines:
+              # Parse EVERY line. The old gate tried only the last line, so one bad trailing
+              # line (a half-written append) hid an otherwise readable JSONL file entirely.
+              recs=[]; bad=[]
+              for i, l in enumerate(lines, 1):
+                  try:
+                      o=json.loads(l)
+                      if isinstance(o, dict): recs.append(o)
+                      else: bad.append((i, len(l), "not an object: " + type(o).__name__))
+                  except Exception as ex:
+                      # json error text is position-only ("Expecting , delimiter: line 1 column 9"),
+                      # never content -- safe for these PUBLIC logs.
+                      # Shape of the failure without content: first/last code point, where the first
+                      # "{" sits, and whether the text from that brace on parses.
+                      b0=l.find("{")
+                      tail_err=""
                       try:
-                          o=json.loads(l)
-                          if isinstance(o, dict): recs.append(o)
+                          tail_ok=isinstance(json.loads(l[b0:]), dict) if b0 >= 0 else False
+                      except json.JSONDecodeError as te:
+                          tail_ok=False
+                          p=te.pos
+                          tail_err=" | from-brace error: %s at char %d, chars there %s" % (te.msg, p, "".join("a" if c.isalpha() else "9" if c.isdigit() else c for c in l[b0+max(p-3,0):b0+p+3]))
                       except Exception:
-                          pass
+                          tail_ok=False
+                      # A short prefix made only of key-name characters is schema, not content: print it.
+                      import re as _re
+                      pre=l[:b0] if 0 <= b0 <= 16 else ""
+                      # Only a word from a fixed schema/function vocabulary is printed; anything else
+                      # (it could be a name) is reduced to its character classes.
+                      VOCAB={"content","contents","chatid","chatname","source","status","messages","message","capturedat","synthetic","body","value","values","data","json","record","item","items","line","text","concat","string","outputs","output","body/value"}
+                      word=_re.sub(r"[^A-Za-z/]", "", pre).lower()
+                      pre=pre if word in VOCAB or word == "" else "<withheld: %d chars, %s>" % (len(pre), "".join(sorted(set("a" if c.isalpha() else "9" if c.isdigit() else "_" if c.isspace() else "p" for c in pre))))
+                      head="".join("a" if c.isalpha() else "9" if c.isdigit() else c for c in (l[b0:b0+4] if b0 >= 0 else ""))
+                      shape="first U+%04X last U+%04X first-brace-at %d prefix %r head %r parses-from-brace %s%s" % (ord(l[0]), ord(l[-1]), b0, pre, head, tail_ok, tail_err)
+                      bad.append((i, len(l), type(ex).__name__ + ": " + str(ex)[:90] + " | " + shape))
+              if bad:
+                  print("JSONL UNPARSEABLE LINES:", len(bad), "of", len(lines), "| last line ok:", not bad or bad[-1][0] != len(lines))
+                  for b in bad[:15]: print("   line", b[0], "| length", b[1], "|", b[2])
+              if recs:
+                  from collections import Counter
                   short=lambda v: v if isinstance(v,(bool,int)) or v is None or (isinstance(v,str) and len(v)<=24 and "@" not in v) else "<long/other>"
                   lk=Counter(k for r in recs for k in r)
                   st=Counter(str(short(r.get("status"))) for r in recs)
