@@ -883,6 +883,33 @@ t("F8c an unclosed hidden element with no parent close still hides the rest", ht
     { task: "Update the budget sheet", evidence: "Dana will update the budget sheet", assignee: null, due_text: "3" },
   ] }, "Hi! Can you send me the Q3 deck? We may need 3 copies. Also Dana will update the budget sheet.", { atIso: AT, tz: TZ }).accepted.map((c) => [c.title, c.dueText]), [["Send the Q3 deck", null], ["Update the budget sheet", null]]);
 }
+// Verifier loop 3, D5: more negation spellings refused; affirmative look-alikes still accepted.
+{
+  const C = "Send the contract to the client";
+  const neg = (src: string, ev: string) => {
+    const r = validateCandidates({ tasks: [{ task: C, evidence: ev }] }, src, { atIso: AT, tz: TZ });
+    return r.accepted.length ? "accepted" : Object.keys(r.rejected).join(",");
+  };
+  const refused: [string, string][] = [
+    ["Under no circumstances should you send the contract to the client before legal signs.", "send the contract to the client before legal signs"],
+    ["Never, ever send the contract to the client without approval.", "send the contract to the client without approval"],
+    ["Please don't, under any circumstances, send the contract to the client.", "send the contract to the client"],
+    ["Avoid sending the contract to the client until Monday.", "sending the contract to the client until Monday"],
+    ["Refrain from sending the contract to the client this week.", "sending the contract to the client this week"],
+    ["There is no reason to send the contract to the client now.", "send the contract to the client now"],
+  ];
+  t("D5 negation spellings are refused", refused.map(([s, ev]) => neg(s, ev)), refused.map(() => "evidence_negated"));
+  const kept: [string, string][] = [
+    ["To avoid delays, send the contract to the client today.", "send the contract to the client today"],
+    ["Don't worry, send the contract to the client when ready.", "send the contract to the client when ready"],
+    ["If you can't make it, send the contract to the client instead.", "send the contract to the client instead"],
+    ["No, send the contract to the client today.", "send the contract to the client today"],
+    ["Never mind the draft, send the contract to the client today.", "send the contract to the client today"],
+    ["I can't believe it, send the contract to the client today.", "send the contract to the client today"],
+    ["Please, send the contract to the client today.", "send the contract to the client today"],
+  ];
+  t("D5 neg: affirmative look-alikes are still accepted", kept.map(([s, ev]) => neg(s, ev)), kept.map(() => "accepted"));
+}
 // Verifier loop 3, D1: hidden-text stripping must never drop VISIBLE text (repros V1/V2/V5/V6/V7/V13/V19).
 t("D1-V1 an unclosed hidden span ends at its parent's </p>, not at a later stray </span>", htmlToText('<p><span style="display:none">pre</p><p>Please approve the budget by Friday.</p><p>Thanks</span></p>').includes("Please approve the budget by Friday."), true);
 t("D1-V19 an unclosed hidden <p> in a cell ends at the next <td>", htmlToText('<table><tr><td><p style="display:none">pre<td>Can you sign today?</td></tr></table>'), "Can you sign today?");

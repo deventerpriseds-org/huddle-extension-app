@@ -320,8 +320,11 @@ export function enclosingSentence(haystackNl: string, start: number, end: number
 
 /** Negations that put the action OFF ("do not send", "no need to send"); "don't forget to" and
  *  "don't hesitate to" are affirmative and are removed before the test. */
-const NEGATION = /\b(do not|does not|don't|dont|doesn't|did not|didn't|never|no need to|not|shouldn't|should not|must not|mustn't|need not|needn't|won't|will not|cannot|can't|please don't|stop|hold off( on)?|no longer)\b/i;
-const NOT_NEGATION = /\b(do not|don't|dont|never|please don't)\s+(forget|hesitate|fail|miss)\b|\bnot only\b|\bif not\b/gi;
+const NEGATION =
+  /\b(do not|does not|don't|dont|doesn't|did not|didn't|never|no need to|not|shouldn't|should not|must not|mustn't|need not|needn't|won't|will not|cannot|can't|please don't|stop|hold off( on)?|no longer|under no circumstances|refrain from|no reason to|avoid(?=\s*$|\s+\p{L}+ing\b))\b/iu;
+const NOT_NEGATION =
+  /\b(do not|don't|dont|never|please don't)\s+(forget|hesitate|fail|miss)\b|\bnot only\b|\bif not\b|\b(don't|do not) worry\b|\bnever mind\b|\bno worries\b|\bnot a problem\b/gi;
+const wordCount = (s: string) => (s.match(/[\p{L}\p{N}']+/gu) ?? []).length;
 
 /** Pure (red-team F7): does the sentence negate the action before the task's first grounded word?
  *  Looks at the clause that leads into the action (after the last , ; : or "but"). */
@@ -336,7 +339,15 @@ export function negatesAction(sentence: string, evidenceOffset: number, evidence
     }
   }
   const lead = sentence.slice(0, evidenceOffset) + evidence.slice(0, actionAt);
-  const clause = lead.split(/[,;:]|\bbut\b/i).pop() ?? "";
+  const clauses = lead.split(/[,;:]|\bbut\b/i);
+  let clause = clauses.pop() ?? "";
+  // Verifier loop 3, D5: a SHORT leading negation set off by a comma aside still governs the action
+  // ("Never, ever send ...", "Please don't, under any circumstances, send ..."). While what leads into
+  // the action is short (<= 4 words), the previous clause joins it -- but only a short one (<= 3 words),
+  // so a real earlier clause ("If you can't make it, send ...") never does.
+  while (clauses.length && wordCount(clause) <= 4 && wordCount(clauses[clauses.length - 1]) <= 3) {
+    clause = `${clauses.pop()} ${clause}`;
+  }
   return NEGATION.test(clause.replace(NOT_NEGATION, " "));
 }
 
