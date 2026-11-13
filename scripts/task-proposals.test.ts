@@ -22,6 +22,7 @@ import {
   transcriptProposalText,
   validateCandidates,
   groundedAssignee,
+  negators,
   titleKey,
   type ProposalRow,
   type ProposalStore,
@@ -943,6 +944,24 @@ t("F8c an unclosed hidden element with no parent close still hides the rest", ht
     ["Please send me the updated proposal.", "Send updated proposal", "send me the updated proposal"],
   ];
   t("D6 neg: a title in the evidence's own words (stems, stopwords dropped) is still grounded", own.map(([s, task, ev]) => g(s, task, ev)), own.map(() => "accepted"));
+  // Verifier loop 4, D6: not / no / never in a title must match the evidence's polarity.
+  const inverts: [string, string, string, string][] = [
+    ["Please send the deck to finance today.", "Do not send the deck to finance", "send the deck to finance today", "task_not_grounded"],
+    ["Please send the deck to finance today.", "Don't send the deck to finance", "send the deck to finance today", "task_not_grounded"],
+    ["Please send the deck to finance today.", "Never send the deck to finance", "send the deck to finance today", "task_not_grounded"],
+    ["Don't forget to send the deck to finance today.", "Do not send the deck to finance", "Don't forget to send the deck to finance today", "task_not_grounded"],
+    ["Please send the deck to finance, not legal.", "Send the deck to legal", "send the deck to finance, not legal", "evidence_negated"],
+    ["Please send the deck but not the budget sheet.", "Send the deck and the budget sheet", "send the deck but not the budget sheet", "evidence_negated"],
+  ];
+  t("D6 loop 4: a title that negates its evidence, or whose evidence negates it, is refused", inverts.map(([s, task, ev]) => g(s, task, ev)), inverts.map(([, , , want]) => want));
+  const polarityOk: [string, string, string][] = [
+    ["Please send the deck to finance, not legal.", "Send the deck to finance", "send the deck to finance, not legal"],
+    ["Send the deck, not the draft deck, to Dana today.", "Send the deck to Dana", "Send the deck, not the draft deck, to Dana today"],
+    ["Can you do the no-show follow-up with Pat today?", "Do the no-show follow-up with Pat", "do the no-show follow-up with Pat today"],
+    ["Can you send the deck to finance? Not urgent.", "Send the deck to finance", "send the deck to finance"],
+  ];
+  t("D6 loop 4 neg: matching polarity, or a negation about something else, is still accepted", polarityOk.map(([s, task, ev]) => g(s, task, ev)), polarityOk.map(() => "accepted"));
+  t("D6 loop 4: negators normalise n't / cannot / no one", [negators("Don’t send"), negators("We cannot"), negators("No one should"), negators("Don't forget")], [["not"], ["not"], ["nobody"], ["not"]]);
 }
 // Verifier loop 3, D1: hidden-text stripping must never drop VISIBLE text (repros V1/V2/V5/V6/V7/V13/V19).
 t("D1-V1 an unclosed hidden span ends at its parent's </p>, not at a later stray </span>", htmlToText('<p><span style="display:none">pre</p><p>Please approve the budget by Friday.</p><p>Thanks</span></p>').includes("Please approve the budget by Friday."), true);

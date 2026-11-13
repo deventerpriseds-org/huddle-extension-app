@@ -248,7 +248,24 @@ export function titleGrounding(title: string, evidence: string): "ok" | "task_no
   if (!tw.length) return "task_not_grounded";
   // Verifier loop 3, D6: a title may not ADD a content word the evidence does not have ("Pay the vendor
   // invoice twice", "Redo the deck you sent") -- every content word must be grounded, not just a majority.
-  return tw.every((w) => ev.has(w)) ? "ok" : "task_not_grounded";
+  if (!tw.every((w) => ev.has(w))) return "task_not_grounded";
+  // Verifier loop 4, D6: not / no / never (and n't, nobody, none ...) in a title are content too: a title
+  // may not negate evidence that does not ("Do not send the deck to finance" from "send the deck to
+  // finance"). Affirmative look-alikes in the evidence ("don't forget to") do not count as its negation.
+  const evNeg = new Set(negators(evidence.replace(NOT_NEGATION, " ")));
+  return negators(title).every((n) => evNeg.has(n)) ? "ok" : "task_not_grounded";
+}
+
+/** Pure: the negator words of a text, normalised -- n't / cannot -> "not", no one / no-one -> "nobody". */
+export function negators(s: string): string[] {
+  const t = String(s ?? "")
+    .toLowerCase()
+    .replace(/[’‘]/g, "'")
+    .replace(/\bcannot\b/g, "can not")
+    .replace(/n't\b/g, " not")
+    .replace(/\b(dont|doesnt|didnt|wont|cant|shouldnt|mustnt|neednt)\b/g, " not")
+    .replace(/\bno[\s-]one\b/g, "nobody");
+  return t.match(/\b(?:not|no|never|nobody|none|nothing|neither|nor)\b/g) ?? [];
 }
 
 // ── Title normalisation for dedup (red-team F13) ────────────────────────────────────────────────────
@@ -351,7 +368,24 @@ export function negatesAction(sentence: string, evidenceOffset: number, evidence
   while (clauses.length && wordCount(clause) <= 4 && wordCount(clauses[clauses.length - 1]) <= 3) {
     clause = `${clauses.pop()} ${clause}`;
   }
-  return NEGATION.test(clause.replace(NOT_NEGATION, " "));
+  if (NEGATION.test(clause.replace(NOT_NEGATION, " "))) return true;
+  return evidenceNegatesTitleWord(evidence, tw);
+}
+
+/** Pure (verifier loop 4, D6): does the evidence negate one of the title's words further in ("send the deck to
+ *  finance, not legal" for "Send the deck to legal")? A title word counts as negated when EVERY place it occurs
+ *  in the evidence is led by a negation in its own clause (after the last , ; : or "but"); one affirmative
+ *  occurrence is enough to keep it ("send the deck, not the draft deck"). */
+function evidenceNegatesTitleWord(evidence: string, titleWords: Set<string>): boolean {
+  const seen = new Map<string, boolean>(); // stem -> every occurrence so far negated
+  for (const m of evidence.matchAll(/[\p{L}\p{N}]+/gu)) {
+    const stem = lightStem(m[0].toLowerCase());
+    if (!titleWords.has(stem)) continue;
+    const clause = evidence.slice(0, m.index ?? 0).split(/[,;:]|\bbut\b/i).pop() ?? "";
+    const negated = NEGATION.test(clause.replace(NOT_NEGATION, " "));
+    seen.set(stem, (seen.get(stem) ?? true) && negated);
+  }
+  return [...seen.values()].some(Boolean);
 }
 
 const PRONOUN = /^(i|me|my|myself|you|your|yourself|we|us|our|ourselves|someone|somebody|anyone|everyone|team|the team|all)$/i;
