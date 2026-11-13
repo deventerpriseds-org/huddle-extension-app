@@ -13,6 +13,9 @@ name: Graph permission check (read-only)
 #             Section 5 (2026-11-08) proves the app-only key can READ the work-mailbox OneDrive feed
 #             files (external-feeds/onedrive-feed.server.ts). Power Automate WRITING them proves nothing
 #             about Huddle's own application permission. Prints status/size/shape/counts only.
+#             Section 5b (2026-11-13) LISTS the feed folders (name, size, modified time only) so a renamed
+#             output file is found by reading the drive, not by guessing; a .jsonl path prints line count
+#             and the KEY NAMES of its last line (never values).
 # SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 # EVIDENCE:   .claude/evidence/schedule-brief-fix.md; deploy-swa.yml "Ensure Graph Mail.Send" step
 #             (grants Mail.Send only).
@@ -35,6 +38,10 @@ on:
         description: "Section 5: comma-separated drive-relative feed file paths."
         required: false
         default: "/automation/email/emails.json,/automation/appointments/appointments.json"
+      feed_list_folders:
+        description: "Section 5b: comma-separated drive-relative folders to LIST (names/sizes/modified only; needs feed_drive_users)."
+        required: false
+        default: ""
       feed_dry_run:
         description: "Section 6: dry-run the REAL feed files through the shipped code, using the HUDDLE_ONEDRIVE_FEEDS repo secret (masked in logs). Verdicts and counts only."
         required: false
@@ -58,6 +65,7 @@ jobs:
           MAILBOXES: ${{ inputs.mailboxes }}
           FEED_USERS: ${{ inputs.feed_drive_users }}
           FEED_PATHS: ${{ inputs.feed_paths }}
+          FEED_FOLDERS: ${{ inputs.feed_list_folders }}
           # A SECRET, never a workflow input: inputs are printed in this public log's env block
           # (VERIFY-trinnex-onedrive-feed-1 D1 -- an earlier run printed the config that way).
           FEED_CONFIG: ${{ inputs.feed_dry_run && secrets.HUDDLE_ONEDRIVE_FEEDS || '' }}
@@ -136,10 +144,49 @@ jobs:
                   "https://graph.microsoft.com/v1.0/users/$u/drive/root:$p:/content")
                 CSUM=$(python3 -c '
           import json
+          raw=open("/tmp/f.json", encoding="utf-8", errors="replace").read()
           try:
-              d=json.load(open("/tmp/f.json"))
+              d=json.loads(raw)
           except Exception:
-              print("not JSON"); raise SystemExit
+              lines=[l for l in raw.splitlines() if l.strip()]
+              try:
+                  last=json.loads(lines[-1]) if lines else None
+              except Exception:
+                  last=None
+              if isinstance(last, dict):
+                  from collections import Counter
+                  recs=[]
+                  for l in lines:
+                      try:
+                          o=json.loads(l)
+                          if isinstance(o, dict): recs.append(o)
+                      except Exception:
+                          pass
+                  short=lambda v: v if isinstance(v,(bool,int)) or v is None or (isinstance(v,str) and len(v)<=24 and "@" not in v) else "<long/other>"
+                  lk=Counter(k for r in recs for k in r)
+                  st=Counter(str(short(r.get("status"))) for r in recs)
+                  src=Counter(str(short(r.get("source"))) for r in recs)
+                  syn=Counter(str(r.get("synthetic","<absent>")) for r in recs)
+                  msgs=[m for r in recs for m in (r.get("messages") if isinstance(r.get("messages"),list) else []) if isinstance(m,dict)]
+                  withm=sum(1 for r in recs if isinstance(r.get("messages"),list) and r.get("messages"))
+                  mk=Counter(k for m in msgs for k in m)
+                  fk=Counter(k for m in msgs if isinstance(m.get("from"),dict) for k in m["from"])
+                  fu=Counter(k for m in msgs if isinstance(m.get("from"),dict) and isinstance(m["from"].get("user"),dict) for k in m["from"]["user"])
+                  bt=Counter(("dict:"+",".join(sorted(m["body"].keys()))) if isinstance(m.get("body"),dict) else type(m.get("body")).__name__ for m in msgs)
+                  mt=Counter(str(short(m.get("messageType"))) for m in msgs)
+                  ct=Counter(str(short((m.get("body") or {}).get("contentType"))) for m in msgs if isinstance(m.get("body"),dict))
+                  ids=Counter((r.get("chatId") is not None) for r in recs)
+                  print("JSONL | lines", len(lines), "| parsed", len(recs), "| lines with messages", withm, "| messages total", len(msgs))
+                  print("   line keys (count):", dict(lk))
+                  print("   status values:", dict(st), "| source values:", dict(src), "| synthetic:", dict(syn), "| chatId present:", dict(ids))
+                  print("   message keys (count):", dict(mk))
+                  print("   from keys:", dict(fk), "| from.user keys:", dict(fu))
+                  print("   body types:", dict(bt), "| contentType:", dict(ct), "| messageType:", dict(mt))
+                  tsk=[k for k in ("createdDateTime","timestamp","lastModifiedDateTime") if mk.get(k)]
+                  print("   time keys present:", tsk, "| capturedAt range:", min((str(r.get("capturedAt",""))[:10] for r in recs), default="-"), "->", max((str(r.get("capturedAt",""))[:10] for r in recs), default="-"))
+              else:
+                  print("not JSON, not JSONL | lines", len(lines))
+              raise SystemExit
           v=((d.get("snapshot") or {}).get("value")) if isinstance(d,dict) else None
           print("feed_type", d.get("feed_type"), "| schema", d.get("schema_version"), "| complete", d.get("complete"),
                 "| synthetic", d.get("synthetic"), "| records", len(v) if isinstance(v,list) else "-",
@@ -157,6 +204,32 @@ jobs:
               done
             done
             echo "(403 on the item = the app lacks Files.Read.All / Files.ReadWrite.All application permission)"
+          fi
+
+          # 5b. LIST feed folders: name, size, modified time only (public logs: no content, no ids). A name
+          #     holding an address-like token (@) or a long digit run is masked.
+          if [ -n "${FEED_USERS// /}" ] && [ -n "${FEED_FOLDERS// /}" ]; then
+            echo "=== 5b. OneDrive feed folder listing (names/sizes/modified only) ==="
+            IFS=',' read -ra FU <<< "$FEED_USERS"; IFS=',' read -ra FF <<< "$FEED_FOLDERS"
+            for u in "${FU[@]}"; do
+              u=$(echo "$u" | xargs)
+              for f in "${FF[@]}"; do
+                f=$(echo "$f" | xargs)
+                L=$(curl -s -o /tmp/l.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+                  "https://graph.microsoft.com/v1.0/users/$u/drive/root:$f:/children?\$select=name,size,lastModifiedDateTime,folder,file&\$top=200")
+                echo "$f | list HTTP $L"
+                python3 -c '
+          import json, re
+          d=json.load(open("/tmp/l.json"))
+          e=(d.get("error") or {}).get("code")
+          if e: print("   error", e); raise SystemExit
+          for c in sorted(d.get("value") or [], key=lambda c: c.get("name","").lower()):
+              n=c.get("name","")
+              if "@" in n or re.search(r"\d{7,}", n): n="<masked name>"
+              kind="folder" if c.get("folder") is not None else "file"
+              print("   ", kind, n, "| size", c.get("size","-"), "| modified", c.get("lastModifiedDateTime","-"))' 2>/dev/null || echo "   (unreadable listing)"
+              done
+            done
           fi
 
           # 6. Dry-run the REAL feed files through the shipped code (validator, mapper, screen).

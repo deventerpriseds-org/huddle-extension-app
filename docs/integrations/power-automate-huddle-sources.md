@@ -77,9 +77,17 @@ and confirm `sent.json` has a record whose `conversationId` equals that email's 
 
 ## 2. Teams chat log (new) — the day's chat messages
 
-**Where:** the same `automation/email` folder (owner, 2026-11-12: "I am updating the teams chats to be in the
-same OneDrive folder as the trinnex emails"). **File name:** `huddle-source-log.jsonl`.
+**This flow ALREADY EXISTS** (read from the drive 2026-11-13: `/automation/Teams Chats/teams-chats.jsonl`, 50
+lines, all captured 2026-11-12). Huddle now reads it **where it is** — do not move or rename it. It needs exactly
+**one change**, below (★).
+
+**Where:** `/automation/Teams Chats/teams-chats.jsonl` (keep as is).
 **Schedule:** weekdays 6:00 pm Eastern (same as planned).
+
+**★ The one required change: add `"synthetic": false` to every line.** Today's lines have no `synthetic` key, and
+Huddle skips any line without it (a safety rule: an unmarked line could be test data). With it, every line is read.
+Nice to have (not required): `"chatName"` — the chat's topic or the other person's name — so the bell can say
+which chat is waiting.
 
 **Format: JSON Lines** — ONE JSON object per line, appended each run. Do **not** write a JSON array, and do not
 rewrite earlier lines. One line per chat per run is ideal.
@@ -88,11 +96,12 @@ rewrite earlier lines. One line per chat per run is ideal.
 
 | Field | Value | Required |
 |---|---|---|
-| `source` | `"power-automate-teams"` | yes |
-| `synthetic` | `false` (production) | **yes** (a line without it is skipped) |
+| `source` | `"teams"` (what the flow writes today) | yes |
+| `synthetic` ★ | `false` (production) | **yes — missing today; a line without it is skipped** |
 | `chatId` | the Teams chat id | yes |
 | `chatName` | the chat's topic / name | optional (shown in the bell) |
-| `capturedUtc` | when this line was written, ISO UTC | yes (never used as identity) |
+| `capturedAt` (or `capturedUtc`) | when this line was written, ISO UTC (the flow writes `capturedAt` today) | read, never used as identity |
+| `status` | the flow writes `"Pending"` today | ignored |
 | `messages` | array of the chat's messages for the day (below) | yes |
 
 **Each message** (the Teams "List messages in a chat" output has these; keep the names as-is):
@@ -116,14 +125,14 @@ other person. If the owner's messages are left out, every chat shows as "can't t
 **Example line** (made-up values, production shape):
 
 ```json
-{"source":"power-automate-teams","synthetic":false,"chatId":"19:chat-alpha@thread.example","chatName":"Alpha chat","capturedUtc":"2026-11-11T23:00:00Z","messages":[{"id":"1001","createdDateTime":"2026-11-10T14:00:00Z","body":{"contentType":"text","content":"Can you send me the Q3 deck by Friday?"},"from":{"user":{"id":"<other person's id>","displayName":"Pat Example"}}}]}
+{"source":"teams","synthetic":false,"chatId":"19:chat-alpha@thread.example","chatName":"Alpha chat","capturedAt":"2026-11-11T23:00:00Z","messages":[{"id":"1001","createdDateTime":"2026-11-10T14:00:00Z","body":{"contentType":"text","content":"Can you send me the Q3 deck by Friday?"},"from":{"user":{"id":"<other person's id>","displayName":"Pat Example"}}}]}
 ```
 
 ---
 
 ## Report back (to the Huddle session)
 
-1. The exact OneDrive paths and casing of `sent.json` and `huddle-source-log.jsonl`.
+1. The exact OneDrive path and casing of `sent.json` (the Teams file path is already known).
 2. ~~A sample of each file~~ — **not needed, and do not paste one:** production files hold real mail and chat
    text. Huddle checks the real files itself, structure and counts only.
 3. ~~The owner's own Teams user id~~ — **already received (2026-11-13), skip.** Only report it if the flow logs
