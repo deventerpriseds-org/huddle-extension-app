@@ -195,7 +195,7 @@ t("AC-1.8 tail read: the first (partial) line is dropped", (() => {
   const r = parseTeamsLog(tail, cfg, { dropFirstLine: true });
   return [r.rejected ?? "none", r.messages.map((m) => m.chatId), r.skippedLines];
 })(), ["none", ["c2", "c3"], 0]);
-t("AC-1.8 tail note says bytes not read, counts only", teamsParseNote({ messages: [], lines: 0, skippedLines: 0, skippedMessages: 0, skipped: {}, duplicates: 0 }, 1234), "tail read: first 1234 byte(s) not read");
+t("AC-1.8 tail note says bytes not read, counts only", teamsParseNote({ messages: [], lines: 0, skippedLines: 0, skippedMessages: 0, skipped: {}, duplicates: 0, captureChats: {} }, 1234), "kept 0 message(s) in 0 chat(s) from 0 line(s) tail read: first 1234 byte(s) not read");
 
 console.log("D. EMAIL SOURCE IDENTITY (AC-2.2, AC-2.3)");
 const NOW = Date.parse("2026-11-12T00:00:00Z");
