@@ -30,7 +30,7 @@ import {
 import { EXTRACTION_SCHEMA, EXTRACTION_SCHEMA_NAME, PROPOSALS_AGENT, PROPOSALS_HUDDLE, transcriptProposalText, type ProposalRow } from "./proposals";
 
 /** The cheap tier the minutes flow already uses for its Luna summaries. */
-const EXTRACT_MODEL = "gpt-5.6-luna";
+export const EXTRACT_MODEL = "gpt-5.6-luna";
 const EXTRACT_TIMEOUT_MS = 20_000;
 const TRANSCRIPT_BUDGET_MS = 25_000;
 const TRANSCRIPT_LOOKBACK_DAYS = 7;
@@ -51,7 +51,7 @@ async function scopeOf(email: string, extra: string[] = []): Promise<string[]> {
 }
 
 /** The existing strict-JSON model path (callOpenAIRouter: Responses + json_schema strict), bounded. */
-const extract: ExtractFn = async (instructions, input) => {
+export const extract: ExtractFn = async (instructions, input) => {
   const { callOpenAIRouter } = await import("../openai-responses.server");
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
