@@ -510,3 +510,55 @@ own words".
 | Mutation | Named test | Verdict |
 |---|---|---|
 | every-word rule back to strict majority | D6 a title that adds a content word is not grounded | FIRED (control EQUIVALENT), exit 0 |
+
+### Verifier loop-4 fix pass
+Source: `docs/qc-evidence/VERIFY-correspondence-proposals-4.md` on `claude_verify-correspondence-4`. Started at head
+`2cf5fa8d`, isolated worktree, only writer on the branch. Synthetic `.example` data only. Each defect is committed
+and pushed on its own. File-staleness items (5, 6) are written up in `IMPL-feed-staleness.md`.
+
+#### Item 12 -- origin/main merged first (commit 0cb6d8a0)
+`git merge origin/main` (20 commits: workflows, docs, ledgers, autowork, HuddleView, PolishView, focus). Clean
+auto-merge, no conflict markers; the `.claude/*.md` ledgers carry both sides. tsc clean; every suite unchanged, plus
+main's new `attention-focus` (all passed) and `confirm-ask-context` (21/21).
+
+#### D1 W1-W3, W4 (mso), W7 -- live work-email screen dropped visible text (commit ac0a5a8f)
+`src/features/huddle/lib/external-feeds/onedrive-feed.ts`
+- `stripHiddenElements` now walks every tag and keeps the stack of open ANCESTORS (`lengthAfterStartTag` /
+  `lengthAfterEndTag`). `elementEnd` takes those ancestors: a start tag whose implied closes pop an ancestor ends
+  the hidden element just before that tag. Covered: every p-end-tag-omission start tag (incl. void `<hr>`, checked
+  before the void skip), next `<li>` (search stops at special elements except address/div/p), next `<dd>`/`<dt>`,
+  heading after heading, cell/row/section in the same table. A hidden FORMATTING element (`a b big code em font i nobr
+  s small strike strong tt u`) is NOT ended this way: Chromium re-opens it, so its text stays hidden (W1b, PCLOSE-font-p).
+- W4: `mso-hide:all` removed from `HIDDEN_STYLE` (Outlook-desktop-only). Comments, incl. `<!--[if mso]>`, are still
+  removed as before. Result: exactly one copy of the text survives.
+- W7: `attrsOf` tokenizes the start tag (name, optional `=` double/single/bare value, first occurrence wins, a stray
+  quote belongs to the name). `styleOf`, `hasHiddenAttr` and `mayResize` read it, so `style=` inside another
+  attribute's value never hides.
+- Ground truth: `scripts/html-visible-text-truth.mjs` drives real Chromium (`/opt/pw-browsers/chromium-1243`,
+  `page.setContent`, `<!doctype html>`, blockquotes removed from the DOM because htmlToText drops quoted history on
+  purpose, then `document.body.innerText`) and writes 81 rows to `scripts/fixtures/html-visible-text-truth.json`.
+  `scripts/onedrive-feed-truth.test.ts` compares offline (whitespace-normalised).
+
+| Chromium comparison, 81 rows | rows identical to Chromium |
+|---|---|
+| origin/main (no hidden stripping at all: keeps hidden text, keeps the mso copy twice) | 8 |
+| branch before this pass (2cf5fa8d) | 27 |
+| branch now | **80** |
+
+The one non-identical row is `LEAK-formatting-reopened` (`<p><b style="display:none">pre</p><p>Wire 5000</p>`):
+Chromium re-opens the hidden `<b>` inside the next paragraph and hides it; htmlToText keeps "Wire 5000". It only
+ever KEEPS extra text (asserted by its own test). No row drops a word Chromium shows. W1, W2, W3, W4, W7: now
+identical to Chromium ("Please approve the budget by Friday?", "Can you sign the NDA today?", "Can you call the
+vendor?", "Can you sign the NDA?" once, "Can you approve the PO?"). W1b: `""`, as Chromium.
+
+- Suites: task-proposals 198/0, redteam 70/0, ingest 149/0, onedrive-feed all passed, onedrive-feed-truth 11/0,
+  inbound-email 72/0, cross-app-turn-gate 92/0, feed-staleness 66/0, attention all passed; tsc clean.
+
+| Mutation (mutate.sh, anchors written from the committed line) | Named test | Verdict |
+|---|---|---|
+| ancestor-close check disabled (`false &&`) | TRUTH W1-W3 ... ends where its <p>/<li> parent ends | FIRED (control EQUIVALENT), exit 0 |
+| formatting-element exception removed | TRUTH W1b a hidden FORMATTING element ... stays hidden | FIRED (control EQUIVALENT), exit 0 |
+| `<li>`/`<dd>`/`<dt>` search removed | TRUTH <li>/<dd>/<dt> closes | FIRED (control EQUIVALENT), exit 0 |
+| void skip moved back before the close checks | TRUTH every p-end-tag-omission closer ... | FIRED (control EQUIVALENT), exit 0 |
+| `mso-hide:all` back in `HIDDEN_STYLE` | TRUTH W4 + mso | FIRED (control EQUIVALENT), exit 0 |
+| `styleOf` back to the in-tag regex | TRUTH W7 + attributes | FIRED (control EQUIVALENT), exit 0 |
