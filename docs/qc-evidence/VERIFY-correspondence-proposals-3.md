@@ -127,3 +127,26 @@ Cause: `htmlToText` drops `<img>` and `<emoji>` with their `alt`, then `:204` tr
   stops writing `capturedAt` hides any drop (`latest` stays the last dated day, `previous:null`).
 - A dated capture with an offset (`19:30-05:00`) is filed under the UTC day (11-13). Consistent, but see misfire.
 - It changes no behaviour (status note text only), so severity is note/minor.
+
+## SQL suites (local PostgreSQL 16) and fireflies
+
+- `task-proposals-sql` 45 passed / 0 failed; `correspondence-ledger-sql` 50/0; `fireflies-queue-sql` all passed.
+- `fireflies-minutes` 3 FAILED (G3, G5, G8). The branch's only diff under `lib/fireflies/` is adding `export` to
+  `fetchTranscript`; the test file is unchanged. Inference (high confidence, not re-run on main): pre-existing.
+
+## Claim (b): red-team findings on the proposal validator, new spellings (`scripts/verify3-proposals-probes.ts`)
+
+| finding | status | new-spelling evidence |
+|---|---|---|
+| F3 impossible dates | CLOSED | `2026-02-30`, `2026-13-45`, `Feb 30`, `31 April`, `2027-02-29`, `30th of February`, `11/31`, `13/1` -> null, no throw |
+| F4 invented detail rides on a shared verb | **OPEN (numbers only fixed)** | evidence "pay the vendor invoice this week" grounds title "Pay the vendor invoice **twice**" and "Pay **all** vendor invoices **from the reserve fund**" -> ACCEPTED. Amounts/account numbers are refused (`task_number_not_grounded`). |
+| F5 pleasantry grounds an invented task | **OPEN (only the 8-char spelling fixed)** | source "We loved the deck you sent last week, thanks!", evidence "loved the deck you sent last week", title "Redo the deck you sent" -> ACCEPTED; "Thanks for sending the budget review yesterday" -> "Send the budget review" ACCEPTED |
+| F7 negation | **OPEN** | ACCEPTED: "Under no circumstances should you send the contract...", "Never, ever send the contract..." (comma splits the clause), "Please don't, under any circumstances, send the contract...", "Avoid sending...", "Refrain from sending...", "There is no reason to send...". Control "Please do NOT send..." refused. Cause `proposals.ts` `negatesAction` (last clause after `,;:` only, fixed word list). |
+| F10 due_text date words only | CLOSED for the date, MINOR display | `due_text:"may"` (modal verb) and `"3"` (a quantity) are KEPT as `dueText` (due date stays null) -- `isDateWords` accepts them; whether `dueText` is shown in the row decides impact |
+| F11 month prefixes / negated date | CLOSED | "march the proposal" with due "by Friday" -> Friday; no March |
+| F12 assignee | CLOSED on probes | "Dana said to send..." -> null; "send the deck to Dana" -> null |
+| F13 look-alikes | CLOSED | ZWSP, fullwidth, Cyrillic e, soft hyphen, word joiner, RLO -> same `titleKey` |
+
+Mitigation worth stating: every accepted row shows the WHOLE enclosing sentence as evidence, and nothing reaches the
+board without the owner's Approve. So F4/F5/F7 put a wrong to-do in front of the owner with the contradicting
+sentence beside it; they do not create a board task on their own.
