@@ -10,7 +10,7 @@ import { appendFileSync } from "node:fs";
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = decodeURIComponent(String(input));
   const method = String(init?.method ?? "GET");
-  if (process.env.STUB_LOG) appendFileSync(process.env.STUB_LOG, `${method} ${url.includes("sendMail") ? "sendMail" : url.includes("Huddle Preview") ? "preview-file" : "feed"}\n`);
+  if (process.env.STUB_LOG) appendFileSync(process.env.STUB_LOG, `${method} ${url.includes("sendMail") ? "sendMail" : url.includes("Huddle Preview") ? (decodeURIComponent(url).includes(".html") ? "preview-html" : "preview-file") : "feed"}\n`);
   if (method === "PUT") return new Response("{}", { status: 201 });
   if (url.includes("sendMail")) return new Response("", { status: 202 });
   const body = url.includes("sent.json") ? process.env.STUB_SENT : /teams/i.test(url) ? process.env.STUB_TEAMS : process.env.STUB_EMAIL;
