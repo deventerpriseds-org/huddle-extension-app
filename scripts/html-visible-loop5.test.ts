@@ -53,6 +53,7 @@ t("CSS !important none beats a later normal block", norm(htmlToText('<div style=
 // Verifier loop 6 repros.
 t("CSS display:none after a CSS comment still hides (the hide direction of comment stripping)", norm(htmlToText('<div style="/* c */ display:none">Wire 5000</div><p>shown</p>')), "shown");
 t("CSS a ';' inside a quoted CSS string does not split the declaration after it", norm(htmlToText(`<div style='font-family:"a;b"; display:block'>Can you call me?</div>`)), "Can you call me?");
+t("CSS 'display:none' INSIDE a quoted string is not a declaration (no false hide)", norm(htmlToText(`<div style='font-family:"a;display:none;b"'>Can you call me?</div>`)), "Can you call me?");
 t("DEPTH 405 nested <div>s keep their text (keep-more past the depth guard, never drop)", norm(htmlToText("<div>".repeat(405) + "Can you sign?")), "Can you sign?");
 t("DEPTH a hidden ancestor above the depth guard still hides the deep text", norm(htmlToText('<div style="display:none">' + "<div>".repeat(405) + "Wire 5000" + "</div>".repeat(406) + "<p>shown</p>")), "shown");
 t("IMPLIED an implied </p> adds no line break: main's line structure, so the live ask decision matches main",
