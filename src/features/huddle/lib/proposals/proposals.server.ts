@@ -20,6 +20,7 @@ import {
   decideProposal,
   deliverEveningProposals,
   editProposal,
+  conversationProposalsProcessor,
   proposalChecklistResult,
   proposalsProcessor,
   runTranscriptProposals,
@@ -89,6 +90,21 @@ export async function makeProposalsProcessor(): Promise<ItemProcessor | null> {
   const cfg = proposalsConfig();
   if (!cfg) return null;
   const d = await deps(cfg.owner);
+  if (cfg.correspondence.conversations === true) {
+    // Needs-you redesign (AC-R6, flag correspondence.conversations): one source per conversation, owner as doer.
+    return conversationProposalsProcessor({
+      ...d,
+      owner: () => cfg.owner,
+      mailbox: () => cfg.mailbox,
+      log: (l) => console.log(l),
+      needsYou: async () => {
+        const { ownerAddressSet } = await import("../correspondence/needs-you");
+        const { loadFeedSent } = await import("../email/email-replies.server");
+        const sent = await loadFeedSent(cfg.owner).catch(() => null);
+        return { ownerAddresses: ownerAddressSet(cfg), ownerNames: cfg.correspondence.ownerNames, latestSent: sent ?? new Map(), sentKnown: !!sent && sent.size > 0 };
+      },
+    });
+  }
   return proposalsProcessor({ ...d, owner: () => cfg.owner, mailbox: () => cfg.mailbox, log: (l) => console.log(l) });
 }
 

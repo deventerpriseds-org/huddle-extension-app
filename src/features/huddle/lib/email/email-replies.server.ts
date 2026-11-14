@@ -290,7 +290,7 @@ export async function reconcileRepliedFromSentItems(
 
 /** The work Sent Items snapshot as latest-sent-per-conversation, or null when it is not configured, not
  *  this owner's, or unreadable (=> no change to today's behaviour). Read through the existing feed reader. */
-async function loadFeedSent(ownerEmail: string): Promise<Map<string, number> | null> {
+export async function loadFeedSent(ownerEmail: string): Promise<Map<string, number> | null> {
   const { getFeedsConfig, readFeed } = await import("../external-feeds/onedrive-feed.server");
   const { feedBelongsTo, latestSentByConversation, mapSentRecords } = await import("../external-feeds/onedrive-feed");
   const cfg = getFeedsConfig();

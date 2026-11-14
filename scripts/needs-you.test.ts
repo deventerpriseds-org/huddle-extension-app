@@ -35,7 +35,9 @@ import {
   type NeedsYouContext,
   type TodoSegment,
 } from "../src/features/huddle/lib/correspondence/needs-you";
-import type { TeamsMessage } from "../src/features/huddle/lib/correspondence/source-item";
+import type { SourceItem, TeamsMessage } from "../src/features/huddle/lib/correspondence/source-item";
+import { conversationProposalsProcessor } from "../src/features/huddle/lib/proposals/engine";
+import type { ProposalStore } from "../src/features/huddle/lib/proposals/proposals";
 
 let pass = 0;
 let fail = 0;
@@ -196,7 +198,7 @@ t("AC-R2.8 a zoneless received time is read as UTC (sent 10:30Z settles a 10:00 
   classifyEmailConversation("k", [em({ conversationId: "c28", receivedDateTime: "2026-11-10T10:00:00" })], ctx({ latestSent: new Map([["c28", Date.parse("2026-11-10T09:30:00Z")]]) })).verdict,
 ], ["replied", "needs_reply"]);
 t("AC-R2.13 a forward with a NEW conversationId is its own conversation (grouping by id, never subject)", classifyEmailConversations(MB, [em({ conversationId: "orig", subject: "Plan" }), em({ conversationId: "fwd", subject: "Fw: Plan" })], ctx()).length, 2);
-t("R2 no conversationId -> its own conversation keyed by message id", classifyEmailConversations(MB, [em({ conversationId: null }), em({ conversationId: null })], ctx()).map((c) => c.key.includes("\u0000msg:")), [true, true]);
+t("R2 no conversationId -> its own conversation keyed by message id", classifyEmailConversations(MB, [em({ conversationId: null }), em({ conversationId: null })], ctx()).map((c) => c.key.includes(":msg:")), [true, true]);
 
 // ── Teams: mentions (S-D), chat kind (S-E), chat verdicts (R2.10-2.12, OQ-5) ───────────────────────
 const OID = "aaaa-owner";
@@ -323,6 +325,96 @@ t("AC-R1.4 the optional mapper fields change NO live verdict, ask or directive",
 }
 t("mapFeedMessage: a record without the new fields maps with NO new keys (exactly as before)", Object.keys(mapFeedMessage({ id: "x", subject: "s" }, MB)).filter((k) => ["toRecipients", "ccRecipients", "contentClass"].includes(k)), []);
 t("mapFeedMessage: carries toRecipients / ccRecipients when present", [mapFeedMessage({ id: "x", toRecipients: "a@work.example;b@work.example", ccRecipients: "" }, MB).toRecipients, mapFeedMessage({ id: "x", ccRecipients: "" }, MB).ccRecipients], ["a@work.example;b@work.example", ""]);
+
+// ── Q: the per-conversation proposals processor (AC-R6.1/6.2/6.3/6.6/6.8/6.9) ──────────────────────
+{
+  type Up = Parameters<ProposalStore["upsert"]>[0];
+  const memProps = () => {
+    const rows: Up[] = [];
+    const refs = new Map<string, string>();
+    const store = {
+      rows,
+      async upsert(p: Up) {
+        const rk = [p.ref.source, p.ref.sourceItemId, p.normTitle].join("|");
+        if (refs.has(rk)) return { kind: "seen" as const, id: refs.get(rk)! };
+        rows.push(p);
+        refs.set(rk, p.id);
+        return { kind: "created" as const, id: p.id };
+      },
+      async priorRelated() {
+        return [];
+      },
+    };
+    return store as unknown as ProposalStore & { rows: Up[] };
+  };
+  const eItem = (m: FeedInboundMessage): SourceItem => ({ source: "email", sourceItemId: m.id.replace(/^feed:/, ""), identityBasis: "provider_id", threadId: m.conversationId ?? null, at: m.receivedDateTime ?? null, contentHash: "h", drivePath: null, driveItemId: null, fileEtag: null, internetMessageId: null, email: m });
+  const tItem = (m: TeamsMessage): SourceItem => ({ source: "teams", sourceItemId: `${m.chatId}:${m.messageId}`, identityBasis: "provider_id", threadId: m.chatId, at: m.at, contentHash: "h", drivePath: null, driveItemId: null, fileEtag: null, internetMessageId: null, teams: m });
+  // The stub model returns the to-dos it is told to, with evidence copied from the input when present.
+  const stubModel = (tasks: Array<{ task: string; evidence: string; assignee: string | null }>) => {
+    const calls: string[] = [];
+    const extract = async (_i: string, input: string) => {
+      calls.push(input);
+      return { tasks: tasks.filter((x) => input.includes(x.evidence)).map((x) => ({ ...x, due_text: null })) };
+    };
+    return { calls, extract };
+  };
+  const runProc = async (items: SourceItem[], tasks: Parameters<typeof stubModel>[0], c = ctx()) => {
+    const store = memProps();
+    const model = stubModel(tasks);
+    const proc = conversationProposalsProcessor({ store, extract: model.extract, openTitles: async () => null, tz: "America/New_York", owner: () => "me@eds.example", mailbox: () => MB, needsYou: async () => c });
+    for (const it of items) await proc.process(it, { owner: "me@eds.example", nowMs: 0, batch: items });
+    return { store, model };
+  };
+  const conv = [
+    em({ conversationId: "q1", at: "2026-11-10T09:00:00Z", fromAddress: "a@work.example", bodyText: "Please send the quarterly budget deck by Friday." }),
+    em({ conversationId: "q1", at: "2026-11-10T10:00:00Z", fromAddress: "b@work.example", subject: "Re: Budget numbers", bodyText: "Dana will update the hiring plan spreadsheet." }),
+    em({ conversationId: "q1", at: "2026-11-10T11:00:00Z", fromAddress: "a@work.example", subject: "Re: Budget numbers", bodyText: "Also please review the vendor contract draft." }),
+  ];
+  const TASKS = [
+    { task: "Send the quarterly budget deck", evidence: "Please send the quarterly budget deck by Friday", assignee: null },
+    { task: "Update the hiring plan spreadsheet", evidence: "Dana will update the hiring plan spreadsheet", assignee: "Dana" },
+    { task: "Review the vendor contract draft", evidence: "please review the vendor contract draft", assignee: null },
+  ];
+  const r1 = await runProc(conv.map(eItem), TASKS);
+  t("AC-R6.2 3 messages of ONE conversation -> ONE extraction call", r1.model.calls.length, 1);
+  t("AC-R6.3 the item assigned to Dana is dropped; the owner's two remain", r1.store.rows.map((r) => r.title).sort(), ["Review the vendor contract draft", "Send the quarterly budget deck"]);
+  t("AC-R6.8 every to-do shares ONE source_item_id = the conversation key", [...new Set(r1.store.rows.map((r) => r.ref.sourceItemId))], [`${MB}:conv:q1`]);
+  const again = await (async () => {
+    const store = r1.store;
+    const proc = conversationProposalsProcessor({ store, extract: stubModel(TASKS).extract, openTitles: async () => null, tz: "America/New_York", owner: () => "me@eds.example", mailbox: () => MB, needsYou: async () => ctx() });
+    const items = [...conv, em({ conversationId: "q1", at: "2026-11-10T12:00:00Z", fromAddress: "a@work.example", subject: "Re: Budget numbers", bodyText: "thanks" })].map(eItem);
+    for (const it of items) await proc.process(it, { owner: "me@eds.example", nowMs: 0, batch: items });
+    return store.rows.length;
+  })();
+  t("AC-R6.9 re-processing the conversation after a new message re-proposes nothing (refs keyed on the conversation)", again, 2);
+  for (const [label, m] of [
+    ["not_addressed", em({ conversationId: "q2", toRecipients: "dl-all@work.example", bodyText: "Please send the quarterly budget deck by Friday." })],
+    ["automated", em({ conversationId: "q3", headerNames: ["list-unsubscribe"], bodyText: "Please send the quarterly budget deck by Friday." })],
+    ["invite", em({ conversationId: "q4", headerNames: ["x-ms-exchange-calendar-originator-id"], bodyText: "Please send the quarterly budget deck by Friday." })],
+    ["minutes", em({ conversationId: "q5", subject: "Meeting Minutes: Budget sync", bodyText: "Please send the quarterly budget deck by Friday." })],
+  ] as const) {
+    const r = await runProc([eItem(m)], TASKS);
+    t(`AC-R6.1 a ${label} conversation -> ZERO extraction calls`, r.model.calls.length, 0);
+  }
+  const own = await runProc([eItem(em({ conversationId: "q6", fromAddress: OWNER, toRecipients: "pat@work.example", bodyText: "I'll send the deck Friday to the whole team." }))], [{ task: "Send the deck", evidence: "I'll send the deck Friday to the whole team", assignee: null }]);
+  t("AC-R6.6 the owner's own first-person commitment is a source and is proposed", own.store.rows.map((r) => r.title), ["Send the deck"]);
+  const ccOnly = await runProc([eItem(em({ conversationId: "q7", toRecipients: "pat@work.example", ccRecipients: OWNER, bodyText: "Can you send the quarterly budget deck by Friday?" }))], [{ task: "Send the quarterly budget deck", evidence: "Can you send the quarterly budget deck by Friday", assignee: null }]);
+  t("OQ-3 CC-only: extraction runs (reply list) but the unnamed to-do is NOT proposed (doer_unclear)", [ccOnly.model.calls.length, ccOnly.store.rows.length], [1, 0]);
+  const replied = await runProc([eItem(em({ conversationId: "q8", fromAddress: OWNER, toRecipients: "pat@work.example", at: "2026-11-10T12:00:00Z", bodyText: "I will send the signed contract tomorrow morning." })), eItem(em({ conversationId: "q8", at: "2026-11-10T09:00:00Z", bodyText: "Can you sign the contract?" }))], [{ task: "Send the signed contract", evidence: "I will send the signed contract tomorrow morning", assignee: null }]);
+  t("AC-R6.10 a commitment in a thread now 'replied' is still proposed", replied.store.rows.length, 1);
+  const chat = [owner(ONE, { text: "Sure." }), tm(ONE, { text: "Please send the quarterly budget deck by Friday." }), tm(ONE, { text: "And please review the vendor contract draft." })];
+  const tr = await runProc(chat.map(tItem), TASKS);
+  t("AC-R6.2/6.4 a 1:1 chat: ONE extraction, null-assignee asks kept for the owner", [tr.model.calls.length, tr.store.rows.length, tr.store.rows[0]?.ref.sourceItemId], [1, 2, ONE]);
+  const big = [owner(GRP), tm(GRP, { senderId: "p1" }), tm(GRP, { senderId: "p3" }), tm(GRP, { senderId: "p2", text: "Please send the quarterly budget deck by Friday." })];
+  const gr = await runProc(big.map(tItem), TASKS);
+  t("AC-R6.5 a group chat (3 others), no @mention: extraction runs (fyi chat) but the doer is unclear -> not proposed", gr.store.rows.length, 0);
+}
+
+// ── Z: zero-call when the switch is OFF (AC-R9.2) ──────────────────────────────────────────────────
+{
+  const src = readFileSync(new URL("../src/features/huddle/lib/proposals/proposals.server.ts", import.meta.url).pathname, "utf8");
+  t("AC-R9.2 the conversation processor is only built behind correspondence.conversations === true; else the original processor", [/if \(cfg\.correspondence\.conversations === true\) \{[\s\S]*conversationProposalsProcessor\(/.test(src), /return proposalsProcessor\(\{ \.\.\.d, owner/.test(src)], [true, true]);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

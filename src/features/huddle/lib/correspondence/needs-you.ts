@@ -215,7 +215,8 @@ export interface NeedsYouContext {
 
 export interface ConversationVerdict {
   source: "email" | "teams";
-  /** email: "<mailbox>\u0000<conversationId>" (or "\u0000msg:<id>" with no conversation id); teams: the chat id. */
+  /** email: "<mailbox>:conv:<conversationId>" (or "<mailbox>:msg:<message id>" with no conversation id); teams: the
+   *  chat id. No NUL separator: the key is stored as a proposal ref's source_item_id (Postgres text). */
   key: string;
   verdict: NeedsYouVerdict;
   /** A short reason NAME (safe to count/log), or null. */
@@ -229,7 +230,7 @@ export interface ConversationVerdict {
 
 /** Pure: the conversation key of an email (AC shared definitions). */
 export function emailConversationKey(mailbox: string, m: Pick<FeedInboundMessage, "id" | "conversationId">): string {
-  return m.conversationId ? `${mailbox}\u0000${m.conversationId}` : `${mailbox}\u0000msg:${m.id}`;
+  return m.conversationId ? `${mailbox}:conv:${m.conversationId}` : `${mailbox}:msg:${m.id}`;
 }
 
 const msOf = (m: { receivedDateTime?: string | null }) => parseUtcMs(m.receivedDateTime ?? "");

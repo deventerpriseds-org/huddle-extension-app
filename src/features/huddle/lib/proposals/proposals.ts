@@ -164,7 +164,11 @@ export type RejectReason =
   | "task_not_grounded"
   | "task_number_not_grounded"
   | "duplicate_in_batch"
-  | "over_cap";
+  | "over_cap"
+  /** Needs-you redesign (AC-R6.3/6.5/6.6): the owner is not the doer of this to-do. */
+  | "assigned_to_other"
+  | "doer_unclear"
+  | "not_owner_commitment";
 
 export interface ValidCandidate {
   title: string;
