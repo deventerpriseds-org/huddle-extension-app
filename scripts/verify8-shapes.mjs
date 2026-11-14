@@ -86,5 +86,18 @@ export const SHAPES = [
   ["deep-500-visible-ask", `${"<div>".repeat(500)}${ASK}${"</div>".repeat(500)}`],
   // reply header inside hidden, Gmail realistic
   ["reply-div-hidden", `<p>${ASK}</p><div style="display:none" id="divRplyFwdMsg">x</div><p>tail</p>`],
-  ["outlook-realistic", `<html><head><style><!-- p.MsoNormal{margin:0} --></style></head><body lang=EN-US><div class=WordSection1><p class=MsoNormal><span style='font-size:11.0pt;font-family:"Calibri",sans-serif'>${ASK}<o:p></o:p></span></p></div><div id="divRplyFwdMsg"><b>From:</b> x<br><b>Sent:</b> y</div><p>old?</p></body></html>`],
+  ["outlook-realistic",`<html><head><style><!-- p.MsoNormal{margin:0} --></style></head><body lang=EN-US><div class=WordSection1><p class=MsoNormal><span style='font-size:11.0pt;font-family:"Calibri",sans-serif'>${ASK}<o:p></o:p></span></p></div><div id="divRplyFwdMsg"><b>From:</b> x<br><b>Sent:</b> y</div><p>old?</p></body></html>`],
+];
+
+// Odd quote counts inside a tag (quote outside an attribute VALUE): the browser ends the tag at the first `>`;
+// a regex that opens a quoted run on ANY quote character does not.
+export const QUOTE_SHAPES = [
+  ["q-inch-mark-in-dq-value", `<p><img alt="27" monitor" src="x.png">${ASK} It's for the new desk.</p>`],
+  ["q-mailto-apostrophe-unquoted", `<p><a href=mailto:o'neil@corp.example>Dana O'Neil</a> wrote to us. ${ASK}</p>`],
+  ["q-attr-name-apostrophe", `<p><div data-note it's>${ASK}</div> I'm around.</p>`],
+  ["q-trailing-quote-after-value", `<p><a href="x"'>Link</a> ${ASK} Let's talk.</p>`],
+  ["q-odd-dq-then-later-dq-attr", `<p><span title=6">${ASK}</span> then <b class="x">ok</b></p>`],
+  ["q-balanced-sq-style-control", `<p><span style='font-family:"Calibri",sans-serif'>${ASK}</span> It's fine.</p>`],
+  ["q-unquoted-value-with-quotes-control", `<p><span style=font-family:'Arial'>${ASK}</span> ok</p>`],
+  ["q-inch-no-later-quote", `<p><img alt="27" monitor">${ASK}</p>`],
 ];
