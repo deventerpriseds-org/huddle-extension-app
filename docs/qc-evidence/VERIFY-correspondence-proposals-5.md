@@ -81,3 +81,20 @@ b7dd9343 adds no merge; `git log 03cabacc..b7dd9343` is the 2 feature commits on
 | task-proposals-sql / correspondence-ledger-sql / fireflies-queue-sql | 45, 50, -- | 45/0, 50/0, 14/0 |
 | fireflies-minutes | -- | 64 pass / **3 FAIL (G3, G5, G8)** -- **pre-existing: origin/main bc6bd661 fails the same 3**; the branch's only fireflies diff is `export` on `fetchTranscript`. Not caused by this branch. |
 | `tsc --noEmit` | -- | 0 errors at b7dd9343; 0 at origin/main |
+
+---
+
+## RESTART 3 (2026-11-14 01:35 UTC) -- re-targeted to 0396f71a
+
+Budget re-based: this run ends 04:35 UTC. Verify branch = fb22507b + merge of 0396f71a (ec4d4c29).
+`git diff b7dd9343 0396f71a --stat` = exactly 3 files: `scripts/fixtures/preview-fetch-stub.ts` (2 +-),
+`scripts/proposals-preview.test.ts` (+1), `scripts/proposals-preview.ts` (+33 -3). **No `src/` change**, so every
+Claim-0 suite result at b7dd9343 carries to 0396f71a except the preview suite. `git diff 0396f71a HEAD -- src
+scripts/proposals-preview* scripts/fixtures` is empty.
+
+## Claim 0c: suites changed by 0396f71a
+
+| suite | implementer | observed at 0396f71a |
+|---|---|---|
+| proposals-preview | 6/0 | **6/0** (PV-1..PV-6) |
+| `tsc --noEmit` | -- | **exit 0, no output** |
