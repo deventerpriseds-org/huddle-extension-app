@@ -529,6 +529,31 @@ function countingDeps(meta: FeedMeta) {
     notifyUrgent: async () => (urgent.push("OFF"), true),
   });
   t("I21 flag OFF: no status read, no announcement", [off, asked.filter((a) => a.startsWith("OFF")).length, urgent.includes("OFF")], [null, 0, false]);
+  // Verifier loop 6, U5: the sent reader may never run again; the check reads the newer copy itself.
+  const refreshes: string[] = [];
+  const stuck = async (status: string) =>
+    runFeedStalenessCheck(cfgWith({ staleAlerts: true }, { sent: true }), {
+      readMeta: async () => ok("2026-11-13T15:55:00Z"),
+      store: twin().store,
+      now: () => now + H,
+      log: () => {},
+      readStatus: async () => ({ status: INCOMPLETE_STATUS, checkedMs: U("2026-11-13T14:50:00Z") }),
+      refreshRead: async (_c, file) => (refreshes.push(file), { status, checkedMs: U("2026-11-13T16:05:00Z") }),
+    });
+  const fixed = await stuck("ok");
+  const still = await stuck(INCOMPLETE_STATUS);
+  t("I24 U5: an unread newer copy after an incomplete read is READ by the check: fixed file -> fresh, still incomplete -> incomplete",
+    [fixed?.states.sent, still?.states.sent, refreshes.length > 0], ["fresh", "incomplete", true]);
+  const r0 = refreshes.length;
+  await runFeedStalenessCheck(cfgWith({ staleAlerts: true }, { sent: true }), {
+    readMeta: async () => ok("2026-11-13T14:30:00Z"),
+    store: twin().store,
+    now: () => now,
+    log: () => {},
+    readStatus: async () => ({ status: INCOMPLETE_STATUS, checkedMs: U("2026-11-13T14:31:00Z") }),
+    refreshRead: async (_c, file) => (refreshes.push(file), null),
+  });
+  t("I25 U5: no extra read when the last read already covers the current copy", refreshes.length, r0);
   t("I22 chat directive + email body name the problem and the fix, and say it is not from the user",
     [/not a message from the user/.test(urgentFeedDirective("T", "D")), /Do not call any tools/.test(urgentFeedDirective("T", "D")), urgentFeedEmailBody("T", "D").startsWith("T.\n\nD")],
     [true, true, true]);

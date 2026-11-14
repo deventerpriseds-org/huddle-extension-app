@@ -503,3 +503,5 @@ const memStore = () => {
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
+// Verifier loop 6: a failing check must fail the run (it used to exit 0 on failures).
+if (fail) process.exit(1);

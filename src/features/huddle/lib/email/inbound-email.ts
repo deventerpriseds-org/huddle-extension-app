@@ -147,8 +147,8 @@ export function newTextOnly(body: string): string {
     if (isAttribution(l) || /^-{2,}\s*(Original Message|Message d'origine|Ursprüngliche Nachricht|Mensaje original|Messaggio originale|Oorspronkelijk bericht)\s*-{2,}/i.test(l)) break;
     // NO two-line ("On ..." / "wrote:") join here: owner 2026-11-14 -- Iris's live email alerts "are already good, this
     // doesn't need to impact it". The join (red-team F9) was a fourth live change he did not approve, so a wrapped
-    // attribution is treated exactly as on main. `isWrappedAttribution` is kept for the correspondence report's own
-    // thread logic, which does not run through this function.
+    // attribution is treated exactly as on main. `isWrappedAttribution` stays exported and tested (redteam D2) but has
+    // NO caller in src/ today; it is available to the correspondence redesign if it needs one (verifier loop 6 nit).
     if (HDR_PAIRS.some(([from, sent]) => from.test(l) && lines.slice(i + 1, i + 5).some((n) => sent.test(n)))) break;
     if (/^\s*>/.test(l)) continue;
     out.push(l);

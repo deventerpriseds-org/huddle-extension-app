@@ -17,6 +17,7 @@
 import type { OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
 import { EMAIL_ALERT_HUDDLE } from "../attention/attention";
 import {
+  INCOMPLETE_STATUS,
   applyFeedStaleness,
   stalenessLogLine,
   type FeedAlertStore,
@@ -47,6 +48,10 @@ export interface StalenessDeps {
   readStatus?(cfg: OneDriveFeedsConfig, file: "email" | "sent"): Promise<FeedReadStatus | null>;
   /** Iris chat + email for a NEW incomplete episode (owner 2026-11-13: incomplete is urgent). */
   notifyUrgent?: FeedUrgentNotifier;
+  /** Read the file NOW with the existing reader (readFeed) and return its fresh status. Used only when the last read
+   *  was incomplete and the drive already holds a newer copy nobody has read: the sent reader runs only while an
+   *  owed work email exists, so waiting for it could hold the incident open forever (verifier loop 6, U5). */
+  refreshRead?(cfg: OneDriveFeedsConfig, file: "email" | "sent"): Promise<FeedReadStatus | null>;
 }
 
 /** One check, every dependency injected (the offline suite runs it with fakes). Returns null when OFF. */
@@ -59,7 +64,16 @@ export async function runFeedStalenessCheck(cfg: OneDriveFeedsConfig | null, dep
   const checked: { file: FeedFile; meta: FeedMeta; read: FeedReadStatus | null }[] = [];
   for (const f of files) {
     const meta = await deps.readMeta(cfg, f.path);
-    const read = f.file !== "teams" && deps.readStatus ? await deps.readStatus(cfg, f.file).catch(() => null) : null;
+    let read = f.file !== "teams" && deps.readStatus ? await deps.readStatus(cfg, f.file).catch(() => null) : null;
+    if (
+      f.file !== "teams" &&
+      read?.status === INCOMPLETE_STATUS &&
+      meta.kind === "ok" &&
+      read.checkedMs < meta.lastModifiedMs &&
+      deps.refreshRead
+    ) {
+      read = (await deps.refreshRead(cfg, f.file).catch(() => null)) ?? read;
+    }
     checked.push({ file: f.file, meta, read });
   }
   const rep = await applyFeedStaleness(owner, checked, deps.now(), cfg.correspondence.staleHours, deps.store, deps.notifyUrgent);
@@ -79,7 +93,7 @@ export function runFeedStaleness(cfg: OneDriveFeedsConfig | null): Promise<Stale
   lastCheckMs = now;
   running = (async () => {
     try {
-      const { readFeedFileMeta, readFeedStatus } = await import("../external-feeds/onedrive-feed.server");
+      const { readFeed, readFeedFileMeta, readFeedStatus } = await import("../external-feeds/onedrive-feed.server");
       const ledger = await import("../email/email-replies.server");
       return await runFeedStalenessCheck(cfg, {
         readMeta: readFeedFileMeta,
@@ -88,6 +102,10 @@ export function runFeedStaleness(cfg: OneDriveFeedsConfig | null): Promise<Stale
         log: (line) => console.log(line),
         readStatus: readFeedStatus,
         notifyUrgent: announceUrgentFeed,
+        refreshRead: async (c, file) => {
+          await readFeed(c, file);
+          return readFeedStatus(c, file);
+        },
       });
     } catch (e) {
       console.error("[feed-staleness] check failed", e instanceof Error ? e.name : "error");

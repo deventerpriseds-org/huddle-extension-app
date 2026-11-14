@@ -30,6 +30,8 @@ import { parse } from "parse5";
 
 type Node = {
   nodeName: string;
+  /** With `sourceCodeLocationInfo`: where the element's start / end tag sat in the SOURCE (absent = implied). */
+  sourceCodeLocation?: { startTag?: unknown; endTag?: unknown } | null;
   tagName?: string;
   value?: string;
   attrs?: { name: string; value: string }[];
@@ -39,10 +41,39 @@ type Node = {
 
 const NEVER_TEXT = new Set(["head", "script", "style", "template", "noscript", "title", "#comment", "#documentType"]);
 
+/** Pure: split a declaration list on `;` the way CSS does -- never inside a quoted string or parentheses
+ *  (verifier loop 6: `content:"a;b"` must not cut the declaration after it in two). */
+function splitDeclarations(style: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  let depth = 0;
+  for (let i = 0; i < style.length; i++) {
+    const c = style[i];
+    if (quote) {
+      if (c === "\\" && i + 1 < style.length) {
+        cur += c + style[++i];
+        continue;
+      }
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === "(") depth++;
+    else if (c === ")" && depth > 0) depth--;
+    else if (c === ";" && depth === 0) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
 /** Pure: the inline style's declarations, browser rules: last wins, !important wins, comments ignored. */
 export function styleDeclarations(style: string): Map<string, string> {
   const out = new Map<string, { v: string; imp: boolean }>();
-  for (const decl of style.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, " ").split(";")) {
+  for (const decl of splitDeclarations(style.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, " "))) {
     const i = decl.indexOf(":");
     if (i < 0) continue;
     const prop = decl.slice(0, i).trim().toLowerCase();
@@ -126,13 +157,31 @@ export function visibleHtml(html: string): string {
     // Standards mode, always: a webmail reader (Outlook on the web, Gmail) shows a message INSIDE a standards-mode
     // page, so the email's own missing or legacy doctype never puts it in quirks mode (where <table> would not close
     // an open <p>). A second doctype is ignored by the parser, so prefixing one is safe either way.
-    doc = parse(`<!doctype html>${html}`) as unknown as Node;
+    doc = parse(`<!doctype html>${html}`, { sourceCodeLocationInfo: true }) as unknown as Node;
   } catch {
     return "";
   }
   const out: string[] = [];
+  // Past this depth the walk stops recursing (a pathological nesting must never overflow the stack) and keeps the
+  // subtree's TEXT instead -- keep-more, never drop (verifier loop 6: 405 nested <div>s lost their text).
+  const MAX_DEPTH = 400;
+  const flatText = (root: Node) => {
+    const stack: Node[] = [root];
+    while (stack.length) {
+      const n = stack.pop()!;
+      if (n.nodeName === "#text") out.push(esc(n.value ?? ""));
+      else if (!NEVER_TEXT.has(n.nodeName)) {
+        const kids = n.childNodes ?? [];
+        for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+        if (n.tagName && /^(p|div|li|tr|h\d|br)$/i.test(n.tagName)) out.push(" ");
+      }
+    }
+  };
   const walk = (n: Node, st: Inherited, depth: number) => {
-    if (depth > 400) return; // a pathological nesting depth: stop, never overflow the stack
+    if (depth > MAX_DEPTH) {
+      if (!st.visHidden && !st.fontZero) flatText(n);
+      return;
+    }
     if (n.nodeName === "#text") {
       if (!st.visHidden && !st.fontZero) out.push(esc(n.value ?? ""));
       return;
@@ -150,10 +199,14 @@ export function visibleHtml(html: string): string {
     }
     const name = n.tagName.toLowerCase();
     const id = attrs.get("id");
-    out.push(`<${name}${id ? ` id="${esc(id).replace(/"/g, "&quot;")}"` : ""}>`);
+    // Only tags the SOURCE wrote are re-emitted: an element the parser implied (a closed-by-omission </p>, an
+    // inserted <tbody>, a reconstructed <b>) adds no tag, so htmlToText's line breaks match main's on malformed mail
+    // (verifier loop 6: implied </p> breaks let main's English "On ... wrote:" cut fire on bodies main keeps whole).
+    const loc = n.sourceCodeLocation;
+    if (loc?.startTag) out.push(`<${name}${id ? ` id="${esc(id).replace(/"/g, "&quot;")}"` : ""}>`);
     if (VOID.has(name)) return;
     for (const c of n.childNodes ?? []) walk(c, v.state, depth + 1);
-    out.push(`</${name}>`);
+    if (loc?.endTag) out.push(`</${name}>`);
   };
   walk(doc, { visHidden: false, fontZero: false }, 0);
   return out.join("");
