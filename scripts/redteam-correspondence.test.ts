@@ -190,7 +190,17 @@ t(
     ["X-noyear", "On Mon, Nov 9 Jane Example\nwrote:\nCan you approve the budget?", "approve the budget"],
     ["X-I", "On Friday, Nov 13, 2026 at 9:00 I\nwrote:\nCan you approve the budget?", "approve the budget"],
   ];
-  t("D2 X1/X2 hard-wrapped English lines with a digit are not a wrapped attribution", wrappedKeeps.filter(([, body, ask]) => !newTextOnly(body).includes(ask)).map(([id]) => id), []);
+  // Verifier loop 5, X3-X6: English words that are also foreign month names (may/out/set), or a weekday + time with
+  // no year, must not make a hard-wrapped English sentence an attribution.
+  wrappedKeeps.push(
+    ["X3", "Quick note.\nOn the 12 open items from 2024 we may still owe Finance, and Dana\nwrote:\nCan you send the ledger by Monday?", "send the ledger"],
+    ["X4", "On the 3 invoices from 2025 it turns out Pat\nKim wrote:\nCan you approve the PO by Friday?", "approve the PO"],
+    ["X5", "On Friday 14 at 10:30 the vendor called and Legal\nwrote:\nCan you sign the NDA today?", "sign the NDA"],
+    ["X6", "On the 2 dates set for 2026 Ops\nwrote:\nCan you confirm the venue?", "confirm the venue"],
+  );
+  t("D2 loop 5: a name-only two-line Gmail stamp WITH year and time is still cut",
+    newTextOnly("Sounds good.\nOn Mon, Nov 10, 2025 at 9:14 AM Dana Kim\nwrote:\nCan you send the old ledger?").includes("old ledger"), false);
+  t("D2 X1-X6 hard-wrapped English lines with a digit are not a wrapped attribution", wrappedKeeps.filter(([, body, ask]) => !newTextOnly(body).includes(ask)).map(([id]) => id), []);
   t("D2 X1/X2 such an email is still screened as an ask", [asksSomething({ subject: "Status", bodyText: wrappedKeeps[0][1] }), asksSomething({ subject: "Client", bodyText: wrappedKeeps[1][1] })], [true, true]);
   const wrappedCuts: [string, string][] = [
     ["email", "Sure.\n\nOn Mon, Nov 9, 2026 at 3:00 PM Jane Example <jane@eds.example>\nwrote:\nPlease send the deck by Friday"],

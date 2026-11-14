@@ -112,6 +112,8 @@ const DATE_NAME =
   /(?<!\p{L})(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december|lun|mer|jeu|ven|sam|dim|janv|févr|fév|mars|avr|mai|juin|juil|août|déc|mié|jue|vie|sáb|dom|ene|abr|ago|dic|gio|gen|mag|giu|lug|ott|seg|ter|qua|qui|sex|fev|set|out|dez|mån|tis|ons|tor|fre|lör|sön|maj|okt|mrt|mei|mär)\.?(?!\p{L})/iu;
 const DAY_NUMBER = /(?<!\d)\d{1,2}(?!\d)/;
 const YEAR_OR_TIME = /(?<!\d)(?:19|20)\d{2}(?!\d)|(?<!\d)\d{1,2}:\d{2}(?!\d)/;
+const YEAR = /(?<!\d)(?:19|20)\d{2}(?!\d)/;
+const CLOCK = /(?<!\d)\d{1,2}:\d{2}(?!\d)/;
 const EMAIL = /[^\s<>()@]+@[^\s<>()@]+\.[a-z]{2,}/i;
 /** Pure: is `first` + `next` a Gmail attribution hard-wrapped over two lines? The joined line must match an
  *  attribution rule AND have the shape of one: the date (a weekday or month name, a day number, a year or a
@@ -123,6 +125,11 @@ function isWrappedAttribution(first: string, next: string): boolean {
   if (!isAttribution(joined)) return false;
   if (!(DATE_NAME.test(first) && DAY_NUMBER.test(first) && YEAR_OR_TIME.test(first))) return false;
   if (EMAIL.test(joined)) return true;
+  // No address: a real client still writes the FULL stamp -- a year AND a clock time ("On Mon, Nov 10, 2025 at
+  // 9:14 AM Dana Kim" / "wrote:"). A year alone or a time alone is ordinary English often enough to cut a real ask:
+  // "On the 12 open items from 2024 we may still owe ... Dana" / "wrote:" (verifier loop 5, X3-X6 -- `may`, `out`,
+  // `set` are also foreign month names in DATE_NAME, so the name test cannot carry this on its own).
+  if (!(YEAR.test(first) && CLOCK.test(first))) return false;
   const before = /(\S+)\s+wrote:\s*$/i.exec(joined);
   return !!before && /^\p{Lu}[\p{L}'’.-]*$/u.test(before[1]) && before[1] !== "I";
 }
