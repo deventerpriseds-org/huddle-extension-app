@@ -54,6 +54,10 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       claude_verify-correspondence-proposals-5). Merge decision waits on its verdict.
 - [x] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history):
       APPROVED 2026-11-13 ("I'm fine with your 3 live work email changes").
+- [x] Verifier loop 5 (b4e76df7) = FIX FIRST: F1-F3 hidden-text drops (23/88 Chromium rows) + urgent alert double-fire
+      (U1/U4) + X3-X6. All fixed on claude_task-proposals @ d849f0da (parse5 tree for htmlToText; incomplete incident
+      only ends on a non-incomplete read; year+clock for name-only wrapped attributions); 7 mutations FIRED. Verifier
+      loop 6 next. Owner still to OK a 4th live change: an English Gmail attribution wrapped over 2 lines is now cut.
 - [ ] Owner 2026-11-14 on the open-vs-replied report: "The logic and tuning is horrible" -- meeting minutes listed as
       needing a reply, mass broadcasts, meeting invites, same-thread replies listed separately, to-dos for things not
       directed at him. Root causes read in code: inbound-email.ts asksSomething (keyword ASK regex + INVITE_SUBJECT =
