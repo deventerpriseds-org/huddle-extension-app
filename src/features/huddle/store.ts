@@ -73,6 +73,8 @@ export interface ChecklistRowState {
    *  journey task an Approve created/linked -- the row then renders as an ordinary task row (AC-5.9). */
   title?: string;
   linkedTaskId?: string | null;
+  /** Meeting-triage rows only (AC-correspondence-redesign R5.10): the For someone name, text only. */
+  assignee?: string | null;
 }
 
 export type MeetingKind = "morning" | "midday" | "afternoon" | "adhoc" | "virtual-meeting";

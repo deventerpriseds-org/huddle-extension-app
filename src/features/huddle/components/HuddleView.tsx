@@ -632,7 +632,7 @@ function ChecklistCard({ m }: { m: HuddleMessage }) {
                 wanted.add(r.taskId);
                 store.seedChecklistRows([{ taskId: r.taskId, status: "BACKLOG", tags: [] }]);
               }
-              store.setChecklistRow(r.id, { status: r.state, title: r.title, linkedTaskId: r.taskId });
+              store.setChecklistRow(r.id, { status: r.state, title: r.title, linkedTaskId: r.taskId, ...(r.assignee !== undefined ? { assignee: r.assignee } : {}) });
             }
           })
           .catch(() => {})
