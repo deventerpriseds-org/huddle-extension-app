@@ -129,7 +129,7 @@ t("AC-R3.7 owner on To of the FIRST message, latest non-owner message reaches hi
 // counts as before.
 const ccConv = (bodyText: string, id: string) => one(em({ toRecipients: "pat@work.example", ccRecipients: OWNER, bodyText, conversationId: id }));
 t("CC-1 CC only, an ask aimed at the To person -> not_addressed (cc_only_not_called_on)", [ccConv("Pat, can you send the numbers?", "cc1"), classifyEmailConversation("k", [em({ toRecipients: "pat@work.example", ccRecipients: OWNER, bodyText: "Can you send the numbers?" })], ctx()).reason], ["not_addressed", "cc_only_not_called_on"]);
-t("CC-2 (a) CC only, the latest message NAMES the owner -> needs_reply", ccConv("Pat, can you send the numbers? Owner Name will review them.", "cc2"), "needs_reply");
+t("CC-2 (a) CC only, the latest message NAMES the owner -> needs_reply", ccConv("Pat, can you send the numbers? Owner Name has the final version.", "cc2"), "needs_reply");
 t("CC-3 (b) CC only, 'Hi everyone,' + an ask -> needs_reply", ccConv("Hi everyone,\nCan you send your numbers by Friday?", "cc3"), "needs_reply");
 t("CC-4 (c) CC only, an asking sentence naming the owner -> needs_reply", ccConv("Owner Name, could you approve this?", "cc4"), "needs_reply");
 t("CC-5 CC only, called on but nothing asked -> fyi (not needs_reply)", ccConv("Hi all, the numbers are attached.", "cc5"), "fyi");
