@@ -65,6 +65,12 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       or addresses the group ("everyone", "all", "team"...); Teams later must be judged from CONTEXT using the
       speaker-tagged thread (his messages vs others), not @mention rules. Sent to the part-A implementer. His message
       "I just need a way to..." was cut off -- asked.
+- [ ] Owner 2026-11-14: "you are trying to apply keyword capture instead of using ai's ability to determine it
+      contextually" -> redesign switched to an AI conversation judge: code computes FACTS only (thread, who said what,
+      To/CC position, calendar/bulk header stamps, settled-by-owner-reply); the model judges meaning per conversation
+      (needs_reply / action_for_owner / fyi / minutes / calendar / broadcast, addressed?, verbatim ask quote, owner-only
+      to-dos), validated (quote must be in the message; to-dos through existing validators; failure = needs_context).
+      Keyword spelling tables superseded for meaning. Both implementers redirected.
 - [ ] Redesign build IN PROGRESS: ACs on claude_ac-correspondence-redesign @ 5b8ba7d3 (~85 ACs, 10 open questions w/
       defaults); probes docs/qc-evidence/PROBES-correspondence-redesign.md (invites = Exchange calendar headers, no
       Content-Class; owner alone on To 93/127). Part A (needs-you classifier + report) on claude_redesign-needs-you,
