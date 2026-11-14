@@ -14,6 +14,7 @@
 import type { Pool, PoolClient } from "pg";
 import { getSharedPool } from "../db/shared-pool.server";
 import type { NewProposal, PriorProposal, ProposalRow, ProposalSourceRef, ProposalState, ProposalStore, UpsertOutcome } from "./proposals";
+import type { TriageOutcome, TriageStore } from "./meeting-triage";
 
 let _pool: Pool | null = null;
 function getPool(): Pool {
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS chat.task_proposals (
   id                  TEXT PRIMARY KEY CHECK (id LIKE 'prop-%'),
   owner_email         TEXT NOT NULL,
   state               TEXT NOT NULL DEFAULT 'proposed'
-                        CHECK (state IN ('proposed','approved','completed','dismissed')),
+                        CHECK (state IN ('proposed','approved','completed','dismissed','untriaged','delegated')),
   title               TEXT NOT NULL,              -- current text (the owner's edit wins)
   original_title      TEXT NOT NULL,              -- what extraction proposed
   norm_title          TEXT NOT NULL,              -- normalizeTaskTitle(original_title): the dedup key
@@ -59,6 +60,26 @@ CREATE TABLE IF NOT EXISTS chat.task_proposal_refs (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (owner_email, source, source_item_id, norm_title)
 );
+-- AC-correspondence-redesign R5.13: meeting triage adds two states. CREATE TABLE IF NOT EXISTS above never
+-- changes the CHECK of a table that already exists, so an explicit, idempotent migration: replace the state
+-- CHECK only when it does not yet allow 'untriaged'. A concurrent bootstrap that loses the race is harmless
+-- (duplicate_object is swallowed; the winner's constraint is the same).
+DO $mig$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'chat.task_proposals'::regclass AND contype = 'c'
+       AND pg_get_constraintdef(oid) LIKE '%state%' AND pg_get_constraintdef(oid) LIKE '%untriaged%'
+  ) THEN
+    ALTER TABLE chat.task_proposals DROP CONSTRAINT IF EXISTS task_proposals_state_check;
+    BEGIN
+      ALTER TABLE chat.task_proposals ADD CONSTRAINT task_proposals_state_check
+        CHECK (state IN ('proposed','approved','completed','dismissed','untriaged','delegated'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+  END IF;
+END
+$mig$;
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -79,6 +100,12 @@ const COLS = `id, owner_email, state, title, original_title, norm_title, edited,
   to_char(due_date, 'YYYY-MM-DD') AS due_date, sources, task_id,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
   to_char(decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS decided_at`;
+
+/** COLS with every column qualified by the alias `p` (for joins). */
+const COLS_P = `p.id, p.owner_email, p.state, p.title, p.original_title, p.norm_title, p.edited, p.evidence, p.assignee, p.due_text,
+  to_char(p.due_date, 'YYYY-MM-DD') AS due_date, p.sources, p.task_id,
+  to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
+  to_char(p.decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS decided_at`;
 
 type DbRow = {
   id: string;
@@ -192,7 +219,7 @@ async function selectOne(owners: string[], id: string): Promise<ProposalRow | nu
   return r.rows[0] ? toRow(r.rows[0]) : null;
 }
 
-export const pgProposalStore: ProposalStore = {
+export const pgProposalStore: ProposalStore & TriageStore = {
   async upsert(p) {
     await ensureBootstrapped();
     for (let i = 0; ; i++) {
@@ -218,7 +245,10 @@ export const pgProposalStore: ProposalStore = {
         WHERE p.owner_email = ANY($1)
           AND (p.id IN (SELECT proposal_id FROM chat.task_proposal_refs
                          WHERE owner_email = ANY($1) AND source = $2 AND source_item_id = $3)
-               OR (p.norm_title = $4 AND p.state = 'dismissed'))
+               OR (p.norm_title = $4 AND p.state = 'dismissed'
+                   -- AC-R5.11 + F15: a SKIPPED meeting item (first source a meeting) suppresses only that
+                   -- meeting's item (the refs), never the same to-do asked of the owner elsewhere.
+                   AND COALESCE(p.sources->0->>'source', '') <> 'transcript'))
         ORDER BY p.created_at, p.id
         LIMIT 100`,
       [own, ref.source, ref.sourceItemId, normTitle],
@@ -301,5 +331,118 @@ export const pgProposalStore: ProposalStore = {
     );
     if (r.rows[0]) return { applied: true, row: toRow(r.rows[0]) };
     return { applied: false, row: await selectOne(owners, id) };
+  },
+
+  // ── Meeting triage (AC-correspondence-redesign R5) ──────────────────────────────────────────────────
+
+  async addTriageRows(rows) {
+    await ensureBootstrapped();
+    const created: string[] = [];
+    const existing: string[] = [];
+    for (const p of rows) {
+      const owner = p.owner.trim().toLowerCase();
+      const refJson = JSON.stringify([{ source: p.ref.source, sourceItemId: p.ref.sourceItemId, at: p.ref.at, context: p.ref.context ?? null }]);
+      const out = await inTx(async (c) => {
+        // The refs are the memory: an item seen for this meeting before (any state, merged included) is never
+        // re-created -- a Skip never reappears (AC-R5.11), an update adds only its NEW items (AC-R5.7).
+        const seen = await c.query<{ proposal_id: string }>(
+          `SELECT proposal_id FROM chat.task_proposal_refs
+            WHERE owner_email = $1 AND source = $2 AND source_item_id = $3 AND norm_title = $4`,
+          [owner, p.ref.source, p.ref.sourceItemId, p.normTitle],
+        );
+        if (seen.rows[0]) return { kind: "existing" as const, id: seen.rows[0].proposal_id };
+        // Never attached to an active proposal here: the owner triages first ("then and only then").
+        await c.query(
+          `INSERT INTO chat.task_proposals (id, owner_email, state, title, original_title, norm_title, evidence, sources)
+           VALUES ($1,$2,'untriaged',$3,$3,$4,$5,$6::jsonb)
+           ON CONFLICT (id) DO NOTHING`,
+          [p.id, owner, p.title, p.normTitle, p.evidence, refJson],
+        );
+        const ref = await c.query(
+          `INSERT INTO chat.task_proposal_refs (owner_email, source, source_item_id, norm_title, proposal_id)
+           VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+          [owner, p.ref.source, p.ref.sourceItemId, p.normTitle, p.id],
+        );
+        return { kind: ref.rowCount ? ("created" as const) : ("existing" as const), id: p.id };
+      });
+      (out.kind === "created" ? created : existing).push(out.id);
+    }
+    return { created, existing };
+  },
+
+  async triage(owners, id, target, assignee): Promise<TriageOutcome> {
+    await ensureBootstrapped();
+    const own = lower(owners);
+    for (let i = 0; ; i++) {
+      try {
+        return await inTx(async (c): Promise<TriageOutcome> => {
+          // Compare-and-set on `untriaged` (AC-R5.17): the row lock makes a double tap apply exactly once.
+          const cur = await c.query<DbRow>(`SELECT ${COLS} FROM chat.task_proposals WHERE id = $2 AND owner_email = ANY($1) FOR UPDATE`, [own, id]);
+          const row = cur.rows[0] ? toRow(cur.rows[0]) : null;
+          if (!row || row.state !== "untriaged") return { applied: false, row };
+          if (target === "proposed") {
+            // One proposal per to-do (OQ-9): Mine on a to-do that is already active from another source moves
+            // this meeting's ref onto that proposal, and this row leaves the triage queue.
+            const act = await c.query<{ id: string }>(
+              `SELECT id FROM chat.task_proposals WHERE owner_email = $1 AND norm_title = $2 AND state = 'proposed' FOR UPDATE`,
+              [row.owner, row.normTitle],
+            );
+            if (act.rows[0]) {
+              const into = act.rows[0].id;
+              const meeting = row.sources[0];
+              await c.query(
+                `UPDATE chat.task_proposal_refs SET proposal_id = $5
+                  WHERE owner_email = $1 AND source = $2 AND source_item_id = $3 AND norm_title = $4 AND proposal_id = $6`,
+                [row.owner, meeting?.source ?? "transcript", meeting?.sourceItemId ?? "", row.normTitle, into, row.id],
+              );
+              const m = await c.query<DbRow>(
+                `UPDATE chat.task_proposals SET sources = sources || $2::jsonb, updated_at = now() WHERE id = $1 RETURNING ${COLS}`,
+                [into, JSON.stringify(row.sources.slice(0, 1))],
+              );
+              const done = await c.query<DbRow>(
+                `UPDATE chat.task_proposals SET state = 'dismissed', decided_at = now(), updated_at = now() WHERE id = $1 RETURNING ${COLS}`,
+                [row.id],
+              );
+              return { applied: true, row: toRow(done.rows[0]), mergedInto: m.rows[0] ? toRow(m.rows[0]) : null };
+            }
+          }
+          const r = await c.query<DbRow>(
+            `UPDATE chat.task_proposals
+                SET state = $2::text, assignee = CASE WHEN $2::text = 'delegated' THEN $3::text ELSE assignee END,
+                    decided_at = CASE WHEN $2::text = 'proposed' THEN NULL ELSE now() END, updated_at = now()
+              WHERE id = $1 AND state = 'untriaged'
+              RETURNING ${COLS}`,
+            [row.id, target, target === "delegated" ? assignee : null],
+          );
+          return r.rows[0] ? { applied: true, row: toRow(r.rows[0]) } : { applied: false, row };
+        });
+      } catch (e) {
+        // Mine racing an email proposal of the same to-do (the active-title unique index): re-evaluate (merge).
+        if ((e as { code?: string }).code === "23505" && i < 3) continue;
+        throw e;
+      }
+    }
+  },
+
+  async listMeetingQueue(owners) {
+    await ensureBootstrapped();
+    const r = await getPool().query<DbRow & { meeting_id: string }>(
+      `SELECT ${COLS_P}, rf.source_item_id AS meeting_id
+         FROM chat.task_proposal_refs rf JOIN chat.task_proposals p ON p.id = rf.proposal_id
+        WHERE rf.owner_email = ANY($1) AND rf.source = 'transcript' AND p.owner_email = ANY($1)
+        ORDER BY p.created_at, p.id
+        LIMIT 2000`,
+      [lower(owners)],
+    );
+    return r.rows.map((x) => ({ ...toRow(x), meetingId: x.meeting_id }));
+  },
+
+  async listUntriaged(owners) {
+    await ensureBootstrapped();
+    const r = await getPool().query<DbRow>(
+      `SELECT ${COLS} FROM chat.task_proposals WHERE owner_email = ANY($1) AND state = 'untriaged' ORDER BY created_at, id LIMIT 200`,
+      [lower(owners)],
+    );
+    return r.rows.map(toRow);
   },
 };

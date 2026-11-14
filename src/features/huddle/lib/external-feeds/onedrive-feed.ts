@@ -42,6 +42,11 @@ export interface CorrespondenceConfig {
   sources: ("teams" | "email")[];
   bell: boolean;
   proposals: boolean;
+  /** Meeting-minutes TRIAGE (AC-correspondence-redesign R5, AC-R9.1): a finished meeting's action items are
+   *  offered in ONE ping (Mine / For someone / Skip) instead of becoming proposals. Works inside `proposals`
+   *  (its store and Iris's 1:1). OFF unless literally `true`; when OFF the Fireflies pass makes NO proposals
+   *  and no calls at all (AC-R9.3). */
+  meetingTriage: boolean;
   maxAttempts: number;
   /** Minimum gap between two eTag checks of the Teams log (the flow writes once a weekday evening). */
   minIntervalMinutes: number;
@@ -216,6 +221,7 @@ function correspondenceFlags(v: unknown): CorrespondenceConfig {
     sources: [...new Set(sources)],
     bell: o.bell === true,
     proposals: o.proposals === true,
+    meetingTriage: o.meetingTriage === true,
     maxAttempts: n(o.maxAttempts, CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT, 20),
     minIntervalMinutes: n(o.minIntervalMinutes, CORRESPONDENCE_MIN_INTERVAL_DEFAULT, 24 * 60),
     staleAlerts: o.staleAlerts === true,

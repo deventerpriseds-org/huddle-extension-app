@@ -13,6 +13,18 @@ import type { ItemProcessor, LedgerStore, ProcessOutcome, SourceItem } from "../
 import { stableHash } from "../correspondence/source-item";
 import { normalizeTaskTitle, screenCapabilityMetaTask, screenRawJourneyCreate, type CapabilityDeferral } from "../tasks/create-task-core";
 import {
+  TRIAGE_CHOICES,
+  TRIAGE_TARGET,
+  cleanTriageName,
+  meetingTriageChecklist,
+  meetingTriagePayload,
+  meetingTriageTurnId,
+  splitActionItems,
+  triageRowsFor,
+  type TriageChoice,
+  type TriageStore,
+} from "./meeting-triage";
+import {
   EXTRACTION_INSTRUCTIONS,
   PROPOSALS_AGENT,
   PROPOSALS_TITLE,
@@ -122,11 +134,11 @@ export async function proposeFromSource(owner: string, src: ProposalSource, deps
  * re-run (crash before `processed`, or an edited message) re-extracts, and the refs table makes every
  * already-seen (item, to-do) a no-op, so nothing duplicates and nothing decided reopens (AC-3.4).
  */
-export function proposalsProcessor(deps: ProposeDeps & { owner(): string; mailbox(): string; log?: (l: string) => void }): ItemProcessor {
+export function proposalsProcessor(deps: ProposeDeps & { owner(): string; mailbox(): string; log?: (l: string) => void; skipMinutes?: boolean }): ItemProcessor {
   return {
     name: "proposals",
     async process(item: SourceItem): Promise<ProcessOutcome> {
-      const src = proposalSourceFromItem(item, deps.mailbox());
+      const src = proposalSourceFromItem(item, deps.mailbox(), { skipMinutes: deps.skipMinutes === true });
       if ("skip" in src) return { status: "processed", resultIds: {} };
       const r = await proposeFromSource(deps.owner(), src, deps);
       if (deps.log && (r.created || r.attached || r.suppressed || Object.keys(r.rejected).length)) {
@@ -138,7 +150,7 @@ export function proposalsProcessor(deps: ProposeDeps & { owner(): string; mailbo
   };
 }
 
-// ── Fireflies transcripts (AC-5.22): read-only, through the same ledger ─────────────────────────────
+// ── Fireflies meetings: read-only, through the same ledger (AC-5.22 source; AC-R5 triage) ────────────
 
 export interface MeetingRef {
   meetingId: string;
@@ -148,15 +160,27 @@ export interface MeetingRef {
   contentHash: string | null;
 }
 
-export interface TranscriptDeps extends ProposeDeps {
+/**
+ * Meeting triage (AC-correspondence-redesign R5). REPLACES the automatic transcript -> proposals path: the owner
+ * rejected automatic to-dos from minutes (AC-R5.3, AC-R9.3). A finished meeting's action items become
+ * `untriaged` rows, and ONE ping per meeting asks Mine / For someone / Skip. No model call is made: the items
+ * are the minutes' own lines (probe P-4), split, never interpreted.
+ */
+export interface MeetingTriageDeps {
+  store: TriageStore;
   ledger: LedgerStore;
   /** Meetings the minutes flow has FINISHED (nothing pending), newest first. Read-only. */
   listFinishedMeetings(): Promise<MeetingRef[]>;
-  /** The Fireflies summary text proposals read (action items + overview), or null when unavailable. */
-  fetchSummaryText(meetingId: string): Promise<string | null>;
+  /** The meeting's Fireflies `action_items` (string or list), or null when the summary is unavailable. */
+  fetchActionItems(meetingId: string): Promise<unknown>;
+  /** enqueueTurn: false when this id already exists (ON CONFLICT DO NOTHING) -- the one-ping idempotency. */
+  enqueue(turnId: string, payload: Record<string, unknown>): Promise<boolean>;
+  run(turnId: string): Promise<void>;
   maxAttempts: number;
   now(): number;
   budgetMs: number;
+  tz: string;
+  log?: (l: string) => void;
 }
 
 export function transcriptSourceItem(m: MeetingRef): SourceItem {
@@ -174,8 +198,17 @@ export function transcriptSourceItem(m: MeetingRef): SourceItem {
   };
 }
 
-export async function runTranscriptProposals(owner: string, deps: TranscriptDeps): Promise<{ observed: number; processed: number; failed: number; needsContext: number }> {
-  const res = { observed: 0, processed: 0, failed: 0, needsContext: 0 };
+export interface MeetingTriageResult {
+  observed: number;
+  processed: number;
+  failed: number;
+  needsContext: number;
+  pinged: number;
+  rowsCreated: number;
+}
+
+export async function runMeetingTriage(owner: string, deps: MeetingTriageDeps): Promise<MeetingTriageResult> {
+  const res: MeetingTriageResult = { observed: 0, processed: 0, failed: 0, needsContext: 0, pinged: 0, rowsCreated: 0 };
   const start = deps.now();
   const meetings = await deps.listFinishedMeetings();
   if (meetings.length) {
@@ -189,15 +222,32 @@ export async function runTranscriptProposals(owner: string, deps: TranscriptDeps
     for (const c of claimed) {
       const m = byId.get(c.sourceItemId);
       try {
-        const text = m ? await deps.fetchSummaryText(m.meetingId) : null;
-        if (!m || text === null) {
+        const raw = m ? await deps.fetchActionItems(m.meetingId) : null;
+        if (!m || raw === null || raw === undefined) {
           if (await deps.ledger.markNeedsContext(c, m ? "transcript_summary" : "source_payload")) res.needsContext++;
           continue;
         }
-        const r = text.trim()
-          ? await proposeFromSource(owner, { source: "transcript", sourceItemId: m.meetingId, at: m.meetingAt, context: m.title, text }, deps)
-          : null;
-        if (await deps.ledger.markProcessed(c, r?.ids.length ? { proposals: r.ids } : {})) res.processed++;
+        const { items } = splitActionItems(raw);
+        // AC-R5.12: no action items -> no ping, processed.
+        if (!items.length) {
+          if (await deps.ledger.markProcessed(c, {})) res.processed++;
+          continue;
+        }
+        // Rows first, ping second: a crash between the two retries the ping (the refs make the rows "existing").
+        const added = await deps.store.addTriageRows(triageRowsFor(owner, m, items));
+        res.rowsCreated += added.created.length;
+        const ids = [...added.created, ...added.existing];
+        const turnId = meetingTriageTurnId(owner, m.meetingId);
+        const rows = await deps.store.getMany([owner], ids);
+        const open = rows.filter((r) => r.state === "untriaged");
+        // AC-R5.6 / R5.7 (OQ-9): the turn id is per meeting, so a retry, a re-send or an update NEVER pings
+        // twice; an update's new items are new untriaged rows in the queue (shown on request).
+        if (open.length && (await deps.enqueue(turnId, meetingTriagePayload(owner, open.length, meetingTriageChecklist(open, m.title), deps.tz)))) {
+          res.pinged++;
+          // The turn is durable: if running it now fails, the turn runner's heartbeat picks it up.
+          await deps.run(turnId).catch(() => deps.log?.("[meeting-triage] ping run deferred"));
+        }
+        if (await deps.ledger.markProcessed(c, ids.length ? { triage: ids } : {})) res.processed++;
       } catch (e) {
         const msg = e instanceof Error ? e.message : "";
         await deps.ledger.markFailed(c, /^[a-z][a-z0-9_:.-]{0,59}$/.test(msg) ? msg : "processor_error", deps.maxAttempts);
@@ -206,6 +256,24 @@ export async function runTranscriptProposals(owner: string, deps: TranscriptDeps
     }
   }
   return res;
+}
+
+/** Owner action (AC-R5.8-R5.11, R5.16, R5.17): Mine / For someone / Skip on an `untriaged` row. */
+export async function triageProposal(owners: string[], id: string, choice: TriageChoice, rawName: unknown, store: TriageStore): Promise<ActionResult> {
+  if (!TRIAGE_CHOICES.includes(choice)) return { ok: false, error: "Pick Mine, For someone or Skip." };
+  let name: string | null = null;
+  if (choice === "someone") {
+    name = cleanTriageName(rawName);
+    // AC-R5.16: an empty name saves nothing; the row stays untriaged.
+    if (!name) return { ok: false, error: "Type who it is for, or pick Mine or Skip." };
+  }
+  const r = await store.triage(owners, id, TRIAGE_TARGET[choice], name);
+  if (!r.row) return { ok: false, error: "That item isn't in your list." };
+  if (r.applied) {
+    if (r.mergedInto) return { ok: true, row: r.mergedInto, note: "It's already in your proposed tasks." };
+    return { ok: true, row: r.row };
+  }
+  return { ok: true, row: r.row, alreadyDone: true };
 }
 
 // ── Owner actions (AC-5.3, 5.7-5.13) ────────────────────────────────────────────────────────────────

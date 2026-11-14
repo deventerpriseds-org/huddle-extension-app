@@ -17,9 +17,11 @@ const PropId = z.string().regex(/^prop-[0-9a-f]{1,32}$/);
 /** The live state of a mounted checklist's proposal rows (one request, AC-5.24). */
 export interface ProposalRowState {
   id: string;
-  state: "proposed" | "approved" | "completed" | "dismissed";
+  state: "proposed" | "approved" | "completed" | "dismissed" | "untriaged" | "delegated";
   title: string;
   taskId: string | null;
+  /** Meeting triage, For someone: the typed name (text only). */
+  assignee?: string | null;
 }
 
 export const getProposalStatesFn = createServerFn({ method: "POST" })
@@ -28,7 +30,7 @@ export const getProposalStatesFn = createServerFn({ method: "POST" })
     try {
       const { getProposalRows } = await import("./proposals.server");
       const rows = await getProposalRows(data.caller, data.ids);
-      return { rows: rows.map((r) => ({ id: r.id, state: r.state, title: r.title, taskId: r.taskId })) };
+      return { rows: rows.map((r) => ({ id: r.id, state: r.state, title: r.title, taskId: r.taskId, ...(r.state === "delegated" ? { assignee: r.assignee } : {}) })) };
     } catch {
       return { rows: [] };
     }
@@ -40,16 +42,21 @@ export const actOnProposalFn = createServerFn({ method: "POST" })
       .object({
         caller: Caller,
         id: PropId,
-        action: z.enum(["approve", "complete", "dismiss", "edit"]),
+        action: z.enum(["approve", "complete", "dismiss", "edit", "triage"]),
         title: z.string().max(400).optional(),
+        // Meeting triage (AC-correspondence-redesign R5.8): Mine / For someone (+ a typed name) / Skip.
+        choice: z.enum(["mine", "someone", "skip"]).optional(),
+        name: z.string().max(400).optional(),
       })
       .parse(raw),
   )
   .handler(async ({ data }): Promise<{ ok: boolean; error?: string; row?: ProposalRowState; alreadyDone?: boolean; alreadyOnBoard?: boolean; note?: string }> => {
     try {
       const { actOnProposal } = await import("./proposals.server");
-      const r = await actOnProposal(data.caller, data.id, data.action, data.title);
-      const row = r.row ? { id: r.row.id, state: r.row.state, title: r.row.title, taskId: r.row.taskId } : undefined;
+      const r = await actOnProposal(data.caller, data.id, data.action, data.title, data.choice ? { choice: data.choice, name: data.name } : undefined);
+      const row = r.row
+        ? { id: r.row.id, state: r.row.state, title: r.row.title, taskId: r.row.taskId, ...(r.row.state === "delegated" ? { assignee: r.row.assignee } : {}) }
+        : undefined;
       if (!r.ok) return { ok: false, error: r.error, row };
       return { ok: true, row, alreadyDone: r.alreadyDone, alreadyOnBoard: r.alreadyOnBoard, note: r.note };
     } catch {
