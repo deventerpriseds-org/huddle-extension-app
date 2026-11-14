@@ -93,6 +93,11 @@ try {
   // First store call: bootstrap + migration run here. A failure is reported under the named check below.
   const added = await S.addTriageRows(m1).catch(() => ({ created: [] as string[], existing: [] as string[] }));
   t("AC-R5.13 after bootstrap the OLD table accepts untriaged rows (migration ran)", [added.created.length, added.existing.length], [4, 0]);
+  t(
+    "AC-R5.3 meeting items are stored untriaged, never proposed",
+    (await pool.query(`SELECT state FROM chat.task_proposals WHERE norm_title = ANY($1) ORDER BY state`, [m1.slice(0, 3).map((r) => r.normTitle)])).rows.map((r) => r.state),
+    ["untriaged", "untriaged", "untriaged"],
+  );
   t("AC-R5.13 exactly ONE state CHECK, now allowing untriaged + delegated", (await stateChecks()).map((c) => [c.conname, /untriaged/.test(c.d) && /delegated/.test(c.d)]), [["task_proposals_state_check", true]]);
   t("AC-R5.13 the pre-existing row survived the migration untouched", (await S.getMany([O], [old.id])).map((r) => [r.state, r.title]), [["proposed", "Test-Pay the invoice"]]);
   t("AC-R5.13 NO new table (still exactly the two proposal tables)", (await pool.query(`SELECT table_name FROM information_schema.tables WHERE table_schema='chat' ORDER BY 1`)).rows.map((r) => r.table_name), ["task_proposal_refs", "task_proposals"]);
@@ -143,7 +148,7 @@ try {
   t("AC-R5.14 delegated / dismissed / untriaged never in the active list", (await S.listActive([O])).every((r) => r.state === "proposed"), true);
 
   // ── OQ-9: Mine on a to-do already active from email -> merged, ONE active row ─────────────────
-  const m = await S.triage([O], invoice, "proposed", null);
+  const m = await S.triage([O], invoice, "proposed", null).catch(() => ({ applied: false, row: null, mergedInto: null }));
   t("OQ-9 Mine on an active to-do -> applied, merged into the existing proposal", [m.applied, m.mergedInto?.id, m.row?.state], [true, old.id, "dismissed"]);
   t("OQ-9 still ONE active row for that to-do, now with the meeting source", [Number((await pool.query(`SELECT count(*) n FROM chat.task_proposals WHERE norm_title=$1 AND state='proposed'`, [old.normTitle])).rows[0].n), (await S.getMany([O], [old.id]))[0].sources.map((s) => s.source)], [1, ["transcript"]]);
   t("OQ-9 the meeting's ref now points at the active proposal", (await pool.query(`SELECT proposal_id FROM chat.task_proposal_refs WHERE source='transcript' AND source_item_id='ff-1' AND norm_title=$1`, [old.normTitle])).rows.map((r) => r.proposal_id), [old.id]);
