@@ -203,3 +203,9 @@ exactly as before; this only announces it.
 | mutate.sh M4 drop the teams exclusion | FIRED (control EQUIVALENT), exit 0 -- I3 |
 
 NOT verified: a real Iris turn and a real email (needs the flag on, live). Independent verifier loop 5 covers this commit.
+
+### Verifier loop 5, U1/U4 fix (commit 28c5759a)
+An unread newer copy used to fall back to the plain staleness decision after 2 h and CLEAR the incomplete incident,
+so the next incomplete read re-announced it (U1) and reopened a dismissed alert (U4). Now only a read that is not
+incomplete ends the incident (`transient` while unread, however long). I5 rewritten to the corrected rule, I23 new;
+feed-staleness 96/0; mutate.sh reinstating the 2 h fallback: FIRED (control EQUIVALENT), exit 0.

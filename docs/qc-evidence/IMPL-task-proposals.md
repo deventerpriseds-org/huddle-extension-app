@@ -642,3 +642,22 @@ OneDrive write; PV-3/PV-4 sendMail only with `PREVIEW_EMAIL=1`; PV-5 the header 
 
 Verifier's own `scripts/verify4-probes.ts` re-run at this head (copied in, run, removed): W1-W4, W7 match Chromium;
 X1/X2 `same: true` vs main; D3 customemoji kept; D5 n6 refused; D6 n4 refused; every loop-3 control unchanged.
+
+## Verifier loop-5 fix pass (2026-11-14, commits 7def0eea, 4th CSS-test commit, 66cdfe95)
+
+Loop 5 (docs/qc-evidence/VERIFY-correspondence-proposals-5.md on claude_verify-correspondence-proposals-5 @ b4e76df7)
+= FIX FIRST: 23 of 88 Chromium-recorded rows dropped a visible word (F1-F3 the serious one), plus X3-X6.
+
+| item | fix | proof |
+|---|---|---|
+| F1-F3 + CSS (comment / last-wins / invalid value) + comment ends + `>` in quoted attrs | `htmlToText` now gets the visible part from `html-visible.ts`: parse5 7.3.0 builds the tree as the browser does (standards mode, as webmail embeds a message), hiding rules applied to the real element; ~270 lines of hand scanner removed | `scripts/html-visible-loop5.test.ts` over the verifier's 88 rows copied unchanged: 0 drops, 83/88 exact (3 keep-more in quirks rows; 2 `opacity:0%` hidden ON PURPOSE -- transparent text innerText still counts); Chromium truth 11/0; CSS rule rows |
+| F8b test input | a bare `<td>` outside `<table>` is discarded by the browser's tree builder, so the old input no longer tested font-size:0: input wrapped in a real table (intent unchanged) + a new row pins the bare-`<td>` behaviour (shown, as Chromium shows it) | task-proposals 204/0 |
+| RT-14b | parse5 decodes `&rsquo;` itself; typographic quotes are normalised to plain after decoding | redteam 76/0 |
+| X3-X6 | a name-only two-line attribution needs a year AND a clock time; with an email address unchanged | redteam X1-X6 row |
+
+Mutation proofs (mutate.sh, exit 0, control EQUIVALENT): standards-mode prefix (TRUTH p-closers), class re-size
+keep-more (D1-V6), `!important` precedence (LOOP5), hidden attr vs invalid display (CSS row), quote normalisation
+(RT-14b), year+clock requirement (X1-X6). ONE not proven: `displayValid &&` in the `display:none` test is
+behaviourally equivalent (an invalid value can never equal "none") -- INERT, correctly.
+Suites: task-proposals 204/0, redteam 76/0, inbound-email 72/0, correspondence-ingest 149/0, cross-app 92/0,
+onedrive-feed all, attention all, feed-staleness 96/0, preview 6/0, html-visible-loop5 9/0, tsc clean.
