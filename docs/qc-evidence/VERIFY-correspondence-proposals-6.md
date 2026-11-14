@@ -244,3 +244,49 @@ effect the owner declined for wrapped attributions on 2026-11-14 ("this doesn't 
 Outlook, Gmail and Apple Mail close their `<p>`/`<div>`/`<li>`/`<tr>`. The fix is cheap: parse with
 `sourceCodeLocationInfo: true` and emit `</name>` only when `sourceCodeLocation.endTag` exists, which reproduces
 main's line structure exactly.
+
+## Claim 16 (U1/U4: one announcement per incident) -- FIXED as asked; NEW defect U5 introduced by the fix
+
+### U1-U4 re-run on the REAL bell SQL (`scripts/verify5-staleness-sql.ts`, local PostgreSQL 16) -- CONFIRMED
+
+| step | loop 5 (0396f71a) | ddc7b55d |
+|---|---|---|
+| U1d Fri 00:10, last read 2h10m ago, newer copy unread | `fresh`, row **auto-cleared** | **`transient`, row stays owed/incomplete** |
+| U1e Fri 07:10, reader reads the copy, still incomplete | reopened, **announcement #2** | `incomplete`, raised=0, urgent=0 |
+| U1 announcements for one incident | 2 | **1** |
+| U4b dismissed incomplete row, republished incomplete, unread 2h+, older than 6 working h | `stale`, dismissed row **reopened** | **`transient`, stays dismissed** |
+| U4 announcements | 2 | **1** |
+
+U2 (dismissed stays silent, 0 announcements), U3 (open stale -> incomplete announces once), V1/V2 (a transient read or
+one 403 raises nothing; two consecutive 403s do), and V3 (feed row first; with no feed rows the order equals main's)
+are all identical to loop 5. **U1/U4 CONFIRMED fixed.** The implementer's I23 test covers the same path in the twin;
+the mutation proof is below.
+
+### NEW: U5 -- an incomplete sent.json whose reader never reads again stays `transient` FOREVER
+
+`decideFeedStaleness` (`feed-staleness.ts:167-169`) now returns `transient` for as long as the last read was
+`rejected:incomplete` and a newer copy exists, "however long the reader takes". The email reader runs on the hourly
+inbound watch, but the SENT reader runs only in `loadFeedSent` (`email-replies.server.ts:292`). That is called by
+`reconcileRepliedFromSentItems` only while an owed `kind='email'` row with a feed id exists
+(`listOwedEmailReplies`, `:210`). So when the owner has no owed work email, sent.json is never read again.
+`scripts/verify6-staleness-stuck.ts`, real SQL:
+
+| step (sent.json; no owed work email) | decision | bell row | announced |
+|---|---|---|---|
+| U5a Mon 10:10 ET, reader read the 9:50 copy -> incomplete | incomplete | owed/incomplete | #1 |
+| U5b Mon 11:10, flow FIXED (complete copy 10:55), never read | transient | **owed/incomplete (stuck: the file is complete)** | -- |
+| U5c Tue 12:10, same | transient | owed/incomplete | -- |
+| owner dismisses | | dismissed | |
+| U5d Fri 12:10, flow STOPPED since Mon 10:55 (4 working days) | **transient** | dismissed | **none** |
+| U5d+ the next Wednesday (9 days stopped) | **transient** | dismissed | **none** |
+| control: same, but the reader DID read the fixed copy (`ok`) | fresh -> Fri **stale** | replied -> **owed/stale** | stale raised |
+
+The consequences:
+- **(i)** An urgent incomplete alert never clears after the flow is fixed.
+- **(ii)** Once the owner dismisses it, a real later outage of the sent flow is NEVER alerted. That is the staleness
+  alert's one job. Before the fix this resolved after 2 h.
+
+Not live at merge (`correspondence.staleAlerts` gates all of it). It **blocks switching staleAlerts on**, in place of
+U1. Minimal fix direction: when the last read is `rejected:incomplete` and the drive shows a newer copy, the staleness
+check should READ that copy (one `readFeed(cfg, kind)`, the reader that already exists), not wait for a reader that
+may never run. Do not fall back on time: falling back to `stale` reintroduces U4, and to `fresh` reintroduces U1.
