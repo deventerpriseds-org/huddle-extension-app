@@ -5278,3 +5278,7 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
   window succeeded via the fallback. Since 11-05 no PARK/BACKLOG tap has been traced yet, so "fixed" is inferred
   from token presence, not observed.
 - [x] proposals-preview.yml: `step` input (reply = tuning step 1, scripts/reply-scan-preview.ts on the chosen ref). Workflow-only.
+- [ ] Tuning step 1 run 43557012507 (2026-11-14 04:33 UTC): 94 conversations since Nov 9, 74 judged, 0 failures ->
+      NEEDS REPLY 13 (10 high, 3 medium; every quote found word-for-word), no reply 61, settled 6, owner-only 14.
+      Report: OneDrive /automation/Huddle Preview/reply-scan-2026-11-14T04-33-28.html (+ emailed). Waiting on the
+      owner to mark wrong YES / missed NO before tuning further.
