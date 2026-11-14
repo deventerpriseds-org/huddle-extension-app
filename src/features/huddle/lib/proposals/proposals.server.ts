@@ -24,18 +24,27 @@ import {
   needsYouJudgeProcessor,
   proposalChecklistResult,
   proposalsProcessor,
-  runTranscriptProposals,
+  runMeetingTriage,
+  triageProposal,
   type ActionResult,
   type ExtractFn,
   type MeetingRef,
 } from "./engine";
-import { EXTRACTION_SCHEMA, EXTRACTION_SCHEMA_NAME, PROPOSALS_AGENT, PROPOSALS_HUDDLE, transcriptProposalText, type ProposalRow } from "./proposals";
+import { EXTRACTION_SCHEMA, EXTRACTION_SCHEMA_NAME, PROPOSALS_AGENT, PROPOSALS_HUDDLE, type ProposalRow } from "./proposals";
+import { actionItemsOf, groupMeetingQueue, type MeetingQueueReport, type TriageChoice } from "./meeting-triage";
 
 /** The cheap tier the minutes flow already uses for its Luna summaries. */
 export const EXTRACT_MODEL = "gpt-5.6-luna";
 const EXTRACT_TIMEOUT_MS = 20_000;
 const TRANSCRIPT_BUDGET_MS = 25_000;
-const TRANSCRIPT_LOOKBACK_DAYS = 7;
+/** Meeting triage pings only for meetings this recent: switching triage on must not post a week of pings at
+ *  once (decision, reversible; IMPL-meeting-triage.md). */
+const TRIAGE_LOOKBACK_DAYS = 2;
+
+/** Meeting triage: proposals ON and correspondence.meetingTriage literally true (AC-R9.1). */
+export function meetingTriageOn(cfg: { correspondence: { proposals: boolean; meetingTriage?: boolean } } | null): boolean {
+  return !!cfg && cfg.correspondence.proposals === true && cfg.correspondence.meetingTriage === true;
+}
 
 /** The config, only when proposals are switched on (literal true) and an owner is bound. */
 export function proposalsConfig(): (OneDriveFeedsConfig & { owner: string }) | null {
@@ -144,37 +153,52 @@ export function runProposalsPass(): Promise<void> {
       const d = await deps(cfg.owner);
       const { pgLedger } = await import("../correspondence/ledger.server");
       const owners = await scopeOf(cfg.owner, cfg.ownerLogins);
-      if (process.env.FIREFLIES_API_KEY) {
+      // AC-R5.3 / AC-R9.3: minutes NEVER become proposals automatically. With meeting triage OFF the Fireflies
+      // pass does not run at all (zero Fireflies, ledger and store calls); ON, each finished meeting's action
+      // items are offered in ONE triage ping (Mine / For someone / Skip).
+      if (meetingTriageOn(cfg) && process.env.FIREFLIES_API_KEY) {
         try {
           const ff = await import("../fireflies/fireflies.server");
           const store = await import("../fireflies/minutes-store.server");
           const mOwner = ff.minutesOwner();
           if (mOwner && owners.includes(mOwner)) {
-            const r = await runTranscriptProposals(cfg.owner, {
-              ...d,
+            const r = await runMeetingTriage(cfg.owner, {
+              store: d.store,
+              tz: d.tz,
               ledger: pgLedger,
               maxAttempts: cfg.correspondence.maxAttempts,
               now: () => Date.now(),
               budgetMs: TRANSCRIPT_BUDGET_MS,
               // Read-only: meetings the minutes flow has FINISHED; the queue, lease, email and upload are untouched.
               listFinishedMeetings: async (): Promise<MeetingRef[]> => {
-                const since = Date.now() - TRANSCRIPT_LOOKBACK_DAYS * 86_400_000;
+                const since = Date.now() - TRIAGE_LOOKBACK_DAYS * 86_400_000;
                 return (await store.listRecentMeetings(mOwner, 20))
                   .filter((m) => !m.pending_email && !m.pending_onedrive && Date.parse(m.created_at) >= since)
                   .map((m) => ({ meetingId: m.meeting_id, title: m.title, meetingAt: m.meeting_at, contentHash: m.content_hash }));
               },
-              fetchSummaryText: async (id) => {
+              fetchActionItems: async (id) => {
                 try {
-                  return transcriptProposalText((await ff.fetchTranscript(id)).transcript.summary);
+                  return actionItemsOf((await ff.fetchTranscript(id)).transcript.summary) ?? "";
                 } catch {
                   return null; // needs_context: retried when the meeting changes, never a hot loop
                 }
               },
+              enqueue: async (turnId, payload) => {
+                const { enqueueTurn } = await import("../tasks/turns.server");
+                return enqueueTurn(turnId, PROPOSALS_HUDDLE, cfg.owner, payload);
+              },
+              run: async (turnId) => {
+                const { runTurnById } = await import("../huddle.functions");
+                await runTurnById(turnId);
+              },
+              log: (l) => console.log(l),
             });
-            if (r.processed || r.failed || r.needsContext) console.log(`[proposals] transcripts processed=${r.processed} needs_context=${r.needsContext} failed=${r.failed}`);
+            if (r.processed || r.failed || r.needsContext) {
+              console.log(`[meeting-triage] processed=${r.processed} pinged=${r.pinged} rows=${r.rowsCreated} needs_context=${r.needsContext} failed=${r.failed}`);
+            }
           }
         } catch (e) {
-          console.error("[proposals] transcript pass failed", e instanceof Error ? e.name : "error");
+          console.error("[meeting-triage] pass failed", e instanceof Error ? e.name : "error");
         }
       }
       const out = await deliverEveningProposals(cfg.owner, owners, {
@@ -226,7 +250,23 @@ export async function proposalChecklistForUser(userEmail: string): Promise<strin
     return proposalChecklistResult([]);
   }
   const { pgProposalStore } = await import("./proposals-store.server");
-  return proposalChecklistResult(await pgProposalStore.listActive(owners));
+  const active = await pgProposalStore.listActive(owners);
+  // OQ-9: an updated meeting's NEW items never ping again; they wait here, after the proposals, untriaged.
+  const untriaged = meetingTriageOn(cfg) ? await pgProposalStore.listUntriaged(owners) : [];
+  return proposalChecklistResult([...active, ...untriaged]);
+}
+
+/**
+ * The meeting action-item queue for the preview report's third list ("Meeting action items for you").
+ * `mine` per meeting is what that list shows; `forSomeone` rows are the owner's own tracking (text names only)
+ * and are NOT "for you"; untriaged / skipped are counts. Null when triage is off (zero DB calls).
+ */
+export async function getMeetingActionQueue(ownerEmail: string): Promise<MeetingQueueReport | null> {
+  const cfg = proposalsConfig();
+  if (!meetingTriageOn(cfg)) return null;
+  const owners = await scopeOf(ownerEmail, cfg!.ownerLogins);
+  const { pgProposalStore } = await import("./proposals-store.server");
+  return groupMeetingQueue(await pgProposalStore.listMeetingQueue(owners));
 }
 
 /** The caller's owner scope, or null when signed out. Ownership is enforced by every store query. */
@@ -248,13 +288,17 @@ export async function getProposalRows(caller: { entra_object_id?: string; entra_
 export async function actOnProposal(
   caller: { entra_object_id?: string; entra_email?: string } | undefined,
   id: string,
-  action: "approve" | "complete" | "dismiss" | "edit",
+  action: "approve" | "complete" | "dismiss" | "edit" | "triage",
   title?: string,
+  triage?: { choice: TriageChoice; name?: string },
 ): Promise<ActionResult> {
-  if (!proposalsConfig()) return { ok: false, error: "Task proposals are not switched on." };
+  const cfg = proposalsConfig();
+  if (!cfg) return { ok: false, error: "Task proposals are not switched on." };
+  if (action === "triage" && !meetingTriageOn(cfg)) return { ok: false, error: "Meeting triage is not switched on." };
   const owners = await callerOwners(caller);
   if (!owners) return { ok: false, error: "Sign-in required." };
   const { pgProposalStore: store } = await import("./proposals-store.server");
+  if (action === "triage") return triageProposal(owners, id, triage?.choice as TriageChoice, triage?.name, store);
   if (action === "complete") return decideProposal(owners, id, "completed", store);
   if (action === "dismiss") return decideProposal(owners, id, "dismissed", store);
   if (action === "edit") return editProposal(owners, id, title ?? "", store);

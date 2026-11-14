@@ -18,8 +18,11 @@ import { newTextOnly, screenMessage } from "../email/inbound-email";
 import { normalizeTaskTitle } from "../tasks/scoring";
 import { stableHash, type CorrespondenceSource, type SourceItem } from "../correspondence/source-item";
 
-export type ProposalState = "proposed" | "approved" | "completed" | "dismissed";
-export const PROPOSAL_STATES: readonly ProposalState[] = ["proposed", "approved", "completed", "dismissed"];
+/** `untriaged` / `delegated` are meeting-triage states (AC-correspondence-redesign R5): an action item from a
+ *  meeting's minutes waiting for the owner's Mine / For someone / Skip, and one the owner said is someone
+ *  else's (the typed name kept as text only). Neither is ever in the active queue (AC-R5.14). */
+export type ProposalState = "proposed" | "approved" | "completed" | "dismissed" | "untriaged" | "delegated";
+export const PROPOSAL_STATES: readonly ProposalState[] = ["proposed", "approved", "completed", "dismissed", "untriaged", "delegated"];
 /** Decided states leave the active queue but stay for audit and dedup (AC-5.5). */
 export const DECIDED_STATES: readonly ProposalState[] = ["approved", "completed", "dismissed"];
 
@@ -736,9 +739,17 @@ export interface ProposalRowInfo {
   dueText: string | null;
   /** The journey task created on Approve (AC-5.9). */
   linkedTaskId: string | null;
+  /** Meeting-triage origin (AC-R5.15): the row came from a meeting's action items. While its state is
+   *  `untriaged` the card shows Mine / For someone / Skip instead of Approve / Edit / Mark done / Dismiss. */
+  triage?: boolean;
 }
 
 const SOURCE_LABEL: Record<CorrespondenceSource, string> = { email: "Email", teams: "Teams", transcript: "Meeting" };
+
+/** Pure: a row that came from meeting triage (its FIRST source is a meeting, or it is in a triage state). */
+export function isTriageRow(p: Pick<ProposalRow, "state" | "sources">): boolean {
+  return p.state === "untriaged" || p.state === "delegated" || p.sources[0]?.source === "transcript";
+}
 
 export function proposalChecklistRow(p: ProposalRow): {
   taskId: string;
@@ -766,6 +777,7 @@ export function proposalChecklistRow(p: ProposalRow): {
       dueDate: p.dueDate,
       dueText: p.dueText,
       linkedTaskId: p.taskId,
+      ...(isTriageRow(p) ? { triage: true } : {}),
     },
   };
 }
@@ -796,7 +808,10 @@ export function sanitizeChecklistPayload(c: unknown):
       if (!isProposalId(base.taskId)) return [];
       const p = (row.proposal && typeof row.proposal === "object" ? row.proposal : {}) as Record<string, unknown>;
       const s = (v: unknown) => (typeof v === "string" ? v : null);
-      const state = PROPOSAL_STATES.includes(p.state as ProposalState) ? (p.state as ProposalState) : "proposed";
+      const triage = p.triage === true;
+      // AC-R5.15: an unknown state falls back to `proposed` only for a NON-triage row; a triage row falls back
+      // to `untriaged` (never silently into the active queue's actions).
+      const state = PROPOSAL_STATES.includes(p.state as ProposalState) ? (p.state as ProposalState) : triage ? "untriaged" : "proposed";
       return [
         {
           ...base,
@@ -812,6 +827,7 @@ export function sanitizeChecklistPayload(c: unknown):
             dueDate: s(p.dueDate),
             dueText: s(p.dueText),
             linkedTaskId: s(p.linkedTaskId),
+            ...(triage ? { triage: true } : {}),
           } satisfies ProposalRowInfo,
         },
       ];

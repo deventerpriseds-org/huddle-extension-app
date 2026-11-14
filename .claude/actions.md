@@ -1,3 +1,8 @@
+- [x] Redesign parts merged into claude_task-proposals (2026-11-14): part A AI conversation judge
+      (needs-you.ts, email-only report; docs/qc-evidence/IMPL-needs-you-redesign.md, 14/14 mutations FIRED) + part B
+      meeting triage (meeting-triage.ts, Mine/For someone/Skip, chat.task_proposals untriaged/delegated states;
+      docs/qc-evidence/IMPL-meeting-triage.md). All suites green on the merge. NOT live; flags conversations /
+      meetingTriage OFF. Verifier loop 7 + real-mail report next.
 # Action Tracker — huddle-extension-app
 Last updated: 2026-10-27
 

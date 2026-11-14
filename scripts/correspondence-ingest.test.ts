@@ -90,6 +90,8 @@ t("AC-6.1 correspondence switches all OFF by default", noTeams.correspondence, {
   sources: ["teams", "email"],
   bell: false,
   proposals: false,
+  // Meeting-minutes triage (2026-11-14, AC-correspondence-redesign R9.1, scripts/meeting-triage.test.ts): OFF by default.
+  meetingTriage: false,
   maxAttempts: 5,
   minIntervalMinutes: 10,
   // File-staleness alert (2026-11-13, scripts/feed-staleness.test.ts): OFF by default like every switch.

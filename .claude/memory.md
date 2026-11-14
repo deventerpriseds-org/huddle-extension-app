@@ -4011,3 +4011,9 @@ here as fact three times before being checked.)
   sent.json exists but sentDateTime null on 29/29; emails.json last written Nov 11 14:02 UTC. Verifier loop 3 = FIX
   FIRST; D1-D5/M1/M2 fixed (aa0d6ade), D6 in progress, loop 4 verifier next. Preview + open-vs-replied report go to
   the owner's OneDrive only (proposals-preview.yml) -- never print item text in this public repo's logs.
+- 2026-11-14 correspondence redesign (branch claude_task-proposals, NOT live): "needs you" is decided by an AI
+  conversation JUDGE (lib/correspondence/needs-you.ts) -- code computes facts only (thread, OWNER/OTHER speakers,
+  To/CC position, calendar/bulk header stamps, settled-by-owner-reply), the model (EXTRACT_MODEL gpt-5.6-luna) judges
+  meaning; its ask quote must be verbatim in the latest OTHER message. Owner rejected keyword capture. Report is
+  EMAIL ONLY. Meeting action items only via the triage ping (Mine / For someone / Skip). Iris's live alert screen
+  (inbound-email.ts) is pinned unchanged.

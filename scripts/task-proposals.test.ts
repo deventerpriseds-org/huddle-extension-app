@@ -36,10 +36,9 @@ import {
   proposalChecklistResult,
   proposalsProcessor,
   proposeFromSource,
-  runTranscriptProposals,
   type ExtractFn,
-  type MeetingRef,
 } from "../src/features/huddle/lib/proposals/engine";
+import * as engineModule from "../src/features/huddle/lib/proposals/engine";
 import {
   errorCategory,
   ledgerKey,
@@ -553,45 +552,13 @@ const runPass = async (tw: ReturnType<typeof memLedger>, store: ReturnType<typeo
   t("S-12 owner's own message -> processed, no proposal", await proc.process(item, { owner: OWNER, nowMs: 0 }), { status: "processed", resultIds: {} });
 }
 
-// ── H. transcripts (AC-5.22) ─────────────────────────────────────────────────────────────────────
-console.log("\n# H. Fireflies transcripts (read-only, same ledger)");
-{
-  const tw = memLedger();
-  const store = memStore();
-  const model = stubModel([["Von to update the budget", { tasks: [{ task: "Update the budget", evidence: "Von to update the budget", assignee: "Von", due_text: null }] }]]);
-  let fetches = 0;
-  const meetings: MeetingRef[] = [
-    { meetingId: "ff-1", title: "Test-Budget sync", meetingAt: AT, contentHash: "h1" },
-    { meetingId: "ff-2", title: "Test-Standup", meetingAt: AT, contentHash: "h2" },
-  ];
-  const td = {
-    store,
-    extract: model.extract,
-    openTitles: async () => new Set<string>(),
-    tz: TZ,
-    ledger: tw.ledger,
-    listFinishedMeetings: async () => meetings,
-    fetchSummaryText: async (id: string) => {
-      fetches++;
-      return id === "ff-1" ? transcriptProposalText({ action_items: "Von to update the budget", overview: "Budget sync." }) : "";
-    },
-    maxAttempts: 5,
-    now: () => 0,
-    budgetMs: 10_000,
-  };
-  const r1 = await runTranscriptProposals(OWNER, td);
-  const p = [...store.rows.values()];
-  t("AC-5.18 Fireflies action item 'Von to update the budget' -> one proposal, named assignee kept", [p.length, p[0]?.title, p[0]?.assignee], [1, "Update the budget", "Von"]);
-  t("AC-5.22 transcript ref = meeting_id", p[0]?.sources[0], { source: "transcript", sourceItemId: "ff-1", at: AT, context: "Test-Budget sync" });
-  t("AC-5.22 both meetings processed (empty summary -> processed, no proposal)", [r1.processed, r1.failed], [2, 0]);
-  await runTranscriptProposals(OWNER, td);
-  t("AC-3.5 second run -> no re-fetch, no new proposals", [fetches, store.rows.size], [2, 1]);
-  meetings[0] = { ...meetings[0], contentHash: "h1-reprocessed" };
-  await runTranscriptProposals(OWNER, td);
-  t("AC-3.4 a re-processed meeting re-extracts but does not duplicate", [fetches, store.rows.size], [3, 1]);
-  const unavailable = { ...td, ledger: memLedger().ledger, fetchSummaryText: async () => null };
-  t("AC-3.7 summary unavailable -> needs_context, not failed", (await runTranscriptProposals(OWNER, unavailable)).needsContext, 2);
-}
+// ── H. transcripts (AC-5.22) -- REPLACED by meeting triage (AC-correspondence-redesign R5) ────────────
+// The old section pinned "a finished meeting's action items become proposals automatically". The owner rejected
+// that on 2026-11-14 ("Then and only then can they go in the meeting action item queue"), so it is replaced by
+// scripts/meeting-triage.test.ts section D (one triage ping per meeting, zero automatic proposals). This check
+// pins the NEW rule here too, so this suite fails if the automatic path ever comes back.
+console.log("\n# H. Fireflies transcripts: no automatic proposals (replaced by meeting triage)");
+t("AC-R5.3 / AC-R9.3 the automatic transcript -> proposals pass no longer exists", "runTranscriptProposals" in engineModule, false);
 
 // ── I. owner actions (AC-5.3, 5.7-5.13) ──────────────────────────────────────────────────────────
 console.log("\n# I. Approve / Edit / Mark done / Dismiss");
