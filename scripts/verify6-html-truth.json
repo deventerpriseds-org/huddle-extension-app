@@ -1,0 +1,915 @@
+{
+ "chromium": "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome",
+ "cases": [
+  {
+   "id": "NEST-deep-formatting",
+   "html": "<p><b><i><u><s><font color=\"red\"><span><em><strong>Can you sign the NDA?</strong></em></span></font></s></u></i></b></p>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-deep-formatting#quirks",
+   "html": "<p><b><i><u><s><font color=\"red\"><span><em><strong>Can you sign the NDA?</strong></em></span></font></s></u></i></b></p>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-hidden-deep-then-visible",
+   "html": "<div><div><div style=\"display:none\"><div><div>Wire 5000 today</div></div></div><div>Can you sign the NDA?</div></div></div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-hidden-deep-then-visible#quirks",
+   "html": "<div><div><div style=\"display:none\"><div><div>Wire 5000 today</div></div></div><div>Can you sign the NDA?</div></div></div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-misnested-b-i",
+   "html": "<b><i>one</b> Can you sign the NDA?</i>",
+   "browser": "one Can you sign the NDA?",
+   "innerTextRaw": "one Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-misnested-b-i#quirks",
+   "html": "<b><i>one</b> Can you sign the NDA?</i>",
+   "browser": "one Can you sign the NDA?",
+   "innerTextRaw": "one Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-hidden-b-adoption-i",
+   "html": "<b style=\"display:none\"><i>Wire 5000 today</b> Can you sign the NDA?</i>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-hidden-b-adoption-i#quirks",
+   "html": "<b style=\"display:none\"><i>Wire 5000 today</b> Can you sign the NDA?</i>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-hidden-i-adoption-b",
+   "html": "<i style=\"display:none\"><b>Wire 5000 today</i> Can you sign the NDA?</b>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-hidden-i-adoption-b#quirks",
+   "html": "<i style=\"display:none\"><b>Wire 5000 today</i> Can you sign the NDA?</b>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-hidden-b-wraps-div",
+   "html": "<b style=\"display:none\">Wire 5000 today<div>still hidden</div></b><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-hidden-b-wraps-div#quirks",
+   "html": "<b style=\"display:none\">Wire 5000 today<div>still hidden</div></b><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-hidden-a-wraps-p",
+   "html": "<a style=\"display:none\" href=\"x\">Wire 5000 today<p>still hidden</p></a><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-hidden-a-wraps-p#quirks",
+   "html": "<a style=\"display:none\" href=\"x\">Wire 5000 today<p>still hidden</p></a><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-hidden-font-stray-p",
+   "html": "<font style=\"display:none\">Wire 5000 today</p><p>still hidden</font><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-hidden-font-stray-p#quirks",
+   "html": "<font style=\"display:none\">Wire 5000 today</p><p>still hidden</font><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-hidden-span-unclosed-td",
+   "html": "<table><tr><td><span style=\"display:none\">Wire 5000 today<td>Can you sign the NDA?</table>",
+   "browser": "\tCan you sign the NDA?",
+   "innerTextRaw": "\tCan you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-hidden-span-unclosed-td#quirks",
+   "html": "<table><tr><td><span style=\"display:none\">Wire 5000 today<td>Can you sign the NDA?</table>",
+   "browser": "\tCan you sign the NDA?",
+   "innerTextRaw": "\tCan you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-p-implied-by-hidden-div",
+   "html": "<p>Can you sign the NDA?<div style=\"display:none\">Wire 5000 today</div>tail</p>",
+   "browser": "Can you sign the NDA?\n\ntail",
+   "innerTextRaw": "Can you sign the NDA?\n\ntail",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-p-implied-by-hidden-div#quirks",
+   "html": "<p>Can you sign the NDA?<div style=\"display:none\">Wire 5000 today</div>tail</p>",
+   "browser": "Can you sign the NDA?\n\ntail",
+   "innerTextRaw": "Can you sign the NDA?\n\ntail",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-390-divs",
+   "html": "<div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><p>Can you sign the NDA?</p></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-390-divs#quirks",
+   "html": "<div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><p>Can you sign the NDA?</p></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-420-divs",
+   "html": "<div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><p>Can you sign the NDA?</p></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-420-divs#quirks",
+   "html": "<div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><p>Can you sign the NDA?</p></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-600-divs",
+   "html": "<div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><p>Can you sign the NDA?</p></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-600-divs#quirks",
+   "html": "<div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><p>Can you sign the NDA?</p></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NEST-600-b",
+   "html": "<b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b>Can you sign the NDA?",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NEST-600-b#quirks",
+   "html": "<b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b><b>Can you sign the NDA?",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "TEMPLATE",
+   "html": "<template><p>Wire 5000 today</p></template><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "TEMPLATE#quirks",
+   "html": "<template><p>Wire 5000 today</p></template><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "NOSCRIPT",
+   "html": "<noscript><p>Wire 5000 today</p></noscript><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "NOSCRIPT#quirks",
+   "html": "<noscript><p>Wire 5000 today</p></noscript><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "SVG-text",
+   "html": "<p>Chart:</p><svg width=\"200\" height=\"20\"><text x=\"0\" y=\"15\">Can you sign the NDA?</text></svg>",
+   "browser": "Chart:\n\nCan you sign the NDA?",
+   "innerTextRaw": "Chart:\n\nCan you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "SVG-text#quirks",
+   "html": "<p>Chart:</p><svg width=\"200\" height=\"20\"><text x=\"0\" y=\"15\">Can you sign the NDA?</text></svg>",
+   "browser": "Chart:\n\nCan you sign the NDA?",
+   "innerTextRaw": "Chart:\n\nCan you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "SVG-hidden",
+   "html": "<svg style=\"display:none\"><text>Wire 5000 today</text></svg><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "SVG-hidden#quirks",
+   "html": "<svg style=\"display:none\"><text>Wire 5000 today</text></svg><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "SVG-title",
+   "html": "<svg width=\"10\" height=\"10\"><title>Wire 5000 today</title><rect width=\"5\" height=\"5\"/></svg><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "SVG-title#quirks",
+   "html": "<svg width=\"10\" height=\"10\"><title>Wire 5000 today</title><rect width=\"5\" height=\"5\"/></svg><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "SVG-foreignObject",
+   "html": "<svg width=\"300\" height=\"40\"><foreignObject width=\"300\" height=\"40\"><div>Can you sign the NDA?</div></foreignObject></svg>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "SVG-foreignObject#quirks",
+   "html": "<svg width=\"300\" height=\"40\"><foreignObject width=\"300\" height=\"40\"><div>Can you sign the NDA?</div></foreignObject></svg>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "MATH",
+   "html": "<p>Total <math><mi>x</mi><mo>=</mo><mn>5</mn></math> Can you sign the NDA?</p>",
+   "browser": "Total \n𝑥\n=\n5\n Can you sign the NDA?",
+   "innerTextRaw": "Total \n𝑥\n=\n5\n Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "MATH#quirks",
+   "html": "<p>Total <math><mi>x</mi><mo>=</mo><mn>5</mn></math> Can you sign the NDA?</p>",
+   "browser": "Total \n𝑥\n=\n5\n Can you sign the NDA?",
+   "innerTextRaw": "Total \n𝑥\n=\n5\n Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "SELECT",
+   "html": "<p>Pick: <select><option>Alpha</option><option selected>Beta</option></select> Can you sign the NDA?</p>",
+   "browser": "Pick: \nAlpha\nBeta\n Can you sign the NDA?",
+   "innerTextRaw": "Pick: \nAlpha\nBeta\n Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "SELECT#quirks",
+   "html": "<p>Pick: <select><option>Alpha</option><option selected>Beta</option></select> Can you sign the NDA?</p>",
+   "browser": "Pick: \nAlpha\nBeta\n Can you sign the NDA?",
+   "innerTextRaw": "Pick: \nAlpha\nBeta\n Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "TEXTAREA",
+   "html": "<textarea>draft words</textarea><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "TEXTAREA#quirks",
+   "html": "<textarea>draft words</textarea><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "DETAILS-closed",
+   "html": "<details><summary>More</summary><p>Wire 5000 today</p></details><p>shown</p>",
+   "browser": "More\n\nshown",
+   "innerTextRaw": "More\n\nshown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "DETAILS-closed#quirks",
+   "html": "<details><summary>More</summary><p>Wire 5000 today</p></details><p>shown</p>",
+   "browser": "More\n\nshown",
+   "innerTextRaw": "More\n\nshown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "DETAILS-open",
+   "html": "<details open><summary>More</summary><p>Can you sign the NDA?</p></details>",
+   "browser": "More\n\nCan you sign the NDA?",
+   "innerTextRaw": "More\n\nCan you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "DETAILS-open#quirks",
+   "html": "<details open><summary>More</summary><p>Can you sign the NDA?</p></details>",
+   "browser": "More\n\nCan you sign the NDA?",
+   "innerTextRaw": "More\n\nCan you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "DIALOG-closed",
+   "html": "<dialog><p>Wire 5000 today</p></dialog><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "DIALOG-closed#quirks",
+   "html": "<dialog><p>Wire 5000 today</p></dialog><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "DIALOG-open",
+   "html": "<dialog open><p>Can you sign the NDA?</p></dialog>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "DIALOG-open#quirks",
+   "html": "<dialog open><p>Can you sign the NDA?</p></dialog>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "OBJECT-fallback",
+   "html": "<object data=\"missing.bin\" type=\"application/x-none\"><p>Can you sign the NDA?</p></object>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "OBJECT-fallback#quirks",
+   "html": "<object data=\"missing.bin\" type=\"application/x-none\"><p>Can you sign the NDA?</p></object>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "IFRAME-srcdoc",
+   "html": "<iframe srcdoc=\"<p>Wire 5000 today</p>\"></iframe><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "IFRAME-srcdoc#quirks",
+   "html": "<iframe srcdoc=\"<p>Wire 5000 today</p>\"></iframe><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "XMP-raw",
+   "html": "<xmp><b>Can you sign the NDA?</b></xmp>",
+   "browser": "<b>Can you sign the NDA?</b>",
+   "innerTextRaw": "<b>Can you sign the NDA?</b>",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "XMP-raw#quirks",
+   "html": "<xmp><b>Can you sign the NDA?</b></xmp>",
+   "browser": "<b>Can you sign the NDA?</b>",
+   "innerTextRaw": "<b>Can you sign the NDA?</b>",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "COND-downlevel-revealed",
+   "html": "<![if !mso]><p>Can you sign the NDA?</p><![endif]>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "COND-downlevel-revealed#quirks",
+   "html": "<![if !mso]><p>Can you sign the NDA?</p><![endif]>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "COND-mjml-not-mso",
+   "html": "<!--[if !mso]><!--><p>Can you sign the NDA?</p><!--<![endif]-->",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "COND-mjml-not-mso#quirks",
+   "html": "<!--[if !mso]><!--><p>Can you sign the NDA?</p><!--<![endif]-->",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "FOSTER-text",
+   "html": "<table>Can you sign the NDA?<tr><td>cell</td></tr></table>",
+   "browser": "Can you sign the NDA?\ncell",
+   "innerTextRaw": "Can you sign the NDA?\ncell",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "FOSTER-text#quirks",
+   "html": "<table>Can you sign the NDA?<tr><td>cell</td></tr></table>",
+   "browser": "Can you sign the NDA?\ncell",
+   "innerTextRaw": "Can you sign the NDA?\ncell",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "FOSTER-hidden-span",
+   "html": "<table><span style=\"display:none\">Wire 5000 today</span><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "FOSTER-hidden-span#quirks",
+   "html": "<table><span style=\"display:none\">Wire 5000 today</span><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "FOSTER-hidden-b-unclosed-cell",
+   "html": "<table><b style=\"display:none\"><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "FOSTER-hidden-b-unclosed-cell#quirks",
+   "html": "<table><b style=\"display:none\"><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "FOSTER-hidden-b-after-rows",
+   "html": "<table><tr><td>cell</td></tr><b style=\"display:none\">Wire 5000 today</b></table><p>Can you sign the NDA?</p>",
+   "browser": "cell\n\nCan you sign the NDA?",
+   "innerTextRaw": "cell\n\nCan you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "FOSTER-hidden-b-after-rows#quirks",
+   "html": "<table><tr><td>cell</td></tr><b style=\"display:none\">Wire 5000 today</b></table><p>Can you sign the NDA?</p>",
+   "browser": "cell\n\nCan you sign the NDA?",
+   "innerTextRaw": "cell\n\nCan you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "FOSTER-hidden-b-reopened-after",
+   "html": "<table><tr><td>x</td></tr><b style=\"display:none\">Wire 5000 today</table>after",
+   "browser": "x",
+   "innerTextRaw": "x",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "FOSTER-hidden-b-reopened-after#quirks",
+   "html": "<table><tr><td>x</td></tr><b style=\"display:none\">Wire 5000 today</table>after",
+   "browser": "x",
+   "innerTextRaw": "x",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "TABLE-hidden-td",
+   "html": "<table><tr><td style=\"display:none\">Wire 5000 today</td><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "TABLE-hidden-td#quirks",
+   "html": "<table><tr><td style=\"display:none\">Wire 5000 today</td><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "TABLE-hidden-tr",
+   "html": "<table><tr hidden><td>Wire 5000 today</td></tr><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "TABLE-hidden-tr#quirks",
+   "html": "<table><tr hidden><td>Wire 5000 today</td></tr><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "LIST-hidden-li",
+   "html": "<ul><li hidden>Wire 5000 today</li><li>Can you sign the NDA?</li></ul>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "LIST-hidden-li#quirks",
+   "html": "<ul><li hidden>Wire 5000 today</li><li>Can you sign the NDA?</li></ul>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "BODY-hidden",
+   "html": "<html><body hidden><p>Can you sign the NDA?</p></body></html>",
+   "browser": "",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "BODY-hidden#quirks",
+   "html": "<html><body hidden><p>Can you sign the NDA?</p></body></html>",
+   "browser": "",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "HTML-hidden",
+   "html": "<html hidden><body><p>Can you sign the NDA?</p></body></html>",
+   "browser": "",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "HTML-hidden#quirks",
+   "html": "<html hidden><body><p>Can you sign the NDA?</p></body></html>",
+   "browser": "",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "BODY-display-none",
+   "html": "<html><body style=\"display:none\"><p>Can you sign the NDA?</p></body></html>",
+   "browser": "",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "BODY-display-none#quirks",
+   "html": "<html><body style=\"display:none\"><p>Can you sign the NDA?</p></body></html>",
+   "browser": "",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "BODY-font0-child-sized",
+   "html": "<html><body style=\"font-size:0\"><p style=\"font-size:14px\">Can you sign the NDA?</p><p>Wire 5000 today</p></body></html>",
+   "browser": "Can you sign the NDA?\n\nWire 5000 today",
+   "innerTextRaw": "Can you sign the NDA?\n\nWire 5000 today",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "BODY-font0-child-sized#quirks",
+   "html": "<html><body style=\"font-size:0\"><p style=\"font-size:14px\">Can you sign the NDA?</p><p>Wire 5000 today</p></body></html>",
+   "browser": "Can you sign the NDA?\n\nWire 5000 today",
+   "innerTextRaw": "Can you sign the NDA?\n\nWire 5000 today",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "BODY-vis-hidden-child-visible",
+   "html": "<html><body style=\"visibility:hidden\"><p style=\"visibility:visible\">Can you sign the NDA?</p><p>Wire 5000 today</p></body></html>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "BODY-vis-hidden-child-visible#quirks",
+   "html": "<html><body style=\"visibility:hidden\"><p style=\"visibility:visible\">Can you sign the NDA?</p><p>Wire 5000 today</p></body></html>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "BODY-hidden-display-block",
+   "html": "<html><body hidden style=\"display:block\"><p>Can you sign the NDA?</p></body></html>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "BODY-hidden-display-block#quirks",
+   "html": "<html><body hidden style=\"display:block\"><p>Can you sign the NDA?</p></body></html>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "HEAD-text-before-body",
+   "html": "<html><head><title>Wire 5000 today</title></head><body><p>Can you sign the NDA?</p></body></html>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "HEAD-text-before-body#quirks",
+   "html": "<html><head><title>Wire 5000 today</title></head><body><p>Can you sign the NDA?</p></body></html>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "HIDDEN-until-found",
+   "html": "<div hidden=\"until-found\">Wire 5000 today</div><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "HIDDEN-until-found#quirks",
+   "html": "<div hidden=\"until-found\">Wire 5000 today</div><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "HIDDEN-attr-display-block",
+   "html": "<div hidden style=\"display:block\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "HIDDEN-attr-display-block#quirks",
+   "html": "<div hidden style=\"display:block\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-upper-display-none",
+   "html": "<div style=\"DISPLAY: NONE\">Wire 5000 today</div><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-upper-display-none#quirks",
+   "html": "<div style=\"DISPLAY: NONE\">Wire 5000 today</div><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-spaced-important",
+   "html": "<div style=\"display : none ! important ; display:block\">Wire 5000 today</div><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-spaced-important#quirks",
+   "html": "<div style=\"display : none ! important ; display:block\">Wire 5000 today</div><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-escaped-none",
+   "html": "<div style=\"display:n\\one\">Wire 5000 today</div><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-escaped-none#quirks",
+   "html": "<div style=\"display:n\\one\">Wire 5000 today</div><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-opacity-0.01",
+   "html": "<div style=\"opacity:0.01\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-opacity-0.01#quirks",
+   "html": "<div style=\"opacity:0.01\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-opacity-0.0",
+   "html": "<div style=\"opacity:0.0\">Wire 5000 today</div><p>shown</p>",
+   "browser": "Wire 5000 today\n\nshown",
+   "innerTextRaw": "Wire 5000 today\n\nshown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-opacity-0.0#quirks",
+   "html": "<div style=\"opacity:0.0\">Wire 5000 today</div><p>shown</p>",
+   "browser": "Wire 5000 today\n\nshown",
+   "innerTextRaw": "Wire 5000 today\n\nshown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-color-transparent",
+   "html": "<div style=\"color:transparent\">Wire 5000 today</div><p>shown</p>",
+   "browser": "Wire 5000 today\n\nshown",
+   "innerTextRaw": "Wire 5000 today\n\nshown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-color-transparent#quirks",
+   "html": "<div style=\"color:transparent\">Wire 5000 today</div><p>shown</p>",
+   "browser": "Wire 5000 today\n\nshown",
+   "innerTextRaw": "Wire 5000 today\n\nshown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-display-contents",
+   "html": "<div style=\"display:contents\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-display-contents#quirks",
+   "html": "<div style=\"display:contents\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-height0-overflow",
+   "html": "<div style=\"height:0;overflow:hidden\">Wire 5000 today</div><p>shown</p>",
+   "browser": "Wire 5000 today\n\nshown",
+   "innerTextRaw": "Wire 5000 today\n\nshown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-height0-overflow#quirks",
+   "html": "<div style=\"height:0;overflow:hidden\">Wire 5000 today</div><p>shown</p>",
+   "browser": "Wire 5000 today\n\nshown",
+   "innerTextRaw": "Wire 5000 today\n\nshown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-semicolon-in-comment",
+   "html": "<div style=\"color:red /* ; display:none */\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-semicolon-in-comment#quirks",
+   "html": "<div style=\"color:red /* ; display:none */\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-decl-inside-string",
+   "html": "<div style=\"font-family:'Arial;display:none;x'\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-decl-inside-string#quirks",
+   "html": "<div style=\"font-family:'Arial;display:none;x'\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?",
+   "innerTextRaw": "Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-content-visibility",
+   "html": "<div style=\"content-visibility:hidden\">Wire 5000 today</div><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-content-visibility#quirks",
+   "html": "<div style=\"content-visibility:hidden\">Wire 5000 today</div><p>shown</p>",
+   "browser": "shown",
+   "innerTextRaw": "shown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-maxheight0-overflow-clip",
+   "html": "<div style=\"max-height:0px;overflow:clip\">Wire 5000 today</div><p>shown</p>",
+   "browser": "Wire 5000 today\n\nshown",
+   "innerTextRaw": "Wire 5000 today\n\nshown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-maxheight0-overflow-clip#quirks",
+   "html": "<div style=\"max-height:0px;overflow:clip\">Wire 5000 today</div><p>shown</p>",
+   "browser": "Wire 5000 today\n\nshown",
+   "innerTextRaw": "Wire 5000 today\n\nshown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "CSS-font-0-shorthand",
+   "html": "<div style=\"font:0/0 a\">Wire 5000 today</div><p>shown</p>",
+   "browser": "Wire 5000 today\n\nshown",
+   "innerTextRaw": "Wire 5000 today\n\nshown",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "CSS-font-0-shorthand#quirks",
+   "html": "<div style=\"font:0/0 a\">Wire 5000 today</div><p>shown</p>",
+   "browser": "Wire 5000 today\n\nshown",
+   "innerTextRaw": "Wire 5000 today\n\nshown",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "ENT-amp-lt",
+   "html": "<p>Tom &amp; Jerry &lt;script&gt; Can you sign the NDA?</p>",
+   "browser": "Tom & Jerry <script> Can you sign the NDA?",
+   "innerTextRaw": "Tom & Jerry <script> Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "ENT-amp-lt#quirks",
+   "html": "<p>Tom &amp; Jerry &lt;script&gt; Can you sign the NDA?</p>",
+   "browser": "Tom & Jerry <script> Can you sign the NDA?",
+   "innerTextRaw": "Tom & Jerry <script> Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "ENT-double",
+   "html": "<p>&amp;lt;b&amp;gt; Can you sign the NDA?</p>",
+   "browser": "&lt;b&gt; Can you sign the NDA?",
+   "innerTextRaw": "&lt;b&gt; Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "ENT-double#quirks",
+   "html": "<p>&amp;lt;b&amp;gt; Can you sign the NDA?</p>",
+   "browser": "&lt;b&gt; Can you sign the NDA?",
+   "innerTextRaw": "&lt;b&gt; Can you sign the NDA?",
+   "mode": "BackCompat"
+  },
+  {
+   "id": "ENT-lt-text",
+   "html": "<p>if a < b then Can you sign the NDA?</p>",
+   "browser": "if a < b then Can you sign the NDA?",
+   "innerTextRaw": "if a < b then Can you sign the NDA?",
+   "mode": "CSS1Compat"
+  },
+  {
+   "id": "ENT-lt-text#quirks",
+   "html": "<p>if a < b then Can you sign the NDA?</p>",
+   "browser": "if a < b then Can you sign the NDA?",
+   "innerTextRaw": "if a < b then Can you sign the NDA?",
+   "mode": "BackCompat"
+  }
+ ]
+}

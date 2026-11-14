@@ -244,9 +244,99 @@ path) are never claimed, so `workPending` stays true and the evening delivery wa
 ## Claim 8: the merges (b7982ad2, 3b3f0c42) lost nothing -- CONFIRMED
 
 All three lanes branch from b7ddbdca (`git merge-base`). Per file, the lane's own patch (b7ddbdca..lane head) was
-reverse-applied (`git apply --check -R`) to the FINAL tree: **loop-6 fixes 7/7 files OK, part A 12/14 OK, part B 15/17
+reverse-applied (`git apply --check -R`) to the FINAL tree: **loop-6 fixes 7/7 files OK, part A 12/14 OK, part B 14/16
 OK**. The two files both A and B changed (`engine.ts`, `proposals.server.ts`) were checked line-set-wise: the +/- lines
 of (A head -> final) equal those of (base -> B head) exactly, and (B head -> final) equal (base -> A head) exactly. The
 final tree changes no file outside the three lanes except `.claude/actions.md` / `memory.md`. origin/main is 11 commits
 ahead of 3b3f0c42, touching only `.claude/*` and `proposals-preview.yml` (`git merge-tree`: one conflict, in
 `.claude/memory.md`).
+
+## Reduced-depth re-checks of loop-6 CONFIRMED items
+
+- Suites: all counts reproduce (claim 0). The loop-5 88 rows + loop-6 130 rows + implementer 81 rows: standards vs
+  quirks Chromium differ on 3 rows only, and in all 3 the branch gives the standards (keep-more) text
+  (`scripts/verify6-quirks-diff.ts` re-run at 3b3f0c42) -- standards mode CONFIRMED.
+- Teams via `htmlToText`: `scripts/verify6-teams-probes.ts` **15/15 identical** text and ask decision (loop 6 had
+  14/15 with one newline-only difference; the source-only tags removed it).
+- Bundle: parse5 server-only, `npm run build` exit 0 (claim 0).
+- Everything else loop 6 confirmed (newTextOnly wrapped attributions, test integrity, `opacity:0%`, F8b,
+  serialization, pathological input, U1/U4) sits in files whose only change since ddc7b55d is covered above
+  (`html-visible.ts` source-only tags / depth / CSS split; `feed-staleness.server.ts` refresh); the suites that pin
+  them pass unchanged.
+
+## The flags-OFF live-change table, rebuilt at 3b3f0c42 (vs origin/main 7ba8f7a4)
+
+origin/main's 11 newer commits touch no `src/` file, so this is the whole `src/` difference on merge.
+
+| # | change on merge with every flag OFF | status |
+|---|---|---|
+| 1a | work-email `htmlToText`: hidden text removed (display:none, hidden, opacity 0, max-height 0 + overflow, font-size 0, visibility; comments, head, script, style, template, noscript, title) | **owner-approved** |
+| 1b | entities decoded once and correctly; typographic quotes folded | **owner-approved** |
+| 1c | visible text dropped that main keeps: loop-6 (i) depth and (ii) CSS string are FIXED; residues: `visibility:visible` under `visibility:hidden` past depth 400 is dropped; `<body hidden>` drops the body (Chromium-consistent) | negligible realism; (iii) judgement carried |
+| 1d | **line structure still differs from main where a tag the source wrote is not a tag main's regex matched**: `<br clear=all>` / `<br style>` / `</p >` / `</div\n>` / `</p class>` now break lines; parser-ignored stray `</div>` `</p>` `</li>` `</tr>` `</hN>` no longer break (and words glue); foster-parented `<p>`/text in `<table>` moves above the table. **11 of 39 synthetic probes flip the live ask decision, both directions** (claim 1) | **NOT approved** -- same class as loop-6 1d; low realism |
+| 2a | `newTextOnly`: non-English quoted history cut | **owner-approved** |
+| 3 | bell settings gain a "Teams chats" checkbox; `chat` joins `ATTENTION_KINDS` / `DEFAULT_URGENT_KINDS` (main: email, meeting, appointment) | **visible with flags OFF and not one of the three approved changes** -- carried since loop 4; needs the owner's OK or a flag |
+| 4-11 | loop-5 rows 4-11 (bell link/badgeCount, settle excludes chat/feed, nullable DDL incl. `feed_pending`, drive metadata select, heartbeat imports, `build_checklist` proposals `not_enabled`, sent settle opt-in, `listOpenAttention` order) | unchanged (AttentionBell.tsx and the attention files untouched in ddc7b55d..3b3f0c42) |
+| 12 | parse5 7.3.0 (+ entities 6.0.1), server bundle only | no client effect |
+| 13 | NEW: `mapFeedMessage` returns optional `toRecipients` / `ccRecipients` / `contentClass` | no live effect: the live inbound path reads named fields only, the turn id is `m.id` (claim 6e); pinned |
+| 14 | NEW: config parses `meetingTriage`, `conversations`, `emailBell`, `ownerAliases`, `ownerNames` | all OFF / empty by default; nothing reads `emailBell` |
+| 15 | NEW: `proposals-store` bootstrap DDL (two states + the CHECK migration) | runs only from a store call, and every store path is behind `proposals` (getProposalRows / actOnProposal / getMeetingActionQueue return before any DB call when off) -- no DDL with flags OFF |
+| 16 | NEW: `HuddleView` ChecklistCard passes `assignee`; `ProposalChecklistItem` triage menu; `store.ts` `assignee` | renders only for proposal rows, which do not exist with `proposals` OFF |
+| 17 | NEW: `loadFeedSent` exported | no behaviour change |
+| 18 | NEW: `feed-staleness.server` refreshRead | behind `staleAlerts` (OFF) |
+
+## Owner-facing open questions (with recommendation)
+
+| question | options | recommendation |
+|---|---|---|
+| AC-R6.10: his OWN promise inside a thread he already answered (settled) is never sent to the judge, so it is never proposed | (a) keep "settled is never sent to the model"; (b) send settled threads to the judge for `owner_todos` only (one model call each) | **(b), behind the same flag** -- (a) silently loses "I'll send it Friday" whenever he replied in the same thread, which is what the AC protected |
+| preview cap `PREVIEW_MAX_SOURCES` (default 60; the real run made 74 calls) | keep 60 / raise / no cap | **raise to 150 for the preview** -- over-cap rows are counted, never listed, so the cap silently hides items |
+| meeting triage 2-day lookback (on the minutes row's creation) | 2 days / 7 days | **7 days** -- a meeting whose minutes finish late, or a long weekend, otherwise never pings; the ping is idempotent, so a longer window costs one ping per older meeting at switch-on |
+| `x-ms-exchange-organization-bulkcategory` passed as presence only | presence / value / drop | **pass the value** (fixed vocabulary, not content) or drop it -- presence alone may read as "bulk" where Exchange's value says otherwise (inference; the values were not read) |
+| the judge's 0 needs_reply on real mail | -- | run the 12 synthetic fixtures once against the real model (no real mail) before switch-on; if direct asks come back `action_for_owner`, sharpen rule 3 |
+| the "Teams chats" bell checkbox visible with flags OFF (row 3) | accept / hide behind a flag | **hide behind `correspondence.bell`** so a flags-OFF merge shows him nothing new |
+
+## Per-claim table (target 3b3f0c42)
+
+Basis: S = suite re-run; P = my probe; M = mutation verdict reviewed; R = code read; Q = real SQL on local PG 16; B = build.
+
+| # | claim | verdict | basis |
+|---|---|---|---|
+| 0 | every suite count, tsc, build | CONFIRMED (fireflies-minutes G3/G5/G8 fail identically on main) | S + B |
+| 1 | implied end tags no longer flip the live ask decision | **implied tags FIXED (8/8 loop-6 rows = main); the class is NOT closed: 11/39 new malformed shapes flip vs main, both directions** | P |
+| 2 | depth guard keeps deep text; hidden ancestor still hides | CONFIRMED (one negligible residue) | P |
+| 3 | quote/paren-aware CSS split | CONFIRMED | P |
+| 4 | U5 fixed via refreshRead | CONFIRMED on real bell SQL (A/B/C/E); residual D: a read `error` ends an incomplete incident and re-announces (pre-existing path, flag-gated) | Q |
+| 5 | nits (redteam exit 1, comment) | CONFIRMED | R |
+| re | loop-6 confirmed items, reduced depth | CONFIRMED (standards 3/299, Teams 15/15, build) | S + P + B |
+| 6a | facts only in code, no keyword meaning rule | CONFIRMED | R |
+| 6b | judge guards (quote, not-addressed, bad JSON, settled, doer, validators, no-todo categories, report, counts-only, flag off) | CONFIRMED as specified | P + S + R |
+| 6c | injection / forged owner to-do | **guards do not stop it: speaker-label spoofing (S1/S2), plain injection (I1/I2), OTHER's "I will" stored as the owner's (T3), owner's absolute rules prompt-only (F rows)** -- switch-blocking for `conversations`, not merge-blocking | P |
+| 6d | recipient / header fact parsing | CONFIRMED | S + R |
+| 6e | Iris's live screen unchanged; pin exists | CONFIRMED | S + R |
+| 6f | 0 needs_reply | the model chose it 0 times (nothing downgraded or swallowed); code CAN reach needs_reply; likely the prompt's split with action_for_owner (inference); bulkcategory cannot explain 43/74 | P + R |
+| 7 | meeting triage (no auto to-dos, one ping, zero items, Mine/someone/Skip once, migration, flag off, lookback, no owner inference, INERT honesty, test replacement) | CONFIRMED; migration race from the OLD state proven | S + Q + R + M |
+| 7-UI | triage UI on the checklist row | **UI-UNVERIFIED** (typechecked + built only) | B |
+| 8 | merges lost nothing | CONFIRMED | R (patch reverse-apply + line sets) |
+| T | flags-OFF live-change table | **row 1d not approved (claim 1); row 3 carried, needs his OK** | P + R |
+
+## Verdict
+
+PASS 15 | FAIL 1 (claim 1 residual) | FINDING, switch-blocking 1 (6c) | UI-UNVERIFIED 1 (7-UI)
+
+**FIX FIRST**, then **MERGE-PENDING-UAT** for the triage UI and the loop-4 bell rows.
+
+Blocking before merge:
+- **Claim 1 / row 1d** -- `src/features/huddle/lib/external-feeds/html-visible.ts:206,209` re-emits each source tag as
+  a bare `<name>` / `</name>`, while `onedrive-feed.ts:468` (main's regex) matched only exact spellings, and the parser
+  drops stray end tags. Minimal repro (live decision `asksSomething({subject:"Status", bodyText: htmlToText(h)})`):
+  `h = 'Hello<br>On Monday the board wrote:<br clear="all">Can you approve the budget?'` -> branch `false`, main `true`;
+  `h = 'Thanks, will do.</div>On Mon, Nov 10, 2025 at 9:14 AM Dana Kim &lt;dana@corp.example&gt; wrote:</div>Can you send the old ledger?'`
+  -> branch `true`, main `false`. All 39 rows: `bun scripts/verify7-screen-probes.ts`. Fix direction: use parse5 only to
+  locate hidden elements' SOURCE offset ranges, cut those from the original html, and run main's text pipeline on the
+  rest -- then the only flags-OFF change is hidden text (+ entities) by construction. Or the owner accepts the residue.
+
+Before switching `correspondence.conversations` on (not before merge):
+- `needs-you.ts:331` renders message text raw, so an email can forge an `OWNER` message or the `LATEST OTHER MESSAGE`
+  marker; `engine.ts:194` trusts the model's `doer: null` for any quote. Repro: `bun scripts/verify7-judge-probes.ts`
+  rows S1/S2, I1/I2, T3. Fix direction in 6c (a)-(d).

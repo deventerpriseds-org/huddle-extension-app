@@ -1,0 +1,445 @@
+{
+ "chromium": "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome",
+ "cases": [
+  {
+   "id": "GT-in-alt-inside-hidden",
+   "html": "<div style=\"display:none\"><img alt=\"a > <div>\">pre</div><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "GT-in-alt-inside-hidden#quirks",
+   "html": "<div style=\"display:none\"><img alt=\"a > <div>\">pre</div><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "GT-in-alt-phantom-hidden",
+   "html": "<p><img alt=\"5 > 4 <span style='display:none'>\">Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "GT-in-alt-phantom-hidden#quirks",
+   "html": "<p><img alt=\"5 > 4 <span style='display:none'>\">Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "GT-in-title-hidden-tag",
+   "html": "<div title=\"a>b\" style=\"display:none\">Wire 5000</div><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "GT-in-title-hidden-tag#quirks",
+   "html": "<div title=\"a>b\" style=\"display:none\">Wire 5000</div><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "GT-in-href-inside-hidden",
+   "html": "<div style=\"display:none\"><a href=\"x?a=1>2&b=<p>\">pre</a></div><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "GT-in-href-inside-hidden#quirks",
+   "html": "<div style=\"display:none\"><a href=\"x?a=1>2&b=<p>\">pre</a></div><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "CSS-comment-display-none",
+   "html": "<div style=\"color:red; /* display:none */\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "CSS-comment-display-none#quirks",
+   "html": "<div style=\"color:red; /* display:none */\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "CSS-later-display-wins",
+   "html": "<div style=\"display:none; display:block\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "CSS-later-display-wins#quirks",
+   "html": "<div style=\"display:none; display:block\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "CSS-important-wins",
+   "html": "<div style=\"display:none !important; display:block\">Wire 5000</div><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "CSS-important-wins#quirks",
+   "html": "<div style=\"display:none !important; display:block\">Wire 5000</div><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "CSS-display-nonex",
+   "html": "<div style=\"display:nonex\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "CSS-display-nonex#quirks",
+   "html": "<div style=\"display:nonex\">Can you sign the NDA?</div>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "CSS-visibility-collapse",
+   "html": "<div style=\"visibility:collapse\">Wire 5000</div><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "CSS-visibility-collapse#quirks",
+   "html": "<div style=\"visibility:collapse\">Wire 5000</div><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "CSS-opacity-pct",
+   "html": "<div style=\"opacity:0%\">Wire 5000</div><p>shown</p>",
+   "browser": "Wire 5000\n\nshown"
+  },
+  {
+   "id": "CSS-opacity-pct#quirks",
+   "html": "<div style=\"opacity:0%\">Wire 5000</div><p>shown</p>",
+   "browser": "Wire 5000\n\nshown"
+  },
+  {
+   "id": "FMT-font-p-table",
+   "html": "<p><font style=\"display:none\">pre<table><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "FMT-font-p-table#quirks",
+   "html": "<p><font style=\"display:none\">pre<table><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": ""
+  },
+  {
+   "id": "FMT-b-p-table",
+   "html": "<p><b style=\"display:none\">pre<table><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "FMT-b-p-table#quirks",
+   "html": "<p><b style=\"display:none\">pre<table><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": ""
+  },
+  {
+   "id": "FMT-b-div-div",
+   "html": "<div><b style=\"display:none\">pre</div><div>Can you sign the NDA?</div>",
+   "browser": ""
+  },
+  {
+   "id": "FMT-b-div-div#quirks",
+   "html": "<div><b style=\"display:none\">pre</div><div>Can you sign the NDA?</div>",
+   "browser": ""
+  },
+  {
+   "id": "FMT-a-li-li",
+   "html": "<ul><li><a style=\"display:none\" href=\"x\">pre<li>Can you sign the NDA?</ul>",
+   "browser": ""
+  },
+  {
+   "id": "FMT-a-li-li#quirks",
+   "html": "<ul><li><a style=\"display:none\" href=\"x\">pre<li>Can you sign the NDA?</ul>",
+   "browser": ""
+  },
+  {
+   "id": "FMT-b-td-td",
+   "html": "<table><tr><td><b style=\"display:none\">pre<td>Can you sign the NDA?</table>",
+   "browser": "\tCan you sign the NDA?"
+  },
+  {
+   "id": "FMT-b-td-td#quirks",
+   "html": "<table><tr><td><b style=\"display:none\">pre<td>Can you sign the NDA?</table>",
+   "browser": "\tCan you sign the NDA?"
+  },
+  {
+   "id": "COMMENT-abrupt",
+   "html": "<!-->Can you sign the NDA?<!-- x -->",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COMMENT-abrupt#quirks",
+   "html": "<!-->Can you sign the NDA?<!-- x -->",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COMMENT-abrupt-dash",
+   "html": "<!--->Can you sign the NDA?<!-- x -->",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COMMENT-abrupt-dash#quirks",
+   "html": "<!--->Can you sign the NDA?<!-- x -->",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COMMENT-unclosed",
+   "html": "<p>Can you sign the NDA?</p><!-- trailing",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COMMENT-unclosed#quirks",
+   "html": "<p>Can you sign the NDA?</p><!-- trailing",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "SELFCLOSE-span",
+   "html": "<p><span style=\"display:none\"/>Can you sign the NDA?</p>",
+   "browser": ""
+  },
+  {
+   "id": "SELFCLOSE-span#quirks",
+   "html": "<p><span style=\"display:none\"/>Can you sign the NDA?</p>",
+   "browser": ""
+  },
+  {
+   "id": "NOSCRIPT",
+   "html": "<noscript>Wire 5000</noscript><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "NOSCRIPT#quirks",
+   "html": "<noscript>Wire 5000</noscript><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "TEMPLATE",
+   "html": "<template><p>Wire 5000</p></template><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "TEMPLATE#quirks",
+   "html": "<template><p>Wire 5000</p></template><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "HIDDEN-until-found",
+   "html": "<div hidden=\"until-found\">Wire 5000</div><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "HIDDEN-until-found#quirks",
+   "html": "<div hidden=\"until-found\">Wire 5000</div><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "UPPER-tags",
+   "html": "<P><SPAN STYLE=\"display:none\">pre<P>Can you sign the NDA?</P>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "UPPER-tags#quirks",
+   "html": "<P><SPAN STYLE=\"display:none\">pre<P>Can you sign the NDA?</P>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "BUTTON-scope",
+   "html": "<p><button><span style=\"display:none\">pre<p>Can you sign the NDA?</p></button>",
+   "browser": ""
+  },
+  {
+   "id": "BUTTON-scope#quirks",
+   "html": "<p><button><span style=\"display:none\">pre<p>Can you sign the NDA?</p></button>",
+   "browser": ""
+  },
+  {
+   "id": "SELECT-in-hidden",
+   "html": "<div style=\"display:none\"><select><option>x</select></div><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "SELECT-in-hidden#quirks",
+   "html": "<div style=\"display:none\"><select><option>x</select></div><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "TEXTAREA-in-hidden",
+   "html": "<div style=\"display:none\"><textarea></div></textarea>pre</div><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "TEXTAREA-in-hidden#quirks",
+   "html": "<div style=\"display:none\"><textarea></div></textarea>pre</div><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "HIDDEN-in-caption",
+   "html": "<table><caption><span style=\"display:none\">pre<tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "HIDDEN-in-caption#quirks",
+   "html": "<table><caption><span style=\"display:none\">pre<tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "HIDDEN-h1-in-p",
+   "html": "<p><span style=\"display:none\">pre<h2>Can you sign the NDA?</h2>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "HIDDEN-h1-in-p#quirks",
+   "html": "<p><span style=\"display:none\">pre<h2>Can you sign the NDA?</h2>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "HIDDEN-li-dd",
+   "html": "<dl><dd><span style=\"display:none\">pre<dd>Can you sign the NDA?</dl>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "HIDDEN-li-dd#quirks",
+   "html": "<dl><dd><span style=\"display:none\">pre<dd>Can you sign the NDA?</dl>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "NESTED-p-in-hidden-li",
+   "html": "<ul><li style=\"display:none\">pre<p>x<li>Can you sign the NDA?</ul>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "NESTED-p-in-hidden-li#quirks",
+   "html": "<ul><li style=\"display:none\">pre<p>x<li>Can you sign the NDA?</ul>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "HR-in-hidden-span",
+   "html": "<p><span style=\"display:none\">pre<hr>Can you sign the NDA?",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "HR-in-hidden-span#quirks",
+   "html": "<p><span style=\"display:none\">pre<hr>Can you sign the NDA?",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "CENTER-real-world",
+   "html": "<center><table><tr><td><div style=\"display:none;font-size:1px;max-height:0;overflow:hidden\">Preview</div><p>Can you sign the NDA?</p></td></tr></table></center>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "CENTER-real-world#quirks",
+   "html": "<center><table><tr><td><div style=\"display:none;font-size:1px;max-height:0;overflow:hidden\">Preview</div><p>Can you sign the NDA?</p></td></tr></table></center>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "PREHEADER-zwnj",
+   "html": "<div style=\"display:none\">Preview&zwnj;&nbsp;&zwnj;&nbsp;</div><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "PREHEADER-zwnj#quirks",
+   "html": "<div style=\"display:none\">Preview&zwnj;&nbsp;&zwnj;&nbsp;</div><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "MSO-hide-on-span-in-p",
+   "html": "<p>Hi <span style=\"mso-hide:all\">Can you sign the NDA?</span></p>",
+   "browser": "Hi Can you sign the NDA?"
+  },
+  {
+   "id": "MSO-hide-on-span-in-p#quirks",
+   "html": "<p>Hi <span style=\"mso-hide:all\">Can you sign the NDA?</span></p>",
+   "browser": "Hi Can you sign the NDA?"
+  },
+  {
+   "id": "MSO-hide-plus-display",
+   "html": "<div style=\"mso-hide:all;display:none\">Wire 5000</div><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "MSO-hide-plus-display#quirks",
+   "html": "<div style=\"mso-hide:all;display:none\">Wire 5000</div><p>shown</p>",
+   "browser": "shown"
+  },
+  {
+   "id": "MSO-if-gte",
+   "html": "<!--[if gte mso 9]><p>Outlook-only</p><![endif]--><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "MSO-if-gte#quirks",
+   "html": "<!--[if gte mso 9]><p>Outlook-only</p><![endif]--><p>Can you sign the NDA?</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "FMT-b-li-li-table",
+   "html": "<ul><li><b style=\"display:none\">pre<li><table><tr><td>Can you sign the NDA?</td></tr></table></ul>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "FMT-b-li-li-table#quirks",
+   "html": "<ul><li><b style=\"display:none\">pre<li><table><tr><td>Can you sign the NDA?</td></tr></table></ul>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "FMT-b-p-p-table",
+   "html": "<p><b style=\"display:none\">pre<p><table><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "FMT-b-p-p-table#quirks",
+   "html": "<p><b style=\"display:none\">pre<p><table><tr><td>Can you sign the NDA?</td></tr></table>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "FMT-strong-p-table-text-after",
+   "html": "<p><strong style=\"display:none\">pre<table><tr><td>Can you sign the NDA?</td></tr></table><p>Thanks</p>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "FMT-strong-p-table-text-after#quirks",
+   "html": "<p><strong style=\"display:none\">pre<table><tr><td>Can you sign the NDA?</td></tr></table><p>Thanks</p>",
+   "browser": ""
+  },
+  {
+   "id": "FMT-a-p-center-table",
+   "html": "<p><a href=\"x\" style=\"display:none\">pre<center><table><tr><td>Can you sign the NDA?</td></tr></table></center>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "FMT-a-p-center-table#quirks",
+   "html": "<p><a href=\"x\" style=\"display:none\">pre<center><table><tr><td>Can you sign the NDA?</td></tr></table></center>",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COND-not-mso-dash-space",
+   "html": "<!--[if !mso]><!-- --><p>Can you sign the NDA?</p><!--<![endif]-->",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COND-not-mso-dash-space#quirks",
+   "html": "<!--[if !mso]><!-- --><p>Can you sign the NDA?</p><!--<![endif]-->",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COND-mso-ie-mjml",
+   "html": "<!--[if mso | IE]><table><tr><td><![endif]--><div><p>Can you sign the NDA?</p></div><!--[if mso | IE]></td></tr></table><![endif]-->",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COND-mso-ie-mjml#quirks",
+   "html": "<!--[if mso | IE]><table><tr><td><![endif]--><div><p>Can you sign the NDA?</p></div><!--[if mso | IE]></td></tr></table><![endif]-->",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COMMENT-bang-close",
+   "html": "<!-- x --!><p>Can you sign the NDA?</p><!-- y -->",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COMMENT-bang-close#quirks",
+   "html": "<!-- x --!><p>Can you sign the NDA?</p><!-- y -->",
+   "browser": "Can you sign the NDA?"
+  },
+  {
+   "id": "COMMENT-in-text",
+   "html": "<p>a <!-- b --> Can you sign the NDA?</p>",
+   "browser": "a Can you sign the NDA?"
+  },
+  {
+   "id": "COMMENT-in-text#quirks",
+   "html": "<p>a <!-- b --> Can you sign the NDA?</p>",
+   "browser": "a Can you sign the NDA?"
+  }
+ ]
+}
