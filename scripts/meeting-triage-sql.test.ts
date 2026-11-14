@@ -90,7 +90,8 @@ try {
 
   const { pgProposalStore: S } = await import("../src/features/huddle/lib/proposals/proposals-store.server");
   const m1 = meeting("ff-1", ["Test-Draft the plan", "Test-Order the chairs", "Test-Clean the board", "Test-Pay the invoice"]);
-  const added = await S.addTriageRows(m1); // first store call: bootstrap + migration run here
+  // First store call: bootstrap + migration run here. A failure is reported under the named check below.
+  const added = await S.addTriageRows(m1).catch(() => ({ created: [] as string[], existing: [] as string[] }));
   t("AC-R5.13 after bootstrap the OLD table accepts untriaged rows (migration ran)", [added.created.length, added.existing.length], [4, 0]);
   t("AC-R5.13 exactly ONE state CHECK, now allowing untriaged + delegated", (await stateChecks()).map((c) => [c.conname, /untriaged/.test(c.d) && /delegated/.test(c.d)]), [["task_proposals_state_check", true]]);
   t("AC-R5.13 the pre-existing row survived the migration untouched", (await S.getMany([O], [old.id])).map((r) => [r.state, r.title]), [["proposed", "Test-Pay the invoice"]]);
@@ -151,6 +152,8 @@ try {
   const [van] = resend.created;
   const mv = await S.triage([O], van, "proposed", null);
   t("AC-R5.9 Mine -> state proposed, decided_at empty, in the active list", [mv.row?.state, mv.row?.decidedAt, (await S.listActive([O])).some((r) => r.id === van)], ["proposed", null, true]);
+  const again = await S.triage([O], van, "proposed", null);
+  t("AC-R5.17 Mine tapped again on a row already Mine -> not applied, no self-merge", [again.applied, again.mergedInto ?? null, (await S.getMany([O], [van]))[0].state], [false, null, "proposed"]);
   t("AC-R5.9 an email of the SAME to-do now attaches to the Mine row (one proposal)", await S.upsert(emailCand("Test-Book the van", "mbx:VAN")).then((r) => [r.kind, r.id]), ["attached", van]);
 
   // ── A Skipped meeting item never suppresses the same to-do from email (F15 + AC-R5.11) ──────────
