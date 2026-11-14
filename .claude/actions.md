@@ -1,3 +1,8 @@
+- [ ] Owner 2026-11-14: "tuning one thing at a time... the ai to find all needing a reply first". First real run of
+      the all-in-one judge (run 43551469840) gave needs_reply 0 / action_for_owner 10 / automated 43 of 94 -> suspect.
+      TUNING STEP 1: scripts/reply-scan-preview.ts asks ONE question per unsettled conversation (needs a reply from the
+      owner? verbatim ask, AI reason, recall-first). Report lists every YES and every NO with the AI's reason for the
+      owner to mark wrong ones. Next steps only after he signs off step 1.
 - [x] Redesign parts merged into claude_task-proposals (2026-11-14): part A AI conversation judge
       (needs-you.ts, email-only report; docs/qc-evidence/IMPL-needs-you-redesign.md, 14/14 mutations FIRED) + part B
       meeting triage (meeting-triage.ts, Mine/For someone/Skip, chat.task_proposals untriaged/delegated states;
