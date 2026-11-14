@@ -235,3 +235,175 @@ new server action (`triage`) on `actOnProposalFn`. No new widget, table or tool.
 | AC-R6.8 | Given one conversation produces 3 to-dos, when shown, then they are grouped under ONE conversation header in the report and share one `source_item_id` = the conversation key. | happy-path | report HTML; ref rows |
 | AC-R6.9 | Given a conversation re-processed after a new message, when extraction runs again, then to-dos already seen for that conversation are not re-proposed (existing F14/F15 dedup via `priorRelated`, keyed on the conversation key). | regression | store rows unchanged |
 | AC-R6.10 | Given the owner's commitment was made in a thread now `replied`, when proposals run, then it is still proposed. A reply does not cancel a promise. | edge | store row |
+
+## R7. The preview report: exactly three lists, everything else counts only
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-R7.1 | Given a fixture run of `scripts/proposals-preview.ts` (Graph mocked), when the HTML is produced, then it has exactly three `<h2>` lists, in this order: "Needs your reply", "Action items for you", "Meeting action items for you". | happy-path | HTML test: `<h2>` texts |
+| AC-R7.2 | Given the report, when "Needs your reply" renders, then each row is ONE conversation (verdict `needs_reply`) with the latest ask's sender, time and subject or chat name. No conversation appears twice. | happy-path | HTML test: unique conversation keys |
+| AC-R7.3 | Given the report, when "Action items for you" renders, then it holds only R6 to-dos (owner as doer), grouped per conversation, with no "for <someone else>" row. | happy-path | HTML test |
+| AC-R7.4 | Given the report, when "Meeting action items for you" renders, then it holds only triage rows marked Mine. Untriaged, delegated and skipped items are not listed (delegated: count only). | happy-path | HTML test |
+| AC-R7.5 | Given the report, when the counts line renders, then it shows one number per verdict: `fyi`, `invite`, `minutes`, `not_addressed`, `automated`, `replied`, `cant_tell` (with reasons), plus `assigned_to_other`, `doer_unclear`, `untriaged`, `delegated`. No subject, sender or name appears for any of them. | happy-path | HTML test: those sections contain digits and labels only |
+| AC-R7.6 | Given the fixture with the counts from section 0 of the brief (127 emails), when the report runs, then the sum of every verdict count equals the number of conversations, and every conversation has exactly one verdict. | edge (reconciliation) | test: sum == total |
+| AC-R7.7 | Given the console output of the script (the public GitHub Actions log), when it is captured over the fixture, then it contains no subject, body, address, display name, chat name or id. Counts, HTTP statuses, verdict names and the file path only. | regression (privacy) | test: captured log matched against every fixture string; 0 hits |
+| AC-R7.8 | Given the bell's Teams rows and the report, when both run on the same files, then every chat in "Needs your reply" is an open `chat` bell row, and the reverse. | cross-surface | test: two sets equal |
+| AC-R7.9 | Given the report runs on a 127-email / 300-message fixture, when timed, then classification (excluding model calls) takes under 2 seconds. | performance | timed test |
+
+## R8. Spelling tables (Tier 1: these rules match input)
+
+"Doc" names the source that makes the spelling real. **UNVERIFIED** rows came from client behaviour I could
+not confirm in a document in this pass. They are written as tests anyway, but the probe named in the row must
+confirm them against the real file before the rule ships. "Wrong answer" is the direction a bug would go.
+
+### S-A. Recipient strings (owner = `owner@work.example`)
+
+| # | Input (`toRecipients` / `ccRecipients`) | Doc | Expected | Wrong answer would be |
+|---|---|---|---|---|
+| S-A1 | To `owner@work.example` | RFC 5322 addr-spec | direct | FALSE REFUSAL |
+| S-A2 | To `Owner Name <owner@work.example>` | RFC 5322 name-addr | direct | FALSE REFUSAL |
+| S-A3 | To `"Name, Owner" <owner@work.example>; pat@work.example` | RFC 5322 quoted display-name | group, 2 addresses | FALSE PASS (split into 3) |
+| S-A4 | To `pat@work.example, owner@work.example` | comma-separated (Graph/Power Automate join, format unknown) | group | FALSE REFUSAL |
+| S-A5 | To `OWNER@WORK.EXAMPLE` | RFC 5321 domain is case-insensitive; local part case is treated as insensitive here (Exchange behaviour) | direct | FALSE REFUSAL |
+| S-A6 | To `dl-all@work.example` (a list holding only the owner) | n/a | not_addressed | FALSE PASS |
+| S-A7 | To `pat@work.example`, CC `owner@work.example` | n/a | group (OQ-3) | depends on OQ-3 |
+| S-A8 | To empty, CC empty (BCC) | RFC 5322 3.6.3 Bcc | not_addressed `no_recipients` | FALSE PASS |
+| S-A9 | To `Undisclosed recipients:;` | RFC 5322 group syntax with no members | not_addressed | FALSE PASS |
+| S-A10 | To `owner@work.example.evil.test` | over-match negative | not_addressed | FALSE PASS |
+| S-A11 | To `notowner@work.example` | over-match negative (substring) | not_addressed | FALSE PASS |
+| S-A12 | To `owner+billing@work.example` | RFC 5233 subaddress | not_addressed unless listed in `ownerAliases` (OQ-4) | FALSE PASS |
+| S-A13 | To `"owner@work.example" <pat@work.example>` | over-match negative: address text inside a display name | not_addressed | FALSE PASS |
+
+### S-B. Invite / calendar spellings
+
+| # | Input | Doc | Expected | Wrong answer would be |
+|---|---|---|---|---|
+| S-B1 | header `Content-Class: urn:content-classes:calendarmessage` | Exchange "Messaging Content Classes" | invite | FALSE PASS (shows as needs reply) |
+| S-B2 | header `content-class: URN:CONTENT-CLASSES:CALENDARMESSAGE` | RFC 5322 header names are case-insensitive | invite | FALSE PASS |
+| S-B3 | subject `Accepted: Q3 review` | UNVERIFIED (probe P-2) | invite | FALSE PASS |
+| S-B4 | subject `Tentative: Q3 review` | UNVERIFIED (P-2) | invite | FALSE PASS |
+| S-B5 | subject `Declined: Q3 review` | UNVERIFIED (P-2) | invite | FALSE PASS |
+| S-B6 | subject `Canceled: Q3 review` / `Cancelled: Q3 review` | UNVERIFIED (P-2) | invite | FALSE PASS |
+| S-B7 | subject `New Time Proposed: Q3 review` | UNVERIFIED (P-2) | invite | FALSE PASS |
+| S-B8 | subject `Invitation: Q3 review @ Tue Nov 18, 2026 10am - 11am (EST) (owner@work.example)` | UNVERIFIED Google form (P-2) | invite | FALSE PASS |
+| S-B9 | subject `Updated invitation: Q3 review @ ...` | third-party forum only (P-2) | invite | FALSE PASS |
+| S-B10 | subject `Re: Invitation: Q3 review`, body `Can we move it to 3pm?` | over-match negative | needs_reply | FALSE REFUSAL |
+| S-B11 | subject `Re: quick invite question`, body `Are you free Thursday?` | over-match negative (F-3) | needs_reply | FALSE REFUSAL |
+| S-B12 | subject `Invitation to speak at our panel`, body asks `Would you join?` | over-match negative (no colon form) | needs_reply | FALSE REFUSAL |
+| S-B13 | subject `Q3 review` (plain Outlook request), header absent, body `Microsoft Teams meeting ... Join the meeting now` | UNVERIFIED (P-1): body marker alone | NOT invite by body alone; decided normally | FALSE PASS if P-1 shows no header (then Outlook invites leak: say so in the PR) |
+
+### S-C. Minutes spellings
+
+| # | Input | Doc | Expected | Wrong answer would be |
+|---|---|---|---|---|
+| S-C1 | subject `Meeting Minutes: Budget sync Nov 14, 10:00 AM` | `minutes.ts:280` (verified) | minutes | FALSE PASS |
+| S-C2 | subject `Updated Meeting Minutes: Budget sync ...` | `minutes.ts:280-284` (verified) | minutes | FALSE PASS |
+| S-C3 | from an address `@fireflies.ai`, any subject | UNVERIFIED sender (P-2) | minutes | FALSE PASS |
+| S-C4 | subject `Meeting recap: Budget sync` / `Recap of Budget sync` | UNVERIFIED Teams/Copilot form (P-2) | minutes | FALSE PASS |
+| S-C5 | subject `Meeting notes: Budget sync` / `Meeting summary for Budget sync` | UNVERIFIED (P-2) | minutes | FALSE PASS |
+| S-C6 | subject `Fw: Meeting Minutes: Budget sync`, new text `Owner, can you take item 3 by Friday?` | over-match negative | needs_reply + to-do source | FALSE REFUSAL |
+| S-C7 | subject `Summary of the budget`, body `Can you approve by Friday?` | over-match negative | needs_reply | FALSE REFUSAL |
+| S-C8 | Teams app sender in a meeting chat, text `Meeting recap ...` | `senderIsApp` (`teams-log.ts:245`) | minutes | FALSE PASS |
+
+### S-D. Teams @mentions (Graph `chatMessageMention`, `mentioned` = `chatMessageMentionedIdentitySet`)
+
+| # | Input | Doc | Expected | Wrong answer would be |
+|---|---|---|---|---|
+| S-D1 | `mentions:[{mentioned:{user:{id:"<owner id>"}}}]` | Graph chatMessageMention | mentionsOwner true | FALSE REFUSAL |
+| S-D2 | same, id in different case | ids compared lower-case (`teams-log.ts` owner set is lower-cased, `onedrive-feed.ts:197`) | true | FALSE REFUSAL |
+| S-D3 | `mentioned:{user:{id:"<other id>"}}` | Graph | false | FALSE PASS |
+| S-D4 | `mentioned:{conversation:{id:"19:aaaa@thread.v2"}}` (whole chat) | Graph identity set `conversation` | false | FALSE PASS |
+| S-D5 | `mentioned:{tag:{id:"..."}}` | Graph identity set `tag` | false (OQ-10 if the owner is in the tag) | FALSE PASS |
+| S-D6 | body text `@Owner` with NO `mentions` array | over-match negative: text only | null (unknown), not true | FALSE PASS |
+| S-D7 | `mentions` key absent on every line | n/a | null + `mentions_field_absent` count | FALSE REFUSAL if read as false |
+
+### S-E. Teams chat kind (UNVERIFIED shapes: probe P-3)
+
+| # | chatId | Expected | Wrong answer would be |
+|---|---|---|---|
+| S-E1 | `19:<guid>_<guid>@unq.gbl.spaces` | one_to_one | FALSE REFUSAL |
+| S-E2 | `19:<hex>@thread.v2`, 3 distinct non-owner senders | group | FALSE PASS |
+| S-E3 | `19:meeting_<id>@thread.v2` | meeting_chat | FALSE PASS |
+| S-E4 | `19:<hex>@thread.v2`, 1 non-owner sender, no other info | unknown (not one_to_one) | FALSE PASS |
+| S-E5 | `19:...@thread.tacv2` (a channel) | not expected in a chat log; counted `channel_in_log`, treated as group | FALSE PASS |
+
+## R9. Flags, zero-call when off, regression guard
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-R9.1 | Given `correspondenceFlags` (`onedrive-feed.ts:205-224`), when the redesign adds switches, then they are new keys in the same object, each ON only when literally `true`: recommended `correspondence.conversations` (R2-R4 classifier for bell + proposals) and `correspondence.meetingTriage` (R5). | regression | parser unit test: absent, `"true"`, `1`, `false` all give OFF |
+| AC-R9.2 | Given both new flags OFF, when an ingest pass and a proposals pass run over the fixture, then outputs (bell rows, proposal rows, enqueued turns) are byte-identical to `ddc7b55d`, and the classifier and the triage code are called 0 times. | regression (zero-call) | spies: 0 calls; snapshot equal |
+| AC-R9.3 | Given `meetingTriage` OFF and `proposals` ON, when a meeting finishes, then today's transcript behaviour is NOT silently kept: the transcript pass makes no proposals at all (the owner rejected automatic to-dos from minutes). | regression (behaviour change, explicit) | store: 0 rows with a transcript ref |
+| AC-R9.4 | Given a third flag `correspondence.emailBell` (OFF, see OQ-2), when OFF, then `recordOwedEmail` callers and email bell rows are exactly as today. | regression | test |
+| AC-R9.5 | Given the whole feed config is absent or invalid, when any pass runs, then zero Graph, model, DB and push calls are made (existing AC-6.1 pattern, `ingest-pass.ts:108-114`). | regression | spies |
+| AC-R9.6 | Given every new guard (addressing, invite, minutes, assignee filter, triage CAS, privacy), when built, then each is mutation-proved with `scripts/mutate.sh` with a FIRED (control EQUIVALENT) verdict, and the output is in the PR. | regression | PR attachment |
+
+## Probes to run before building (counts only; output is public)
+
+| Probe | Answers | Prints only |
+|---|---|---|
+| P-1 | Which header names appear on the 127 emails, and how many carry `Content-Class` with each value | header name -> count; Content-Class value -> count (values are fixed vocabulary, not content) |
+| P-2 | How many subjects start with each candidate prefix in S-B / S-C; how many senders end in each candidate vendor domain | prefix -> count; domain -> count (the vendor domains only, never other domains) |
+| P-3 | chatId shape per chat: `unq.gbl.spaces` / `thread.v2` / `meeting_` / `thread.tacv2` / other | shape -> count; distinct non-owner sender count histogram |
+| P-4 | Fireflies `action_items` text shape for the last 10 finished meetings | lines per meeting, lines starting with `-`/`*`/digit, lines that look like a heading (`**...**` or ends with `:`), lines ending in a `(mm:ss)` stamp |
+| P-5 | Recipient string format | separator counts (`;` vs `,`), share with `<` `>`, share with a quote, how many contain an owner address on To / CC only / nowhere |
+| P-6 | Whether the Teams log has `mentions` | lines with a `mentions` array; mentions of type user / conversation / tag |
+
+## Open questions for the owner (each with a recommended default)
+
+| # | Question | Recommended default |
+|---|---|---|
+| OQ-1 | Your message says "This is an email and 6pm". We read it as "This is for email and Teams". Right? | Yes: email and Teams. |
+| OQ-2 | The email rows in the bell are made by Iris's live alerts, one per alerted email. Should the bell group them per conversation and drop invites, minutes and not-addressed mail? That changes what the bell shows, but not the alerts. | Not now. Keep email bell rows as they are (`emailBell` OFF). Apply the new rules to the report, to-dos and Teams first. |
+| OQ-3 | You are on CC only, with others on To. Is that "a group talk that includes me"? | Yes for the reply list. No for to-dos unless you are @named or asked by name. |
+| OQ-4 | Do you get mail at other addresses (aliases, `+tags`) that should count as you? | Add an `ownerAliases` list; empty until you give one. |
+| OQ-5 | In a group Teams chat, does a question with no @mention count as asking you? | Only in chats with 2 or fewer other people; in bigger chats only with an @mention. |
+| OQ-6 | Where does the meeting action item queue show? | In Iris's 1:1 as the ping's checklist, plus the third list in the report. No new screen. |
+| OQ-7 | Can the email flow add attachment names (to catch `.ics` invites)? | Ask only if probe P-1 shows no `Content-Class` header. |
+| OQ-8 | Teams/Copilot meeting recaps have no structured action items. Ping for them too? | No. Count them as minutes only; Fireflies is the action-item source. |
+| OQ-9 | When minutes are updated with new action items, should that ping again? | No second ping; new items join the existing checklist. |
+| OQ-10 | A name typed under "For someone": should it ever become a task for that person? | No. Text only, kept for your own tracking. |
+
+## Goal coverage
+
+| Owner goal | ACs |
+|---|---|
+| Minutes are not things to reply to | R5.1, R5.4, S-C |
+| Action items from minutes, separately, only after I pick them | R5.3, R5.5-R5.17, R7.4 |
+| No mass broadcasts / not-addressed mail | R3.1-R3.9, S-A |
+| Invites are not reply items | R4.1-R4.8, S-B |
+| Settle across the whole thread, not per message | R2.1-R2.13 |
+| No cumulative action items for things that aren't mine | R6.1-R6.10, R7.3 |
+| Iris's live alerts unchanged | R1.1-R1.6, R9.4 |
+| Report I can read | R7.1-R7.9 |
+
+Every AC above traces to one of these goals. None was added for implementation detail alone; the schema
+AC (R5.13) traces to "extend, don't duplicate".
+
+## Riskiest ACs (summary)
+
+1. **AC-R4.1 / S-B13: Outlook invites may be undetectable.** An Outlook meeting request has no subject prefix.
+   If probe P-1 shows no `Content-Class` header in this feed, invites still leak into "Needs your reply". Run
+   P-1 first.
+2. **AC-R1 vs OQ-2: the email bell is tied to the live alerts.** Doing rule 1 and the bell together is not
+   possible without the owner choosing. Default keeps the email bell unchanged.
+3. **AC-R5.13: the CHECK constraint.** A new proposal state on a table that may already exist needs a real
+   migration. A test against the OLD constraint must prove it.
+4. **AC-R6.5 / OQ-5: group asks with no @mention.** The easiest place to drop a real ask (false refusal) or
+   keep noise (false pass). Mentions may not even be in the log (P-6).
+5. **AC-R5.2: Fireflies action-item text has an unknown shape** (F-16). Splitting it into rows is a guess
+   until P-4 runs.
+6. **AC-R9.3: switching the transcript pass off is a deliberate change** to work on the unmerged branch. It
+   must be stated in the PR as a change.
+
+## Gaps (could not open a document in this pass)
+
+- Outlook's subject text for meeting responses and cancellations (only the response TYPES are documented).
+- Google Calendar's invitation subject format (third-party forum only).
+- Fireflies and Teams/Copilot recap email senders and subjects.
+- Graph chat-id shapes for 1:1, group and meeting chats.
+All are marked UNVERIFIED in section R8 with the probe that settles each.
+
+Sources used for R8: Microsoft Exchange "Messaging Content Classes" (learn.microsoft.com, aa494250);
+Graph `chatMessageMention` and `chatMessageMentionedIdentitySet` resource pages; Outlook `OlMeetingResponse`
+enumeration; RFC 5322, RFC 5233, RFC 5545 / 6047.
