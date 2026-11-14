@@ -1,6 +1,7 @@
 // WHAT:       The TASK-PROPOSAL engine with every I/O dependency injected: the ledger processor that turns one
-//             email / Teams item into proposals, the Fireflies transcript pass, Approve / Edit / Mark done /
-//             Dismiss, the build_checklist "proposals" result, and the evening delivery into Iris's 1:1.
+//             email / Teams item into proposals, the Fireflies MEETING TRIAGE pass (one ping per meeting; it
+//             replaced the automatic transcript -> proposals pass, AC-correspondence-redesign R5), Approve / Edit /
+//             Mark done / Dismiss / triage, the build_checklist "proposals" result, and the evening delivery.
 // WHY:        AC docs/ac/AC-correspondence-checklist.md section 5. Pure so the offline suite runs it against an
 //             in-memory store, a stub model and a stub journey (Tier 1: the model is never trusted, and the
 //             task writer is the EXISTING create path, screened by create-task-core).
