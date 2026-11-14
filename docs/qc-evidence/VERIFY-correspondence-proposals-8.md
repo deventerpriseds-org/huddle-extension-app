@@ -108,3 +108,27 @@ main's (the GT-in-alt row then leaves main's `b">` residue, which never removes 
 opening a run directly after `=` (optionally after whitespace), as the HTML tokenizer does; or (c) let visibleHtml
 replace each element's START-TAG source span (parse5 `startTag` location = the browser's own tag extent) so no regex
 has to guess where a tag ends.
+
+### 1e. Adversarial timing (`bun scripts/verify8-redos.ts` + scratch scaling runs)
+
+The quote-aware regex is NOT catastrophic (exponential): its three alternatives start on disjoint characters, so each
+start position backtracks linearly. It is polynomial like main's own `<[^>]+>`:
+
+| input (synthetic) | len | branch htmlToText ms | main ms |
+|---|---|---|---|
+| `"<a".repeat(25k / 50k / 100k)` (no `>`) | 50k / 100k / 200k | 1835 / 5373 / 10690 | 420 / 1723 / 6974 |
+| `"<a '".repeat(25k)` | 100k | 2333 | 984 |
+| `"<".repeat(100k)` | 100k | 3225 | 3365 |
+| `"<b'x".repeat(25k)` | 100k | 2366 | 1023 |
+| unclosed `"` / dq pairs / attr-heavy / comment never closed / 6k hidden spans | ~100k | 8-28 | 0-3 |
+| realistic Word/Outlook markup | 219k | 55 | 1 |
+
+So the regex is 1-4x main on the same quadratic inputs, never a new complexity class.
+
+**Separate observation (not from b6b5f9af; present since parse5 came in):** deeply nested BLOCK tags make
+`visibleHtml`'s parse5 call roughly quadratic (instrumented copy: parse 5112 ms, walk 2 ms): `"<div>".repeat(n)` ->
+n=10k 252 ms, 20k 1009 ms, 40k (200 KB) 5174 ms, 80k (400 KB) 23843 ms; main 0-2 ms. `<span>` nesting stays fast
+(40k: 31 ms). Every read re-maps every snapshot record (`onedrive-feed.server.ts:361`, `ingest-pass.ts:80`), so one
+crafted ~0.4-2 MB email body would cost tens of seconds to minutes on EVERY live work-email read, flags OFF. Needs a
+hostile sender; no real email nests 20k+ block elements. Cheapest guard: skip parse5 above a body size or a cheap
+open-tag count (return `html` unchanged = main's text, keep-more).
