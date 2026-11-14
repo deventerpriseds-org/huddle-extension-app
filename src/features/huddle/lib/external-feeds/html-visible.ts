@@ -39,7 +39,7 @@ type Node = {
   content?: Node;
 };
 
-const NEVER_TEXT = new Set(["head", "script", "style", "template", "noscript", "title", "#comment", "#documentType"]);
+const NEVER_TEXT = new Set(["head", "script", "style", "template", "noscript", "title", "#comment"]);
 
 /** Pure: split a declaration list on `;` the way CSS does -- never inside a quoted string or parentheses
  *  (verifier loop 6: `content:"a;b"` must not cut the declaration after it in two). */
@@ -152,41 +152,60 @@ const VOID = new Set(["br", "hr", "img", "input", "meta", "link", "area", "base"
  * malformed input; a pathological input falls back to the empty string).
  */
 export function visibleHtml(html: string): string {
+  const PREFIX = "<!doctype html>";
   let doc: Node;
   try {
     // Standards mode, always: a webmail reader (Outlook on the web, Gmail) shows a message INSIDE a standards-mode
     // page, so the email's own missing or legacy doctype never puts it in quirks mode (where <table> would not close
     // an open <p>). A second doctype is ignored by the parser, so prefixing one is safe either way.
-    doc = parse(`<!doctype html>${html}`, { sourceCodeLocationInfo: true }) as unknown as Node;
+    doc = parse(`${PREFIX}${html}`, { sourceCodeLocationInfo: true }) as unknown as Node;
   } catch {
-    return "";
+    return html;
   }
-  const out: string[] = [];
-  // Past this depth the walk stops recursing (a pathological nesting must never overflow the stack) and keeps the
-  // subtree's TEXT instead -- keep-more, never drop (verifier loop 6: 405 nested <div>s lost their text).
-  const MAX_DEPTH = 400;
-  const flatText = (root: Node) => {
+  // The parser only LOCATES what is hidden; the output is the ORIGINAL HTML with those source spans cut out
+  // (verifier loop 7, claim 1). Every tag, stray end tag and line break the email wrote is left exactly where it was,
+  // so htmlToText's existing conversion sees main's line structure: the only differences from main are the hidden
+  // text itself (and entity decoding), by construction -- never a re-serialised tree.
+  type Loc = { startOffset: number; endOffset: number };
+  const cuts: [number, number][] = [];
+  const locOf = (n: Node): Loc | null => {
+    const l = n.sourceCodeLocation as unknown as Loc | null | undefined;
+    return l && Number.isFinite(l.startOffset) && Number.isFinite(l.endOffset) ? l : null;
+  };
+  /** Cut a hidden subtree's TEXT only: every located text and comment node in it. Element tags are left where the
+   *  source wrote them (the existing tag rules remove them exactly as on main). Spans of whole ELEMENTS are never
+   *  used: parse5 gives a reconstructed formatting element the ORIGINAL start tag's location and stretches an
+   *  implied-closed element's end, so an element span can cover visible content (verifier loop 7: a hidden <strong>
+   *  closed by omission, rebuilt in a later <p>, spanned the visible table between). Iterative: no recursion limit. */
+  const cutNode = (root: Node) => {
     const stack: Node[] = [root];
     while (stack.length) {
       const n = stack.pop()!;
-      if (n.nodeName === "#text") out.push(esc(n.value ?? ""));
-      else if (!NEVER_TEXT.has(n.nodeName)) {
-        const kids = n.childNodes ?? [];
-        for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
-        if (n.tagName && /^(p|div|li|tr|h\d|br)$/i.test(n.tagName)) out.push(" ");
+      if (n.nodeName === "#text" || n.nodeName === "#comment") {
+        const l = locOf(n);
+        if (l && l.endOffset > l.startOffset) cuts.push([l.startOffset, l.endOffset]);
+        continue;
       }
+      for (const c of n.childNodes ?? []) stack.push(c);
+      if (n.content) stack.push(n.content);
     }
   };
+  // Past this depth the walk stops recursing (a pathological nesting must never overflow the stack).
+  const MAX_DEPTH = 400;
   const walk = (n: Node, st: Inherited, depth: number) => {
-    if (depth > MAX_DEPTH) {
-      if (!st.visHidden && !st.fontZero) flatText(n);
-      return;
-    }
+    if (n.nodeName === "#documentType") return; // the prefix / the email's own doctype: never text, left in place
+    // Past the depth guard nothing more is judged: the subtree stays as the source wrote it (keep-more, exactly main's
+    // text). An element dropped ABOVE the guard is still cut whole (cutNode is iterative). Cutting an inherited
+    // visibility/font-size state here would drop a deeper `visibility:visible` child (verifier loop 7).
+    if (depth > MAX_DEPTH) return;
     if (n.nodeName === "#text") {
-      if (!st.visHidden && !st.fontZero) out.push(esc(n.value ?? ""));
+      if (st.visHidden || st.fontZero) cutNode(n);
       return;
     }
-    if (NEVER_TEXT.has(n.nodeName)) return;
+    if (NEVER_TEXT.has(n.nodeName)) {
+      cutNode(n);
+      return;
+    }
     if (!n.tagName) {
       for (const c of n.childNodes ?? []) walk(c, st, depth + 1); // #document, #document-fragment
       return;
@@ -194,20 +213,29 @@ export function visibleHtml(html: string): string {
     const attrs = new Map((n.attrs ?? []).map((a) => [a.name.toLowerCase(), a.value]));
     const v = elementVisibility(n.tagName.toLowerCase(), attrs, st);
     if (v.drop) {
-      out.push(" ");
+      cutNode(n);
       return;
     }
-    const name = n.tagName.toLowerCase();
-    const id = attrs.get("id");
-    // Only tags the SOURCE wrote are re-emitted: an element the parser implied (a closed-by-omission </p>, an
-    // inserted <tbody>, a reconstructed <b>) adds no tag, so htmlToText's line breaks match main's on malformed mail
-    // (verifier loop 6: implied </p> breaks let main's English "On ... wrote:" cut fire on bodies main keeps whole).
-    const loc = n.sourceCodeLocation;
-    if (loc?.startTag) out.push(`<${name}${id ? ` id="${esc(id).replace(/"/g, "&quot;")}"` : ""}>`);
-    if (VOID.has(name)) return;
     for (const c of n.childNodes ?? []) walk(c, v.state, depth + 1);
-    if (loc?.endTag) out.push(`</${name}>`);
   };
   walk(doc, { visHidden: false, fontZero: false }, 0);
-  return out.join("");
+  if (!cuts.length) return html;
+  // Merge overlapping spans, then splice them out of the ORIGINAL string (offsets shifted past the prefix).
+  cuts.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [a, b] of cuts) {
+    const last = merged[merged.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+  let out = "";
+  let pos = 0;
+  for (const [a0, b0] of merged) {
+    const a = Math.max(0, a0 - PREFIX.length);
+    const b = Math.max(0, b0 - PREFIX.length);
+    if (b <= pos) continue;
+    out += html.slice(pos, Math.max(pos, a)) + " ";
+    pos = b;
+  }
+  return out + html.slice(pos);
 }

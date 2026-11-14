@@ -59,6 +59,16 @@ t("DEPTH a hidden ancestor above the depth guard still hides the deep text", nor
 t("IMPLIED an implied </p> adds no line break: main's line structure, so the live ask decision matches main",
   asksSomething({ subject: "Status", bodyText: htmlToText("<p>Status below.<p>On Friday the auditor wrote:<p>Can you send the ledger by Monday?") }), true);
 t("IMPLIED a written </p> still breaks the line", htmlToText("<p>a</p><p>b</p>").includes("\n"), true);
+// Verifier loop 7, claim 1: only hidden TEXT is cut from the ORIGINAL html; every tag stays where the email wrote it,
+// so the live ask decision matches main's on malformed mail (39/39 of the verifier's shapes, run 2026-11-14).
+t("LOOP7 <br clear=all> keeps main's line structure: ask detected as on main",
+  asksSomething({ subject: "Status", bodyText: htmlToText('Hello<br>On Monday the board wrote:<br clear="all">Can you approve the budget?') }), true);
+t("LOOP7 stray </div> end tags keep main's line structure: no new ask invented",
+  asksSomething({ subject: "Re: ledger", bodyText: htmlToText("Thanks, will do.</div>On Mon, Nov 10, 2025 at 9:14 AM Dana Kim &lt;dana@corp.example&gt; wrote:</div>Can you send the old ledger?") }), false);
+t("LOOP7 a hidden formatting element rebuilt by the parser in a later <p> never swallows the visible table between",
+  norm(htmlToText('<p><strong style="display:none">pre<table><tr><td>Can you sign the NDA?</td></tr></table><p>Thanks</p>')), "Can you sign the NDA?");
+t("LOOP7 past the depth guard a visibility:visible child is kept (keep-more, never a drop)",
+  norm(htmlToText('<div style="visibility:hidden">' + "<div>".repeat(405) + '<span style="visibility:visible">Can you call?</span>' + "</div>".repeat(406))).includes("Can you call?"), true);
 console.log(`exact ${exact.length}/${cases.length}`);
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

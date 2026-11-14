@@ -466,6 +466,8 @@ export function htmlToText(html: string): string {
     )
       .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
       .replace(/<br\s*\/?>|<\/(p|div|li|tr|h\d)>/gi, "\n")
+      // A `>` inside a quoted attribute value does not end the tag (verifier loop 5, GT-in-alt); then main's plain rule.
+      .replace(/<[a-zA-Z\/!?](?:[^>"']|"[^"]*"|'[^']*')*>/g, " ")
       .replace(/<[^>]+>/g, " "),
   )
     .replace(/\u00a0/g, " ")

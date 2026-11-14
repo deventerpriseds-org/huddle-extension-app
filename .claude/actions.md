@@ -1,3 +1,8 @@
+- [x] Verifier loop 7 (46ff73f8) = FIX FIRST on claim 1 (malformed HTML still flipped Iris's live ask decision in 11/39
+      shapes). Fixed: html-visible.ts now only LOCATES hidden text with parse5 and cuts those text/comment spans out of
+      the ORIGINAL html; every tag stays where the email wrote it, so main's conversion runs unchanged (39/39 + 8/8
+      verifier shapes identical to main, 0 flips). Before-switch-on findings (prompt injection via forged OWNER
+      lines, others' promises as owner to-dos, rules only in prompt) recorded for the judge work.
 - [ ] Owner 2026-11-14: "tuning one thing at a time... the ai to find all needing a reply first". First real run of
       the all-in-one judge (run 43551469840) gave needs_reply 0 / action_for_owner 10 / automated 43 of 94 -> suspect.
       TUNING STEP 1: scripts/reply-scan-preview.ts asks ONE question per unsettled conversation (needs a reply from the
