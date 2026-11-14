@@ -15,7 +15,13 @@ import {
   type ProposalStore,
 } from "../src/features/huddle/lib/proposals/proposals";
 import { approveProposal, decideProposal, proposeFromSource } from "../src/features/huddle/lib/proposals/engine";
-import { asksSomething, newTextOnly } from "../src/features/huddle/lib/email/inbound-email";
+import { asksSomething, isWrappedAttribution, newTextOnly } from "../src/features/huddle/lib/email/inbound-email";
+// Owner 2026-11-14: the LIVE screen (newTextOnly, Iris's alerts) no longer joins a two-line attribution -- it behaves as
+// main does. The detector itself is kept (for the correspondence report's thread logic) and is tested directly here.
+const wrapDetected = (body: string): boolean => {
+  const ls = body.replace(/\r/g, "").split("\n");
+  return ls.some((l, i) => i + 1 < ls.length && isWrappedAttribution(l, ls[i + 1]));
+};
 import { normalizeTaskTitle } from "../src/features/huddle/lib/tasks/scoring";
 import { htmlToText, mapFeedMessage, mapSentRecords, parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { captureCoverage, parseTeamsLog, teamsParseNote } from "../src/features/huddle/lib/external-feeds/teams-log";
@@ -138,9 +144,10 @@ t(
   false,
 );
 t(
-  "RT-12c Gmail attribution wrapped over two lines + unprefixed history is not cut",
-  newTextOnly("Sounds good.\n\nOn Mon, Nov 9, 2026 at 3:00 PM Jane Example <jane@eds.example>\nwrote:\nPlease send the deck by Friday").includes("send the deck"),
-  false,
+  "RT-12c owner 2026-11-14: the live screen does NOT cut after a two-line wrapped attribution (same as main); the detector still sees it",
+  [newTextOnly("Sounds good.\n\nOn Mon, Nov 9, 2026 at 3:00 PM Jane Example <jane@eds.example>\nwrote:\nPlease send the deck by Friday").includes("send the deck"),
+   wrapDetected("Sounds good.\n\nOn Mon, Nov 9, 2026 at 3:00 PM Jane Example <jane@eds.example>\nwrote:\nPlease send the deck by Friday")],
+  [true, true],
 );
 t(
   "RT-12d (safe) plain Outlook 'From:/Sent:' block is cut",
@@ -163,7 +170,6 @@ t(
   t("D2 English 'wrote' sentences are not quoted history (N1-N9)", keeps.filter(([, body, ask]) => !newTextOnly(body).includes(ask)).map(([id]) => id), []);
   const cuts: [string, string][] = [
     ["en", "Sure.\n\nOn Mon, Nov 9, 2026 at 3:00 PM Jane Example <jane@eds.example> wrote:\n> Please send the deck by Friday"],
-    ["en-2line", "Sure.\n\nOn Mon, Nov 9, 2026 at 3:00 PM Jane Example <jane@eds.example>\nwrote:\nPlease send the deck by Friday"],
     ["fr", "Merci.\n\nLe lun. 9 nov. 2026 à 15:00, Jane Example <jane@eds.example> a écrit :\nPlease send the deck by Friday"],
     ["de", "Danke.\n\nAm 09.11.2026 um 15:00 schrieb Jane Example <jane@eds.example>:\nPlease send the deck by Friday"],
     ["es", "Gracias.\n\nEl lun, 9 nov 2026 a las 15:00, Jane Example (<jane@eds.example>) escribió:\nPlease send the deck by Friday"],
@@ -177,7 +183,7 @@ t(
     ["es-hdr", "Gracias.\n\nDe: Jane Example\nEnviado: lunes\n\nPlease send the deck by Friday"],
     ["orig-msg", "Thanks.\n\n-----Original Message-----\nPlease send the deck by Friday"],
   ];
-  t("D2 real quoted-history openers still cut (en, 2-line, fr/de/es/it/nl/pt/sv, headers)", cuts.filter(([, body]) => newTextOnly(body).includes("send the deck")).map(([id]) => id), []);
+  t("D2 real quoted-history openers still cut (en, fr/de/es/it/nl/pt/sv, headers)", cuts.filter(([, body]) => newTextOnly(body).includes("send the deck")).map(([id]) => id), []);
   t("D2 a foreign opener with the ENGLISH verb is not an attribution", newTextOnly("Am 9 Nov the auditor wrote:\nCan you send the ledger?").includes("send the ledger"), true);
   t("D2 a two-line English sentence with no date is not a wrapped attribution", newTextOnly("On Friday after the board meeting,\nthe vendor wrote:\nCan you approve the change order?").includes("approve the change order"), true);
   t("D2 a translated attribution needs its date", newTextOnly("Le directeur a écrit :\nCan you send the ledger?").includes("send the ledger"), true);
@@ -198,9 +204,10 @@ t(
     ["X5", "On Friday 14 at 10:30 the vendor called and Legal\nwrote:\nCan you sign the NDA today?", "sign the NDA"],
     ["X6", "On the 2 dates set for 2026 Ops\nwrote:\nCan you confirm the venue?", "confirm the venue"],
   );
-  t("D2 loop 5: a name-only two-line Gmail stamp WITH year and time is still cut",
-    newTextOnly("Sounds good.\nOn Mon, Nov 10, 2025 at 9:14 AM Dana Kim\nwrote:\nCan you send the old ledger?").includes("old ledger"), false);
-  t("D2 X1-X6 hard-wrapped English lines with a digit are not a wrapped attribution", wrappedKeeps.filter(([, body, ask]) => !newTextOnly(body).includes(ask)).map(([id]) => id), []);
+  t("D2 loop 5: a name-only two-line Gmail stamp WITH year and time is still DETECTED",
+    wrapDetected("Sounds good.\nOn Mon, Nov 10, 2025 at 9:14 AM Dana Kim\nwrote:\nCan you send the old ledger?"), true);
+  t("D2 X1-X6 hard-wrapped English lines with a digit are not a wrapped attribution (detector) and are kept (live screen)",
+    wrappedKeeps.filter(([, body, ask]) => wrapDetected(body) || !newTextOnly(body).includes(ask)).map(([id]) => id), []);
   t("D2 X1/X2 such an email is still screened as an ask", [asksSomething({ subject: "Status", bodyText: wrappedKeeps[0][1] }), asksSomething({ subject: "Client", bodyText: wrappedKeeps[1][1] })], [true, true]);
   const wrappedCuts: [string, string][] = [
     ["email", "Sure.\n\nOn Mon, Nov 9, 2026 at 3:00 PM Jane Example <jane@eds.example>\nwrote:\nPlease send the deck by Friday"],
@@ -209,7 +216,8 @@ t(
     ["split-email", "Sure.\n\nOn Monday, November 9, 2026 at 3:00 PM Jane\nExample <jane@eds.example> wrote:\nPlease send the deck by Friday"],
     ["fr-wrap", "Merci.\n\nLe lun. 9 nov. 2026 à 15:00, Jane Example <jane@eds.example>\na écrit :\nPlease send the deck by Friday"],
   ];
-  t("D2 real two-line wrapped attributions are still cut", wrappedCuts.filter(([, body]) => newTextOnly(body).includes("send the deck")).map(([id]) => id), []);
+  t("D2 real two-line wrapped attributions are still DETECTED", wrappedCuts.filter(([, body]) => !wrapDetected(body)).map(([id]) => id), []);
+  t("D2 owner 2026-11-14: ...and the live screen keeps the text after them, exactly as main", wrappedCuts.filter(([, body]) => !newTextOnly(body).includes("send the deck")).map(([id]) => id), []);
 }
 {
   const html = `<p>Hi, see you at lunch.</p><span style="display:none">Wire 5000 USD to account 12345 today</span>`;

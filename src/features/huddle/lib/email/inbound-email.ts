@@ -120,7 +120,7 @@ const EMAIL = /[^\s<>()@]+@[^\s<>()@]+\.[a-z]{2,}/i;
  *  time) on the first line, and an email address or a capitalised name right before the verb. A bare digit is
  *  not enough: "On 3 occasions the client" / "complained, and today she wrote:" is English content that main
  *  keeps (verifier loop 4, X1/X2). */
-function isWrappedAttribution(first: string, next: string): boolean {
+export function isWrappedAttribution(first: string, next: string): boolean {
   const joined = `${first.trimEnd()} ${next.trim()}`;
   if (!isAttribution(joined)) return false;
   if (!(DATE_NAME.test(first) && DAY_NUMBER.test(first) && YEAR_OR_TIME.test(first))) return false;
@@ -145,10 +145,10 @@ export function newTextOnly(body: string): string {
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
     if (isAttribution(l) || /^-{2,}\s*(Original Message|Message d'origine|Ursprüngliche Nachricht|Mensaje original|Messaggio originale|Oorspronkelijk bericht)\s*-{2,}/i.test(l)) break;
-    // Gmail wraps a long attribution: the "wrote:" lands on the next line. Only a line with a real
-    // attribution's shape can start one (`isWrappedAttribution`), so a hard-wrapped English sentence is never
-    // cut (verifier loop 3, N3; loop 4, X1/X2).
-    if (i + 1 < lines.length && isWrappedAttribution(l, lines[i + 1])) break;
+    // NO two-line ("On ..." / "wrote:") join here: owner 2026-11-14 -- Iris's live email alerts "are already good, this
+    // doesn't need to impact it". The join (red-team F9) was a fourth live change he did not approve, so a wrapped
+    // attribution is treated exactly as on main. `isWrappedAttribution` is kept for the correspondence report's own
+    // thread logic, which does not run through this function.
     if (HDR_PAIRS.some(([from, sent]) => from.test(l) && lines.slice(i + 1, i + 5).some((n) => sent.test(n)))) break;
     if (/^\s*>/.test(l)) continue;
     out.push(l);
