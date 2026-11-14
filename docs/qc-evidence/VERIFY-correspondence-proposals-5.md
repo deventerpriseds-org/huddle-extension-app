@@ -323,3 +323,51 @@ literal `true` runs. `runCorrespondenceIngest` returns before even importing `fe
   parser (probe: `fromOwner: true`).
 - Nit: the HTML footer still says "identified by a best guess for this run" even when the file's `ownerUserId`
   was used. Cosmetic, preview-only.
+
+## Reduced-depth re-checks of loop-4 CONFIRMED items
+
+Basis: the Claim 0 suite re-run at b7dd9343 (every count reproduces; 0396f71a changes no `src/`) plus one probe each
+(`scripts/verify5-spot-probes.ts`, `scripts/verify5-d356-probes.ts`, claim 18 above).
+
+| item | spot probe | result |
+|---|---|---|
+| 4.5 / 4.13 | external ask then owner reply: text / `<customemoji>`-only / image-only -> `decideChatThread` | answered x3; control with no owner reply -> open. CONFIRMED |
+| 5.19 | D5/D6 table above | CONFIRMED (two minor D5 residues) |
+| 6.1 | `runCorrespondenceIngest()` with no config, and with config but no correspondence flags | `null`, `null`. CONFIRMED |
+| STALE flag OFF | claim 18 | zero calls. CONFIRMED |
+
+## The flags-OFF live-change table, rebuilt at 0396f71a
+
+Files that changed in `src/` since loop 4's head 2cf5fa8d: the fix files plus `autowork.server.ts`, `PolishView.tsx`,
+`focus.ts`, `HuddleView.tsx` -- the first three are byte-identical to origin/main (`git diff --stat origin/main
+0396f71a` empty) and HuddleView differs from main only by the proposal checklist (Claim 0b). `AttentionBell.tsx`,
+`attention.ts`, `tools.ts`, `huddle.functions.ts`, `scheduler.server.ts`: no change since 2cf5fa8d, so loop-4 rows
+3, 4, 8, 9 carry over unchanged.
+
+| # | change on merge with every flag OFF | status |
+|---|---|---|
+| 1a | work-email `htmlToText`: hidden text removed; more entities decoded | **owner-approved** |
+| 1b | work-email `htmlToText`: HTML comments stripped (so Outlook-only `[if mso]` copies are no longer shown) | part of "hidden text ignored"; acceptable |
+| 1c | work-email `htmlToText`: **visible text dropped** -- F1-F3 (hidden unclosed `<b>/<strong>/<font>/<a>` in a `<p>`/`<li>` closed implicitly, ask in a table cell), C1-C3 (CSS comment / later declaration / invalid value), K1-K2 (`<!-->`, `--!>`), G1 (`>` in a quoted value). W1-W4/W7 themselves are fixed | **DEFECT (F1-F3 blocking)** |
+| 2a | `newTextOnly` (main mailbox + work feed): non-English quoted history cut | **owner-approved** |
+| 2b | `newTextOnly`: an English Gmail attribution hard-wrapped over two lines is now cut (main cut it only on one line); X3-X6 / N-da show it also cuts some English text after "<X> wrote:" | **not in the approved list -- tell the owner**; non-blocking (extends main's own one-line false positive) |
+| 3 | Bell settings "Teams chats" checkbox; `chat` in defaults (loop 4 row 3) | unchanged from loop 4 |
+| 4 | Bell renders `link` / uses `badgeCount` (no effect without chat rows) | unchanged |
+| 5 | `settleAttentionForHuddle` excludes `chat` and `feed` (no effect without such rows) | unchanged in effect |
+| 6 | `chat.email_replies` gains nullable `needs_context`, `source_link` **and `feed_pending`** at the next bootstrap | additive DDL, harmless |
+| 7 | drive metadata `$select=id,eTag,size`, `method:"GET"` forced; `feedStateKey` extraction | no live key or behaviour change (claim 14) |
+| 8 | heartbeat imports the ingest / proposals modules; staleness module NOT imported when off | no work done |
+| 9 | `build_checklist` gains `proposals` (returns `not_enabled`) | unchanged |
+| 10 | feed owed rows settle from sent.json only when `sent` is configured (opt-in) | unchanged with it off |
+| 11 | `listOpenAttention` `ORDER BY (kind='feed') DESC, ...` | **no effect without feed rows** (real SQL, V3) |
+
+## Judgement calls asked for
+
+| item | judgement |
+|---|---|
+| keep-more: re-opened `<b>` (`LEAK-formatting-reopened`, `FMT-b-div-div`) | acceptable: extra hidden text is noise, never a missed ask |
+| keep-more: `display:/*x*/none` | acceptable (same direction) |
+| keep-more: `<table>` in an open `<p>` without a doctype (quirks) | acceptable (same direction). NOTE its mirror image is F1-F3, which drops |
+| open: `<video>`-only Teams reply | non-blocking: the chat stays owed (a nag, not a lost ask); bell is flag-gated |
+| open: bell client sorts by time | non-blocking: the server now always includes the feed row (V3); it may not render first |
+| open: missing-file alert one check later | non-blocking: the 2-check rule costs ~10 minutes by design and is what fixed V1/V2 |
