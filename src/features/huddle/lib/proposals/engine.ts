@@ -11,6 +11,18 @@
 
 import type { ItemProcessor, LedgerStore, ProcessOutcome, SourceItem } from "../correspondence/source-item";
 import { stableHash } from "../correspondence/source-item";
+import type { FeedInboundMessage } from "../external-feeds/onedrive-feed";
+import {
+  conversationFacts,
+  doerIsOwner,
+  emailConversationKey,
+  judgeConversation,
+  type ConversationFacts,
+  type JudgeCache,
+  type JudgeFn,
+  type Judgement,
+  type NeedsYouContext,
+} from "../correspondence/needs-you";
 import { normalizeTaskTitle, screenCapabilityMetaTask, screenRawJourneyCreate, type CapabilityDeferral } from "../tasks/create-task-core";
 import {
   EXTRACTION_INSTRUCTIONS,
@@ -134,6 +146,90 @@ export function proposalsProcessor(deps: ProposeDeps & { owner(): string; mailbo
         deps.log(`[proposals] ${item.source} created=${r.created} attached=${r.attached} seen=${r.seen} on_board=${r.onBoard} suppressed=${r.suppressed}${rej ? ` rejected=${rej}` : ""}`);
       }
       return { status: "processed", resultIds: r.ids.length ? { proposals: r.ids } : {} };
+    },
+  };
+}
+
+// ── Needs-you JUDGE (owner redirect 2026-11-14): the MODEL judges each email conversation; code gives facts ──
+
+export interface JudgeProcessorDeps extends ProposeDeps {
+  owner(): string;
+  mailbox(): string;
+  needsYou(): Promise<NeedsYouContext>;
+  judge: JudgeFn;
+  cache?: JudgeCache;
+  log?: (l: string) => void;
+}
+
+/** Categories whose conversations never yield to-dos, whatever the model listed (owner rule: minutes, calendar
+ *  items and broadcasts are never to-do sources; meeting action items come only through part B's triage). */
+const NO_TODO_CATEGORIES: readonly string[] = ["meeting_minutes", "calendar", "automated_or_broadcast"];
+
+export interface JudgedTodoResult extends ProposeResult {
+  assignedToOther: number;
+}
+
+/**
+ * A judged conversation's owner_todos -> proposals through the EXISTING pipeline. A to-do the model says another
+ * person does is dropped first (assigned_to_other); the rest are handed to proposeFromSource through an extract
+ * stub that returns exactly them, so the EXISTING Tier 1 validator (verbatim evidence in the thread, title
+ * grounding, negation D5/D6, date words) decides what may be stored -- no new validator. The source id is the
+ * conversation key (AC-R6.8), so a re-judge after a new message sees/attaches instead of duplicating (AC-R6.9).
+ */
+export async function proposeJudgedTodos(owner: string, f: ConversationFacts, j: Judgement, ownerNames: readonly string[], deps: ProposeDeps): Promise<JudgedTodoResult | null> {
+  if (!j.todos.length || NO_TODO_CATEGORIES.includes(j.category) || j.addressed === "not_addressed") return null;
+  const mine = j.todos.filter((t) => doerIsOwner(t.doer, ownerNames));
+  const assignedToOther = j.todos.length - mine.length;
+  const text = f.messages.map((m) => m.text).filter(Boolean).join("\n\n");
+  const empty: JudgedTodoResult = { ids: [], created: 0, attached: 0, seen: 0, onBoard: 0, suppressed: 0, failed: 0, rejected: {}, assignedToOther };
+  if (!mine.length || !text) return empty;
+  const last = f.messages[f.messages.length - 1];
+  const src: ProposalSource = { source: "email", sourceItemId: f.key, at: last?.at ?? null, context: (last?.subject ?? "").slice(0, 160) || null, text };
+  const r = await proposeFromSource(owner, src, {
+    ...deps,
+    // The judge already answered; the "extraction" is its owner_todos, validated by the existing guard.
+    extract: async () => ({ tasks: mine.map((t) => ({ task: t.title, evidence: t.quote, assignee: t.doer, due_text: t.dueText })) }),
+  });
+  return { ...r, assignedToOther };
+}
+
+/**
+ * The per-CONVERSATION judge processor (flag correspondence.conversations). One judgement per email conversation per
+ * pass, however many of its messages are claimed. Settled conversations never reach the model. A model failure
+ * THROWS (the ledger's failed_retryable / maxAttempts path); an invalid answer returns needs_context (never "open").
+ * Teams items go to the ORIGINAL per-message proposals processor unchanged (owner: Teams out of scope).
+ */
+export function needsYouJudgeProcessor(deps: JudgeProcessorDeps): ItemProcessor {
+  const decided = new Map<string, Promise<ProcessOutcome>>();
+  let ctxP: Promise<NeedsYouContext> | null = null;
+  const original = proposalsProcessor(deps);
+  return {
+    name: "proposals",
+    async process(item: SourceItem, pctx): Promise<ProcessOutcome> {
+      if (item.source !== "email" || !item.email) return original.process(item, pctx);
+      ctxP ??= deps.needsYou();
+      const ctx = await ctxP;
+      const mailbox = deps.mailbox();
+      const key = emailConversationKey(mailbox, item.email);
+      const prior = decided.get(key);
+      if (prior) return prior;
+      const run = (async (): Promise<ProcessOutcome> => {
+        const batch = (pctx.batch ?? [item]).filter((b) => b.source === "email" && b.email && emailConversationKey(mailbox, b.email) === key).map((b) => b.email as FeedInboundMessage);
+        const f = conversationFacts(key, batch.length ? batch : [item.email as FeedInboundMessage], ctx);
+        const o = await judgeConversation(f, ctx.ownerNames, deps.judge, deps.cache);
+        if (o.status === "needs_context") return { status: "needs_context", missingField: o.reason };
+        if (o.status !== "judged") return { status: "processed", resultIds: { needs_you: [o.status] } };
+        const r = await proposeJudgedTodos(deps.owner(), f, o.judgement, ctx.ownerNames, deps);
+        if (deps.log) {
+          const rej = r ? Object.entries(r.rejected).map(([k, n]) => `${k}=${n}`).join(",") : "";
+          deps.log(`[needs-you] email judged=${o.judgement.category}${o.judgement.downgraded ? ` downgraded=${o.judgement.downgraded}` : ""}${o.cached ? " cached" : ""} todos created=${r?.created ?? 0} assigned_to_other=${r?.assignedToOther ?? 0}${rej ? ` rejected=${rej}` : ""}`);
+        }
+        // The verdict NAME is kept in the ledger row's result JSON (no new table): the judged category per item.
+        return { status: "processed", resultIds: { needs_you: [o.judgement.category], ...(r?.ids.length ? { proposals: r.ids } : {}) } };
+      })();
+      decided.set(key, run);
+      run.catch(() => decided.delete(key));
+      return run;
     },
   };
 }
