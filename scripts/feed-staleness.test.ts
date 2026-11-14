@@ -439,8 +439,10 @@ function countingDeps(meta: FeedMeta) {
   t("I3 teams has no complete flag: an incomplete status is ignored", decideFeedStaleness("teams", ok("2026-11-13T14:30:00Z"), now, 6, inc("2026-11-13T14:31:00Z")).state, "fresh");
   t("I4 a copy published AFTER the incomplete read, read < 2h ago -> transient (wait for the reader; no clear, no re-raise)",
     decideFeedStaleness("email", ok("2026-11-13T14:30:00Z"), now, 6, inc("2026-11-13T14:00:00Z")).state, "transient");
-  t("I5 ...but if the reader has not looked for 2h+, the plain staleness decision applies again",
-    decideFeedStaleness("email", ok("2026-11-13T14:30:00Z"), now, 6, inc("2026-11-13T12:30:00Z")).state, "fresh");
+  t("I5 ...however long the reader takes (2h+, 9 days): an unread copy NEVER clears an incomplete incident (verifier loop 5, U1)",
+    [decideFeedStaleness("email", ok("2026-11-13T14:30:00Z"), now, 6, inc("2026-11-13T12:30:00Z")).state,
+     decideFeedStaleness("email", ok("2026-11-13T14:30:00Z"), now + 9 * 86_400_000, 6, inc("2026-11-13T12:30:00Z")).state],
+    ["transient", "transient"]);
   t("I6 any other reader status (ok / unchanged / rejected:other) -> plain staleness",
     ["ok", "unchanged", "rejected:not_json", "error"].map((st) => decideFeedStaleness("email", ok("2026-11-13T14:30:00Z"), now, 6, { status: st, checkedMs: U("2026-11-13T14:31:00Z") }).state),
     ["fresh", "fresh", "fresh", "fresh"]);
@@ -487,6 +489,20 @@ function countingDeps(meta: FeedMeta) {
   };
   const k = await applyFeedStaleness(O, [...incNow, { file: "sent" as const, meta: ok("2026-11-13T14:30:00Z"), read: inc("2026-11-13T14:31:00Z") }], now, 6, tw3.store, thrower);
   t("I18 a failing announcement never blocks the bell row or the other file", [k.raised, k.urgent, k.failed, open(tw3.rows)], [2, 0, 2, 2]);
+  {
+    // Verifier loop 5, U1: incomplete -> newer copy unread for hours -> incomplete again = ONE announcement, and
+    // the bell never shows the incident as cleared in between. U4: dismissed during the incident stays dismissed.
+    const tw4 = twin();
+    const sent4: string[] = [];
+    const n4: FeedUrgentNotifier = async (r) => (sent4.push(r.file), true);
+    const r1 = await applyFeedStaleness(O, [{ file: "sent" as const, meta: ok("2026-11-13T14:30:00Z"), read: inc("2026-11-13T14:31:00Z") }], now, 6, tw4.store, n4);
+    const gap = await applyFeedStaleness(O, [{ file: "sent" as const, meta: ok("2026-11-13T16:00:00Z"), read: inc("2026-11-13T14:31:00Z") }], U("2026-11-14T12:10:00Z"), 6, tw4.store, n4);
+    const st = tw4.rows.get(feedAttentionId(O, "sent"))!.status;
+    tw4.rows.get(feedAttentionId(O, "sent"))!.status = "dismissed";
+    const r2 = await applyFeedStaleness(O, [{ file: "sent" as const, meta: ok("2026-11-14T12:00:00Z"), read: inc("2026-11-14T12:20:00Z") }], U("2026-11-14T12:30:00Z"), 6, tw4.store, n4);
+    t("I23 U1/U4: one incident across a long unread gap = ONE announcement, never shown cleared, dismiss holds",
+      [r1.urgent, gap.cleared, gap.states.sent, st, r2.raised, r2.urgent, sent4.length], [1, 0, "transient", "owed", 0, 0, 1]);
+  }
   t("I19 log line counts urgent announcements (names/counts only)", stalenessLogLine({ states: { email: "incomplete" }, raised: 1, cleared: 0, failed: 0, urgent: 1 }),
     "[feed-staleness] email=incomplete raised=1 cleared=0 urgent=1");
 }

@@ -48,8 +48,9 @@ export interface FeedReadStatus {
 }
 /** The reader's status for a snapshot the flow marked `complete: false` (it is refused, exactly as before). */
 export const INCOMPLETE_STATUS = "rejected:incomplete";
-/** The file was re-published after the reader last saw it incomplete: wait this long for the reader to look at
- *  the new copy before trusting the plain staleness decision again (so one republish never clears + re-raises). */
+/** RETIRED (verifier loop 5, U1/U4): an unread newer copy used to fall back to the plain staleness decision
+ *  after this long, which CLEARED the incomplete alert with nothing complete ever read -- and re-announced it
+ *  on the next incomplete read. Kept exported only so old imports fail loudly in review, not silently. */
 export const READ_LAG_MS = 2 * 3_600_000;
 
 export type StaleDecision =
@@ -160,10 +161,11 @@ export function decideFeedStaleness(
   if (meta.kind === "transient" || !Number.isFinite(meta.lastModifiedMs)) return { state: "transient" };
   const lm = meta.lastModifiedMs;
   // Incomplete (email / sent only -- the Teams log has no complete flag): the reader refused the CURRENT copy.
-  // A copy published after that read has not been judged yet: hold the alert state until the reader looks.
+  // A copy published after that read has not been judged yet: hold the alert state, however long the reader
+  // takes. Only a read that is NOT incomplete ends the incident -- an unread copy never clears it (verifier
+  // loop 5, U1/U4: clearing on time alone re-announced one incident and reopened a dismissed alert).
   if (file !== "teams" && read && read.status === INCOMPLETE_STATUS && Number.isFinite(read.checkedMs)) {
-    if (read.checkedMs >= lm) return { state: "incomplete", sinceMs: lm };
-    if (nowMs - read.checkedMs < READ_LAG_MS) return { state: "transient" };
+    return read.checkedMs >= lm ? { state: "incomplete", sinceMs: lm } : { state: "transient" };
   }
   if (lm >= nowMs) return { state: "fresh" };
   if (file === "teams") {
