@@ -37,6 +37,9 @@ for (const [name, rows] of sets) {
       if (INVISIBLE.test(r.html)) deliberate++;
       else { drops++; lines.push(`  DROP ${r.id}: ${JSON.stringify(dropped)}`); }
     }
+    // reverse: words the branch SHOWS that main hid AND Chromium hides (cutting comments/hidden text exposed them)
+    const exposed = [...wb].filter((w) => !wm.has(w) && !wc.has(w));
+    if (exposed.length) lines.push(`  EXPOSED ${r.id}: ${JSON.stringify(exposed)}`);
     const ab = asksSomething({ ...q, bodyText: b }), am = mainAsks({ ...q, bodyText: m }), ac = asksSomething({ ...q, bodyText: c });
     if (ab !== am) {
       flips++;
