@@ -28,6 +28,12 @@ export const ATTENTION_KIND_LABEL: Record<AttentionKind, string> = {
   chat: "Teams chats",
 };
 
+/** The kinds offered in the bell's "What counts" list. "Teams chats" is NOT offered for now: the owner put Teams out of
+ *  scope ("email report for now, no teams", 2026-11-14), and a new checkbox visible with every flag off is a live UI
+ *  change he did not approve (verifier loop 7). The `chat` kind itself stays in the data and the defaults, so nothing
+ *  stored changes; put it back here when Teams is switched on. */
+export const SETTINGS_KINDS: readonly AttentionKind[] = ATTENTION_KINDS.filter((k) => k !== "chat");
+
 /** Seeded default only -- the owner changes it from the bell itself (config-centric rule). */
 export const DEFAULT_URGENT_KINDS: AttentionKind[] = ["email", "meeting", "appointment", "chat"];
 

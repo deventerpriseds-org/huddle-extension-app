@@ -19,7 +19,7 @@ import {
   setAttentionKindsFn,
 } from "../lib/attention/attention.functions";
 import {
-  ATTENTION_KINDS,
+  SETTINGS_KINDS,
   ATTENTION_KIND_LABEL,
   badgeCount,
   type AttentionItem,
@@ -154,7 +154,7 @@ export function AttentionBell() {
         </div>
         {showSettings && (
           <div className="space-y-1.5 border-b border-hairline px-3 py-2" data-testid="attention-settings">
-            {ATTENTION_KINDS.map((k) => (
+            {SETTINGS_KINDS.map((k) => (
               <label key={k} className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={kinds.includes(k)} onChange={() => void toggleKind(k)} />
                 {ATTENTION_KIND_LABEL[k]}
