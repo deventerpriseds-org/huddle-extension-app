@@ -34,6 +34,10 @@ on:
         required: false
         type: boolean
         default: false
+      step:
+        description: "Tuning step to run instead of the full preview: blank = full preview; reply = step 1 (which emails need a reply)"
+        required: false
+        default: ""
       probe:
         description: "Run the counts-only correspondence probes (scripts/correspondence-probes.ts) INSTEAD of the preview"
         required: false
@@ -76,6 +80,7 @@ jobs:
           HUDDLE_EMAIL_FROM: ${{ secrets.HUDDLE_EMAIL_FROM }}
           PREVIEW_ACCEPT_UNMARKED: ${{ inputs.accept_unmarked_teams && '1' || '0' }}
           PREVIEW_PROBE: ${{ inputs.probe && '1' || '0' }}
+          PREVIEW_STEP: ${{ inputs.step }}
           FIREFLIES_API_KEY: ${{ inputs.probe && secrets.FIREFLIES_API_KEY || '' }}
         run: |
           TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
@@ -84,5 +89,6 @@ jobs:
             | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
           if [ -z "$TOKEN" ]; then echo "::error::could not get an app-only Graph token"; exit 1; fi
           echo "::add-mask::$TOKEN"
+          if [ "$PREVIEW_STEP" = "reply" ]; then TOKEN="$TOKEN" bun scripts/reply-scan-preview.ts; exit $?; fi
           if [ "$PREVIEW_PROBE" = "1" ]; then TOKEN="$TOKEN" bun scripts/correspondence-probes.ts; exit $?; fi
           TOKEN="$TOKEN" bun scripts/proposals-preview.ts
