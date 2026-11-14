@@ -866,7 +866,11 @@ t("F13 an all-Cyrillic word is real text and is NOT folded", titleKey("Отпр�
 t("F8 over-match negative: a visible styled span is kept", htmlToText('<p>Hi <span style="display:inline-block;font-size:12px">please send the deck</span></p>'), "Hi please send the deck");
 t("F8 nested hidden element removed whole, the text after it kept", htmlToText('<div style="display:none"><div>a</div>hidden</div><p>shown</p>'), "shown");
 t("F8b font-size:0 wrapper with a re-sized child keeps the visible ask", htmlToText('<table><tr><td style="font-size:0"><div style="font-size:14px">Can you review the deck?</div></td></tr></table>'), "Can you review the deck?");
-t("F8b font-size:0 wrapper drops its OWN zero-size text, keeps the re-sized child", htmlToText('<td style="font-size:0">Wire 5000 now<span style="font-size:14px">see you at lunch</span></td>'), "see you at lunch");
+// Input wrapped in a real table (2026-11-14): a bare <td> outside any <table> is DISCARDED by the browser's tree
+// builder (Chromium measured: the style never applies), so the old bare-<td> input no longer tested font-size:0 at all
+// once htmlToText builds the tree the way a browser does. The intent is unchanged: zero-size own text is dropped.
+t("F8b font-size:0 wrapper drops its OWN zero-size text, keeps the re-sized child", htmlToText('<table><tr><td style="font-size:0">Wire 5000 now<span style="font-size:14px">see you at lunch</span></td></tr></table>'), "see you at lunch");
+t("F8b a stray <td> outside a table does not exist in the browser's tree, so its style hides nothing", htmlToText('<td style="font-size:0">Wire 5000 now<span style="font-size:14px">see you at lunch</span></td>'), "Wire 5000 now see you at lunch");
 t("F8b font-size:0 with no re-sized content is still hidden", htmlToText('<p>shown</p><span style="font-size:0">Wire 5000 now</span>'), "shown");
 t("F8b a font-size:0px / inherit child does NOT re-size", htmlToText('<div style="font-size:0"><span style="font-size:0px">a</span><span style="font-size:inherit">b</span></div><p>shown</p>'), "shown");
 t("F8b a 0.9em child re-sizes", htmlToText('<div style="font-size:0"><span style="font-size:0.9em">please send the deck</span></div>'), "please send the deck");
