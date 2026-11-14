@@ -5277,3 +5277,4 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
   taps (10-19..11-02) was PARK or BACKLOG -> `GIVE_UP route=NONE http=0`, i.e. never sent. The 5 DONE taps in the same
   window succeeded via the fallback. Since 11-05 no PARK/BACKLOG tap has been traced yet, so "fixed" is inferred
   from token presence, not observed.
+- [x] proposals-preview.yml: `step` input (reply = tuning step 1, scripts/reply-scan-preview.ts on the chosen ref). Workflow-only.
