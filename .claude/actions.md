@@ -15,6 +15,8 @@
       the AI saw only the signature. BUILT: lib/correspondence/forwarded.ts (forward read separately; Iris's live path
       pinned unchanged, scripts/forwarded.test.ts 16/0) + scripts/action-scan-steps.ts (STEP 2 on-To open item, STEP 3
       CC/list action; report action-scan-<stamp>.html with a printed web link). His 4th step was cut off ("Next ask for").
+      RUN 1 (43612968787): step 2 open 49/76, step 3 action 1/4, forwards read only 1 -> held; fallback for forwards
+      whose header is plain "From:/Sent:" text added (F11b) + counts-only forward diagnostics; re-run before sending.
 - [x] Redesign parts merged into claude_task-proposals (2026-11-14): part A AI conversation judge
       (needs-you.ts, email-only report; docs/qc-evidence/IMPL-needs-you-redesign.md, 14/14 mutations FIRED) + part B
       meeting triage (meeting-triage.ts, Mine/For someone/Skip, chat.task_proposals untriaged/delegated states;
