@@ -52,7 +52,11 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       evidence docs/qc-evidence/IMPL-task-proposals.md + IMPL-feed-staleness.md "Verifier loop-4 fix pass").
 - [ ] Independent verifier loop 5 at 03cabacc: RUNNING (3h budget; report pushed per claim to
       claude_verify-correspondence-proposals-5). Merge decision waits on its verdict.
-- [ ] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history).
+- [x] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history):
+      APPROVED 2026-11-13 ("I'm fine with your 3 live work email changes").
+- [x] Owner 2026-11-13: incomplete (complete:false) stays a hard refusal, but must alert by bell + Huddle chat + email
+      (urgent). Built on claude_task-proposals 84b4a613/b7dd9343 (feed-staleness I1-I22 95/0, 4 mutations FIRED);
+      NOT live, NOT independently verified yet -- covered by verifier loop 5. Flag: correspondence.staleAlerts.
 - [x] PA emails.json: FIXED 2026-11-13 (run 43473391504): complete:true, 127 records Nov 6 08:24 -> Nov 13 15:17 UTC,
       published 15:18 UTC. sent.json: complete:true, 29 records, sentDateTime 29/29, published 15:37 UTC.
 - [x] PA Teams backfill: FIXED 2026-11-13 23:13 UTC (run 43525408545, file modified 22:58 UTC): 166/166 lines parse,

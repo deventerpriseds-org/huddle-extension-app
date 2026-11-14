@@ -4018,3 +4018,7 @@ here as fact three times before being checked.)
   complete:true; Teams still broken -- re-run at 22:19 UTC wrote 59 new concat(' text lines (108-166). Nothing live.
   Teams FIXED 23:13 UTC: 166/166 parse, 626 msgs to Nov 13 19:39 UTC (Nov 9-11 duplicated by the re-run; dedup
   on chatId+message.id handles it). Lines now carry ownerUserId (owner's Teams id -- never print/commit it).
+  Owner decisions 23:30 UTC: 3 live work-email changes APPROVED; complete:false stays refused (no warn-and-use) but
+  is URGENT -> bell + Iris chat (dm-iris-chase, push) + self-email, once per incident (feed-staleness 'incomplete'
+  state reads chat.external_feed_state.last_status; email/sent only). Container restarted 3x in ~30 min and killed
+  verifier loop 5 twice -- commit+push per step.
