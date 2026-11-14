@@ -5282,3 +5282,4 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
       NEEDS REPLY 13 (10 high, 3 medium; every quote found word-for-word), no reply 61, settled 6, owner-only 14.
       Report: OneDrive /automation/Huddle Preview/reply-scan-2026-11-14T04-33-28.html (+ emailed). Waiting on the
       owner to mark wrong YES / missed NO before tuning further.
+- [x] graph-permission-check: `feed_links` input prints OneDrive web links for report files in /automation/Huddle Preview only (owner 2026-11-14: "You have to provide links I can click").
