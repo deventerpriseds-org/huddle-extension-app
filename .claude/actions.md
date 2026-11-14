@@ -8,6 +8,13 @@
       TUNING STEP 1: scripts/reply-scan-preview.ts asks ONE question per unsettled conversation (needs a reply from the
       owner? verbatim ask, AI reason, recall-first). Report lists every YES and every NO with the AI's reason for the
       owner to mark wrong ones. Next steps only after he signs off step 1.
+      OWNER REVIEW (2026-11-14 14:xx, screenshots): no YES disputed; six NO rows circled as needing ACTION, not a reply
+      (two manager "Fw: ... Due" forwards, Keeper account setup, a requested attachment, a CC'd hours notice, an intro).
+      "Next ask for all that include me directly, find which of those have an open item. Next ask for all that address
+      me indirectly with an action." Root cause of the two forwards: the text path cuts at Outlook's forward header, so
+      the AI saw only the signature. BUILT: lib/correspondence/forwarded.ts (forward read separately; Iris's live path
+      pinned unchanged, scripts/forwarded.test.ts 16/0) + scripts/action-scan-steps.ts (STEP 2 on-To open item, STEP 3
+      CC/list action; report action-scan-<stamp>.html with a printed web link). His 4th step was cut off ("Next ask for").
 - [x] Redesign parts merged into claude_task-proposals (2026-11-14): part A AI conversation judge
       (needs-you.ts, email-only report; docs/qc-evidence/IMPL-needs-you-redesign.md, 14/14 mutations FIRED) + part B
       meeting triage (meeting-triage.ts, Mine/For someone/Skip, chat.task_proposals untriaged/delegated states;
