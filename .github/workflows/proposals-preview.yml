@@ -35,7 +35,7 @@ on:
         type: boolean
         default: false
       step:
-        description: "Tuning step to run instead of the full preview: blank = full preview; reply = step 1 (which emails need a reply)"
+        description: "Tuning step to run instead of the full preview: blank = full preview; reply = step 1 (which emails need a reply); action = steps 2+3 (open items when you are on To; actions when CC'd or on a list)"
         required: false
         default: ""
       probe:
@@ -89,6 +89,6 @@ jobs:
             | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
           if [ -z "$TOKEN" ]; then echo "::error::could not get an app-only Graph token"; exit 1; fi
           echo "::add-mask::$TOKEN"
-          if [ "$PREVIEW_STEP" = "reply" ]; then TOKEN="$TOKEN" bun scripts/reply-scan-preview.ts; exit $?; fi
+          if [ "$PREVIEW_STEP" = "reply" ] || [ "$PREVIEW_STEP" = "action" ]; then TOKEN="$TOKEN" bun scripts/reply-scan-preview.ts; exit $?; fi
           if [ "$PREVIEW_PROBE" = "1" ]; then TOKEN="$TOKEN" bun scripts/correspondence-probes.ts; exit $?; fi
           TOKEN="$TOKEN" bun scripts/proposals-preview.ts
