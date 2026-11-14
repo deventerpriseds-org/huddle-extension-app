@@ -181,10 +181,33 @@ async function fetchDriveFile(
  * Never throws. On any failure the stored last-good snapshot (if any) rides back in `lastGood`, so a
  * caller can keep serving it while saying it is not current.
  */
+/** The chat.external_feed_state key of one feed file: kind + drive user + path (server config, never a payload). */
+export const feedStateKey = (cfg: OneDriveFeedsConfig, kind: Kind) => `${kind}:${cfg.driveUser}:${cfg[kind].path}`;
+
+/**
+ * What `readFeed` last recorded for one file (status + when it read), for the file-health alert's
+ * incomplete check. Database only: no Graph call, no download. null when never read, or on any error.
+ */
+export async function readFeedStatus(cfg: OneDriveFeedsConfig, kind: "email" | "sent"): Promise<{ status: string; checkedMs: number } | null> {
+  try {
+    await ensureBootstrapped();
+    const { rows } = await getPool().query(
+      `SELECT last_status, checked_at FROM chat.external_feed_state WHERE feed_key = $1`,
+      [feedStateKey(cfg, kind)],
+    );
+    const r = rows[0];
+    if (!r || !r.checked_at) return null;
+    const checkedMs = new Date(r.checked_at).getTime();
+    return Number.isFinite(checkedMs) ? { status: String(r.last_status ?? ""), checkedMs } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function readFeed(cfg: OneDriveFeedsConfig, kind: Kind): Promise<FeedRead> {
   const file = cfg[kind];
   if (!file.enabled) return { ok: false, reason: "disabled" };
-  const key = `${kind}:${cfg.driveUser}:${file.path}`;
+  const key = feedStateKey(cfg, kind);
   let state: { etag: string | null; last_good: ValidSnapshot<Record<string, unknown>> | null } = {
     etag: null,
     last_good: null,
