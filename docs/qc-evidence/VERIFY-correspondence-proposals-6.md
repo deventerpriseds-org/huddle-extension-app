@@ -290,3 +290,172 @@ Not live at merge (`correspondence.staleAlerts` gates all of it). It **blocks sw
 U1. Minimal fix direction: when the last read is `rejected:incomplete` and the drive shows a newer copy, the staleness
 check should READ that copy (one `readFeed(cfg, kind)`, the reader that already exists), not wait for a reader that
 may never run. Do not fall back on time: falling back to `stale` reintroduces U4, and to `fresh` reintroduces U1.
+
+## X3-X6 and the detector, new spellings both ways -- CONFIRMED (live screen); detector residues listed
+
+- `scripts/verify5-newtext-probes.ts` at ddc7b55d: X1, X2, X3-may, X4-out, X5-time, X6-set, G1 and G2 (Gmail
+  wrapped) all give **the same output as main**.
+- DIFF rows are all approved non-English history:
+  - T-fr (a French header block) and T-de-attr (a German attribution) are cut, as approved.
+  - Three are foreign header PAIRS colliding with English, the same residue class as loop 5's N-da:
+    - N-van `Van: 12-seat, booked` / `Datum: tbd`
+    - N-da `Da: the team` / `Data: attached below`
+    - N-de `De: rien` / `Date: Friday`
+
+    (`inbound-email.ts:79-86`; the English-plausible ones are `De:`/`DE:` + `Date:` and `Da:`/`Od:` + `Data:`.)
+    Part of the approved "non-English quoted history" change; non-blocking.
+- Detector (`isWrappedAttribution`, no live caller): Gmail (4 spellings), Apple Mail (3) and Outlook-mobile (2)
+  stamps are detected, and X3-X6, lowercase-name, `I` and no-date sentences are not. The residues are in claim (a):
+  3 English sentences that carry month or day name + year + clock + a capitalised word are detected, and Thunderbird
+  numeric is missed.
+
+## Bundle / build -- CONFIRMED
+
+- parse5 is reachable from a static import chain that includes a server-fn file: `huddle.functions.ts:8` ->
+  `proposals.ts` -> `source-item.ts:15` -> `onedrive-feed.ts:18` -> `html-visible.ts:29` -> parse5. No `.tsx`
+  imports any of these.
+- `npm run build` (vite build + nitro): **exit 0**. The parse5 signature string (`abandoned-head-element-child`) is
+  in **0 files under `.output/public`** (the client) and in 1 server file (`.output/server/_libs/parse5.mjs`).
+  Server-only.
+- `package-lock.json` adds parse5 7.3.0 + entities 6.0.1. `npm ci --dry-run` on the target's package.json + lock
+  succeeds (699 packages). `bun.lock` has no parse5 entry, but it was already stale (last touched a3b20df4), and
+  `deploy-swa.yml` runs `bun install` without `--frozen-lockfile`, then npm fallback. Not a new risk.
+- origin/main moved to 97c4bed2 during this loop: its 8 commits since the merge base aa29eef5 touch only
+  `.claude/*.md` and `proposals-preview.yml`, none touched by the branch. A merge stays clean.
+
+## Mutation proofs (`mutate.sh`, anchors/replacements in files) -- 13 run, 12 FIRED, 1 INERT-equivalent
+
+| mutation | file | named test | verdict | exit |
+|---|---|---|---|---|
+| U1 fix reverted (2 h fallback back) | feed-staleness.ts | I23 U1/U4 | FIRED (control EQUIVALENT) | 0 |
+| 2-check bypassed | feed-staleness.ts | T3 a 403 | FIRED (control EQUIVALENT) | 0 |
+| M2: drop `ok &&` | feed-staleness.ts | I12 later checks | FIRED (control EQUIVALENT) | 0 |
+| D6: title-negator check always ok | proposals.ts | D6 loop 4: a title that negates | FIRED (control EQUIVALENT) | 0 |
+| PV-6: HTML PUT only with PREVIEW_EMAIL=1 | scripts/proposals-preview.ts | PV-6 | FIRED (control EQUIVALENT) | 0 |
+| hidden attribute rule off | html-visible.ts | D1 neg: bare / empty-valued hidden attribute | FIRED (control EQUIVALENT) | 0 |
+| first declaration wins (no cascade) | html-visible.ts | CSS a later display wins | FIRED (control EQUIVALENT) | 0 |
+| parse WITHOUT the doctype (quirks) | html-visible.ts | LOOP5 no row drops a word | FIRED (control EQUIVALENT) | 0 |
+| NEVER_TEXT reduced to comment/doctype | html-visible.ts | LOOP5 at least 83 rows match Chromium exactly | FIRED (control EQUIVALENT) | 0 |
+| (same) | | TRUTH negatives / TRUTH every row | INERT -- no truth row has `<title>`/`<noscript>`/`<template>`; caught by the loop-5 fixture instead | 1 |
+| CSS comment stripping off | html-visible.ts | CSS display:none inside a CSS comment | **INERT, behaviourally equivalent** for that input. Without stripping the property name is garbled (`/* display`), so nothing can hide. Untested direction: `style="/* c */ display:none"` is hidden today (probe: `"shown"`) and would leak under the mutation (keep-more). Test gap, non-blocking. | 1 |
+| join reinstated / year+clock off / email shortcut off (claim b) | inbound-email.ts | see claim (b) | FIRED (control EQUIVALENT) x3 | 0 |
+
+`git status --short` was empty after every run.
+
+## Reduced-depth re-checks of loop-5 CONFIRMED items
+
+| item | evidence this loop | result |
+|---|---|---|
+| full suites | Claim 0 at d849f0da and ddc7b55d: every count equals the claim (redteam 77 at ddc7b55d) | CONFIRMED |
+| truth fixture regenerates identically | `scripts/fixtures/html-visible-text-truth.json` unchanged since loop 5 (no commit touches it in 0396f71a..ddc7b55d); truth suite 11/0 | CONFIRMED (carried; not regenerated this loop) |
+| V1/V2 (transient / single 403 raise nothing) | real SQL re-run | CONFIRMED |
+| V3 (feed row first; flags off == main order) | real SQL re-run | CONFIRMED |
+| `feedStateKey` pure; complete:false refused | no diff in 0396f71a..ddc7b55d touches either (`git diff` limited to feed-staleness.ts, inbound-email.ts, html-visible.ts, onedrive-feed.ts htmlToText) | CONFIRMED (carried) |
+| D3 / D5 / D6 | `scripts/verify5-d356-probes.ts`: identical to loop 5 (D5 `No‑one` residue unchanged) | CONFIRMED |
+| Teams dedup (chatId, message.id), unknown keys ignored | same probe: 2 messages, last copy wins | CONFIRMED |
+| flag off = zero calls | no change to `runFeedStalenessCheck` / ingest gating since loop 5 | CONFIRMED (carried) |
+| preview: HTML file, email unchanged, counts-only logs | PV suite 6/0 + PV-6 mutation FIRED | CONFIRMED |
+| 7 mutation proofs | 6 re-run, all FIRED. W1-W3's code was deleted (replaced by parse5) and is replaced by 4 new html-visible mutations | CONFIRMED |
+| Golden-path regression baseline (live app) | not run: this loop forbids live systems; no UI file changed since loop 5 | NOT RUN (out of scope) |
+
+## The flags-OFF live-change table, rebuilt at ddc7b55d (vs origin/main)
+
+`src/` files changed since loop 5's target 0396f71a: `feed-staleness.ts` (flag-gated), `inbound-email.ts` (live),
+`html-visible.ts` (new, live) and `onedrive-feed.ts` (`htmlToText`, live). Every other loop-5 row carries unchanged.
+
+| # | change on merge with every flag OFF | status |
+|---|---|---|
+| 1a | work-email `htmlToText`: hidden text removed. Rules: `display:none`, `hidden`, opacity 0, max-height 0 + overflow hidden/clip, font-size 0, visibility; comments, `<head>`, `<script>`, `<style>`, `<template>`, `<noscript>`, `<title>` | **owner-approved** ("hidden text ignored") |
+| 1b | entities decoded, once and correctly (`&eacute;`, `&#8217;`, `&hellip;`; `&amp;lt;` shows `&lt;` where main shows `<`); typographic quotes folded to `'` and `"` | **owner-approved** ("entities decoded") |
+| 1c | **visible text dropped that main keeps**, in 3 low-realism shapes: (i) text deeper than ~397 elements (`html-visible.ts:135`); (ii) `;` inside a quoted CSS string (`html-visible.ts:45`); (iii) `<body hidden>` / `<body style="display:none">` drops the whole body (Chromium-consistent; webmail would likely show it -- inference) | **DEFECT** (i), (ii); (iii) judgement |
+| 1d | **NEW: implied end tags become line breaks** (`html-visible.ts:156` + `onedrive-feed.ts:440`), so main's English `On ... wrote:` and From:/Sent: cuts now also apply to bodies with unclosed `<p>`/`<li>`/`<tr>`, and the live ask decision flips from ask to no-ask (5 of 8 probes) | **NOT approved**; the same kind of English quoted-history change the owner declined on 2026-11-14 |
+| 1e | more line breaks generally; text order follows the browser for foster-parented table text | harmless (no other decision change in 23 Teams/screen probes) |
+| 2a | `newTextOnly`: non-English quoted history cut (residue: `De:`+`Date:`, `Da:`+`Data:`, `Van:`+`Datum:` header pairs cut English) | **owner-approved** |
+| 2b | ~~English two-line Gmail attribution cut~~ | **GONE** at ddc7b55d (claim (a): 22/22 shapes and 1502 literals equal main) |
+| 3-11 | loop-5 rows 3-11 (bell "Teams chats" checkbox, link/badgeCount, settle excludes chat/feed, nullable DDL incl. `feed_pending`, drive metadata select, heartbeat imports, `build_checklist` proposals `not_enabled`, sent settle opt-in, `listOpenAttention` order) | unchanged since loop 5 (no file touched) |
+| 12 | new dependency parse5 7.3.0 (+ entities 6.0.1), server bundle only | no client effect |
+
+## Per-claim table (target ddc7b55d)
+
+Basis: S = suite re-run; P = my probe; M = mutate.sh; R = code read; Q = real SQL on local PG; C = real Chromium; B = build.
+
+| item | verdict | basis |
+|---|---|---|
+| Claim 0: all suites + tsc | CONFIRMED: every claimed count reproduces (redteam 77/0 at ddc7b55d); fireflies-minutes 3 failures pre-existing on main | S |
+| (a) `newTextOnly` == main on every wrapped shape | CONFIRMED (22/22; sweep 1502 literals, only the 13 approved non-English differ) | P |
+| (b) rewritten tests not weakened | CONFIRMED (3 mutations FIRED); redteam suite exits 0 on failure (infra nit) | M + R |
+| 6.4 F1-F3 / C / K / G (loop-5 23 regressions) | **FIXED** (loop-5 88 rows: 83 OK, 0 regressions except deliberate opacity) | C |
+| 6.4 new shapes (130 rows: nesting, template/noscript/svg/math/select/details/dialog, foster, `<html>`/`<body>`) | **102 OK / 10 KEEP+ / 18 DROP**. Of the DROP rows, 6 are real regressions vs main: depth guard (3 shapes) and CSS string (1 shape) x2 modes; the rest are innerText-oracle artefacts (font-size:0, opacity 0, max-height clip) or math italics | C |
+| 6.4 standards-mode choice | SOUND (3/299 rows differ; standards always the keep-more side) | C + R |
+| `opacity:0%` hidden | ACCEPT (computed opacity 0) | C |
+| F8b test input change | LEGITIMATE, strengthening (Chromium builds 0 `<td>`) | C |
+| `visibleHtml` serialization, reply cut, blockquote | CONFIRMED | P |
+| pathological input, never throws | CONFIRMED (bounded time); depth guard drops deep text | P |
+| bundle / build | CONFIRMED server-only; build exit 0; lock in sync | B |
+| Teams via `htmlToText` (radius challenge) | no open/answered change (14/15 identical, 1 newline-only) | P |
+| **6.4 flags OFF: no unapproved live change** | **REFUTED**: row 1d (implied end tags -> English cut on the live ask decision) and row 1c (i)/(ii) | P + C |
+| Claim 16 U1/U4 | **FIXED** (1 announcement, never cleared mid-incident, dismiss holds) | Q + M |
+| **U5 (new, from the fix)** | **DEFECT**: incomplete sent.json + no owed work email -> `transient` forever; stuck alert, and after a dismiss a real outage is never alerted | Q |
+| X3-X6 (detector) | CONFIRMED; 3 English residues still detected, but the detector has no live caller | P + M |
+| Claims 5, 6, 7, 8, 9, 10, 11, 14, 15, 17, 18, 20 (loop 5) | CONFIRMED (carried + reduced re-check) | S + P + Q |
+| Claim 13 / 19 mutation proofs | CONFIRMED (6 re-run + 7 new, all FIRED except 1 equivalent) | M |
+| comment at `inbound-email.ts:150` ("kept for the correspondence report") | inaccurate: `isWrappedAttribution` has no `src/` caller | R |
+
+UI note: none of this loop's claims is browser-only, and no UI file changed since loop 5 (`AttentionBell.tsx`,
+`HuddleView.tsx`, `ProposalChecklistItem.tsx` untouched in 0396f71a..ddc7b55d). The bell/checklist UI rows from
+loop 4 have still not been driven in a browser in any loop, so whenever this lands it lands **MERGE-PENDING-UAT**
+for those rows.
+
+## Verdict: FIX FIRST
+
+PASS (CONFIRMED) 24 claim rows | FAIL (REFUTED/DEFECT) 3 (6.4 flags-off row 1d, 6.4 row 1c depth/CSS-string,
+U5) | UNVERIFIED 1 (claim 17 self-send tier, needs the live profile row; carried) | UI-UNVERIFIED: bell/checklist UI
+(carried, not in scope this loop).
+
+Loop 5's blockers are fixed: F1-F3 and the whole tree-shape class, and U1/U4. What blocks now is smaller and cheap.
+
+### Blocking for merge (live with every flag OFF)
+
+1. **Implied end tags change the live ask decision**: `src/features/huddle/lib/external-feeds/html-visible.ts:156`
+   always emits `</name>`, and `onedrive-feed.ts:440` turns `</p|div|li|tr|hN>` into line breaks. As a result
+   `newTextOnly`'s English attribution and From:/Sent: rules (`inbound-email.ts:151-152`) now cut bodies that main
+   keeps whole.
+   ```
+   asksSomething({subject:"Status", bodyText: htmlToText('<p>Status below.<p>On Friday the auditor wrote:<p>Can you send the ledger by Monday?')})
+   // branch false ; main true   (scripts/verify6-screen-probes.ts, 5 of 8 shapes)
+   ```
+   This is an English quoted-history change the owner has not approved, of the same kind he declined on 2026-11-14.
+   Fix: parse with `sourceCodeLocationInfo: true` and emit `</name>` only when `node.sourceCodeLocation?.endTag`
+   exists, which reproduces main's line structure.
+2. **Depth guard drops visible text main keeps**: `html-visible.ts:135` `if (depth > 400) return;`.
+   ```
+   htmlToText("<div>".repeat(405) + "Can you sign?")              // branch "" ; main "Can you sign?" ; Chromium shows it
+   htmlToText("<table><tr><td>".repeat(3000) + "Can you sign?")  // branch ""
+   ```
+   Low realism, but it is a dropped-visible-text defect by this loop's rule. Fix: past the limit, append the
+   subtree's text iteratively (escaped) instead of returning.
+
+Fold into the same pass (non-blocking, very low realism): `html-visible.ts:45` splits a style on `;` inside a
+quoted CSS string (`style="font-family:'Arial;display:none;x'"` drops the text; main keeps it).
+
+If the owner prefers to accept items 1-2 as known deviations instead, everything else here is MERGE-READY. That is
+the owner's call, not the verifier's.
+
+### Blocking before `correspondence.staleAlerts` is switched on (not live at merge)
+
+3. **U5** -- `src/features/huddle/lib/correspondence/feed-staleness.ts:167-168`: an unread newer copy after an
+   incomplete read is `transient` forever. The sent reader runs only while an owed `kind='email'` work row exists
+   (`email-replies.server.ts:210`, `:293`). Repro: `scripts/verify6-staleness-stuck.ts`. The alert stays after the
+   flow is fixed; after a dismiss, a 4-day and a 9-day sent outage raise nothing (control raises `stale`). Fix:
+   have the staleness check read the newer copy (existing `readFeed`) rather than wait.
+
+### Tell the owner / nits (non-blocking)
+
+4. Row 1c (iii): `<body hidden>` drops the whole message (Chromium-consistent; webmail likely shows it -- inference).
+5. Foreign header-pair collisions with English (`De:`+`Date:`, `Da:`+`Data:`, `Van:`+`Datum:`), inside the approved
+   class.
+6. `scripts/redteam-correspondence.test.ts:505` never exits non-zero on a failure; add `if (fail) process.exit(1)`.
+7. `inbound-email.ts:150` comment claims a caller of `isWrappedAttribution` that does not exist (dead code).
+8. Test gap: CSS-comment stripping is only tested in the keep direction; `style="/* c */ display:none"` is
+   untested.
+9. Carried: D5 `No‑one` residue; preview footer wording.
