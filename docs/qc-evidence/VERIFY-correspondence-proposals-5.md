@@ -181,3 +181,22 @@ single-line false positive reaching a hard-wrapped line, and the cut content is 
 two-line English wrap cut is itself NOT one of the three owner-approved changes (only non-English quoted history
 is); it should be listed to the owner as a fourth live change. Fix candidate: English-only names in DATE_NAME for
 the English opener.
+
+## Claims 7, 8, 9 + real-file note (D5, D6, D3, Teams dedup) -- CONFIRMED (two minor residues)
+
+`scripts/verify5-d356-probes.ts`, synthetic data.
+
+| claim | probe | observed |
+|---|---|---|
+| 9 / D3 | owner reply = only `<customemoji>`, `<CUSTOMEMOJI>` (upper), `<emoji>`, `<animatedemoji>` | kept 1 each (not skipped) |
+| 9 / D3 negatives | whitespace-only `<pre><code>`, `<span class="emoji">` (class, no element), empty body | `empty`, skipped -- correct |
+| 9 / D3 left open | `<video>`-only reply | skipped `empty` (the documented open item) |
+| 7 / D5 | "Nobody should", "No one should", "No-one should", "NO ONE is to", "No one, repeat, should", "Nobody here may", "No one else should" ... send the contract | all `evidence_negated` |
+| 7 / D5 positive | "Nobody forget to send ..." | accepted (affirmative) |
+| 7 / D5 residue | `No‑one` (non-breaking hyphen) | **accepted** -- minor, the separator class is `[\s-]` |
+| 7 / D5 residue | "No one objected, so send the contract ..." | refused -- safe direction (a missed proposal, not a wrong one) |
+| 8 / D6 | titles "Do not / Don't / Never / Cannot / Hold off on sending / Stop sending / Send no deck ..." from evidence "send the deck to finance" | all refused (`task_not_grounded`; the claim's wording says `evidence_negated`, the reason code is `task_not_grounded` -- either way refused) |
+| 8 / D6 positive | "Send the deck to finance" | accepted |
+| real-file note | lines `(c1,m1)`, `(c1,m1)` edited, `(c2,m1)`; each line carries `ownerUserId` plus unknown keys `futureKey`, `zz` | 2 messages: `(c1,"edited copy")` (last copy wins) and `(c2, ...)`; nothing skipped -- dedup on (chatId, message.id) and unknown keys ignored. CONFIRMED |
+
+**Claims 7, 8, 9 CONFIRMED.** The two D5 residues are minor and non-blocking (the proposals flag is off).
