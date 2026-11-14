@@ -12,6 +12,13 @@ import { newTextOnly } from "../email/inbound-email";
 /** A subject that marks a forward (English plus the common Outlook locales). */
 export const FORWARD_SUBJECT = /^\s*(?:(?:re|aw|sv)\s*:\s*)*(?:fw|fwd|tr|wg|rv|doorst)\s*:/i;
 
+/** The text after newTextOnly's cut (the quoted / forwarded part), or null when nothing meaningful follows. */
+function afterCut(text: string): string | null {
+  const fresh = newTextOnly(text);
+  if (!text.startsWith(fresh) || text.length - fresh.length < 20) return null;
+  return text.slice(fresh.length).trim();
+}
+
 /** Outlook's reply/forward header block -- the exact marker htmlToText cuts at. */
 const RPLY_FWD = /<div[^>]*id=["']?(?:divRplyFwdMsg|appendonsend)["']?/i;
 
@@ -26,14 +33,18 @@ export function forwardedText(subject: string | null | undefined, body: string |
   let out = "";
   if (isHtml) {
     const m = RPLY_FWD.exec(raw);
-    if (!m) return null;
-    // Rename only THIS marker so htmlToText keeps it; a deeper marker (the forward's own history) is still cut.
-    const rest = raw.slice(m.index).replace(/id=(["']?)(?:divRplyFwdMsg|appendonsend)/i, "id=$1fwdpart");
-    out = htmlToText(rest);
+    if (m) {
+      // Rename only THIS marker so htmlToText keeps it; a deeper marker (the forward's own history) is still cut.
+      const rest = raw.slice(m.index).replace(/id=(["']?)(?:divRplyFwdMsg|appendonsend)/i, "id=$1fwdpart");
+      out = htmlToText(rest);
+    } else {
+      // No Outlook marker (other clients, or a prefixed id): the forward header is plain "From: ... Sent: ..." text,
+      // which newTextOnly cuts at -- so read what comes after that cut. Measured 2026-11-14: 1 of 2+ forwards found
+      // with the marker alone.
+      out = afterCut(htmlToText(raw)) ?? "";
+    }
   } else {
-    const fresh = newTextOnly(raw);
-    if (!raw.startsWith(fresh) || raw.length - fresh.length < 20) return null;
-    out = raw.slice(fresh.length).trim();
+    out = afterCut(raw) ?? "";
   }
   out = out.trim();
   return out ? out.slice(0, max) : null;

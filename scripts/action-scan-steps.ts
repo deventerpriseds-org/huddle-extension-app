@@ -13,7 +13,7 @@
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   .github/workflows/proposals-preview.yml step=action.
 import type { ConversationFacts, NeedsYouContext } from "../src/features/huddle/lib/correspondence/needs-you";
-import { forwardedText } from "../src/features/huddle/lib/correspondence/forwarded";
+import { FORWARD_SUBJECT, forwardedText } from "../src/features/huddle/lib/correspondence/forwarded";
 import { mapFeedMessage, type OneDriveFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { EXTRACT_MODEL } from "../src/features/huddle/lib/proposals/proposals.server";
 
@@ -79,13 +79,20 @@ export async function runActionScan(a: {
   const { facts, cfg, ctx, token, drive, enc, sinceMs, maxCalls, newest } = a;
   // The forwarded part of every "Fw:" message, keyed by the same id the facts use.
   const fwd = new Map<string, string>();
+  const fwdStats = { subjects: 0, marker: 0, emptyBody: 0 };
   for (const r of a.rawRecords) {
     const body = r.body as unknown;
     const raw = typeof body === "string" ? body : body && typeof body === "object" ? String((body as Record<string, unknown>).content ?? "") : "";
     const isHtml = r.isHtml === true || (!!body && typeof body === "object" && String((body as Record<string, unknown>).contentType ?? "").toLowerCase() === "html");
+    const isFwd = FORWARD_SUBJECT.test(String(r.subject ?? ""));
+    if (isFwd) fwdStats.subjects++;
+    if (isFwd && /id=["']?(?:divRplyFwdMsg|appendonsend)/i.test(raw)) fwdStats.marker++;
+    if (isFwd && !raw.trim()) fwdStats.emptyBody++;
     const t = forwardedText(String(r.subject ?? ""), raw, isHtml);
     if (t) fwd.set(mapFeedMessage(r, cfg.mailbox).id, t);
   }
+  // Counts only (public log): how many "Fw:" messages, how many carry Outlook's marker, how many had a readable forward.
+  console.log(`forwards: Fw subjects ${fwdStats.subjects} | with Outlook marker ${fwdStats.marker} | empty body ${fwdStats.emptyBody} | forwarded text read ${fwd.size}`);
 
   const input = (f: ConversationFacts) => {
     const head = `FACTS: ${JSON.stringify({ owner_names: ctx.ownerNames, owner_position_on_latest_other_message: f.ownerPosition, others_on_to: f.othersOnTo, others_on_cc: f.othersOnCc, recipient_count: f.recipientCount })}`;

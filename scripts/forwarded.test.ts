@@ -36,6 +36,9 @@ t("F8 the forward's OWN older history is still cut", !f.includes("older history 
 t("F9 the forwarder's signature is not in the forwarded part", !f.includes("555-0100"), f);
 t("F10 not a forward -> null even with a marker", forwardedText("Re: REMINDER", fwdHtml, true) === null);
 t("F11 forward with no marker -> null", forwardedText("Fw: x", "<div>just text</div>", true) === null);
+const noMarker = '<div>Mark<br>555-0100</div><hr><div><b>From:</b> Compliance Team<br><b>Sent:</b> Monday, November 9<br><b>To:</b> All<br><b>Subject:</b> REMINDER</div><div>Please complete the assessment by November 12.</div>';
+const nm = forwardedText("Fw: REMINDER", noMarker, true) ?? "";
+t("F11b forward with a plain From/Sent header and no marker keeps the forwarded body", nm.includes("Please complete the assessment by November 12.") && !nm.includes("555-0100"), nm);
 t("F12 empty body -> null", forwardedText("Fw: x", "", true) === null);
 
 const plain = "See below.\n\n-----Original Message-----\nFrom: A\nPlease send the timesheet today.";
