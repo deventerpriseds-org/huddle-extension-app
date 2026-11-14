@@ -52,3 +52,32 @@ Every implementer count reproduces exactly.
 - Merge 03cabacc (parents 21928c16 / main aa29eef5, base 8972f632): main side touched only `.claude/actions.md`,
   `.claude/memory.md`, `graph-permission-check.yml`; the workflow is byte-identical to main.
 - vs today's origin/main 9a22b0cc: every main-side code/workflow/skill file above is byte-identical. **CONFIRMED.**
+
+---
+
+## RESTART 2 (2026-11-14 00:02 UTC) -- re-targeted to b7dd9343
+
+**The two claims above were run at 03cabacc, which is NOT the target.** The target b7dd9343 is 2 commits newer
+(84b4a613 + b7dd9343, the urgent incomplete-file alert; `git merge-base --is-ancestor 03cabacc b7dd9343` true). This
+run merged b7dd9343 into the verify branch (52964877); `git diff b7dd9343 HEAD -- src` is empty, so every probe below
+runs against the target's source. Budget re-based: this run ends 03:02 UTC. Claim 0b (merge integrity) still holds:
+b7dd9343 adds no merge; `git log 03cabacc..b7dd9343` is the 2 feature commits only.
+
+## Claim 0 (re-run at b7dd9343)
+
+| suite | implementer | observed at b7dd9343 |
+|---|---|---|
+| task-proposals | 203/0 | 203/0 |
+| redteam-correspondence | 75/0 | 75/0 |
+| correspondence-ingest | 149/0 | 149/0 |
+| inbound-email | 72/0 | 72/0 |
+| cross-app-turn-gate | 92/0 | 92/0 |
+| feed-staleness | 95/0 | **95/0** (was 73 at 03cabacc: +22 new) |
+| onedrive-feed-truth | 11/0 | 11/0 |
+| proposals-preview | 5/0 | 5/0 |
+| onedrive-feed / attention / attention-focus | -- | 61/0, 15/0, 27/0 |
+| confirm-ask-context | -- | 21/0 |
+| feed-staleness-sql (local PG 16) | 23/0 | **23/0 -- unchanged, so the 22 new incomplete-alert tests are in-memory only; none runs the real SQL** |
+| task-proposals-sql / correspondence-ledger-sql / fireflies-queue-sql | 45, 50, -- | 45/0, 50/0, 14/0 |
+| fireflies-minutes | -- | 64 pass / **3 FAIL (G3, G5, G8)** -- **pre-existing: origin/main bc6bd661 fails the same 3**; the branch's only fireflies diff is `export` on `fetchTranscript`. Not caused by this branch. |
+| `tsc --noEmit` | -- | 0 errors at b7dd9343; 0 at origin/main |
