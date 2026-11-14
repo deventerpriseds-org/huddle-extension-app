@@ -11,19 +11,17 @@
 
 import type { ItemProcessor, LedgerStore, ProcessOutcome, SourceItem } from "../correspondence/source-item";
 import { stableHash } from "../correspondence/source-item";
-import { newTextOnly } from "../email/inbound-email";
-import { parseUtcMs, type FeedInboundMessage } from "../external-feeds/onedrive-feed";
+import type { FeedInboundMessage } from "../external-feeds/onedrive-feed";
 import {
-  classifyEmailConversation,
-  conversationIsTodoSource,
-  doerVerdict,
+  conversationFacts,
+  doerIsOwner,
   emailConversationKey,
-  emailNewText,
-  ownerAddressing,
-  segmentOf,
-  type ConversationVerdict,
+  judgeConversation,
+  type ConversationFacts,
+  type JudgeCache,
+  type JudgeFn,
+  type Judgement,
   type NeedsYouContext,
-  type TodoSegment,
 } from "../correspondence/needs-you";
 import { normalizeTaskTitle, screenCapabilityMetaTask, screenRawJourneyCreate, type CapabilityDeferral } from "../tasks/create-task-core";
 import {
@@ -46,7 +44,6 @@ import {
   type ProposalSource,
   type ProposalStore,
   type RejectReason,
-  type ValidCandidate,
 } from "./proposals";
 
 /** The model call: instructions + input -> parsed JSON (whatever shape it returned). Throws on failure. */
@@ -58,9 +55,6 @@ export interface ProposeDeps {
   /** The owner's OPEN board titles, normalized; null when the read failed (then nothing is skipped). */
   openTitles(): Promise<Set<string> | null>;
   tz: string;
-  /** Needs-you redesign (AC-R6.3-6.7): after validation, a reject reason when the OWNER is not the doer of a
-   *  candidate, else null. Absent = every validated candidate is kept (the original behaviour). */
-  doer?(c: ValidCandidate): RejectReason | null;
 }
 
 export interface ProposeResult {
@@ -89,15 +83,7 @@ export async function proposeFromSource(owner: string, src: ProposalSource, deps
     // AC-3.3: a failed extraction is NOT processed; the ledger retries it with backoff.
     throw code("proposals:extract_failed");
   }
-  const v = validateCandidates(raw, src.text, { atIso: src.at, tz: deps.tz });
-  const rejected = v.rejected;
-  const accepted = deps.doer
-    ? v.accepted.filter((c) => {
-        const r = deps.doer!(c);
-        if (r) rejected[r] = (rejected[r] ?? 0) + 1;
-        return !r;
-      })
-    : v.accepted;
+  const { accepted, rejected } = validateCandidates(raw, src.text, { atIso: src.at, tz: deps.tz });
   out.rejected = rejected;
   if (!accepted.length) return out;
   const openRaw = await deps.openTitles();
@@ -164,118 +150,82 @@ export function proposalsProcessor(deps: ProposeDeps & { owner(): string; mailbo
   };
 }
 
-// ── Needs-you redesign: ONE proposal source per CONVERSATION, the owner as the doer (AC-R6) ────────────
+// ── Needs-you JUDGE (owner redirect 2026-11-14): the MODEL judges each email conversation; code gives facts ──
 
-/** A conversation as a proposal source: one text (the conversation's new texts in time order) plus the segment
- *  each span came from, so the doer rule can ask "who wrote this, and how was the owner reached". */
-export interface ConversationSource extends ProposalSource {
-  segments: TodoSegment[];
-  verdict: ConversationVerdict;
+export interface JudgeProcessorDeps extends ProposeDeps {
+  owner(): string;
+  mailbox(): string;
+  needsYou(): Promise<NeedsYouContext>;
+  judge: JudgeFn;
+  cache?: JudgeCache;
+  log?: (l: string) => void;
 }
 
-const SOURCE_TEXT_MAX = 6000;
+/** Categories whose conversations never yield to-dos, whatever the model listed (owner rule: minutes, calendar
+ *  items and broadcasts are never to-do sources; meeting action items come only through part B's triage). */
+const NO_TODO_CATEGORIES: readonly string[] = ["meeting_minutes", "calendar", "automated_or_broadcast"];
 
-/**
- * Pure (AC-R6.1/6.2/6.8): the conversation `item` belongs to, built from every item of that conversation the pass
- * holds -> ONE source (sourceItemId = the conversation key), or a skip naming the verdict. Never screenMessage:
- * the classifier decides. Each message is read through newTextOnly (quoted history never re-proposes a to-do).
- * The owner's own messages ARE included (AC-R6.6: his first-person commitments). EMAIL ONLY (owner scope change
- * 2026-11-14: Teams is out of scope for this pass); a non-email item returns a skip and the processor hands it to
- * the original per-message path unchanged.
- */
-export function conversationSourceFor(
-  item: SourceItem,
-  batch: readonly SourceItem[],
-  mailbox: string,
-  ctx: NeedsYouContext,
-): ConversationSource | { skip: string; key: string } {
-  if (item.source === "email" && item.email) {
-    const key = emailConversationKey(mailbox, item.email);
-    const msgs = batch.filter((b) => b.source === "email" && b.email && emailConversationKey(mailbox, b.email) === key).map((b) => b.email as FeedInboundMessage);
-    const all = msgs.length ? msgs : [item.email as FeedInboundMessage];
-    const verdict = classifyEmailConversation(key, all, ctx);
-    if (!conversationIsTodoSource(verdict)) return { skip: verdict.verdict, key };
-    const sorted = [...all].sort((a, b) => (parseUtcMs(a.receivedDateTime ?? "") || 0) - (parseUtcMs(b.receivedDateTime ?? "") || 0));
-    const segments: TodoSegment[] = sorted
-      .map((m) => {
-        const a = ownerAddressing(m, ctx.ownerAddresses);
-        return {
-          text: newTextOnly(emailNewText(m)).trim(),
-          fromOwner: ctx.ownerAddresses.has(String(m.fromAddress ?? "").trim().toLowerCase()),
-          reach: a.kind,
-          ownerAloneOnTo: a.kind === "direct" || (a.kind === "group" && a.ownerAloneOnTo),
-          mentionsOwner: false,
-        };
-      })
-      .filter((s) => s.text);
-    return finishConversationSource("email", key, sorted[sorted.length - 1]?.receivedDateTime ?? item.at, item.email.subject ?? null, segments, verdict);
-  }
-  return { skip: "no_payload", key: item.sourceItemId };
-}
-
-function finishConversationSource(
-  source: "email",
-  key: string,
-  at: string | null,
-  context: string | null,
-  segments: TodoSegment[],
-  verdict: ConversationVerdict,
-): ConversationSource | { skip: string; key: string } {
-  // The newest text matters most: when the conversation is over the cap, the OLDEST segments are dropped whole.
-  const kept: TodoSegment[] = [];
-  let len = 0;
-  for (let i = segments.length - 1; i >= 0; i--) {
-    if (len + segments[i].text.length + 2 > SOURCE_TEXT_MAX && kept.length) break;
-    kept.unshift(segments[i]);
-    len += segments[i].text.length + 2;
-  }
-  const text = kept.map((s) => s.text).join("\n\n").slice(-SOURCE_TEXT_MAX).trim();
-  if (!text) return { skip: "no_text", key };
-  return { source, sourceItemId: key, at, context: (context ?? "").slice(0, 160) || null, text, segments: kept, verdict };
-}
-
-/** Pure (AC-R6.3-6.7): the doer filter for one conversation source. A span whose message cannot be found is
- *  dropped as doer_unclear (fail closed: never proposed to the owner on a guess). */
-export function conversationDoer(src: ConversationSource, ownerNames: readonly string[]): (c: ValidCandidate) => RejectReason | null {
-  return (c) => {
-    const seg = segmentOf(c.evidence, src.segments, canonicalSpan);
-    if (!seg) return "doer_unclear";
-    const v = doerVerdict(c, seg, ownerNames);
-    return v === "keep" ? null : v;
-  };
+export interface JudgedTodoResult extends ProposeResult {
+  assignedToOther: number;
 }
 
 /**
- * The per-CONVERSATION proposals processor (flag correspondence.conversations, AC-R9.1). One extraction per
- * conversation per pass, however many of its messages are claimed (each reuses the conversation's outcome),
- * mirroring the bell's per-chat decision. Idempotent across passes through the store's refs (AC-R6.9: the
- * conversation key is the ref, so a re-extraction after a new message attaches/sees instead of duplicating).
- * Teams items (owner scope change 2026-11-14) go to the ORIGINAL per-message processor, exactly as before.
+ * A judged conversation's owner_todos -> proposals through the EXISTING pipeline. A to-do the model says another
+ * person does is dropped first (assigned_to_other); the rest are handed to proposeFromSource through an extract
+ * stub that returns exactly them, so the EXISTING Tier 1 validator (verbatim evidence in the thread, title
+ * grounding, negation D5/D6, date words) decides what may be stored -- no new validator. The source id is the
+ * conversation key (AC-R6.8), so a re-judge after a new message sees/attaches instead of duplicating (AC-R6.9).
  */
-export function conversationProposalsProcessor(
-  deps: ProposeDeps & { owner(): string; mailbox(): string; needsYou(): Promise<NeedsYouContext>; log?: (l: string) => void },
-): ItemProcessor {
+export async function proposeJudgedTodos(owner: string, f: ConversationFacts, j: Judgement, ownerNames: readonly string[], deps: ProposeDeps): Promise<JudgedTodoResult | null> {
+  if (!j.todos.length || NO_TODO_CATEGORIES.includes(j.category) || j.addressed === "not_addressed") return null;
+  const mine = j.todos.filter((t) => doerIsOwner(t.doer, ownerNames));
+  const assignedToOther = j.todos.length - mine.length;
+  const text = f.messages.map((m) => m.text).filter(Boolean).join("\n\n");
+  const empty: JudgedTodoResult = { ids: [], created: 0, attached: 0, seen: 0, onBoard: 0, suppressed: 0, failed: 0, rejected: {}, assignedToOther };
+  if (!mine.length || !text) return empty;
+  const last = f.messages[f.messages.length - 1];
+  const src: ProposalSource = { source: "email", sourceItemId: f.key, at: last?.at ?? null, context: (last?.subject ?? "").slice(0, 160) || null, text };
+  const r = await proposeFromSource(owner, src, {
+    ...deps,
+    // The judge already answered; the "extraction" is its owner_todos, validated by the existing guard.
+    extract: async () => ({ tasks: mine.map((t) => ({ task: t.title, evidence: t.quote, assignee: t.doer, due_text: t.dueText })) }),
+  });
+  return { ...r, assignedToOther };
+}
+
+/**
+ * The per-CONVERSATION judge processor (flag correspondence.conversations). One judgement per email conversation per
+ * pass, however many of its messages are claimed. Settled conversations never reach the model. A model failure
+ * THROWS (the ledger's failed_retryable / maxAttempts path); an invalid answer returns needs_context (never "open").
+ * Teams items go to the ORIGINAL per-message proposals processor unchanged (owner: Teams out of scope).
+ */
+export function needsYouJudgeProcessor(deps: JudgeProcessorDeps): ItemProcessor {
   const decided = new Map<string, Promise<ProcessOutcome>>();
   let ctxP: Promise<NeedsYouContext> | null = null;
   const original = proposalsProcessor(deps);
   return {
     name: "proposals",
     async process(item: SourceItem, pctx): Promise<ProcessOutcome> {
-      if (item.source !== "email") return original.process(item, pctx);
+      if (item.source !== "email" || !item.email) return original.process(item, pctx);
       ctxP ??= deps.needsYou();
       const ctx = await ctxP;
-      const src = conversationSourceFor(item, pctx.batch ?? [item], deps.mailbox(), ctx);
-      const key = `${item.source}:${"skip" in src ? src.key : src.sourceItemId}`;
+      const mailbox = deps.mailbox();
+      const key = emailConversationKey(mailbox, item.email);
       const prior = decided.get(key);
       if (prior) return prior;
       const run = (async (): Promise<ProcessOutcome> => {
-        if ("skip" in src) return { status: "processed", resultIds: {} };
-        const r = await proposeFromSource(deps.owner(), src, { ...deps, doer: conversationDoer(src, ctx.ownerNames) });
-        if (deps.log && (r.created || r.attached || r.suppressed || Object.keys(r.rejected).length)) {
-          const rej = Object.entries(r.rejected).map(([k, n]) => `${k}=${n}`).join(",");
-          deps.log(`[proposals] ${item.source} conversation created=${r.created} attached=${r.attached} seen=${r.seen} on_board=${r.onBoard} suppressed=${r.suppressed}${rej ? ` rejected=${rej}` : ""}`);
+        const batch = (pctx.batch ?? [item]).filter((b) => b.source === "email" && b.email && emailConversationKey(mailbox, b.email) === key).map((b) => b.email as FeedInboundMessage);
+        const f = conversationFacts(key, batch.length ? batch : [item.email as FeedInboundMessage], ctx);
+        const o = await judgeConversation(f, ctx.ownerNames, deps.judge, deps.cache);
+        if (o.status === "needs_context") return { status: "needs_context", missingField: o.reason };
+        if (o.status !== "judged") return { status: "processed", resultIds: { needs_you: [o.status] } };
+        const r = await proposeJudgedTodos(deps.owner(), f, o.judgement, ctx.ownerNames, deps);
+        if (deps.log) {
+          const rej = r ? Object.entries(r.rejected).map(([k, n]) => `${k}=${n}`).join(",") : "";
+          deps.log(`[needs-you] email judged=${o.judgement.category}${o.judgement.downgraded ? ` downgraded=${o.judgement.downgraded}` : ""}${o.cached ? " cached" : ""} todos created=${r?.created ?? 0} assigned_to_other=${r?.assignedToOther ?? 0}${rej ? ` rejected=${rej}` : ""}`);
         }
-        return { status: "processed", resultIds: r.ids.length ? { proposals: r.ids } : {} };
+        // The verdict NAME is kept in the ledger row's result JSON (no new table): the judged category per item.
+        return { status: "processed", resultIds: { needs_you: [o.judgement.category], ...(r?.ids.length ? { proposals: r.ids } : {}) } };
       })();
       decided.set(key, run);
       run.catch(() => decided.delete(key));

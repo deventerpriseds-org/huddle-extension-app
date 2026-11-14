@@ -15,12 +15,13 @@
 import { getFeedsConfig } from "../external-feeds/onedrive-feed.server";
 import type { OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
 import type { ItemProcessor } from "../correspondence/source-item";
+import type { JudgeFn } from "../correspondence/needs-you";
 import {
   approveProposal,
   decideProposal,
   deliverEveningProposals,
   editProposal,
-  conversationProposalsProcessor,
+  needsYouJudgeProcessor,
   proposalChecklistResult,
   proposalsProcessor,
   runTranscriptProposals,
@@ -67,6 +68,24 @@ export const extract: ExtractFn = async (instructions, input) => {
   }
 };
 
+/** The needs-you JUDGE call: the SAME client, key, model and timeout as `extract` above, with the judge's strict
+ *  schema (lib/correspondence/needs-you.ts). No new provider (owner redirect 2026-11-14). */
+export const judge: JudgeFn = async (instructions, input) => {
+  const { callOpenAIRouter } = await import("../openai-responses.server");
+  const { JUDGE_SCHEMA, JUDGE_SCHEMA_NAME } = await import("../correspondence/needs-you");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      callOpenAIRouter<unknown>({ model: EXTRACT_MODEL, system: instructions, prompt: input, schema: JUDGE_SCHEMA as unknown as Record<string, unknown>, schemaName: JUDGE_SCHEMA_NAME }),
+      new Promise<never>((_, rej) => {
+        timer = setTimeout(() => rej(new Error("judge_timeout")), EXTRACT_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
 /** The owner's open board titles via the create path's own reader (fail-open -> null, never "no dupes"). */
 function openTitlesFor(owner: string) {
   let cache: { at: number; v: Set<string> | null } | null = null;
@@ -91,9 +110,11 @@ export async function makeProposalsProcessor(): Promise<ItemProcessor | null> {
   if (!cfg) return null;
   const d = await deps(cfg.owner);
   if (cfg.correspondence.conversations === true) {
-    // Needs-you redesign (AC-R6, flag correspondence.conversations): one source per conversation, owner as doer.
-    return conversationProposalsProcessor({
+    // Needs-you judge (owner redirect 2026-11-14, flag correspondence.conversations): the model judges each email
+    // conversation; the existing validators decide what is stored. Teams items keep the original processor.
+    return needsYouJudgeProcessor({
       ...d,
+      judge,
       owner: () => cfg.owner,
       mailbox: () => cfg.mailbox,
       log: (l) => console.log(l),

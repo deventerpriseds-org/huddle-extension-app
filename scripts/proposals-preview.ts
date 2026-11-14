@@ -1,6 +1,6 @@
 // WHAT:       A ONE-OFF PREVIEW of what needs the owner, from the owner's REAL work-email snapshot (EMAIL ONLY,
 //             owner 2026-11-14: "email report for now, no teams"). Three lists, one row per CONVERSATION (needs-you
-//             classifier, lib/correspondence/needs-you.ts): Needs your reply, Action items for you, Meeting action
+//             JUDGE, lib/correspondence/needs-you.ts: facts in code, meaning from the model): Needs your reply, Action items for you, Meeting action
 //             items for you; everything else is counts only (scripts/proposals-preview-render.ts). Runs the shipped
 //             extraction + validation (proposeFromSource, the same model call the live feature uses). It WRITES one Markdown file to the owner's OWN OneDrive
 //             (/automation/Huddle Preview/task-proposals-preview-<timestamp>.md, a new file every run), WRITES the
@@ -26,20 +26,21 @@ import {
   validateEmailSnapshot,
   validateSentSnapshot,
 } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
-import { ledgerEmailItems } from "../src/features/huddle/lib/correspondence/ingest-pass";
-import type { SourceItem } from "../src/features/huddle/lib/correspondence/source-item";
 import {
-  classifyEmailConversations,
-  conversationIsTodoSource,
+  conversationFacts,
   effectiveOwnerNames,
+  groupEmailConversations,
+  judgeConversation,
   ownerAddressSet,
-  verdictCounts,
+  reportBucket,
+  type JudgeOutcome,
+  type Judgement,
   type NeedsYouContext,
 } from "../src/features/huddle/lib/correspondence/needs-you";
 import type { NewProposal, ProposalStore } from "../src/features/huddle/lib/proposals/proposals";
-import { conversationDoer, conversationSourceFor, proposeFromSource } from "../src/features/huddle/lib/proposals/engine";
+import { proposeJudgedTodos } from "../src/features/huddle/lib/proposals/engine";
 import { renderNeedsYouHtml, renderNeedsYouMarkdown, type NeedsYouReport } from "./proposals-preview-render";
-import { extract, EXTRACT_MODEL } from "../src/features/huddle/lib/proposals/proposals.server";
+import { extract, judge, EXTRACT_MODEL } from "../src/features/huddle/lib/proposals/proposals.server";
 
 /** Parse a feed file WITHOUT ever printing its content: a JSON.parse error message quotes the first characters
  *  of the input (V8: `Unexpected token 'S', "Secret mer"... is not valid JSON`), and these logs are public. A
@@ -73,8 +74,7 @@ const read = async (path: string) => {
 const cfg = cfg0;
 
 // ── Sources (the ledger's own mappers). Owner 2026-11-14 redesign: ONE row per CONVERSATION, decided by the
-// needs-you classifier (lib/correspondence/needs-you.ts) -- never by Iris's live screen (AC-R1.6).
-const items: SourceItem[] = [];
+// needs-you JUDGE (lib/correspondence/needs-you.ts: facts in code, meaning from the model) -- never by Iris's live screen (AC-R1.6).
 const e = await read(cfg.email.path);
 // PREVIEW ONLY: PREVIEW_ACCEPT_UNMARKED=1 also reads an email file the flow marked complete:false (the live
 // validator still refuses it); the report says so up front.
@@ -86,8 +86,7 @@ if (ev && !ev.ok && ev.reason === "incomplete" && process.env.PREVIEW_ACCEPT_UNM
   emailIncomplete = !!ev?.ok;
 }
 console.log(`email: HTTP ${e.status} | ${ev ? (ev.ok ? (emailIncomplete ? "valid (flow marked it incomplete; read for the preview only)" : "valid") : `REJECTED ${ev.reason}`) : "-"}`);
-if (ev?.ok) items.push(...ledgerEmailItems(ev.snapshot.records, cfg, { path: cfg.email.path, etag: null }).items);
-// ── Sent Items: what settles an email thread (the EXISTING sentReplySettles, through the classifier).
+// ── Sent Items: what settles an email thread (the EXISTING sentReplySettles, via conversationFacts).
 const sinceIso = process.env.PREVIEW_SINCE || "";
 const sinceMs = sinceIso ? Date.parse(sinceIso) : since;
 const sentRead = await read("/automation/email/sent.json");
@@ -97,7 +96,8 @@ const sentMapped = sv?.ok ? mapSentRecords(sv.snapshot.records, cfg) : { sent: [
 const latestSent = latestSentByConversation(sentMapped.sent);
 console.log(`sent: HTTP ${sentRead.status} | ${sv ? (sv.ok ? "valid" : `REJECTED ${sv.reason}`) : "-"} | usable ${sentMapped.sent.length} | no time ${sentMapped.skipped}`);
 
-// ── One verdict per conversation (AC-R2..R4). A conversation is in the window when its NEWEST message is.
+// ── One JUDGEMENT per conversation (owner redirect 2026-11-14: the model decides meaning; code gives facts).
+// A conversation is in the window when its NEWEST message is. Settled conversations never reach the model.
 const nyCtx: NeedsYouContext = {
   ownerAddresses: ownerAddressSet(cfg),
   ownerNames: effectiveOwnerNames(cfg),
@@ -106,14 +106,41 @@ const nyCtx: NeedsYouContext = {
 };
 const emailMsgs = ev?.ok ? ev.snapshot.records.map((r) => mapFeedMessage(r, cfg.mailbox)) : [];
 const newest = (ats: (string | null | undefined)[]) => Math.max(...ats.map((a) => Date.parse(String(a ?? ""))).filter(Number.isFinite), -Infinity);
-const emailById = new Map(emailMsgs.map((m) => [m.id, m]));
-const convs = classifyEmailConversations(cfg.mailbox, emailMsgs, nyCtx).filter((c) => newest(c.messageIds.map((id) => emailById.get(id)?.receivedDateTime)) >= sinceMs);
-const vc = verdictCounts(convs);
+const facts = [...groupEmailConversations(cfg.mailbox, emailMsgs)]
+  .map(([k, ms]) => conversationFacts(k, ms, nyCtx))
+  .filter((f) => newest(f.messages.map((m) => m.at)) >= sinceMs)
+  .sort((a, b) => newest(b.messages.map((m) => m.at)) - newest(a.messages.map((m) => m.at)));
+const cache = new Map<string, Judgement>();
+const judgeCache = { get: (k: string) => cache.get(k), set: (k: string, j: Judgement) => void cache.set(k, j) };
+const judged: { f: (typeof facts)[number]; o: JudgeOutcome }[] = [];
+let judgeCalls = 0;
+let judgeFailures = 0;
+for (const f of facts) {
+  // Cap the MODEL calls, not the conversations: settled / owner-only ones cost nothing and are still counted.
+  const needsModel = !!f.latestOther && !f.settled;
+  if (needsModel && judgeCalls >= maxSources) {
+    judged.push({ f, o: { status: "needs_context", reason: "over_cap" } });
+    continue;
+  }
+  try {
+    if (needsModel) judgeCalls++;
+    judged.push({ f, o: await judgeConversation(f, nyCtx.ownerNames, judge, judgeCache) });
+  } catch {
+    judgeFailures++;
+    judged.push({ f, o: { status: "needs_context", reason: "judge_failed" } });
+  }
+}
+const buckets: Record<string, number> = {};
+for (const { f, o } of judged) {
+  const b = reportBucket(f, o);
+  buckets[b] = (buckets[b] ?? 0) + 1;
+}
+const downgraded = judged.filter((x) => x.o.status === "judged" && x.o.judgement.downgraded).length;
 console.log(
-  `conversations since ${new Date(sinceMs).toISOString().slice(0, 10)}: ${vc.total} | ${Object.entries(vc.byVerdict).map(([k, v]) => `${k} ${v}`).join(" ")}`,
+  `conversations since ${new Date(sinceMs).toISOString().slice(0, 10)}: ${judged.length} | model calls ${judgeCalls} | failures ${judgeFailures} | downgraded ${downgraded} | ${Object.entries(buckets).map(([k, v]) => `${k} ${v}`).join(" ")}`,
 );
 
-// ── To-dos: ONE extraction per conversation that may hold the owner's to-dos (AC-R6), newest first, capped.
+// ── To-dos: the judge's owner_todos through the EXISTING proposal validators (AC-R6), in memory only.
 const rows: NewProposal[] = [];
 const store = {
   async upsert(p: NewProposal) {
@@ -126,57 +153,47 @@ const store = {
     return [];
   },
 } as unknown as ProposalStore;
-const itemByConv = new Map<string, SourceItem[]>();
-for (const it of items) {
-  if (it.source !== "email" || !it.email) continue;
-  const k = `${cfg.mailbox}:${it.email.conversationId ? `conv:${it.email.conversationId}` : `msg:${it.email.id}`}`;
-  (itemByConv.get(k) ?? itemByConv.set(k, []).get(k)!).push(it);
-}
-const todoConvs = convs
-  .filter((c) => conversationIsTodoSource(c))
-  .sort((a, b) => Date.parse(b.deciding?.at ?? "") - Date.parse(a.deciding?.at ?? ""))
-  .slice(0, maxSources);
 const rejected: Record<string, number> = {};
+let assignedToOther = 0;
 let failed = 0;
-const perConv = new Map<string, { kind: "Email"; context: string | null; at: string | null; ids: string[] }>();
-for (const c of todoConvs) {
-  const batch = itemByConv.get(c.key) ?? [];
-  if (!batch.length) continue;
-  const src = conversationSourceFor(batch[0], batch, cfg.mailbox, nyCtx);
-  if ("skip" in src) continue;
+const perConv = new Map<string, { context: string | null; at: string | null; ids: string[] }>();
+for (const { f, o } of judged) {
+  if (o.status !== "judged") continue;
   try {
     const before = rows.length;
-    const r = await proposeFromSource(cfg.ownerLogins[0] ?? "owner", src, { store, extract, openTitles: async () => null, tz: "America/New_York", doer: conversationDoer(src, nyCtx.ownerNames) });
+    const r = await proposeJudgedTodos(cfg.ownerLogins[0] ?? "owner", f, o.judgement, nyCtx.ownerNames, { store, extract, openTitles: async () => null, tz: "America/New_York" });
+    if (!r) continue;
+    assignedToOther += r.assignedToOther;
     for (const [k, v] of Object.entries(r.rejected)) rejected[k] = (rejected[k] ?? 0) + (v ?? 0);
-    if (rows.length > before) perConv.set(c.key, { kind: "Email", context: src.context ?? null, at: src.at, ids: rows.slice(before).map((x) => x.id) });
+    const last = f.messages[f.messages.length - 1];
+    if (rows.length > before) perConv.set(f.key, { context: last?.subject ?? null, at: last?.at ?? null, ids: rows.slice(before).map((x) => x.id) });
   } catch {
     failed++;
   }
 }
-console.log(`proposals: ${rows.length} from ${todoConvs.length} conversation(s) (cap ${maxSources}) | rejected ${JSON.stringify(rejected)} | extraction failures ${failed} | model ${EXTRACT_MODEL}`);
+console.log(`proposals: ${rows.length} | assigned_to_other ${assignedToOther} | rejected by validation ${JSON.stringify(rejected)} | failures ${failed} | model ${EXTRACT_MODEL}`);
 
 // ── The report: three lists (AC-R7.1), everything else counts only (AC-R7.5).
 const fmtAt = (s: string | null | undefined) => (s && Number.isFinite(Date.parse(s)) ? new Date(s).toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "medium", timeStyle: "short" }) : "?");
 const clipLine = (s: string | null | undefined, k = 160) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, k);
-const replies: NeedsYouReport["replies"] = convs
-  .filter((c) => c.verdict === "needs_reply")
-  .sort((a, b) => Date.parse(b.deciding?.at ?? "") - Date.parse(a.deciding?.at ?? ""))
-  .map((c) => {
-    const m = emailById.get(c.deciding?.id ?? "");
-    return { key: c.key, kind: "Email" as const, who: clipLine(m?.fromName || m?.fromAddress, 60), at: fmtAt(m?.receivedDateTime), title: clipLine(m?.subject, 140) };
+const replies: NeedsYouReport["replies"] = judged
+  .filter(({ f, o }) => reportBucket(f, o) === "needs_reply")
+  .map(({ f, o }) => {
+    const m = f.latestOther!;
+    const ask = o.status === "judged" ? o.judgement.ask : null;
+    return { key: f.key, kind: "Email" as const, who: clipLine(m.name, 60), at: fmtAt(m.at), title: clipLine(m.subject, 140), ...(ask ? { ask: clipLine(ask.summary || ask.quote, 220) } : {}) };
   });
 const todos: NeedsYouReport["todos"] = [...perConv.values()].map((g, i) => ({
   key: String(i),
-  kind: g.kind,
+  kind: "Email" as const,
   context: clipLine(g.context ?? "(no subject)", 140),
   at: fmtAt(g.at),
   items: g.ids.map((id) => rows.find((r) => r.id === id)!).map((p) => ({ title: p.title, due: p.dueDate ?? (p.dueText ? `"${p.dueText}"` : null), evidence: clipLine(p.evidence, 300) })),
 }));
 const counts: Array<[string, number]> = [
-  ...(["fyi", "invite", "minutes", "not_addressed", "automated", "replied", "cant_tell"] as const).map((v) => [v, vc.byVerdict[v]] as [string, number]),
-  ...Object.entries(vc.byReason).filter(([k]) => k.startsWith("cant_tell:")).map(([k, n]) => [k.replace(":", " ") as string, n] as [string, number]),
-  ["assigned_to_other", rejected.assigned_to_other ?? 0],
-  ["doer_unclear", rejected.doer_unclear ?? 0],
+  ...(["fyi", "action_for_owner", "meeting_minutes", "calendar", "automated_or_broadcast", "settled", "cant_tell_no_sent_items", "needs_context", "owner_only"] as const).map((k) => [k, buckets[k] ?? 0] as [string, number]),
+  ["downgraded", downgraded],
+  ["assigned_to_other", assignedToOther],
   ["untriaged", 0],
   ["delegated", 0],
 ];
