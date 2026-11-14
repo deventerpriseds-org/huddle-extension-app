@@ -33,7 +33,9 @@ let records: Record<string, unknown>[] = [];
 try {
   const j = JSON.parse(await read(cfg.email.path)) as { snapshot?: unknown; records?: unknown };
   const snap = (j.snapshot ?? j.records) as unknown;
-  records = Array.isArray(snap) ? (snap as Record<string, unknown>[]) : Array.isArray((snap as { records?: unknown })?.records) ? ((snap as { records: Record<string, unknown>[] }).records) : [];
+  // The envelope's records live in snapshot.value (the validator's own path, onedrive-feed.ts validateEnvelope).
+  const val = (snap as { value?: unknown } | undefined)?.value;
+  records = Array.isArray(val) ? (val as Record<string, unknown>[]) : Array.isArray(snap) ? (snap as Record<string, unknown>[]) : [];
 } catch {
   console.log("P-1/P-2/P-5: email file is not JSON");
 }
