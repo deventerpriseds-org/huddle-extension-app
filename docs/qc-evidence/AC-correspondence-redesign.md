@@ -151,3 +151,87 @@ in Teams. The useful filter in a group chat is "was the latest ask aimed at me".
 `group` or `meeting_chat`, an ask is `needs_reply` only when it @mentions the owner, OR it has no @mention
 of anyone and the chat has 2 or fewer distinct non-owner senders. Otherwise it is `fyi`. This is **OQ-5**,
 because it changes Teams bell rows that exist today.
+
+## R4. Meeting invites, updates, responses and cancellations are not reply items
+
+**Signals, strongest first.** Only signals present in the file are used. Each is marked with what is known.
+
+| Signal | Source of the claim | Known in THIS file? |
+|---|---|---|
+| Header `Content-Class: urn:content-classes:calendarmessage` | Microsoft Exchange "Messaging Content Classes" docs (calendarmessage = a message that carries a meeting request, response or cancellation) | **Unknown.** One report says the header is not always in the transport headers. Probe P-1 |
+| A `text/calendar` part or a `.ics` attachment | RFC 5545 / RFC 6047 (iTIP over email: `METHOD:REQUEST/REPLY/CANCEL`) | **Not visible**: the feed has `hasAttachments` but no attachment names or MIME parts. Only usable if the flow adds them (OQ-7) |
+| Subject prefix: `Accepted:`, `Tentative:`, `Declined:`, `Canceled:` / `Cancelled:`, `New Time Proposed:`, `Invitation:`, `Updated invitation:`, `Invitation from ...` | Outlook / Google Calendar client behaviour | **UNVERIFIED spellings.** The Outlook response TYPES are documented (`OlMeetingResponse`), the subject text is not. Google's `Invitation:` / `Updated invitation:` is seen only in a third-party forum. Probe P-2 |
+| Body markers: `Microsoft Teams meeting`, `Join the meeting now`, `Invitation from Google Calendar` | client templates | **UNVERIFIED.** Only counts together with a header or subject signal, never alone (a person pastes a Teams link into a real question) |
+
+**Note:** an Outlook meeting REQUEST usually carries the meeting title as its subject with no prefix. Without
+P-1 succeeding, Outlook invites can only be caught by the body marker, which is weak. This is why P-1 must
+run before the invite rule ships.
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-R4.1 | Given a message with header `Content-Class: urn:content-classes:calendarmessage` (any case, `{name,value}` or `{Name,Value}` shape, the same as `mapFeedMessage:462-465`), when classified, then the verdict is `invite`, never `needs_reply`, whatever its body says. | happy-path | verdict |
+| AC-R4.2 | Given subject `Accepted: Quarterly review` from a person, with no calendar header, when classified, then `invite`. | happy-path | verdict |
+| AC-R4.3 | Given subject `Re: Invitation: Quarterly review @ Tue` from a person whose new text is `Can we move this to 3pm?`, and no calendar header, when classified, then `needs_reply`. A `Re:` / `Fw:` (stripped with `stripReplyPrefixes`, `onedrive-feed.ts:115`) means a person wrote it. | edge (over-match negative) | verdict |
+| AC-R4.4 | Given subject `Re: quick invite question` and new text `Are you free Thursday?`, when classified, then `needs_reply`. The word "invite" decides nothing (F-3 is not used). | edge (over-match negative) | verdict |
+| AC-R4.5 | Given subject `Invitation to speak at our panel` with new text `Would you be willing to join?` and no calendar header, when classified, then `needs_reply`. A subject starting with the WORD "Invitation" without the colon form is not a calendar message. | edge (over-match negative) | verdict |
+| AC-R4.6 | Given a body containing `Join the meeting now` and NO header or subject signal, when classified, then the body marker alone does not make it `invite`. It is decided as a normal message. | edge (over-match negative) | verdict |
+| AC-R4.7 | Given a conversation whose latest non-owner message is `invite` but an EARLIER message in it is a real ask the owner has not answered, when classified, then the verdict comes from the latest message (`invite`). The invite does not hide behind or create a reply item. | edge | verdict |
+| AC-R4.8 | Given the report, when invites exist, then they appear only as the count `invites: N`. | happy-path | report text |
+
+## R5. Meeting minutes: never reply items, never automatic to-dos; one triage ping per meeting
+
+**What counts as minutes (email or Teams).** Any of: subject `Meeting Minutes:` / `Updated Meeting Minutes:`
+(Huddle's own, `minutes.ts:280-284`, VERIFIED from code); a sender address at a minutes vendor domain
+(`fireflies.ai`, UNVERIFIED sender: probe P-2); subject words `meeting (notes|minutes|recap|summary)` or
+`recap of` / `summary of` with no `Re:`/`Fw:`; a Teams message from an app sender (`senderIsApp`) in a
+`meeting_chat`.
+
+**Push-back.** A subject keyword like "summary" over-matches ("Summary of the budget, can you approve?").
+Rule: a keyword match makes it `minutes` only when the latest non-owner new text has NO direct ask to the
+owner (AC-R5.4).
+
+**Source of the action items.** The Fireflies minutes pipeline (`chat.fireflies_meetings`, F-15, F-12), read
+through the existing transcript pass. Minutes EMAILS are classified only, never parsed for items. Teams /
+Copilot recaps are classified as `minutes` and give NO ping (there is no structured source for them yet:
+OQ-8).
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-R5.1 | Given a minutes email (any rule above) with no direct ask, when classified, then verdict `minutes`: never `needs_reply`, never a proposal source. | happy-path | verdict; proposals source count 0 |
+| AC-R5.2 | Given the redesign is built, when probe P-4 has run, then the parsing rule for Fireflies `action_items` text (one item per line, or per bullet, and how a speaker heading is written) is taken from the probe's measured shape, and the probe's counts-only output is attached to the PR. | gap closer | PR attachment |
+| AC-R5.3 | Given `runTranscriptProposals` (`engine.ts:177-210`) after the change, when a finished meeting is processed, then it creates **zero** rows in state `proposed`. Its action items are written as triage rows instead (AC-R5.8). | regression (behaviour change, approved by the owner's message) | DB/in-memory store: no `proposed` row with a `transcript` ref until triaged |
+| AC-R5.4 | Given someone forwards minutes with new text `Owner, can you take item 3 by Friday?`, when classified, then `needs_reply` (the person asked directly), and the forward is a normal to-do source under R6. | edge (over-match negative) | verdict |
+| AC-R5.5 | Given a finished meeting with N >= 1 parsed action items, when the pass runs, then ONE durable turn is enqueued in Iris's 1:1 (`dm-iris-chase`), with the usual push, holding a checklist of N triage rows. | happy-path | `chat.pending_turns` row count 1 for that meeting; push call count 1 |
+| AC-R5.6 | Given the same meeting is processed again (webhook retry, `deliveries` > 1, or an update with a new `content_hash`), when the pass runs, then no second ping is sent. The turn id is `meeting-triage-<hash(owner, meeting_id)>` and `enqueueTurn`'s conflict rule makes the re-run a no-op. | edge (idempotency) | pending_turns count stays 1 |
+| AC-R5.7 | Given an UPDATED minutes version adds a new action item after the first ping, when processed, then the new item gets a triage row in the queue, and no second ping is sent. (Recommended default; OQ-9 asks whether an update should ping.) | edge | rows +1, pings 0 |
+| AC-R5.8 | Given the ping, when each row is shown, then it offers exactly three choices: **Mine** (track it), **For someone** (opens an inline text input for a name), **Skip**. | happy-path | Playwright UAT on the checklist card: 3 controls per row |
+| AC-R5.9 | Given the owner picks Mine, when it saves, then the row becomes a normal proposal (state `proposed`, `transcript` ref kept) and appears in the "Meeting action items for you" list and in the evening checklist. | happy-path | store row state; report list |
+| AC-R5.10 | Given the owner types `Pat` under For someone, when it saves, then the row keeps `assignee = "Pat"` as TEXT ONLY: no lookup of a person, no contact, no task on anyone's board, no message to Pat. The row is in the queue but NOT in "for you" lists. | happy-path | store row; zero journey/email calls in a spy |
+| AC-R5.11 | Given the owner picks Skip, when the same meeting is re-sent or updated, then that item never reappears as a triage row. The skip is kept as a `task_proposal_refs` row (dedup memory, F-13) with state `dismissed`. | edge | rows after re-run: skipped item count 0 |
+| AC-R5.12 | Given a finished meeting with ZERO action items (empty, or parse finds none), when processed, then no ping is sent and the ledger marks it `processed`. | edge | pending_turns count 0 |
+| AC-R5.13 | Given the triage store, when inspected, then there is NO new table. Triage rows live in `chat.task_proposals`; the new state (recommended `untriaged`) and the delegated state (recommended `delegated`) are added through an explicit `ALTER TABLE ... DROP CONSTRAINT / ADD CONSTRAINT` migration, because `CREATE TABLE IF NOT EXISTS` (`proposals-store.server.ts:28`) does not change an existing CHECK. | regression (extend, don't duplicate) | schema diff; a test run against a table created with the OLD check |
+| AC-R5.14 | Given rows in state `untriaged` or `delegated`, when `listActive` runs (evening checklist), then they are NOT returned. Only `proposed` rows are. | regression | store test |
+| AC-R5.15 | Given the checklist widget, when it is extended, then the triage rows use the SAME card (`ChecklistRow` with `kind: "proposal"`, `seed.ts:99-113`) and reuse the Edit pattern's inline `<input>` (`ProposalChecklistItem.tsx:120-129`) for the name. No second checklist component. `sanitizeChecklistPayload` (`proposals.ts:780`) maps the new state; a row with an unknown state still falls back to `proposed` only for `kind:"proposal"` rows that are NOT triage rows. | regression | grep for a new widget file: none; sanitize unit test |
+| AC-R5.16 | Given the typed name, when stored, then it is trimmed, capped at 80 characters, and rendered as text (no HTML). Empty input saves nothing and the row stays untriaged. | edge | unit + UI test |
+| AC-R5.17 | Given two triage actions on one row at once (double tap), when both reach the server, then exactly one applies (compare-and-set on state `untriaged`, the same as `decide`, `proposals-store.server.ts:283`). | edge | concurrency test |
+
+**Why the existing widget can carry this (decision, with reason).** The proposal row already has a dropdown
+with four actions and an inline text editor. Triage needs three actions and one free-text field. The smallest
+extension: a `triage` flag on `ProposalRowInfo`. When it is set, the row shows Mine / For someone / Skip
+instead of Approve / Edit / Mark done / Dismiss, and For someone reuses the editor's input for a name. One
+new server action (`triage`) on `actOnProposalFn`. No new widget, table or tool.
+
+## R6. To-dos: only the owner's, one list per conversation
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-R6.1 | Given a conversation with verdict `not_addressed`, `automated`, `invite` or `minutes`, when proposals run, then zero extraction calls are made for it. | happy-path | spy on `extract`: 0 calls |
+| AC-R6.2 | Given a conversation that passes R2-R4, when proposals run, then extraction runs ONCE on the conversation's non-owner new texts in time order (each through `newTextOnly`), not once per message. | happy-path | spy: 1 call per conversation |
+| AC-R6.3 | Given an extracted item whose grounded `assignee` (`groundedAssignee`, `proposals.ts:409`) names someone who is NOT the owner, when validated, then it is dropped and counted `assigned_to_other`. | happy-path | store rows 0; counts |
+| AC-R6.4 | Given an item with `assignee: null` in a `direct` email or a 1:1 chat, when validated, then it is kept (a request to the owner). | happy-path | store row 1 |
+| AC-R6.5 | Given an item with `assignee: null` in a `group` email or a group chat, when validated, then it is kept only when the message @mentions the owner, or the evidence uses "you" and the owner is the only person on To. Otherwise dropped as `doer_unclear`. | edge | store rows |
+| AC-R6.6 | Given the owner's OWN message saying `I'll send the deck Friday`, when proposals run, then it is a source (the owner's commitment). Today owner messages are skipped (`proposals.ts:91`); this is a change. Only commitments in the first person count. | happy-path (behaviour change) | store row with `dueDate` |
+| AC-R6.7 | Given the owner name is matched as the assignee (`assignee` equals the owner's display name or first name), when validated, then it counts as the owner. The owner's names come from config, not from the model. | edge | unit test |
+| AC-R6.8 | Given one conversation produces 3 to-dos, when shown, then they are grouped under ONE conversation header in the report and share one `source_item_id` = the conversation key. | happy-path | report HTML; ref rows |
+| AC-R6.9 | Given a conversation re-processed after a new message, when extraction runs again, then to-dos already seen for that conversation are not re-proposed (existing F14/F15 dedup via `priorRelated`, keyed on the conversation key). | regression | store rows unchanged |
+| AC-R6.10 | Given the owner's commitment was made in a thread now `replied`, when proposals run, then it is still proposed. A reply does not cancel a promise. | edge | store row |
