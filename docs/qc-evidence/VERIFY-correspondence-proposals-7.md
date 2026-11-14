@@ -214,3 +214,39 @@ Probe P-1 saw it on 10 of 127 emails (8%), so it cannot by itself drive 43 of 74
 list-unsubscribe (18), auto-submitted (11), precedence (10), and ServiceNow / Viva Engage headers are NOT passed at
 all, so most of the 43 must be the model's own reading. Inference only: presence-not-value means the model may read
 the header as "bulk" even where Exchange's value says otherwise -- pass the value or drop the flag.
+
+## Claim 7: part B, meeting triage -- CONFIRMED (UI browser-unverified)
+
+| item | evidence | result |
+|---|---|---|
+| automatic Fireflies to-dos gone | `runProposalsPass` (`proposals.server.ts:157`) only runs `runMeetingTriage` and only when `meetingTriageOn(cfg)` (proposals AND meetingTriage literally true, `:45`); `runTranscriptProposals` no longer exported; suite "AC-R5.3 a finished meeting creates ZERO proposed rows" | CONFIRMED |
+| one ping per meeting | turn id `meeting-triage-<stableHash(lower(owner), meetingId)>` (`meeting-triage.ts`); `enqueue` = `enqueueTurn` ON CONFLICT DO NOTHING; re-run / re-sent / updated minutes send no 2nd ping (suite rows AC-R5.6, R5.7, enqueue-failure retry pings once) | CONFIRMED |
+| zero items -> no ping | `engine.ts:329` marks processed before any row/ping; the `open.length &&` guard (`:342`) also blocks it | CONFIRMED |
+| Mine / For someone / Skip applied once | `triage()` row lock `FOR UPDATE` + state check (`proposals-store.server.ts` triage); real-PG suite: concurrent Mine + Skip -> exactly one applied; Mine on an active to-do merges (ref moved, triage row dismissed, not suppressing elsewhere: `priorRelated` excludes transcript-first dismissals) | CONFIRMED |
+| For someone = text only, capped | `cleanTriageName` (control / zero-width removed, 80 chars), zod `max(400)` on the wire, store keeps it as `assignee` text; `ProposalChecklistItem.tsx` input `maxLength={80}`, no `dangerouslySetInnerHTML` (grep 0) | CONFIRMED |
+| migration on an existing old-CHECK table | `scripts/verify7-migration-race.ts`: the OLD shipped bootstrap text (ddc7b55d) + 2 rows, then the NEW bootstrap once, and in 2 more fresh DBs **4 bootstraps at once from the OLD state**, then once more: 0 errors, exactly one `task_proposals_state_check` (NEW), old rows unchanged, `untriaged` accepted, `bogus` refused | CONFIRMED (the suite's own concurrency check ran only AFTER the migration; this covers the race from the old state) |
+| flag OFF -> zero calls | `meetingTriageOn` false -> the Fireflies block is skipped entirely; `getMeetingActionQueue` null with zero DB calls; `listUntriaged` only when on; `actOnProposal('triage')` refused when off; meeting-triage-server 7/0 (mock.module zero-call checks) | CONFIRMED |
+| 2-day lookback | `TRIAGE_LOOKBACK_DAYS = 2` on the minutes row's `created_at`, over the 20 newest rows, finished only (`!pending_email && !pending_onedrive`) | CONFIRMED; note: a meeting whose minutes took > 2 days to finish is never offered (open question below) |
+| no owner inference | `triageRowsFor` sets `assignee: null`; no model call in triage; the directive forbids guessing; heading lines (`**Name**`) are dropped, so the per-person grouping Fireflies sometimes writes is not used either | CONFIRMED |
+| the 3 INERT mutations | M12 (`WHERE state='untriaged'` on the UPDATE): redundant behind the `FOR UPDATE` + state check (M11 FIRED) -- agree, belt-and-braces, unproven alone. M15 (refs early return in `addTriageRows`): equivalent -- I checked the merge case too: a merged triage row is set `dismissed`, not deleted, so the `ON CONFLICT (id) DO NOTHING` re-insert cannot resurrect it. M16 (zero items): equivalent via `open.length &&`. Honest as reported. | ACCEPTED |
+| task-proposals: 6 auto-to-do checks -> 1 | the removed section H pinned "a finished meeting's action items become proposals automatically", which the owner rejected; its idempotency / re-processed / needs_context coverage reappears for triage in meeting-triage section D (AC-R5.6, R5.7, summary unavailable). The replacement check is name-only (`"runTranscriptProposals" in engine`), weak alone, but the behavioural "ZERO proposed rows" check exists in meeting-triage | LEGITIMATE requirement change, not a weakening |
+
+**UI (`ProposalChecklistItem.tsx`, `HuddleView.tsx` ChecklistCard, `store.ts`): typechecked + built only.** A browser
+run needs: an environment with `proposals` and `meetingTriage` ON (or a seeded checklist message whose rows are
+`untriaged` triage rows reachable by `getProposalStatesFn`), the UAT bypass identity, then Playwright: open Iris's 1:1,
+open the checklist, tap Mine / For someone (type a name with `<b>` markup, Enter; empty name; 120 chars) / Skip on three
+rows, assert the labels "Proposed" / "For <name>" (literal text) / "Skipped", reload and assert the states persist,
+double-tap a row, and the same at iPhone 15 width for touch targets. **Not run (no live systems) -> MERGE-PENDING-UAT.**
+Residual: with `meetingTriage` OFF but `proposals` ON, old due `transcript` ledger rows (from the removed automatic
+path) are never claimed, so `workPending` stays true and the evening delivery waits its grace period every day
+(`proposals.server.ts` `hasDue(..., ["email","teams","transcript"])`). Behind flags; non-blocking.
+
+## Claim 8: the merges (b7982ad2, 3b3f0c42) lost nothing -- CONFIRMED
+
+All three lanes branch from b7ddbdca (`git merge-base`). Per file, the lane's own patch (b7ddbdca..lane head) was
+reverse-applied (`git apply --check -R`) to the FINAL tree: **loop-6 fixes 7/7 files OK, part A 12/14 OK, part B 15/17
+OK**. The two files both A and B changed (`engine.ts`, `proposals.server.ts`) were checked line-set-wise: the +/- lines
+of (A head -> final) equal those of (base -> B head) exactly, and (B head -> final) equal (base -> A head) exactly. The
+final tree changes no file outside the three lanes except `.claude/actions.md` / `memory.md`. origin/main is 11 commits
+ahead of 3b3f0c42, touching only `.claude/*` and `proposals-preview.yml` (`git merge-tree`: one conflict, in
+`.claude/memory.md`).
