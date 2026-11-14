@@ -54,6 +54,11 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       claude_verify-correspondence-proposals-5). Merge decision waits on its verdict.
 - [x] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history):
       APPROVED 2026-11-13 ("I'm fine with your 3 live work email changes").
+- [ ] Owner 2026-11-14 on the open-vs-replied report: "The logic and tuning is horrible" -- meeting minutes listed as
+      needing a reply, mass broadcasts, meeting invites, same-thread replies listed separately, to-dos for things not
+      directed at him. Root causes read in code: inbound-email.ts asksSomething (keyword ASK regex + INVITE_SUBJECT =
+      always open), no thread grouping, no To/CC test (emails.json HAS toRecipients 126/127, ccRecipients 13). The same
+      screenMessage drives the LIVE Iris email alerts. Redesign plan put to owner for thumbs-up; verifier loop 5 parked.
 - [x] Owner 2026-11-13: incomplete (complete:false) stays a hard refusal, but must alert by bell + Huddle chat + email
       (urgent). Built on claude_task-proposals 84b4a613/b7dd9343 (feed-staleness I1-I22 95/0, 4 mutations FIRED);
       NOT live, NOT independently verified yet -- covered by verifier loop 5. Flag: correspondence.staleAlerts.
