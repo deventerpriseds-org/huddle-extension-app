@@ -64,6 +64,14 @@ const facts = [...groupEmailConversations(cfg.mailbox, msgs)]
   .filter((f) => newest(f) >= sinceMs)
   .sort((a, b) => newest(b) - newest(a));
 
+// ── Steps 2 + 3 (PREVIEW_STEP=action) run instead of step 1 and exit there.
+if (process.env.PREVIEW_STEP === "action") {
+  const rawRecords = ev?.ok ? (ev.snapshot.records as Record<string, unknown>[]) : [];
+  const { runActionScan } = await import("./action-scan-steps");
+  await runActionScan({ facts, rawRecords, cfg, ctx, token, drive, enc, sinceMs, maxCalls, newest });
+  process.exit(process.exitCode ?? 0);
+}
+
 // ── The ONE question.
 export const REPLY_SCAN_INSTRUCTIONS =
   "You read ONE email conversation from the mailbox of the OWNER. Messages are labelled OWNER (written by him) or " +
