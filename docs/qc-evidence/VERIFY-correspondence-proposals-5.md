@@ -270,3 +270,56 @@ Not blocking for merge with flags OFF (staleAlerts gates all of it), but it bloc
 the urgent channel (chat + push + email) can repeat for one incident, and the bell can show it cleared while the
 file is still incomplete. Minimal fix direction: while the last read is `rejected:incomplete`, an UNREAD newer copy
 should stay `transient` (or `incomplete`) until the reader actually reads it, never fall through to `fresh`.
+
+## Claim 13 + 19: mutation proofs re-run with `mutate.sh` -- CONFIRMED (7/7, every exit code 0)
+
+Anchors/replacements in files (`scratchpad/mut/*.anchor|*.repl`), each run alone; `git status --short` empty after.
+
+| mutation | file | named test | verdict | exit |
+|---|---|---|---|---|
+| W1-W3: ancestor-close rule off (`if (false && ancestors.length ...`) | onedrive-feed.ts | TRUTH W1-W3 | FIRED (control EQUIVALENT) | 0 |
+| X1/X2: shape guard back to "any digit" | inbound-email.ts | D2 X1/X2 hard-wrapped | FIRED (control EQUIVALENT) | 0 |
+| staleness 2-check: notePending bypassed (`&& false &&`) | feed-staleness.ts | T3 a 403 ... 2nd consecutive check | FIRED (control EQUIVALENT) | 0 |
+| D6: title-negator check always ok | proposals.ts | D6 loop 4: a title that negates ... | FIRED (control EQUIVALENT) | 0 |
+| M2 (claim 19): drop `ok &&` before announce | feed-staleness.ts | I12 | FIRED (control EQUIVALENT) | 0 |
+| M3 (claim 19): drop the 2 h reader wait | feed-staleness.ts | I4 | FIRED (control EQUIVALENT) | 0 |
+| PV-6 (claim 20): HTML PUT only with PREVIEW_EMAIL=1 | scripts/proposals-preview.ts | PV-6 | FIRED (control EQUIVALENT) | 0 |
+
+The guards are real. Note M2/I12 prove "an already-showing row is not re-announced"; neither covers the clear-then-
+reopen path of claim 16 (U1/U4), which no test exercises.
+
+## Claim 17 (channels independent, send gate, caller) -- CONFIRMED (send gate: inference)
+
+- `announceUrgentFeed` (`feed-staleness.server.ts`): chat and email are two separate try/catch blocks; `sent` is
+  true if either succeeded; it never throws, and `applyFeedStaleness` wraps the notifier in its own try/catch after
+  the row is written, inside the per-file loop -- a notifier failure cannot undo the bell row or stop the next file.
+- `caller: { entra_email }` + `internal: true` + `enqueueTurn` then `runTurnById` is the same shape the live
+  reminders close-out (`reminders.ts:290-307`), job-check and inbound-email (`inbound-email.server.ts:231-237`)
+  turns use. CONFIRMED by precedent.
+- Self-email: `sendGraphEmail` -> `resolveRecipientScope` -> `classifySendScope`: a recipient that is the caller's
+  own `profile_emails` row with tier `auto` (explicit, or source `entra`) is `send` and skips the global send flag.
+  `ownerLogins[0]` is the owner's Huddle (Entra) sign-in, so it should resolve `auto` -- **inference, not proven**:
+  it depends on the live `profile_emails` row, which this loop may not read. If it resolves `on-request`, the email
+  is refused by the gate (logged `urgent email not sent file=<f> (send gate)`) and the chat still goes out.
+- Logs: `urgent chat failed file=<f>`, `urgent email not sent file=<f>`, error class name only. CONFIRMED.
+- Observation (not a defect): `runTurnById` runs the whole Iris turn inline, inside the heartbeat's
+  `Promise.all([pass, stale])`, before the next file is checked; the live reminder close-out does the same.
+
+## Claim 18 (flag) -- CONFIRMED
+
+`runFeedStalenessCheck` with `correspondence.staleAlerts` = absent, `"true"`, `1`, `"yes"`, `false`: parsed to
+`false`, returns `null`, zero dependency calls (no meta read, no status read, no store, no notify, no log). Only
+literal `true` runs. `runCorrespondenceIngest` returns before even importing `feed-staleness.server` when off.
+
+## Claims 10 + 20 (preview script) -- CONFIRMED
+
+- 8.3: PV-1 passes (a non-JSON file logs `<label>: not JSON` and none of its content). Every `console.log` in the
+  script (14 lines) prints statuses, counts, reason names, the model name and OneDrive paths only; the two new
+  ones are `teams: owner taken from the file's ownerUserId field` / `... disagrees across lines (<n> values)`.
+- HTML report: `PUT /automation/Huddle Preview/open-vs-replied-report-<stamp>.html` now runs on every run (PV-6,
+  mutation FIRED); `sendMail` is still inside `if (process.env.PREVIEW_EMAIL === "1")`, unchanged.
+- `ownerUserId`: used only when the config has no `ownerSenderIds`, and only when every line that states it
+  agrees (set size 1); the id is never printed. Upper-case ids in the file match a lower-cased owner list in the
+  parser (probe: `fromOwner: true`).
+- Nit: the HTML footer still says "identified by a best guess for this run" even when the file's `ownerUserId`
+  was used. Cosmetic, preview-only.
