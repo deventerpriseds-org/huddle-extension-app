@@ -134,11 +134,11 @@ export async function proposeFromSource(owner: string, src: ProposalSource, deps
  * re-run (crash before `processed`, or an edited message) re-extracts, and the refs table makes every
  * already-seen (item, to-do) a no-op, so nothing duplicates and nothing decided reopens (AC-3.4).
  */
-export function proposalsProcessor(deps: ProposeDeps & { owner(): string; mailbox(): string; log?: (l: string) => void; skipMinutes?: boolean }): ItemProcessor {
+export function proposalsProcessor(deps: ProposeDeps & { owner(): string; mailbox(): string; log?: (l: string) => void }): ItemProcessor {
   return {
     name: "proposals",
     async process(item: SourceItem): Promise<ProcessOutcome> {
-      const src = proposalSourceFromItem(item, deps.mailbox(), { skipMinutes: deps.skipMinutes === true });
+      const src = proposalSourceFromItem(item, deps.mailbox());
       if ("skip" in src) return { status: "processed", resultIds: {} };
       const r = await proposeFromSource(deps.owner(), src, deps);
       if (deps.log && (r.created || r.attached || r.suppressed || Object.keys(r.rejected).length)) {

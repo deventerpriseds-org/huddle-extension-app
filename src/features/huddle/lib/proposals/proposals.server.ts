@@ -98,8 +98,7 @@ export async function makeProposalsProcessor(): Promise<ItemProcessor | null> {
   const cfg = proposalsConfig();
   if (!cfg) return null;
   const d = await deps(cfg.owner);
-  // AC-R5.1: with triage ON, a minutes email is never a proposal source (its items come through the ping).
-  return proposalsProcessor({ ...d, owner: () => cfg.owner, mailbox: () => cfg.mailbox, log: (l) => console.log(l), skipMinutes: meetingTriageOn(cfg) });
+  return proposalsProcessor({ ...d, owner: () => cfg.owner, mailbox: () => cfg.mailbox, log: (l) => console.log(l) });
 }
 
 let running: Promise<void> | null = null;

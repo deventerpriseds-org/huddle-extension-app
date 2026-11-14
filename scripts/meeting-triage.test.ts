@@ -1,14 +1,16 @@
-// WHAT:       Offline tests for MEETING-MINUTES TRIAGE (AC-correspondence-redesign R5 + spelling table S-C + the R9
-//             flag ACs that apply to R5): the minutes predicate, the action-item splitter (probe P-4 shapes), the
+// WHAT:       Offline tests for MEETING-MINUTES TRIAGE (AC-correspondence-redesign R5 + the R9 flag ACs that apply
+//             to R5): the action-item splitter (probe P-4 shapes), the
 //             typed-name cleaner, the one-ping-per-meeting pass against an in-memory store / ledger / turn queue,
 //             Mine / For someone / Skip, the checklist row mapping and sanitizer, the report grouping, the flag,
-//             and the proposals processor's minutes skip. Every check names its AC id.
+//             and that the email/Teams proposal path can never create a triage row or ping. Every check names its AC.
+//             NO keyword matcher for minutes EMAILS (owner redirect 2026-11-14: "use ai's ability to determine it
+//             contextually"): that call belongs to the AI conversation judge in the parallel lane, so the S-C
+//             spelling rows are that lane's eval cases, not a regex here.
 // WHY:        Tier 1: this decides what enters the owner's meeting action-item queue. Synthetic fixtures only.
 // SUPERSEDES: scripts/task-proposals.test.ts section H (automatic transcript -> proposals, rejected by the owner).
 // SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   docs/qc-evidence/IMPL-meeting-triage.md.
 // Run: bun scripts/meeting-triage.test.ts
-import { minutesSignal, isMinutesVendor } from "../src/features/huddle/lib/correspondence/minutes-signal";
 import {
   MAX_TRIAGE_PER_MEETING,
   cleanTriageName,
@@ -21,7 +23,6 @@ import {
 } from "../src/features/huddle/lib/proposals/meeting-triage";
 import {
   proposalChecklistRow,
-  proposalSourceFromItem,
   sanitizeChecklistPayload,
   type NewProposal,
   type ProposalRow,
@@ -45,37 +46,6 @@ const t = (name: string, got: unknown, want: unknown) => {
 const OWNER = "owner@eds.example";
 const AT = "2026-11-10T14:00:00.000Z";
 const TZ = "America/New_York";
-
-// ── A. SPELLING TABLE S-C: what counts as minutes (AC-R5.1, AC-R5.4) ───────────────────────────────
-console.log("\n# A. minutes spelling table (S-C, Tier 1)");
-type MRow = [string, Parameters<typeof minutesSignal>[0], boolean];
-const MTABLE: MRow[] = [
-  ["S-C1 Huddle's own 'Meeting Minutes:' subject -> minutes", { subject: "Meeting Minutes: Budget sync Nov 14, 10:00 AM", fromAddress: "huddle@work.example", newText: "Summary..." }, true],
-  ["S-C2 'Updated Meeting Minutes:' -> minutes", { subject: "Updated Meeting Minutes: Budget sync Nov 14", fromAddress: "huddle@work.example", newText: "" }, true],
-  ["S-C2b lower-case 'meeting minutes:' -> minutes", { subject: "meeting minutes: budget sync", fromAddress: "pat@work.example", newText: "" }, true],
-  ["S-C3 sender @fireflies.ai, any subject -> minutes", { subject: "Your meeting is ready", fromAddress: "fred@fireflies.ai", newText: "Can you review it?" }, true],
-  ["S-C3b sender at a fireflies.ai subdomain, display-name form -> minutes", { subject: "Recap", fromAddress: "Fred <notes@mail.fireflies.ai>", newText: "" }, true],
-  ["S-C4 'Meeting recap: Budget sync' -> minutes", { subject: "Meeting recap: Budget sync", fromAddress: "pat@work.example", newText: "Notes below." }, true],
-  ["S-C4b 'Recap of Budget sync' -> minutes", { subject: "Recap of Budget sync", fromAddress: "pat@work.example", newText: "Notes below." }, true],
-  ["S-C5 'Meeting notes: Budget sync' -> minutes", { subject: "Meeting notes: Budget sync", fromAddress: "pat@work.example", newText: "Attached." }, true],
-  ["S-C5b 'Meeting summary for Budget sync' -> minutes", { subject: "Meeting summary for Budget sync", fromAddress: "pat@work.example", newText: "Attached." }, true],
-  ["S-C6 NEG 'Fw: Meeting Minutes: ...' + a direct ask -> NOT minutes", { subject: "Fw: Meeting Minutes: Budget sync", fromAddress: "pat@work.example", newText: "Owner, can you take item 3 by Friday?" }, false],
-  ["S-C6b NEG 'Re: Meeting Minutes: ...' (a person replied) -> NOT minutes", { subject: "Re: Meeting Minutes: Budget sync", fromAddress: "pat@work.example", newText: "Thanks." }, false],
-  ["S-C7 NEG 'Summary of the budget' + 'Can you approve by Friday?' -> NOT minutes", { subject: "Summary of the budget", fromAddress: "pat@work.example", newText: "Can you approve by Friday?" }, false],
-  ["S-C7b NEG 'Meeting notes: ...' + a direct ask -> NOT minutes", { subject: "Meeting notes: Budget sync", fromAddress: "pat@work.example", newText: "Could you send the numbers?" }, false],
-  ["S-C NEG 'notfireflies.ai' sender (substring) -> NOT minutes", { subject: "Hello", fromAddress: "a@notfireflies.ai", newText: "" }, false],
-  ["S-C NEG 'fireflies.ai.evil.test' sender -> NOT minutes", { subject: "Hello", fromAddress: "a@fireflies.ai.evil.test", newText: "" }, false],
-  ["S-C NEG 'minutes' word alone ('5 minutes late') -> NOT minutes", { subject: "Running 5 minutes late", fromAddress: "pat@work.example", newText: "" }, false],
-  ["S-C NEG 'Budget summary' (no 'meeting', not leading 'summary of') -> NOT minutes", { subject: "Budget summary", fromAddress: "pat@work.example", newText: "" }, false],
-  ["S-C NEG a plain email -> NOT minutes", { subject: "Lunch?", fromAddress: "pat@work.example", newText: "Are you free?" }, false],
-  ["S-C8 Teams app sender in a meeting chat -> minutes", { teams: { senderIsApp: true, chatKind: "meeting_chat" } }, true],
-  ["S-C8 NEG Teams app sender in a 1:1 -> NOT minutes", { teams: { senderIsApp: true, chatKind: "one_to_one" } }, false],
-  ["S-C8 NEG a PERSON in a meeting chat -> NOT minutes", { teams: { senderIsApp: false, chatKind: "meeting_chat" } }, false],
-];
-for (const [name, input, want] of MTABLE) t(name, minutesSignal(input).minutes, want);
-t("S-C7 the reason is direct_ask (decided as a normal message)", minutesSignal({ subject: "Summary of the budget", newText: "Can you approve by Friday?" }), { minutes: false, reason: "direct_ask" });
-t("AC-R1.5 the subject never reaches the ask test ('invite' in a minutes subject decides nothing)", minutesSignal({ subject: "Meeting notes: invite list", newText: "Notes attached." }).minutes, true);
-t("S-C isMinutesVendor whole-label only", [isMinutesVendor("x@fireflies.ai"), isMinutesVendor("x@FIREFLIES.AI"), isMinutesVendor("x@ffireflies.ai"), isMinutesVendor(null)], [true, true, false, false]);
 
 // ── B. splitting Fireflies action_items (AC-R5.2, probe P-4) ───────────────────────────────────────
 console.log("\n# B. action-item splitter (probe P-4 shapes)");
@@ -473,8 +443,8 @@ t("AC-R9.1 meetingTriage: absent / 'true' / 1 / false -> OFF; true -> ON", [flag
 const on = (p: boolean, m: boolean) => meetingTriageOn({ correspondence: { proposals: p, meetingTriage: m } });
 t("AC-R9.1 triage runs only inside proposals (proposals AND meetingTriage)", [on(false, false), on(true, false), on(false, true), on(true, true), meetingTriageOn(null)], [false, false, false, true, false]);
 
-// ── I. the proposals processor: minutes emails are not sources (AC-R5.1, R5.4, R9.2) ──────────────
-console.log("\n# I. proposals processor + minutes");
+// ── I. the email / Teams proposal path never triages (brief: a forwarded-minutes email is NOT a ping) ─
+console.log("\n# I. proposals processor never creates triage rows or pings");
 const emailItem = (id: string, subject: string, body: string, from = "pat@work.example"): SourceItem => ({
   source: "email",
   sourceItemId: id,
@@ -489,15 +459,9 @@ const emailItem = (id: string, subject: string, body: string, from = "pat@work.e
   email: { id, subject, bodyText: body, fromAddress: from, fromName: "Pat", inferenceClassification: "focused", headerNames: [] },
 } as SourceItem);
 {
-  const minutes = emailItem("m1", "Meeting Minutes: Test-Budget sync Nov 14", "Action Items\n- Test-Send the Q3 deck by Friday");
+  // Whether a minutes email is a reply item / to-do is the AI conversation judge's call (parallel lane). What
+  // THIS lane guarantees: the ONLY way into triage is a finished Fireflies meeting; an email never pings.
   const fwdAsk = emailItem("m2", "Fw: Meeting Minutes: Test-Budget sync", "Owner, can you take item 3 by Friday?");
-  t("AC-R5.1 triage ON: a minutes email is never a proposal source", proposalSourceFromItem(minutes, "owner@work.example", { skipMinutes: true }), { skip: "minutes" });
-  t("AC-R5.4 a forward WITH a direct ask is still a proposal source", "text" in proposalSourceFromItem(fwdAsk, "owner@work.example", { skipMinutes: true }), true);
-  t("AC-R9.2 triage OFF: the source decision is exactly as before (minutes email still a source)", proposalSourceFromItem(minutes, "owner@work.example"), proposalSourceFromItem(minutes, "owner@work.example", { skipMinutes: false }));
-  t("AC-R9.2 triage OFF: minutes email still read (unchanged behaviour)", "text" in proposalSourceFromItem(minutes, "owner@work.example"), true);
-
-  // Through the processor: zero model calls for the minutes email; the forward is extracted; neither makes a
-  // triage row or a ping (the processor has no triage path at all).
   const calls: string[] = [];
   const extract: ExtractFn = async (_i, input) => {
     calls.push(input);
@@ -506,15 +470,10 @@ const emailItem = (id: string, subject: string, body: string, from = "pat@work.e
   const triage = memStore();
   const turns = memTurns();
   const proposalStore = { upsert: async () => ({ kind: "created" as const, id: "prop-1" }), priorRelated: async () => [], listActive: async () => [], getMany: async () => [], claimApprove: async () => ({ claimed: false, row: null }), finishApprove: async () => null, releaseApprove: async () => {}, decide: async () => ({ applied: false, row: null }), edit: async () => ({ applied: false, row: null }) };
-  const proc = proposalsProcessor({ store: proposalStore, extract, openTitles: async () => new Set(), tz: TZ, owner: () => OWNER, mailbox: () => "owner@work.example", skipMinutes: true });
-  await proc.process(minutes, { owner: OWNER, nowMs: 0 });
-  t("AC-R5.1 / R6.1 minutes email -> zero extraction calls", calls.length, 0);
+  const proc = proposalsProcessor({ store: proposalStore, extract, openTitles: async () => new Set(), tz: TZ, owner: () => OWNER, mailbox: () => "owner@work.example" });
   await proc.process(fwdAsk, { owner: OWNER, nowMs: 0 });
-  t("AC-R5.4 forwarded minutes with an ask -> extracted once (a reply/to-do source)", calls.length, 1);
-  t("brief: a forwarded-minutes email NEVER creates a triage row or a ping", [triage.rows.size, turns.turns.size], [0, 0]);
-  const procOff = proposalsProcessor({ store: proposalStore, extract, openTitles: async () => new Set(), tz: TZ, owner: () => OWNER, mailbox: () => "owner@work.example" });
-  await procOff.process(minutes, { owner: OWNER, nowMs: 0 });
-  t("AC-R9.2 processor with triage OFF: minutes email extracted exactly as before", calls.length, 2);
+  t("AC-R5.4 a forwarded-minutes email with a direct ask is still read by the proposals path (unchanged)", calls.length, 1);
+  t("brief: a forwarded-minutes email NEVER creates a triage row or a ping", [triage.rows.size, triage.calls.length, turns.turns.size], [0, 0, 0]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -17,7 +17,6 @@
 import { newTextOnly, screenMessage } from "../email/inbound-email";
 import { normalizeTaskTitle } from "../tasks/scoring";
 import { stableHash, type CorrespondenceSource, type SourceItem } from "../correspondence/source-item";
-import { minutesSignal } from "../correspondence/minutes-signal";
 
 /** `untriaged` / `delegated` are meeting-triage states (AC-correspondence-redesign R5): an action item from a
  *  meeting's minutes waiting for the owner's Mine / For someone / Skip, and one the owner said is someone
@@ -62,7 +61,7 @@ export interface ProposalSource extends ProposalSourceRef {
   text: string;
 }
 
-export type SourceSkip = "self" | "automated-sender" | "bulk-header" | "other-folder" | "app-sender" | "own-message" | "no-text" | "no-payload" | "minutes";
+export type SourceSkip = "self" | "automated-sender" | "bulk-header" | "other-folder" | "app-sender" | "own-message" | "no-text" | "no-payload";
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s);
 
@@ -74,7 +73,7 @@ const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s);
  * an older message is never re-proposed from a reply (AC S-13). The owner's own Teams messages and app /
  * bot senders are not sources (default, IMPL log).
  */
-export function proposalSourceFromItem(item: SourceItem, mailbox: string, opts: { skipMinutes?: boolean } = {}): ProposalSource | { skip: SourceSkip } {
+export function proposalSourceFromItem(item: SourceItem, mailbox: string): ProposalSource | { skip: SourceSkip } {
   if (item.source === "email") {
     const m = item.email;
     if (!m) return { skip: "no-payload" };
@@ -84,9 +83,6 @@ export function proposalSourceFromItem(item: SourceItem, mailbox: string, opts: 
     // A reply's subject is history too (the asksSomething rule), so only an original subject is text.
     const ownSubject = /^\s*(re|fw|fwd)\s*:/i.test(subject) ? "" : subject;
     const body = newTextOnly(String(m.bodyText ?? m.bodyPreview ?? ""));
-    // AC-R5.1 (meeting triage ON): a minutes email is never a proposal source. Its action items reach the owner
-    // only through the triage ping. A forward WITH a direct ask is not minutes (AC-R5.4) and stays a source.
-    if (opts.skipMinutes === true && minutesSignal({ subject, fromAddress: m.fromAddress, newText: body }).minutes) return { skip: "minutes" };
     const text = clip([ownSubject, body].filter((s) => s.trim()).join("\n"), SOURCE_TEXT_MAX).trim();
     if (!text) return { skip: "no-text" };
     return { source: "email", sourceItemId: item.sourceItemId, at: item.at, context: subject.slice(0, 160) || null, text };
