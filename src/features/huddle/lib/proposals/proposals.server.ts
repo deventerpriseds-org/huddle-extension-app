@@ -98,10 +98,10 @@ export async function makeProposalsProcessor(): Promise<ItemProcessor | null> {
       mailbox: () => cfg.mailbox,
       log: (l) => console.log(l),
       needsYou: async () => {
-        const { ownerAddressSet } = await import("../correspondence/needs-you");
+        const { effectiveOwnerNames, ownerAddressSet } = await import("../correspondence/needs-you");
         const { loadFeedSent } = await import("../email/email-replies.server");
         const sent = await loadFeedSent(cfg.owner).catch(() => null);
-        return { ownerAddresses: ownerAddressSet(cfg), ownerNames: cfg.correspondence.ownerNames, latestSent: sent ?? new Map(), sentKnown: !!sent && sent.size > 0 };
+        return { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), latestSent: sent ?? new Map(), sentKnown: !!sent && sent.size > 0 };
       },
     });
   }

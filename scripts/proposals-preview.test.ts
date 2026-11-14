@@ -54,5 +54,50 @@ t("PV-5 the header states the OneDrive write and the PREVIEW_EMAIL email, and no
   /sends nothing/i.test(header),
 ], [true, true, false]);
 
+// ── Needs-you redesign (owner 2026-11-14; AC-R7): three lists, EMAIL only, everything else counts only ──────
+{
+  const now = new Date();
+  const iso = (h: number) => new Date(now.getTime() - h * 3_600_000).toISOString();
+  const W = "work@corp.example";
+  const rec = (id: string, conv: string, h: number, over: Record<string, unknown> = {}) => ({
+    id,
+    conversationId: conv,
+    receivedDateTime: iso(h),
+    subject: `[TEST] Zebra subject ${id}`,
+    from: `Quokka Sender ${id} <sender-${id}@corp.example>`,
+    toRecipients: W,
+    body: `Can you send the walrus numbers ${id}?`,
+    internetMessageHeaders: [],
+    ...over,
+  });
+  const records = [
+    rec("a1", "conv-open", 5),
+    rec("a2", "conv-open", 4, { subject: "[TEST] Re: Zebra subject a1", body: "Following up: can you send the walrus numbers?" }),
+    rec("b1", "conv-replied", 6),
+    rec("c1", "conv-list", 6, { toRecipients: "dl-everyone@corp.example" }),
+    rec("d1", "conv-invite", 6, { internetMessageHeaders: [{ name: "x-ms-exchange-calendar-originator-id", value: "x" }] }),
+    rec("e1", "conv-minutes", 6, { subject: "[TEST] Meeting notes: Zebra sync", body: "Notes below." }),
+    rec("f1", "conv-bulk", 6, { internetMessageHeaders: [{ name: "List-Unsubscribe", value: "<x>" }] }),
+    rec("g1", "conv-cc", 6, { toRecipients: "pat@corp.example", ccRecipients: W, body: "Pat, can you send it?" }),
+  ];
+  const env = (feed: string, recs: unknown[]) => JSON.stringify({ schema_version: "1.0", feed_type: feed, source: "power-automate-outlook", mailbox: W, synthetic: true, complete: true, published_utc: iso(1), window_start_utc: iso(240), snapshot: { value: recs } });
+  const sent = [{ id: "s1", conversationId: "conv-replied", sentDateTime: iso(2), subject: "[TEST] Re: Zebra subject b1" }];
+  const dir = mkdtempSync(join(tmpdir(), "preview-body-"));
+  const r = run({ STUB_EMAIL: env("email_snapshot", records), STUB_SENT: env("sent_snapshot", sent), STUB_TEAMS: '{"source":"teams","synthetic":true,"chatId":"19:x@unq.gbl.spaces","messages":[]}', STUB_BODY_DIR: dir, PREVIEW_DAYS: "30" });
+  const html = existsSync(join(dir, "report.html")) ? readFileSync(join(dir, "report.html"), "utf8") : "";
+  const md = existsSync(join(dir, "report.md")) ? readFileSync(join(dir, "report.md"), "utf8") : "";
+  const h2s = [...html.matchAll(/<h2[^>]*>([^<(]+?)\s*\(/g)].map((m) => m[1].trim());
+  t("PV-7 AC-R7.1 exactly three <h2> lists, in order", h2s, ["Needs your reply", "Action items for you", "Meeting action items for you"]);
+  const replyBlock = html.slice(html.indexOf("Needs your reply"), html.indexOf("Action items for you"));
+  t("PV-8 AC-R7.2 'Needs your reply' holds ONE row for the 2-message open conversation, and no other conversation", [(replyBlock.match(/<tr>/g) ?? []).length, /Zebra subject a1/.test(replyBlock), /b1|c1|d1|e1|f1|g1/.test(replyBlock)], [1, true, false]);
+  t("PV-9 AC-R7.4 meeting list renders 'none triaged yet' until part B stores items", /Meeting action items for you \(0\)<\/h2>\s*<p[^>]*>none triaged yet</.test(html), true);
+  const counts = /<p[^>]*data-counts="1">([\s\S]*?)<\/p>/.exec(html)?.[1] ?? "";
+  t("PV-10 AC-R7.5 counts line: replied/not_addressed/invite/minutes/automated as numbers, no subject or sender", [/replied 1/.test(counts), /not_addressed 2/.test(counts), /invite 1/.test(counts), /minutes 1/.test(counts), /automated 1/.test(counts), /Zebra|Quokka|walrus|corp\.example/.test(counts)], [true, true, true, true, true, false]);
+  const src = readFileSync(join(root, "scripts/proposals-preview.ts"), "utf8").replace(/\/\/.*$/gm, "");
+  t("PV-11 owner scope 2026-11-14: EMAIL only -- the script reads no Teams log; no Teams row, label or count in the report", [/parseTeamsLog|teams\.path|TEAMS_LOG_PATH/.test(src), /teams/i.test(html + md)], [false, false]);
+  t("PV-12 AC-R7.7 the public log carries no subject, sender, address, body word or id from the fixture", /Zebra|Quokka|walrus|corp\.example|conv-|sender-/.test(r.out), false);
+  t("PV-13 the Markdown file has the same three lists", [...md.matchAll(/^## (.+?) \(/gm)].map((m) => m[1]), ["Needs your reply", "Action items for you", "Meeting action items for you"]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

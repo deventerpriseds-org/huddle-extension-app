@@ -9,12 +9,11 @@
 //
 // LOGS ARE PUBLIC-SAFE: counts, states and error CATEGORIES only. No title, evidence, subject or id is logged.
 
-import type { ItemProcessor, LedgerStore, ProcessOutcome, SourceItem, TeamsMessage } from "../correspondence/source-item";
+import type { ItemProcessor, LedgerStore, ProcessOutcome, SourceItem } from "../correspondence/source-item";
 import { stableHash } from "../correspondence/source-item";
 import { newTextOnly } from "../email/inbound-email";
 import { parseUtcMs, type FeedInboundMessage } from "../external-feeds/onedrive-feed";
 import {
-  classifyChat,
   classifyEmailConversation,
   conversationIsTodoSource,
   doerVerdict,
@@ -180,7 +179,9 @@ const SOURCE_TEXT_MAX = 6000;
  * Pure (AC-R6.1/6.2/6.8): the conversation `item` belongs to, built from every item of that conversation the pass
  * holds -> ONE source (sourceItemId = the conversation key), or a skip naming the verdict. Never screenMessage:
  * the classifier decides. Each message is read through newTextOnly (quoted history never re-proposes a to-do).
- * The owner's own messages ARE included (AC-R6.6: his first-person commitments); app senders are not.
+ * The owner's own messages ARE included (AC-R6.6: his first-person commitments). EMAIL ONLY (owner scope change
+ * 2026-11-14: Teams is out of scope for this pass); a non-email item returns a skip and the processor hands it to
+ * the original per-message path unchanged.
  */
 export function conversationSourceFor(
   item: SourceItem,
@@ -209,29 +210,11 @@ export function conversationSourceFor(
       .filter((s) => s.text);
     return finishConversationSource("email", key, sorted[sorted.length - 1]?.receivedDateTime ?? item.at, item.email.subject ?? null, segments, verdict);
   }
-  if (item.source === "teams" && item.teams) {
-    const key = item.teams.chatId;
-    const thread = batch.filter((b) => b.source === "teams" && b.teams?.chatId === key).map((b) => b.teams as TeamsMessage);
-    const all = thread.length ? thread : [item.teams];
-    const verdict = classifyChat(key, all, ctx);
-    if (!conversationIsTodoSource(verdict)) return { skip: verdict.verdict, key };
-    const sorted = [...all].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).filter((m) => !m.senderIsApp);
-    const segments: TodoSegment[] = sorted
-      .map((m) => ({
-        text: newTextOnly(m.text ?? "").trim(),
-        fromOwner: m.fromOwner === true,
-        reach: verdict.addressing as TodoSegment["reach"],
-        ownerAloneOnTo: false,
-        mentionsOwner: m.mentionsOwner === true,
-      }))
-      .filter((s) => s.text);
-    return finishConversationSource("teams", key, sorted[sorted.length - 1]?.at ?? item.at, item.teams.chatName ?? null, segments, verdict);
-  }
   return { skip: "no_payload", key: item.sourceItemId };
 }
 
 function finishConversationSource(
-  source: "email" | "teams",
+  source: "email",
   key: string,
   at: string | null,
   context: string | null,
@@ -267,15 +250,18 @@ export function conversationDoer(src: ConversationSource, ownerNames: readonly s
  * conversation per pass, however many of its messages are claimed (each reuses the conversation's outcome),
  * mirroring the bell's per-chat decision. Idempotent across passes through the store's refs (AC-R6.9: the
  * conversation key is the ref, so a re-extraction after a new message attaches/sees instead of duplicating).
+ * Teams items (owner scope change 2026-11-14) go to the ORIGINAL per-message processor, exactly as before.
  */
 export function conversationProposalsProcessor(
   deps: ProposeDeps & { owner(): string; mailbox(): string; needsYou(): Promise<NeedsYouContext>; log?: (l: string) => void },
 ): ItemProcessor {
   const decided = new Map<string, Promise<ProcessOutcome>>();
   let ctxP: Promise<NeedsYouContext> | null = null;
+  const original = proposalsProcessor(deps);
   return {
     name: "proposals",
     async process(item: SourceItem, pctx): Promise<ProcessOutcome> {
+      if (item.source !== "email") return original.process(item, pctx);
       ctxP ??= deps.needsYou();
       const ctx = await ctxP;
       const src = conversationSourceFor(item, pctx.batch ?? [item], deps.mailbox(), ctx);

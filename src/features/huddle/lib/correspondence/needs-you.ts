@@ -1,6 +1,7 @@
-// WHAT:          The correspondence "needs you" classifier: ONE verdict per CONVERSATION (an email thread keyed by
-//                conversationId, or a Teams chat), deciding whether it needs the owner's reply, plus the rules the
-//                to-do side reads (who is the doer). Pure, import-light, no I/O.
+// WHAT:          The correspondence "needs you" classifier: ONE verdict per email CONVERSATION (keyed by
+//                conversationId), deciding whether it needs the owner's reply, plus the rules the to-do side reads
+//                (who is the doer). Pure, import-light, no I/O. EMAIL ONLY: owner scope change 2026-11-14 ("email
+//                report for now, no teams"); Teams keeps its existing decideChatThread path, untouched.
 // WHY:           Owner 2026-11-14, after a preview listed 41 "open" emails: minutes, mass mailings, invites and
 //                earlier replies in the same thread were each listed as a separate thing to answer. AC
 //                docs/qc-evidence/AC-correspondence-redesign.md (branch claude_ac-correspondence-redesign) sections
@@ -16,8 +17,6 @@
 
 import { asksSomething, isAutomatedAddress, newTextOnly } from "../email/inbound-email";
 import { parseAddress, parseUtcMs, sentReplySettles, stripReplyPrefixes, type FeedInboundMessage } from "../external-feeds/onedrive-feed";
-import { decideChatThread } from "./bell";
-import type { TeamsMessage } from "./source-item";
 
 /** The one verdict per conversation (AC shared definitions). When several apply, the FIRST in this order wins. */
 export type NeedsYouVerdict = "automated" | "invite" | "minutes" | "not_addressed" | "replied" | "cant_tell" | "needs_reply" | "fyi";
@@ -202,6 +201,50 @@ export function isMinutesEmail(m: Pick<FeedInboundMessage, "subject" | "fromAddr
   return false;
 }
 
+// ── CC-only rule and group address (owner scope change 2026-11-14) ─────────────────────────────────────
+
+/** A GROUP ADDRESS: the sender speaks to everyone on the thread ("Hi everyone", "Hi all,", "Team,", "Thanks, folks",
+ *  "y'all", "Can everyone ..."). Only in an address POSITION: at the start of a line/sentence followed by
+ *  punctuation or the line end, after a closing "thanks," at the end, or as the subject of a group ask. So
+ *  "everyone agreed last week", "all the files" and "the Platform Team will ship" are NOT group addresses. */
+const GROUP_WORD = String.raw`(?:everyone|everybody|all|team|folks|y['’]?all|you all|all of you)`;
+const GROUP_OPENING = new RegExp(String.raw`^(?:(?:hi|hello|hey|dear|greetings|good (?:morning|afternoon|evening)|morning|afternoon|thanks|thank you)[ \t,]+)?${GROUP_WORD}[ \t]*(?:[,!:;.\u2014\u2013-]|$)`, "i");
+const GROUP_CLOSING = new RegExp(String.raw`(?:,|\b(?:hi|hello|hey|thanks|thank you|cheers))[ \t]+${GROUP_WORD}[ \t]*[.!?]?$`, "i");
+const GROUP_ASK = new RegExp(String.raw`\b(?:can|could|would|will|does|do|did|has|have)\s+(?:everyone|everybody|you all|all of you|y['’]?all)\b`, "i");
+const YALL = /(?<![\p{L}])y['’]?all(?![\p{L}])/iu;
+
+/** Pure: does this NEW text address the whole group? Quoted history is dropped first. */
+export function addressesGroup(text: string): boolean {
+  const lines = newTextOnly(text).split(/\n+/).flatMap((l) => l.split(/(?<=[.?!])\s+/)).map((l) => l.trim()).filter(Boolean);
+  return lines.some((l) => GROUP_OPENING.test(l) || GROUP_CLOSING.test(l) || GROUP_ASK.test(l) || YALL.test(l));
+}
+
+/** Pure (owner 2026-11-14): being on CC ALONE needs the owner only when the latest message from someone else
+ *  (a) names the owner, (b) addresses the whole group, or (c) asks the owner directly (an asking sentence that
+ *  names him). Otherwise CC-only is not "needs you". Returns the reason it counts, or null. */
+export function ccCallsOnOwner(text: string, ownerNames: readonly string[]): "names_owner" | "group_address" | "direct_ask" | null {
+  const nt = newTextOnly(text);
+  if (sentencesOfText(nt).some((s) => textAsks(s) && namesOwner(s, ownerNames))) return "direct_ask";
+  if (namesOwner(nt, ownerNames)) return "names_owner";
+  if (addressesGroup(nt)) return "group_address";
+  return null;
+}
+const sentencesOfText = (text: string) => text.split(/(?<=[.?!])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+
+/** Pure (owner 2026-11-14): the owner's names -- `correspondence.ownerNames` when configured, else the FIRST token
+ *  of each owner login's local part, capitalised (`first.last@...` -> "First"). Tokens under 2 letters or with a
+ *  digit are skipped. Matched as whole words, case-insensitive (namesOwner). */
+export function effectiveOwnerNames(cfg: { ownerLogins: string[]; correspondence?: { ownerNames?: string[] } }): string[] {
+  const configured = (cfg.correspondence?.ownerNames ?? []).map((n) => n.trim()).filter(Boolean);
+  if (configured.length) return [...new Set(configured)];
+  const out = new Set<string>();
+  for (const login of cfg.ownerLogins) {
+    const first = String(login ?? "").split("@")[0].split(/[._+-]/)[0] ?? "";
+    if (first.length >= 2 && /^\p{L}+$/u.test(first)) out.add(first[0].toUpperCase() + first.slice(1).toLowerCase());
+  }
+  return [...out];
+}
+
 // ── Email conversations (AC-R2) ───────────────────────────────────────────────────────────────────────
 
 export interface NeedsYouContext {
@@ -214,17 +257,17 @@ export interface NeedsYouContext {
 }
 
 export interface ConversationVerdict {
-  source: "email" | "teams";
-  /** email: "<mailbox>:conv:<conversationId>" (or "<mailbox>:msg:<message id>" with no conversation id); teams: the
-   *  chat id. No NUL separator: the key is stored as a proposal ref's source_item_id (Postgres text). */
+  source: "email";
+  /** "<mailbox>:conv:<conversationId>" (or "<mailbox>:msg:<message id>" with no conversation id). No NUL separator:
+   *  the key is stored as a proposal ref's source_item_id (Postgres text). */
   key: string;
   verdict: NeedsYouVerdict;
   /** A short reason NAME (safe to count/log), or null. */
   reason: string | null;
-  /** The deciding message: the latest message not from the owner (email) / the open ask or latest other (Teams). */
+  /** The deciding message: the latest message not from the owner. */
   deciding: { id: string; at: string | null; fromOwner: false } | null;
-  /** How the owner was reached on the deciding message (email) or the chat kind (Teams). */
-  addressing: Addressing["kind"] | ChatKind | null;
+  /** How the owner was reached on the deciding message. */
+  addressing: Addressing["kind"] | null;
   messageIds: string[];
 }
 
@@ -261,6 +304,9 @@ export function classifyEmailConversation(key: string, msgs: readonly FeedInboun
   const newText = emailNewText(latest);
   if (isMinutesEmail(latest, newText, ctx.ownerNames)) return v("minutes", null);
   if (addr.kind === "none") return v("not_addressed", addr.reason);
+  // Owner 2026-11-14: CC alone counts only when the latest message calls on him (names him, speaks to the whole
+  // group, or asks him directly). Otherwise it is not "needs you".
+  if (addr.kind === "cc_only" && !ccCallsOnOwner(newText, ctx.ownerNames)) return v("not_addressed", "cc_only_not_called_on");
   if (addr.kind === "unknown") return v("cant_tell", addr.reason);
   // A later owner message settles the thread: in the inbox (AC-R2.6) or in Sent Items (AC-R2.4, the EXISTING
   // sentReplySettles -- no second settle rule). Times without a zone are UTC (AC-R2.8).
@@ -289,65 +335,6 @@ export function classifyEmailConversations(mailbox: string, msgs: readonly FeedI
   return [...groupEmailConversations(mailbox, msgs)].map(([k, ms]) => classifyEmailConversation(k, ms, ctx));
 }
 
-// ── Teams chats (AC-R2.10-2.12, R3.10-3.13, OQ-5, S-D, S-E) ───────────────────────────────────────────
-
-export type ChatKind = "one_to_one" | "group" | "meeting_chat" | "channel" | "unknown";
-
-/** Pure (S-E, shapes confirmed by probe P-3: meeting_ 40, unq.gbl.spaces 18, thread.v2 1): a chat's kind from its
- *  id shape and the number of distinct NON-owner senders seen in the whole log. Never a member count. */
-export function chatKind(chatId: string, nonOwnerSenders: number): ChatKind {
-  const id = String(chatId ?? "");
-  if (/^19:meeting_/i.test(id)) return "meeting_chat";
-  if (/@unq\.gbl\.spaces$/i.test(id)) return "one_to_one";
-  if (/@thread\.tacv2$/i.test(id)) return "channel";
-  return nonOwnerSenders >= 2 ? "group" : "unknown";
-}
-
-/** Pure (owner decision OQ-5, 2026-11-14): is an ask in this chat aimed at the owner?
- *  - 1:1: always.
- *  - meeting chat: only when it @mentions the owner or names him.
- *  - group / channel / unknown: when it @mentions the owner; otherwise only when it @mentions nobody else AND the
- *    chat has 2 or fewer other people (distinct non-owner senders in the log). */
-export function chatAskAimedAtOwner(ask: TeamsMessage, kind: ChatKind, nonOwnerSenders: number, ownerNames: readonly string[]): boolean {
-  if (kind === "one_to_one") return true;
-  if (ask.mentionsOwner === true) return true;
-  if (kind === "meeting_chat") return namesOwner(ask.text, ownerNames);
-  return !ask.mentionsOther && nonOwnerSenders <= 2;
-}
-
-const RECAP_TEXT = /\b(?:meeting\s+(?:notes|minutes|recap|summary)|recap)\b/i;
-
-/** Pure: one chat's verdict. The decision is the EXISTING decideChatThread with the bell's per-chat owner presence
- *  (AC-R2.10, R2.12: never a constant true); this layer only adds the aimed-at-the-owner test and minutes. */
-export function classifyChat(chatId: string, thread: readonly TeamsMessage[], ctx: Pick<NeedsYouContext, "ownerNames">, nonOwnerSendersInLog?: number): ConversationVerdict {
-  const sorted = [...thread].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  const nonOwner = nonOwnerSendersInLog ?? new Set(sorted.filter((m) => m.fromOwner !== true && m.senderId).map((m) => m.senderId)).size;
-  const kind = chatKind(chatId, nonOwner);
-  const base = { source: "teams" as const, key: chatId, addressing: kind, messageIds: sorted.map((m) => m.messageId) };
-  const others = sorted.filter((m) => m.fromOwner !== true);
-  const latestOther = others[others.length - 1];
-  const dec = (m: TeamsMessage | undefined) => (m ? { id: m.messageId, at: m.at, fromOwner: false as const } : null);
-  // S-C8: a Teams app's recap in a meeting chat is minutes, never a reply item.
-  if (latestOther && latestOther.senderIsApp && kind === "meeting_chat" && RECAP_TEXT.test(latestOther.text)) {
-    return { ...base, verdict: "minutes", reason: null, deciding: dec(latestOther) };
-  }
-  const d = decideChatThread(sorted, sorted.some((m) => m.fromOwner === true));
-  if (d.state === "open") {
-    if (!chatAskAimedAtOwner(d.ask, kind, nonOwner, ctx.ownerNames)) return { ...base, verdict: "fyi", reason: `not_aimed_${kind}`, deciding: dec(d.ask) };
-    if (d.missing) return { ...base, verdict: "cant_tell", reason: d.missing, deciding: dec(d.ask) };
-    return { ...base, verdict: "needs_reply", reason: null, deciding: dec(d.ask) };
-  }
-  if (d.state === "answered") return { ...base, verdict: "replied", reason: null, deciding: dec(latestOther) };
-  return { ...base, verdict: "fyi", reason: null, deciding: dec(latestOther) };
-}
-
-/** Pure: every chat in a log. Distinct non-owner senders are counted over the WHOLE log per chat (AC-R3.13). */
-export function classifyChats(msgs: readonly TeamsMessage[], ctx: Pick<NeedsYouContext, "ownerNames">): ConversationVerdict[] {
-  const by = new Map<string, TeamsMessage[]>();
-  for (const m of msgs) (by.get(m.chatId) ?? by.set(m.chatId, []).get(m.chatId)!).push(m);
-  return [...by].map(([id, ms]) => classifyChat(id, ms, ctx));
-}
-
 // ── Counts (AC-R7.5/7.6): verdict names and reason names only, never content ──────────────────────────
 
 export function verdictCounts(vs: readonly ConversationVerdict[]): { total: number; byVerdict: Record<NeedsYouVerdict, number>; byReason: Record<string, number> } {
@@ -360,8 +347,6 @@ export function verdictCounts(vs: readonly ConversationVerdict[]): { total: numb
   return { total: vs.length, byVerdict, byReason };
 }
 
-/** Pure (AC-R3.12): no Teams message carries a mentions array at all -> name it in the counts line. */
-export const mentionsFieldAbsent = (msgs: readonly TeamsMessage[]) => msgs.length > 0 && !msgs.some((m) => m.mentionsOwner !== undefined || m.mentionsOther !== undefined);
 
 // ── To-dos: the owner is the doer (AC-R6) ─────────────────────────────────────────────────────────────
 
@@ -377,8 +362,8 @@ export function conversationIsTodoSource(c: Pick<ConversationVerdict, "verdict" 
 export interface TodoSegment {
   text: string;
   fromOwner: boolean;
-  /** email addressing kind or Teams chat kind of THIS message. */
-  reach: Addressing["kind"] | ChatKind;
+  /** How the owner was reached on THIS message. */
+  reach: Addressing["kind"];
   ownerAloneOnTo: boolean;
   mentionsOwner: boolean;
 }
@@ -401,8 +386,8 @@ export type DoerVerdict = "keep" | "assigned_to_other" | "doer_unclear" | "not_o
 /** Pure (AC-R6.3-6.7): may this validated to-do be proposed to the OWNER? `segment` is the message its evidence
  *  came from. The owner's own message counts only as a first-person commitment (AC-R6.6). Someone else's message:
  *  a grounded assignee who is not the owner drops it (assigned_to_other); no assignee keeps it only where the owner
- *  is plainly the one asked -- a direct email / a 1:1 chat / an @mention / the owner alone on To with "you" in the
- *  evidence (AC-R6.4/6.5). CC-only never counts unless the owner is named (owner decision OQ-3). */
+ *  is plainly the one asked -- a direct email / the owner alone on To with "you" in the evidence (AC-R6.4/6.5).
+ *  CC-only never counts unless the owner is named (owner decision OQ-3). */
 export function doerVerdict(c: { assignee: string | null; evidence: string }, segment: TodoSegment, ownerNames: readonly string[]): DoerVerdict {
   if (segment.fromOwner) {
     if (c.assignee && !assigneeIsOwner(c.assignee, ownerNames)) return "assigned_to_other";
@@ -410,7 +395,7 @@ export function doerVerdict(c: { assignee: string | null; evidence: string }, se
   }
   if (c.assignee) return assigneeIsOwner(c.assignee, ownerNames) ? "keep" : "assigned_to_other";
   if (namesOwner(c.evidence, ownerNames)) return "keep";
-  if (segment.reach === "direct" || segment.reach === "one_to_one") return "keep";
+  if (segment.reach === "direct") return "keep";
   if (segment.mentionsOwner) return "keep";
   if (segment.reach === "group" && segment.ownerAloneOnTo && /\byou(?:r|rs)?\b/i.test(c.evidence)) return "keep";
   return "doer_unclear";

@@ -16,16 +16,16 @@ import {
   type InboundMessage,
 } from "../src/features/huddle/lib/email/inbound-email";
 import { latestSentByConversation, mapFeedMessage, parseFeedsConfig, type FeedInboundMessage } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
-import { messageMentions, parseTeamsLog, statedOwnerIds } from "../src/features/huddle/lib/external-feeds/teams-log";
 import {
   assigneeIsOwner,
-  chatKind,
-  classifyChat,
+  addressesGroup,
+  ccCallsOnOwner,
   classifyEmailConversation,
   classifyEmailConversations,
   conversationIsTodoSource,
   directAsk,
   doerVerdict,
+  effectiveOwnerNames,
   isCalendarItem,
   isMinutesEmail,
   ownerAddressing,
@@ -124,7 +124,58 @@ t("AC-R3.7 owner on To of the FIRST message, latest non-owner message reaches hi
   em({ conversationId: "c37", at: "2026-11-10T09:00:00Z", toRecipients: OWNER }),
   em({ conversationId: "c37", at: "2026-11-10T10:00:00Z", toRecipients: "pat@work.example", bodyText: "Can you also check this?" }),
 ], ctx()).verdict, "not_addressed");
-t("R3 CC-only with an ask -> needs_reply (CC counts for the reply list)", one(em({ toRecipients: "pat@work.example", ccRecipients: OWNER, conversationId: "c-cc" })), "needs_reply");
+// ── CC-only rule (owner scope change 2026-11-14): CC alone needs the owner only when the latest message from
+// someone else (a) names him, (b) addresses the whole group, or (c) asks him directly. To (alone or with others)
+// counts as before.
+const ccConv = (bodyText: string, id: string) => one(em({ toRecipients: "pat@work.example", ccRecipients: OWNER, bodyText, conversationId: id }));
+t("CC-1 CC only, an ask aimed at the To person -> not_addressed (cc_only_not_called_on)", [ccConv("Pat, can you send the numbers?", "cc1"), classifyEmailConversation("k", [em({ toRecipients: "pat@work.example", ccRecipients: OWNER, bodyText: "Can you send the numbers?" })], ctx()).reason], ["not_addressed", "cc_only_not_called_on"]);
+t("CC-2 (a) CC only, the latest message NAMES the owner -> needs_reply", ccConv("Pat, can you send the numbers? Owner Name will review them.", "cc2"), "needs_reply");
+t("CC-3 (b) CC only, 'Hi everyone,' + an ask -> needs_reply", ccConv("Hi everyone,\nCan you send your numbers by Friday?", "cc3"), "needs_reply");
+t("CC-4 (c) CC only, an asking sentence naming the owner -> needs_reply", ccConv("Owner Name, could you approve this?", "cc4"), "needs_reply");
+t("CC-5 CC only, called on but nothing asked -> fyi (not needs_reply)", ccConv("Hi all, the numbers are attached.", "cc5"), "fyi");
+t("CC-6 To with others (owner individually on To) -> counts as before", one(em({ toRecipients: "pat@work.example; owner@work.example", bodyText: "Pat, can you send the numbers?", conversationId: "cc6" })), "needs_reply");
+t("CC-7 the rule reads the LATEST non-owner message, not an earlier one", classifyEmailConversation("k", [
+  em({ conversationId: "cc7", at: "2026-11-10T09:00:00Z", toRecipients: "pat@work.example", ccRecipients: OWNER, bodyText: "Hi everyone, can you send numbers?" }),
+  em({ conversationId: "cc7", at: "2026-11-10T10:00:00Z", toRecipients: "pat@work.example", ccRecipients: OWNER, subject: "Re: Budget numbers", bodyText: "Pat, can you also add Q4?" }),
+], ctx()).verdict, "not_addressed");
+t("CC-8 a quoted old 'Hi everyone' in history does not call on the owner", ccConv("Pat, can you send it?\n> Hi everyone, can you all reply?", "cc8"), "not_addressed");
+t("CC-9 ccCallsOnOwner reasons", [ccCallsOnOwner("Owner Name, can you approve?", NAMES), ccCallsOnOwner("Owner Name is out today.", NAMES), ccCallsOnOwner("Hi team, update below.", NAMES), ccCallsOnOwner("Pat, please send it.", NAMES)], ["direct_ask", "names_owner", "group_address", null]);
+
+// ── S-F group address spellings (owner 2026-11-14). Expected = addressesGroup(text). ─────────────────
+const G: Array<[string, boolean, string]> = [
+  ["Hi everyone,", true, "greeting + everyone"],
+  ["Hi everyone", true, "greeting, line end"],
+  ["Hello all,", true, "greeting + all"],
+  ["Hi all", true, "greeting + all, line end"],
+  ["All,", true, "bare vocative All,"],
+  ["Everyone - quick update.", true, "vocative + dash"],
+  ["Team,", true, "vocative Team,"],
+  ["Hi team,", true, "greeting + team"],
+  ["Hey folks!", true, "greeting + folks"],
+  ["Good morning everyone.", true, "good morning + everyone"],
+  ["Thanks, everyone.", true, "closing thanks, everyone"],
+  ["Thanks all!", true, "closing thanks all"],
+  ["Can y'all send numbers?", true, "y'all anywhere"],
+  ["Can y’all send numbers?", true, "y’all, typographic apostrophe"],
+  ["Could everyone send their numbers?", true, "group ask"],
+  ["Can you all review this?", true, "group ask you all"],
+  ["Everyone agreed last week.", false, "OVER-MATCH: everyone in a sentence"],
+  ["We sent everyone the deck.", false, "OVER-MATCH: everyone as object"],
+  ["All the files are attached.", false, "OVER-MATCH: all as an ordinary word"],
+  ["I read all of it.", false, "OVER-MATCH: all mid-sentence"],
+  ["The Platform Team will ship Friday.", false, "OVER-MATCH: team inside a team name"],
+  ["Team Phoenix shipped the release.", false, "OVER-MATCH: team name at line start"],
+  ["Our team meeting moved to 3pm.", false, "OVER-MATCH: team as a noun"],
+  ["Allison, can you check?", false, "OVER-MATCH: All inside a name"],
+  ["Thanks for all your help.", false, "OVER-MATCH: all in a thanks sentence"],
+  ["The folks at the vendor replied.", false, "OVER-MATCH: folks as a noun"],
+];
+for (const [text, want, why] of G) t(`S-F ${why}: ${JSON.stringify(text)} -> ${want}`, addressesGroup(text), want);
+
+// ── Owner names (owner 2026-11-14): config, else the first token of each login's local part, capitalised ─
+t("ON-1 configured ownerNames win", effectiveOwnerNames({ ownerLogins: ["first.last@eds.example"], correspondence: { ownerNames: ["Owner Name"] } }), ["Owner Name"]);
+t("ON-2 default: first.last@ -> First; dedup; digits / 1-letter tokens skipped", effectiveOwnerNames({ ownerLogins: ["first.last@eds.example", "FIRST_x@other.example", "a.b@x.example", "r2d2@x.example"] }), ["First"]);
+t("ON-3 names match as whole words, case-insensitive", [ccCallsOnOwner("first, can you check?", ["First"]), ccCallsOnOwner("Firstly, the numbers.", ["First"])], ["direct_ask", null]);
 t("R3 record without recipients fields -> cant_tell no_recipient_field", classifyEmailConversation("k", [em({ toRecipients: undefined })], ctx()).reason, "no_recipient_field");
 
 // ── S-B / R4 invites ────────────────────────────────────────────────────────────────────────────────
@@ -200,33 +251,9 @@ t("AC-R2.8 a zoneless received time is read as UTC (sent 10:30Z settles a 10:00 
 t("AC-R2.13 a forward with a NEW conversationId is its own conversation (grouping by id, never subject)", classifyEmailConversations(MB, [em({ conversationId: "orig", subject: "Plan" }), em({ conversationId: "fwd", subject: "Fw: Plan" })], ctx()).length, 2);
 t("R2 no conversationId -> its own conversation keyed by message id", classifyEmailConversations(MB, [em({ conversationId: null }), em({ conversationId: null })], ctx()).map((c) => c.key.includes(":msg:")), [true, true]);
 
-// ── Teams: mentions (S-D), chat kind (S-E), chat verdicts (R2.10-2.12, OQ-5) ───────────────────────
+// ── Teams helpers (Teams classification is OUT OF SCOPE for this pass, owner 2026-11-14; only the
+// passthrough to the ORIGINAL per-message proposals path is tested in section Q) ─────────────────────
 const OID = "aaaa-owner";
-const ownerSet = new Set([OID]);
-t("S-D1 mention of the owner's user id -> owner true", messageMentions({ mentions: [{ mentioned: { user: { id: OID } } }] }, ownerSet), { owner: true, other: false });
-t("S-D2 id in a different case -> true", messageMentions({ mentions: [{ mentioned: { user: { id: OID.toUpperCase() } } }] }, ownerSet)?.owner, true);
-t("S-D3 another user -> owner false, other true", messageMentions({ mentions: [{ mentioned: { user: { id: "bbbb" } } }] }, ownerSet), { owner: false, other: true });
-t("S-D4 a conversation (whole chat) mention -> owner false", messageMentions({ mentions: [{ mentioned: { conversation: { id: "19:aaaa@thread.v2" } } }] }, ownerSet)?.owner, false);
-t("S-D5 a tag mention -> owner false", messageMentions({ mentions: [{ mentioned: { tag: { id: "tag-1" } } }] }, ownerSet)?.owner, false);
-t("S-D6 body '@Owner' with NO mentions array -> null (unknown), not true", messageMentions({ body: { content: "@Owner can you?" } }, ownerSet), null);
-t("S-D owner ids not configured -> owner null", messageMentions({ mentions: [{ mentioned: { user: { id: OID } } }] }, new Set())?.owner, null);
-{
-  const line = (msgs: unknown[]) => JSON.stringify({ source: "teams", synthetic: false, chatId: "19:aaaa_bbbb@unq.gbl.spaces", capturedUtc: "2026-11-10T23:00:00Z", messages: msgs });
-  const cfgT = { synthetic: false, subjectPrefix: undefined, notBeforeUtc: undefined, teams: { source: "teams", ownerSenderIds: [OID] } };
-  const p = parseTeamsLog([
-    line([{ id: "1", timestamp: "2026-11-10T10:00:00Z", from: { user: { id: "pat", displayName: "Pat" } }, body: { content: "Can you look?", contentType: "text" }, mentions: [{ mentioned: { user: { id: OID } } }] }]),
-    line([{ id: "2", timestamp: "2026-11-10T10:01:00Z", from: { user: { id: "pat", displayName: "Pat" } }, body: { content: "No mentions key", contentType: "text" } }]),
-  ].join("\n"), cfgT);
-  t("AC-R3.11 parser sets mentionsOwner true from a Graph mention", p.messages.find((m) => m.messageId === "1")?.mentionsOwner, true);
-  t("AC-R3.12 no mentions array -> the field is ABSENT (unknown), existing message shape unchanged", "mentionsOwner" in (p.messages.find((m) => m.messageId === "2") ?? {}), false);
-}
-t("statedOwnerIds: one agreeing value -> it; disagreeing -> none", [statedOwnerIds('{"ownerUserId":"A"}\n{"ownerUserId":"a"}').ids, statedOwnerIds('{"ownerUserId":"a"}\n{"ownerUserId":"b"}')], [["a"], { ids: [], disagree: 2 }]);
-t("S-E1 19:<g>_<g>@unq.gbl.spaces -> one_to_one", chatKind("19:aaaa_bbbb@unq.gbl.spaces", 1), "one_to_one");
-t("S-E2 19:<hex>@thread.v2, 3 non-owner senders -> group", chatKind("19:abcdef@thread.v2", 3), "group");
-t("S-E3 19:meeting_<id>@thread.v2 -> meeting_chat", chatKind("19:meeting_abc@thread.v2", 5), "meeting_chat");
-t("S-E4 19:<hex>@thread.v2, 1 non-owner sender -> unknown (not one_to_one)", chatKind("19:abcdef@thread.v2", 1), "unknown");
-t("S-E5 @thread.tacv2 -> channel", chatKind("19:abc@thread.tacv2", 4), "channel");
-
 let tid = 0;
 const tm = (chatId: string, over: Partial<TeamsMessage> = {}): TeamsMessage => ({
   chatId,
@@ -243,23 +270,6 @@ const ONE = "19:aaaa_bbbb@unq.gbl.spaces";
 const GRP = "19:abcdef@thread.v2";
 const MTG = "19:meeting_abc@thread.v2";
 const owner = (chatId: string, over: Partial<TeamsMessage> = {}) => tm(chatId, { senderId: OID, senderName: "Owner", fromOwner: true, text: "On it.", ...over });
-t("AC-R2.10 3 asks in a row in a 1:1, owner present earlier -> ONE needs_reply, the newest ask", (() => {
-  const msgs = [owner(ONE), tm(ONE), tm(ONE), tm(ONE, { text: "Third: can you confirm?" })];
-  const v = classifyChat(ONE, msgs, { ownerNames: NAMES });
-  return [v.verdict, v.deciding?.id === msgs[3].messageId];
-})(), ["needs_reply", true]);
-t("AC-R2.11 owner posted after the last ask -> replied", classifyChat(ONE, [tm(ONE), owner(ONE)], { ownerNames: NAMES }).verdict, "replied");
-t("AC-R2.12 a chat where the log has NO owner message -> cant_tell owner_messages (never a constant 'true')", [classifyChat(ONE, [tm(ONE)], { ownerNames: NAMES }).verdict, classifyChat(ONE, [tm(ONE)], { ownerNames: NAMES }).reason], ["cant_tell", "owner_messages"]);
-t("AC-R3.10 a 1:1 chat ask is addressed (not not_addressed)", classifyChat(ONE, [owner(ONE), tm(ONE)], { ownerNames: NAMES }).verdict, "needs_reply");
-t("OQ-5 group chat, 2 other people, no mention -> needs_reply", classifyChat(GRP, [owner(GRP), tm(GRP, { senderId: "p1" }), tm(GRP, { senderId: "p2", text: "Can you review?" })], { ownerNames: NAMES }).verdict, "needs_reply");
-t("OQ-5 group chat, 3 other people, no mention -> fyi", classifyChat(GRP, [owner(GRP), tm(GRP, { senderId: "p1" }), tm(GRP, { senderId: "p3" }), tm(GRP, { senderId: "p2", text: "Can you review?" })], { ownerNames: NAMES }).verdict, "fyi");
-t("OQ-5 group chat, 3 other people, ask @mentions the owner -> needs_reply", classifyChat(GRP, [owner(GRP), tm(GRP, { senderId: "p1" }), tm(GRP, { senderId: "p3" }), tm(GRP, { senderId: "p2", text: "Can you review?", mentionsOwner: true })], { ownerNames: NAMES }).verdict, "needs_reply");
-t("OQ-5 group chat, 2 other people, ask @mentions SOMEONE ELSE -> fyi", classifyChat(GRP, [owner(GRP), tm(GRP, { senderId: "p1" }), tm(GRP, { senderId: "p2", text: "Can you review?", mentionsOwner: false, mentionsOther: true })], { ownerNames: NAMES }).verdict, "fyi");
-t("OQ-5 meeting chat, ask with no mention and no name -> fyi", classifyChat(MTG, [owner(MTG), tm(MTG, { text: "Can someone send the deck?" })], { ownerNames: NAMES }).verdict, "fyi");
-t("OQ-5 meeting chat, ask names the owner's first name -> needs_reply", classifyChat(MTG, [owner(MTG), tm(MTG, { text: "Owner, can you send the deck?" })], { ownerNames: ["Owner Name", "Owner"] }).verdict, "needs_reply");
-t("OQ-5 meeting chat, ask @mentions the owner -> needs_reply", classifyChat(MTG, [owner(MTG), tm(MTG, { text: "Can you send the deck?", mentionsOwner: true })], { ownerNames: NAMES }).verdict, "needs_reply");
-t("OQ-5 over-match: a first name inside another word does not count", classifyChat(MTG, [owner(MTG), tm(MTG, { text: "Can the Owners group send it?" })], { ownerNames: ["Owner"] }).verdict, "fyi");
-t("S-C8 a Teams app recap in a meeting chat -> minutes", classifyChat(MTG, [tm(MTG, { senderIsApp: true, senderId: "app", text: "Meeting recap: decisions and action items" })], { ownerNames: NAMES }).verdict, "minutes");
 
 // ── Counts / reconciliation (AC-R7.5/7.6) ──────────────────────────────────────────────────────────
 {
@@ -274,7 +284,7 @@ const seg = (over: Partial<TodoSegment> = {}): TodoSegment => ({ text: "x", from
 t("AC-R6.1 verdicts never a to-do source: not_addressed / automated / invite / minutes", ["not_addressed", "automated", "invite", "minutes", "needs_reply", "fyi", "replied"].map((v) => conversationIsTodoSource({ verdict: v as never, reason: null })), [false, false, false, false, true, true, true]);
 t("AC-R6.1 cant_tell for missing Sent Items is still a to-do source; for no owner address it is not", [conversationIsTodoSource({ verdict: "cant_tell", reason: "no_sent_items" }), conversationIsTodoSource({ verdict: "cant_tell", reason: "no_owner_address" })], [true, false]);
 t("AC-R6.3 grounded assignee who is NOT the owner -> assigned_to_other", doerVerdict({ assignee: "Dana", evidence: "Dana will send the deck by Friday" }, seg(), NAMES), "assigned_to_other");
-t("AC-R6.4 assignee null in a direct email -> keep; in a 1:1 chat -> keep", [doerVerdict({ assignee: null, evidence: "Please send the deck by Friday" }, seg(), NAMES), doerVerdict({ assignee: null, evidence: "Please send the deck by Friday" }, seg({ reach: "one_to_one" }), NAMES)], ["keep", "keep"]);
+t("AC-R6.4 assignee null in a direct email -> keep (the 1:1-chat half is Teams: out of scope for this pass)", doerVerdict({ assignee: null, evidence: "Please send the deck by Friday" }, seg(), NAMES), "keep");
 t("AC-R6.5 assignee null in a group email: 'you' + owner alone on To -> keep; else doer_unclear", [
   doerVerdict({ assignee: null, evidence: "Can you send the deck by Friday" }, seg({ reach: "group", ownerAloneOnTo: true }), NAMES),
   doerVerdict({ assignee: null, evidence: "Can you send the deck by Friday" }, seg({ reach: "group", ownerAloneOnTo: false }), NAMES),
@@ -399,15 +409,14 @@ t("mapFeedMessage: carries toRecipients / ccRecipients when present", [mapFeedMe
   const own = await runProc([eItem(em({ conversationId: "q6", fromAddress: OWNER, toRecipients: "pat@work.example", bodyText: "I'll send the deck Friday to the whole team." }))], [{ task: "Send the deck", evidence: "I'll send the deck Friday to the whole team", assignee: null }]);
   t("AC-R6.6 the owner's own first-person commitment is a source and is proposed", own.store.rows.map((r) => r.title), ["Send the deck"]);
   const ccOnly = await runProc([eItem(em({ conversationId: "q7", toRecipients: "pat@work.example", ccRecipients: OWNER, bodyText: "Can you send the quarterly budget deck by Friday?" }))], [{ task: "Send the quarterly budget deck", evidence: "Can you send the quarterly budget deck by Friday", assignee: null }]);
-  t("OQ-3 CC-only: extraction runs (reply list) but the unnamed to-do is NOT proposed (doer_unclear)", [ccOnly.model.calls.length, ccOnly.store.rows.length], [1, 0]);
+  t("CC-only, not called on: the conversation is not_addressed -> ZERO extraction calls", [ccOnly.model.calls.length, ccOnly.store.rows.length], [0, 0]);
+  const ccGroup = await runProc([eItem(em({ conversationId: "q7b", toRecipients: "pat@work.example", ccRecipients: OWNER, bodyText: "Hi everyone, can you send the quarterly budget deck by Friday?" }))], [{ task: "Send the quarterly budget deck", evidence: "can you send the quarterly budget deck by Friday", assignee: null }]);
+  t("OQ-3 CC-only + group address: extraction runs (reply list) but the unnamed to-do is NOT proposed (doer_unclear)", [ccGroup.model.calls.length, ccGroup.store.rows.length], [1, 0]);
   const replied = await runProc([eItem(em({ conversationId: "q8", fromAddress: OWNER, toRecipients: "pat@work.example", at: "2026-11-10T12:00:00Z", bodyText: "I will send the signed contract tomorrow morning." })), eItem(em({ conversationId: "q8", at: "2026-11-10T09:00:00Z", bodyText: "Can you sign the contract?" }))], [{ task: "Send the signed contract", evidence: "I will send the signed contract tomorrow morning", assignee: null }]);
   t("AC-R6.10 a commitment in a thread now 'replied' is still proposed", replied.store.rows.length, 1);
-  const chat = [owner(ONE, { text: "Sure." }), tm(ONE, { text: "Please send the quarterly budget deck by Friday." }), tm(ONE, { text: "And please review the vendor contract draft." })];
+  const chat = [tm(ONE, { text: "Please send the quarterly budget deck by Friday." }), tm(ONE, { text: "And please review the vendor contract draft." })];
   const tr = await runProc(chat.map(tItem), TASKS);
-  t("AC-R6.2/6.4 a 1:1 chat: ONE extraction, null-assignee asks kept for the owner", [tr.model.calls.length, tr.store.rows.length, tr.store.rows[0]?.ref.sourceItemId], [1, 2, ONE]);
-  const big = [owner(GRP), tm(GRP, { senderId: "p1" }), tm(GRP, { senderId: "p3" }), tm(GRP, { senderId: "p2", text: "Please send the quarterly budget deck by Friday." })];
-  const gr = await runProc(big.map(tItem), TASKS);
-  t("AC-R6.5 a group chat (3 others), no @mention: extraction runs (fyi chat) but the doer is unclear -> not proposed", gr.store.rows.length, 0);
+  t("SCOPE Teams items go to the ORIGINAL per-message path (one extraction per message, as before)", [tr.model.calls.length, tr.store.rows.length], [2, 2]);
 }
 
 // ── Z: zero-call when the switch is OFF (AC-R9.2) ──────────────────────────────────────────────────

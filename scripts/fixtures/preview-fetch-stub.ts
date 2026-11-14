@@ -11,6 +11,8 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = decodeURIComponent(String(input));
   const method = String(init?.method ?? "GET");
   if (process.env.STUB_LOG) appendFileSync(process.env.STUB_LOG, `${method} ${url.includes("sendMail") ? "sendMail" : url.includes("Huddle Preview") ? (decodeURIComponent(url).includes(".html") ? "preview-html" : "preview-file") : "feed"}\n`);
+  // Needs-you redesign (PV-7..): STUB_BODY_DIR captures each OneDrive PUT body so the test can read the report.
+  if (method === "PUT" && process.env.STUB_BODY_DIR) appendFileSync(`${process.env.STUB_BODY_DIR}/${url.includes(".html") ? "report.html" : "report.md"}`, String(init?.body ?? ""));
   if (method === "PUT") return new Response("{}", { status: 201 });
   if (url.includes("sendMail")) return new Response("", { status: 202 });
   const body = url.includes("sent.json") ? process.env.STUB_SENT : /teams/i.test(url) ? process.env.STUB_TEAMS : process.env.STUB_EMAIL;

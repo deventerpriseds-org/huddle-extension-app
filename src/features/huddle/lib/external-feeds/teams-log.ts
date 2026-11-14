@@ -115,41 +115,6 @@ function hasNonTextContent(m: Record<string, unknown>): boolean {
   return typeof content === "string" && /<(?:img|[a-z0-9-]*emoji[a-z0-9-]*)\b|hostedContents|schema\.skype\.com\/Giphy/i.test(content);
 }
 
-/** Pure (needs-you redesign, AC-R3.11/3.12, Graph chatMessageMention): who a message @mentions. Only a
- *  `mentioned.user.id` equal to an owner Teams id (lower-cased) counts as the owner; a `conversation` (the whole
- *  chat) or a `tag` mention never does. null when there is no `mentions` array (a body "@Name" alone is text,
- *  S-D6) -- unknown, not false. `owner` is null when the owner's ids are not configured. */
-export function messageMentions(m: Record<string, unknown>, owners: ReadonlySet<string>): { owner: boolean | null; other: boolean } | null {
-  if (!Array.isArray(m.mentions)) return null;
-  let owner = false;
-  let other = false;
-  for (const it of m.mentions) {
-    const mentioned = it && typeof it === "object" ? ((it as Record<string, unknown>).mentioned as Record<string, unknown> | undefined) : undefined;
-    if (!mentioned || typeof mentioned !== "object") continue;
-    const user = mentioned.user && typeof mentioned.user === "object" ? (mentioned.user as Record<string, unknown>) : null;
-    const id = user ? str(user.id).toLowerCase() : "";
-    if (id && owners.has(id)) owner = true;
-    else if (id || mentioned.conversation || mentioned.tag || mentioned.application) other = true;
-  }
-  return { owner: owners.size ? owner : null, other };
-}
-
-/** Pure: the owner's Teams id as the Teams flow STATES it on each line (`ownerUserId`, owner 2026-11-13), but only
- *  when every line that carries it agrees on ONE value (AC shared definitions). Moved here from the preview script
- *  so the preview and any later caller read it the same way. Never logged. */
-export function statedOwnerIds(text: string): { ids: string[]; disagree: number } {
-  const stated = new Set<string>();
-  for (const line of text.split("\n")) {
-    try {
-      const v = (JSON.parse(line) as { ownerUserId?: unknown }).ownerUserId;
-      if (typeof v === "string" && v.trim()) stated.add(v.trim().toLowerCase());
-    } catch {
-      /* not a JSON line */
-    }
-  }
-  return stated.size === 1 ? { ids: [...stated], disagree: 0 } : { ids: [], disagree: stated.size > 1 ? stated.size : 0 };
-}
-
 /** Pure: the America/New_York calendar date (YYYY-MM-DD) of an instant -- the owner's day, so a flow rerun
  *  at 7:30pm Eastern files under the same day as the 6pm run, not the next UTC day (verifier loop 3, D4). */
 const CAPTURE_TZ = "America/New_York";
@@ -266,7 +231,6 @@ export function parseTeamsLog(
         continue;
       }
       const who = sender(m);
-      const mentions = messageMentions(m, owners);
       const key = `${chatId}\u0000${messageId}`;
       if (byKey.has(key)) {
         out.duplicates++;
@@ -285,9 +249,6 @@ export function parseTeamsLog(
         text: textOut,
         ...(chatName ? { chatName } : {}),
         ...(str(m.webUrl) ? { webUrl: str(m.webUrl) } : {}),
-        // Needs-you redesign: present only when the message carries a `mentions` array (AC-R3.12: absent = unknown).
-        ...(mentions && mentions.owner !== null ? { mentionsOwner: mentions.owner } : {}),
-        ...(mentions?.other ? { mentionsOther: true } : {}),
       });
     }
   }
