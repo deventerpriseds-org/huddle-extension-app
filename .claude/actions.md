@@ -58,6 +58,13 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       (U1/U4) + X3-X6. All fixed on claude_task-proposals @ d849f0da (parse5 tree for htmlToText; incomplete incident
       only ends on a non-incomplete read; year+clock for name-only wrapped attributions); 7 mutations FIRED. Verifier
       loop 6 next. Owner still to OK a 4th live change: an English Gmail attribution wrapped over 2 lines is now cut.
+- [x] Verifier loop 6 (9afa8eb6) = FIX FIRST: implied end tags flipped live ask decision on malformed HTML, depth-guard
+      drop, CSS-string ';' split, U5 stuck incomplete sent alert. All fixed @ claude_task-proposals 800e7fec (5 mutations
+      FIRED, 1 equivalent). Loop 7 will cover these + the redesign once its two parts merge in.
+- [ ] Redesign build IN PROGRESS: ACs on claude_ac-correspondence-redesign @ 5b8ba7d3 (~85 ACs, 10 open questions w/
+      defaults); probes docs/qc-evidence/PROBES-correspondence-redesign.md (invites = Exchange calendar headers, no
+      Content-Class; owner alone on To 93/127). Part A (needs-you classifier + report) on claude_redesign-needs-you,
+      part B (meeting triage) on claude_redesign-meeting-triage.
 - [ ] Owner 2026-11-14 redesign answers: (1) Iris's live email alerts are good -- do NOT change them (two-line
       attribution join removed from the live screen, ddc7b55d); (2) "needs you" = addressed to me directly OR a group
       conversation that includes me (not literal broadcasts), email AND Teams [assumed: "This is an email and 6pm" =
