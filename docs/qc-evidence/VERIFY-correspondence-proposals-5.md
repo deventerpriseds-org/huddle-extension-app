@@ -98,3 +98,53 @@ scripts/proposals-preview* scripts/fixtures` is empty.
 |---|---|---|
 | proposals-preview | 6/0 | **6/0** (PV-1..PV-6) |
 | `tsc --noEmit` | -- | **exit 0, no output** |
+
+## Claim 11: the Chromium truth fixture is real -- CONFIRMED
+
+`node scripts/html-visible-text-truth.mjs` re-run here against `/opt/pw-browsers/chromium-1243`: wrote 81 cases and
+`git diff -- scripts/fixtures/html-visible-text-truth.json` is **empty** (byte-identical, incl. the recorded chromium
+path). The fixture has one commit (ac0a5a8f) and is reproducible from the generator, so it was not hand-edited.
+`bun scripts/onedrive-feed-truth.test.ts`: 11/0. 80/81 rows match exactly; the 81st is `LEAK-formatting-reopened`
+(keeps more). CONFIRMED.
+
+## Claims 1-3 (D1 W1-W3, W4, W7): fixed on the recorded shapes -- REFUTED on new shapes
+
+W1, W2, W3, W4 (one copy survives), W7 match Chromium exactly (fixture rows, truth suite 11/0). To test beyond the
+implementer's 81 rows, `scripts/verify5-html-cases.mjs` records 44 NEW shapes x {doctype, quirks} = 88 rows through the
+same Chromium extraction, and `scripts/verify5-html-compare.ts` scores branch and origin/main `htmlToText` against it
+(DROP = a word Chromium shows is missing). Branch: 47 OK / 16 KEEP+ / **25 DROP**; main: 22 OK / 64 KEEP+ / 2 DROP.
+**23 rows are DROP on the branch and not on main** (flags OFF, live work-email screen):
+
+| shape (synthetic) | Chromium | branch | main | realism |
+|---|---|---|---|---|
+| F1 `<p><b style="display:none">pre<table><tr><td>Can you sign the NDA?</td></tr></table>` | ask | **""** | kept | medium: W1-class unclosed hidden element; ask in a layout table |
+| F2 same with `<font>`, `<strong>` (+ `<p>Thanks</p>` after: "Thanks" survives, ask dropped), `<a>`+`<center>` | ask | **""** | kept | as F1 |
+| F3 `<ul><li><b style="display:none">pre<li><table><tr><td>ASK` and `<p><b ...>pre<p><table>...ASK` | ask (doctype AND quirks) | **""** | kept | as F1 |
+| C1 `style="color:red; /* display:none */"` | ask | **""** | kept | low |
+| C2 `style="display:none; display:block"` (later declaration wins) | ask | **""** | kept | low |
+| C3 `style="display:nonex"` (invalid value) | ask | **""** | kept | very low |
+| K1 `<!-->ASK<!-- x -->` / `<!--->ASK...` (abrupt empty comment) | ask | **""** | kept | low |
+| K2 `<!-- x --!><p>ASK</p><!-- y -->` (`--!>` closes a comment) | ask | **""** | kept | very low |
+| G1 `<div style="display:none"><img alt="a > <div>">pre</div><p>ASK</p>` (`>` inside a quoted value) | ask | **""** | kept (+junk) | very low |
+
+Root causes:
+- F1-F3: `onedrive-feed.ts:581` skips the ancestor-close rule for every FORMATTING element ("the browser re-opens
+  it"), so `elementEnd` runs to the end of the document. The browser re-opens a formatting element only up to the
+  last **marker** in the active-formatting list; a `<td>`/`<th>`/`<caption>` pushes a marker, so text in the next
+  table cell is NOT re-wrapped in the hidden `<b>` and is visible. The code has no marker notion.
+- C1-C3: `HIDDEN_STYLE` (`:408`) is a substring regex over the raw style text: it sees declarations inside CSS
+  comments, ignores the cascade inside one attribute, and has no word boundary after `none`.
+- K1/K2: `htmlToText` (`:700`) strips comments with `/<!--[\s\S]*?-->/`; the HTML tokenizer also ends a comment at
+  `<!-->`, `<!--->` and `--!>`. Main never stripped comments, so this is new on the branch.
+- G1: every tag regex (`:456`, `:573`, `:643`) ends a tag at the first `>`, including one inside a quoted value
+  (`attrsOf` itself is correct; the tag it is handed is already truncated). Main shares the regex but never stripped.
+
+Also observed, keep-more only (acceptable direction): self-closing `<span style="display:none"/>` (browser keeps the
+span open), `<noscript>`, `<template>`, `visibility:collapse`, an unclosed trailing `<!--`, `<textarea>` content, the
+known re-opened `<b>` (`FMT-b-div-div`), and `>` in a hidden tag's own attribute (junk kept).
+
+**Verdict for claims 1-3: the five recorded shapes are fixed; the D1 class ("flag-off live screen drops visible
+text") is NOT closed.** F1-F3 is the same class loop 4 blocked on (an unclosed hidden inline element whose parent
+closes implicitly), reached with a formatting tag and an ask in a table cell -- the commonest place for an ask in
+an HTML email. Blocking under this loop's rule ("any OTHER flag-off live change, especially dropped visible text, is
+still a defect"). C/K/G are rarer; listed for the fix pass.
