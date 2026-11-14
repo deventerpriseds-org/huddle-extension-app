@@ -50,6 +50,18 @@ export interface CorrespondenceConfig {
   staleAlerts: boolean;
   /** email / sent are stale after MORE than this many working hours (Mon-Fri 8-18 ET) unchanged. */
   staleHours: number;
+  /** Needs-you redesign (owner 2026-11-14, AC-R9.1): the per-CONVERSATION classifier
+   *  (lib/correspondence/needs-you.ts) drives the Teams bell rows and the proposals. OFF unless literally `true`;
+   *  OFF = every path exactly as before, and the classifier is never called (AC-R9.2). */
+  conversations: boolean;
+  /** AC-R9.4 / OQ-2 (owner: "not now"): would group the EMAIL bell rows per conversation. Parsed so the switch
+   *  exists, but NOTHING reads it yet: Iris's live email alerts and their bell rows stay exactly as today. */
+  emailBell: boolean;
+  /** OQ-4: extra addresses that are the owner (aliases, +tags). Lower-cased whole addresses; empty by default. */
+  ownerAliases: string[];
+  /** AC-R6.7 / OQ-5: the owner's names (display name, first name) used to recognise him as the doer of a to-do
+   *  or as the person named in a meeting-chat question. From config only, never from the model. */
+  ownerNames: string[];
 }
 
 /** The REAL file the owner's Teams flow writes (read from the drive 2026-11-13, graph-permission-check run
@@ -220,6 +232,16 @@ function correspondenceFlags(v: unknown): CorrespondenceConfig {
     minIntervalMinutes: n(o.minIntervalMinutes, CORRESPONDENCE_MIN_INTERVAL_DEFAULT, 24 * 60),
     staleAlerts: o.staleAlerts === true,
     staleHours: n(o.staleHours, CORRESPONDENCE_STALE_HOURS_DEFAULT, 200),
+    conversations: o.conversations === true,
+    emailBell: o.emailBell === true,
+    ownerAliases: [
+      ...new Set(
+        (Array.isArray(o.ownerAliases) ? o.ownerAliases : [])
+          .map((x) => str(x).toLowerCase())
+          .filter((x) => /^[^\s@<>"]+@[^\s@<>"]+$/.test(x)),
+      ),
+    ],
+    ownerNames: [...new Set((Array.isArray(o.ownerNames) ? o.ownerNames : []).map((x) => str(x)).filter((x) => x.length >= 2 && x.length <= 80))],
   };
 }
 
@@ -457,7 +479,20 @@ export function htmlToText(html: string): string {
  * connector's output and is left undefined rather than invented, so the "Other folder" rule simply
  * does not apply to feed mail (documented gap).
  */
-export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): InboundMessage {
+/** mapFeedMessage's result: an InboundMessage plus OPTIONAL fields only the correspondence "needs you" classifier
+ *  reads (lib/correspondence/needs-you.ts). InboundMessage itself is unchanged, and screenMessage /
+ *  asksSomething never read these fields (pinned by scripts/needs-you.test.ts section P). Each field is present
+ *  only when the record carries the source field, so a record without them maps exactly as before. */
+export interface FeedInboundMessage extends InboundMessage {
+  /** The record's `toRecipients` as given (a `;`-separated STRING in the real feed, probe P-5; Graph's array
+   *  shape is accepted too). Parsed by needs-you.ts parseRecipients. */
+  toRecipients?: unknown;
+  ccRecipients?: unknown;
+  /** Lower-cased value of a `Content-Class` header, when present (absent on all 127 real emails, probe P-1). */
+  contentClass?: string | null;
+}
+
+export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): FeedInboundMessage {
   // Outlook connectors write header items as {name,value} or {Name,Value}; accept both.
   const headers = (Array.isArray(rec.internetMessageHeaders) ? rec.internetMessageHeaders : []).map((h) => {
     const o = (h && typeof h === "object" ? h : {}) as Record<string, unknown>;
@@ -491,6 +526,10 @@ export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): I
     headerNames: headers.map((h) => str(h?.name).toLowerCase()).filter(Boolean),
     precedence: val("precedence"),
     autoSubmitted: val("auto-submitted"),
+    // Needs-you redesign (2026-11-14): optional, present only when the record carries them.
+    ...(rec.toRecipients !== undefined ? { toRecipients: rec.toRecipients } : {}),
+    ...(rec.ccRecipients !== undefined ? { ccRecipients: rec.ccRecipients } : {}),
+    ...(header("content-class") ? { contentClass: val("content-class") } : {}),
   };
 }
 

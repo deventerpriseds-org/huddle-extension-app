@@ -34,6 +34,12 @@ export interface TeamsMessage {
   text: string;
   chatName?: string;
   webUrl?: string;
+  /** Needs-you redesign (AC-R3.11/3.12): true when a Graph `mentions` item names one of the owner's Teams ids as
+   *  a USER; false when the message carries a `mentions` array without the owner. ABSENT (= unknown) when the
+   *  message has no `mentions` array or the owner's ids are not configured -- never read as false. */
+  mentionsOwner?: boolean;
+  /** true when the message's `mentions` array names a user who is not the owner (or a whole chat / a tag). */
+  mentionsOther?: boolean;
 }
 
 export interface SourceItem {
