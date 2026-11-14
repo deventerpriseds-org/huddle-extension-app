@@ -1,4 +1,6 @@
 # Action Tracker — huddle-extension-app
+- [x] proposals-preview.yml step=action (2026-11-14): runs scripts/reply-scan-preview.ts steps 2+3 from the chosen ref
+      (owner's step-1 review: "next ask for all that include me directly... then indirectly with an action").
 Last updated: 2026-10-27
 
 ## ACT:correspondence-checklist — Teams + email unanswered correspondence on the bell; task proposals in Iris's checklist (2026-11-12)
