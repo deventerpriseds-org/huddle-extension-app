@@ -58,6 +58,11 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       (U1/U4) + X3-X6. All fixed on claude_task-proposals @ d849f0da (parse5 tree for htmlToText; incomplete incident
       only ends on a non-incomplete read; year+clock for name-only wrapped attributions); 7 mutations FIRED. Verifier
       loop 6 next. Owner still to OK a 4th live change: an English Gmail attribution wrapped over 2 lines is now cut.
+- [ ] Owner 2026-11-14 redesign answers: (1) Iris's live email alerts are good -- do NOT change them (two-line
+      attribution join removed from the live screen, ddc7b55d); (2) "needs you" = addressed to me directly OR a group
+      conversation that includes me (not literal broadcasts), email AND Teams [assumed: "This is an email and 6pm" =
+      "email and Teams"]; (3) meeting minutes: Fireflies can't tag owners, so ping on minutes arrival with a drop list
+      per action item (mine / type who it's for / skip) -> only then into a meeting action-item queue. AC pass next.
 - [ ] Owner 2026-11-14 on the open-vs-replied report: "The logic and tuning is horrible" -- meeting minutes listed as
       needing a reply, mass broadcasts, meeting invites, same-thread replies listed separately, to-dos for things not
       directed at him. Root causes read in code: inbound-email.ts asksSomething (keyword ASK regex + INVITE_SUBJECT =
