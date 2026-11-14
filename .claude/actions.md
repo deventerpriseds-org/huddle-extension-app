@@ -61,6 +61,10 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
 - [x] Verifier loop 6 (9afa8eb6) = FIX FIRST: implied end tags flipped live ask decision on malformed HTML, depth-guard
       drop, CSS-string ';' split, U5 stuck incomplete sent alert. All fixed @ claude_task-proposals 800e7fec (5 mutations
       FIRED, 1 equivalent). Loop 7 will cover these + the redesign once its two parts merge in.
+- [ ] Owner 2026-11-14 (later): report is EMAIL ONLY for now (no Teams); CC-only counts only when the message names him
+      or addresses the group ("everyone", "all", "team"...); Teams later must be judged from CONTEXT using the
+      speaker-tagged thread (his messages vs others), not @mention rules. Sent to the part-A implementer. His message
+      "I just need a way to..." was cut off -- asked.
 - [ ] Redesign build IN PROGRESS: ACs on claude_ac-correspondence-redesign @ 5b8ba7d3 (~85 ACs, 10 open questions w/
       defaults); probes docs/qc-evidence/PROBES-correspondence-redesign.md (invites = Exchange calendar headers, no
       Content-Class; owner alone on To 93/127). Part A (needs-you classifier + report) on claude_redesign-needs-you,
