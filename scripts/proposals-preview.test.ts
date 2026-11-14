@@ -46,6 +46,7 @@ t("PV-2 the run still completes (counts + file write), exit 0", [bad.status, bad
 t("PV-3 without PREVIEW_EMAIL nothing is emailed", bad.calls.some((c) => c.includes("sendMail")), false);
 const mailed = run({ STUB_EMAIL: SECRET, PREVIEW_EMAIL: "1" });
 t("PV-4 with PREVIEW_EMAIL=1 the report is emailed once (the header now says so)", mailed.calls.filter((c) => c === "POST sendMail").length, 1);
+t("PV-6 every run also writes the HTML report file to OneDrive, with or without PREVIEW_EMAIL (owner 2026-11-14)", [bad.calls.filter((c) => c === "PUT preview-html").length, mailed.calls.filter((c) => c === "PUT preview-html").length], [1, 1]);
 const header = readFileSync(join(root, "scripts/proposals-preview.ts"), "utf8").split("\n").slice(0, 25).join("\n");
 t("PV-5 the header states the OneDrive write and the PREVIEW_EMAIL email, and no longer says 'sends nothing'", [
   /WRITES one Markdown file to the owner's OWN OneDrive/.test(header),

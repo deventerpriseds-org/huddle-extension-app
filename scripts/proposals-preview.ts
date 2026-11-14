@@ -1,8 +1,9 @@
 // WHAT:       A ONE-OFF PREVIEW of the task proposals Huddle would put in Iris's checklist, from the owner's REAL
 //             work-email snapshot and Teams chat log. Runs the shipped extraction + validation (proposeFromSource,
 //             the same model call the live feature uses). It WRITES one Markdown file to the owner's OWN OneDrive
-//             (/automation/Huddle Preview/task-proposals-preview-<timestamp>.md, a new file every run) and, with
-//             PREVIEW_EMAIL=1, EMAILS the same report as HTML (Graph sendMail from HUDDLE_EMAIL_FROM to the owner's
+//             (/automation/Huddle Preview/task-proposals-preview-<timestamp>.md, a new file every run), WRITES the
+//             open-vs-replied report as HTML next to it (open-vs-replied-report-<timestamp>.html, every run, owner
+//             2026-11-14) and, with PREVIEW_EMAIL=1, EMAILS the same report as HTML (Graph sendMail from HUDDLE_EMAIL_FROM to the owner's
 //             mailbox in the private feed config). Stores nothing in Huddle and creates no task.
 // WHY:        Owner 2026-11-13: "give me a preview of the action items you pulled from the email/chat". The
 //             feature is still switched off and unmerged; a preview on real data is the cheapest check of its
@@ -68,6 +69,23 @@ const read = async (path: string) => {
 const teamsPath = cfg0.teams.enabled ? cfg0.teams.path : TEAMS_LOG_PATH_DEFAULT;
 const t = await read(teamsPath);
 let ownerIds = cfg0.teams.ownerSenderIds;
+// The Teams flow now writes the owner's own Teams id on each line (`ownerUserId`, owner 2026-11-13). Prefer the
+// flow's own statement over the guess below. The id is never printed (this log is public).
+if (t.status === 200 && !ownerIds.length) {
+  const stated = new Set<string>();
+  for (const line of t.text.split("\n")) {
+    try {
+      const v = (JSON.parse(line) as { ownerUserId?: unknown }).ownerUserId;
+      if (typeof v === "string" && v.trim()) stated.add(v.trim().toLowerCase());
+    } catch {
+      /* not a JSON line */
+    }
+  }
+  if (stated.size === 1) {
+    ownerIds = [...stated];
+    console.log(`teams: owner taken from the file's ownerUserId field`);
+  } else if (stated.size > 1) console.log(`teams: ownerUserId disagrees across lines (${stated.size} values); falling back to the guess`);
+}
 if (t.status === 200 && !ownerIds.length) {
   const chatsBy = new Map<string, Set<string>>();
   for (const line of t.text.split("\n")) {
@@ -266,7 +284,7 @@ if (!put.ok) process.exitCode = 1;
 // ── HTML email of the same report (owner 2026-11-13: "Email me a clean html version of the Monday forward
 // report"). PREVIEW_EMAIL=1 sends it from Huddle's sender mailbox (HUDDLE_EMAIL_FROM, default the dev sender)
 // to the owner's EDS mailbox from the PRIVATE feed config (driveUser). Nothing about it is printed but HTTP status.
-if (process.env.PREVIEW_EMAIL === "1") {
+{
   const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const sinceLabel = fmtAt(new Date(sinceMs).toISOString());
   const pill = (txt: string, bg: string, fg: string) =>
@@ -346,6 +364,18 @@ if (process.env.PREVIEW_EMAIL === "1") {
     parts.push(`</ul>`);
   }
   parts.push(`<p style="font-size:12px;color:#8c959f;margin-top:28px">Preview only. Your own Teams messages were identified by a best guess for this run; at switch-on Huddle uses your Teams id.</p></div>`);
+  // Owner 2026-11-14: "I still don't have an html report" -- the email lands wherever the owner's mail rules file
+  // mail from the sender mailbox, so the HTML is ALSO written next to the Markdown in OneDrive, every run.
+  const htmlOut = `/automation/Huddle Preview/open-vs-replied-report-${stamp}.html`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Huddle: open vs replied since ${esc(sinceLabel)}</title></head><body style="margin:16px;background:#ffffff">${parts.join("\n")}</body></html>`;
+  const hput = await fetch(`${drive}${enc(htmlOut)}:/content`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "text/html" },
+    body: html,
+  });
+  console.log(`html report file: HTTP ${hput.status} -> OneDrive ${htmlOut}`);
+  if (!hput.ok) process.exitCode = 1;
+  if (process.env.PREVIEW_EMAIL === "1") {
   const from = (process.env.HUDDLE_EMAIL_FROM || "dev@enterpriseds.io").split(",")[0].trim();
   const send = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(from)}/sendMail`, {
     method: "POST",
@@ -361,4 +391,5 @@ if (process.env.PREVIEW_EMAIL === "1") {
   });
   console.log(`email: sendMail HTTP ${send.status}`);
   if (!send.ok) process.exit(1);
+  }
 }
