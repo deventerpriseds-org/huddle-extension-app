@@ -200,3 +200,73 @@ the English opener.
 | real-file note | lines `(c1,m1)`, `(c1,m1)` edited, `(c2,m1)`; each line carries `ownerUserId` plus unknown keys `futureKey`, `zz` | 2 messages: `(c1,"edited copy")` (last copy wins) and `(c2, ...)`; nothing skipped -- dedup on (chatId, message.id) and unknown keys ignored. CONFIRMED |
 
 **Claims 7, 8, 9 CONFIRMED.** The two D5 residues are minor and non-blocking (the proposals flag is off).
+
+## Claims 5, 6, 14, 15, 16 (staleness + the urgent incomplete alert) against the REAL bell SQL
+
+`scripts/verify5-staleness-sql.ts`: real `applyFeedStaleness` + real `raiseFeedAttention` / `clearFeedAttention` /
+`notePendingFeedAttention` / `listOpenAttention` on a throwaway local PostgreSQL 16, with a counting notifier.
+(The implementer's `feed-staleness-sql.test.ts` has NO incomplete case: its count is still 23 at b7dd9343.)
+
+### Claim 5 (4c) and 6 (4d) -- CONFIRMED
+
+| probe | observed |
+|---|---|
+| dismissed stale row + a transient read | stays `dismissed` |
+| dismissed stale row + ONE 403 | stays `dismissed` (pending only) |
+| dismissed stale row + 403, transient, 403 | reopened `owed/unreadable` (2 non-transient checks; a different hard reason = something new) |
+| fresh owner, ONE 403 | 0 listed; 403, fresh, 403 -> 0 listed (a fresh check breaks the run); then a 2nd consecutive 403 -> 1 listed |
+| `readFeedFileMeta` | 404 -> missing, 403 -> unreadable, every other status / throw / bad date -> transient (read in code, `onedrive-feed.server.ts` readFeedFileMeta) |
+| `feed_pending` | `ALTER TABLE ... ADD COLUMN IF NOT EXISTS feed_pending TEXT` (nullable, no default): harmless to existing rows |
+| 4d: 60 newer open email rows + a feed row 12 days older | `listOpenAttention` returns 50, feed row FIRST; the other 49 still newest-first |
+| no feed rows (flags OFF) | order identical to main's `ORDER BY coalesce(received_at, created_at) DESC` (`(kind='feed') DESC` is false for every row) |
+
+### Claim 14 -- CONFIRMED
+
+`validateEnvelope` (`onedrive-feed.ts:280`, `e.complete !== true -> "incomplete"`) is not in the branch diff (no
+diff line in `onedrive-feed.ts` mentions it), so a `complete:false` email/sent file is refused exactly as main.
+`feedStateKey(cfg, kind)` = `` `${kind}:${cfg.driveUser}:${cfg[kind].path}` `` and main's inline key is
+`` `${kind}:${cfg.driveUser}:${file.path}` `` with `file = cfg[kind]` -- identical for `email` and `appointments`; the
+`sent` key is new. `fetchDriveFile`'s eTag short-circuit receives `state.last_good ? state.etag : null`, which is
+main's `etag && state.etag === etag && state.last_good` condition. No live key changed.
+
+### Claim 15 (`incomplete` state) -- CONFIRMED as specified
+
+`decideFeedStaleness` probes: read at/after lm -> incomplete; incomplete beats a 3-day-stale lm; missing and
+unreadable beat incomplete; a copy republished after the read -> `transient` for 1h59 and falls through at 2h01;
+`teams` with an incomplete read -> `fresh` (never incomplete); the server passes `read: null` for teams
+(`feed-staleness.server.ts` `f.file !== "teams"`). `readFeedStatus` is one `SELECT last_status, checked_at` (no
+Graph call). `readFeed`'s `fail()` records `checked_at = now()` on every refused read, so `checkedMs` advances on
+each re-read of an incomplete copy.
+
+### Claim 16 ("once per incident") -- REFUTED
+
+| step (ONE incident: every copy the flow publishes is `complete:false`) | decision | bell row | announced |
+|---|---|---|---|
+| U1a Thu 22:10 ET, reader saw the 21:30 copy incomplete at 22:00 | incomplete | owed/incomplete | **#1** |
+| U1b 22:20 re-check | incomplete | unchanged | -- |
+| U1c 23:10, flow republished (still incomplete) at 23:00, unread | transient | unchanged | -- |
+| U1d Fri 00:10, last read 2h10m ago | **fresh** | **replied (auto-cleared)** | -- |
+| U1e Fri 07:10, hourly reader read the 23:00 copy: still incomplete | incomplete | reopened owed | **#2** (chat + push + email) |
+
+Same incident announced twice, and between 00:10 and 07:10 the bell showed the alert cleared while the file was
+still incomplete. Cause: `feed-staleness.ts:164-168` -- once `checkedMs < lm` for 2 h, the decision falls through to
+plain staleness, and a recently-modified UNREAD copy is "fresh", which clears the row (`applyFeedStaleness` ->
+`store.clear`). A fresh last-modified time says nothing about completeness. Reachable in practice: the email
+reader runs from the inbound watch (hourly 07-22 ET, `scheduling-config.server.ts:100`) and the ingest heartbeat
+only when `correspondence.ingest` is on; the SENT reader runs only inside `reconcileRepliedFromSentItems` when an
+owed feed row exists, so sent can go unread for hours or days while the flow republishes on every sent mail.
+
+U4 (second path): a row created as incomplete has `received_at NULL`; the owner DISMISSES it; the flow republishes
+(incomplete) and it is unread for 2 h+ and older than 6 working hours -> decision `stale`, and the dismissed row
+REOPENS (`raiseFeedAttention` reopens a dismissed row when `e.received_at IS NULL`); the reader then reads the copy
+-> `incomplete` differs from the open `stale` episode -> row written -> **announced again** (2 announcements; the
+owner's dismiss did not hold for the incident).
+
+Held: re-checks of an open incomplete row write nothing (U1b); a dismissed incomplete row stays dismissed and
+silent while the reader keeps seeing incomplete copies (U2a/U2b, 0 announcements); an open stale row turning
+incomplete announces exactly once and repeated checks add nothing (U3, 1 announcement).
+
+Not blocking for merge with flags OFF (staleAlerts gates all of it), but it blocks switching `staleAlerts` on:
+the urgent channel (chat + push + email) can repeat for one incident, and the bell can show it cleared while the
+file is still incomplete. Minimal fix direction: while the last read is `rejected:incomplete`, an UNREAD newer copy
+should stay `transient` (or `incomplete`) until the reader actually reads it, never fall through to `fresh`.
