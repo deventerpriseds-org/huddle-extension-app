@@ -148,3 +148,36 @@ text") is NOT closed.** F1-F3 is the same class loop 4 blocked on (an unclosed h
 closes implicitly), reached with a formatting tag and an ask in a table cell -- the commonest place for an ask in
 an HTML email. Blocking under this loop's rule ("any OTHER flag-off live change, especially dropped visible text, is
 still a defect"). C/K/G are rarer; listed for the fix pass.
+
+## Claims 4 + 12 (D2 X1/X2, `newTextOnly` vs main) -- X1/X2 FIXED; sweep REPRODUCED; guard weaker than claimed
+
+`scripts/verify5-newtext-probes.ts` (branch vs origin/main `newTextOnly`), `scripts/verify5-literal-sweep.ts`.
+
+- X1, X2 verbatim: branch output == main output (ask kept). **FIXED.**
+- Sweep (TypeScript AST over the inbound-email, redteam, ingest and task-proposals suites): **1486 literals, 19 differ**
+  (implementer counted 1436; my walker also joins template expressions). The 19 are exactly the implementer's list:
+  7 one-line foreign attributions, 6 foreign header blocks, 6 two-line wrapped attributions; every one keeps only the
+  greeting line before quoted history. **REPRODUCED.**
+- NEW spellings, cut direction (branch cuts, main keeps the whole body):
+
+| id | body (synthetic) | branch keeps | why it passes `isWrappedAttribution` |
+|---|---|---|---|
+| X3 | `Quick note.` / `On the 12 open items from 2024 we may still owe Finance, and Dana` / `wrote:` / `Can you send the ledger by Monday?` | "Quick note." | `may` is in DATE_NAME |
+| X4 | `On the 3 invoices from 2025 it turns out Pat` / `Kim wrote:` / `Can you approve the PO by Friday?` | "" | `out` (Portuguese Oct) |
+| X5 | `On Friday 14 at 10:30 the vendor called and Legal` / `wrote:` / `Can you sign the NDA today?` | "" | weekday + day + time |
+| X6 | `On the 2 dates set for 2026 Ops` / `wrote:` / `Can you confirm the venue?` | "" | `set` (Portuguese Sep) |
+| N-da | `Da: the team` / `Data: attached below` / `Can you review it today?` | "" | it header pair `Da:` + `Data:` |
+
+  `DATE_NAME` (`inbound-email.ts:118`) includes 3-letter foreign abbreviations that are common English words
+  (`may`, `out`, `set`, `sun`, `sat`, `mar`, `dom`, `ago`), so the "weekday or month name" test is satisfied by
+  ordinary English. Every X3-X6 joined line is a sentence main's OWN single-line rule (`^\s*On .+wrote:\s*$`) already
+  cuts when it is not wrapped, so this extends a false-positive main already has rather than creating a new class.
+- Keep direction: real Gmail wraps (`On Mon, Nov 10, 2025 at 9:14 AM Dana Kim <dana@...>` / `wrote:`; name-only
+  variant), a real French header block and a real German one-line attribution are all cut. CONFIRMED.
+
+**Verdict: claim 4 PARTIAL (X1/X2 fixed; the shape guard is satisfied by English words). Claim 12 CONFIRMED on its
+corpus; new spellings X3-X6/N-da cut English text main keeps.** Not blocking on its own: it is main's existing
+single-line false positive reaching a hard-wrapped line, and the cut content is always text after "<X> wrote:". The
+two-line English wrap cut is itself NOT one of the three owner-approved changes (only non-English quoted history
+is); it should be listed to the owner as a fourth live change. Fix candidate: English-only names in DATE_NAME for
+the English opener.
