@@ -661,3 +661,25 @@ keep-more (D1-V6), `!important` precedence (LOOP5), hidden attr vs invalid displ
 behaviourally equivalent (an invalid value can never equal "none") -- INERT, correctly.
 Suites: task-proposals 204/0, redteam 76/0, inbound-email 72/0, correspondence-ingest 149/0, cross-app 92/0,
 onedrive-feed all, attention all, feed-staleness 96/0, preview 6/0, html-visible-loop5 9/0, tsc clean.
+
+## Verifier loop-6 fix pass (2026-11-14, commits 8d87253c, 800e7fec)
+
+Loop 6 (docs/qc-evidence/VERIFY-correspondence-proposals-6.md on claude_verify-correspondence-proposals-6 @ 9afa8eb6)
+= FIX FIRST on three items; all fixed:
+
+| item | fix | proof |
+|---|---|---|
+| 1 implied end tags changed the live ask decision on 5/8 malformed bodies | `visibleHtml` re-emits only tags the source wrote (parse5 `sourceCodeLocationInfo`) | verifier's 8 screen probes: 0 differ from main; IMPLIED rows in html-visible-loop5 |
+| 2 depth guard dropped text (405 nested divs) | past depth 400 the subtree's text is kept (iterative, no recursion) | DEPTH rows |
+| 2 `;` inside a quoted CSS string split a declaration | quote/paren-aware declaration split | CSS rows |
+| 3 U5 incomplete sent.json stuck `transient` forever | the staleness check reads an unread newer copy itself (`refreshRead` = existing `readFeed` + `readFeedStatus`) | feed-staleness I24/I25 |
+| nits | redteam suite exits 1 on failure; inbound-email comment corrected | -- |
+
+Verifier's 130 Chromium rows re-run: 110 OK, 10 keep-more, 10 "drop" -- every one a deliberate visual-hiding rule
+(opacity 0.0, max-height:0+overflow:clip, font-size:0 incl. the `font:0/0` shorthand and an unsized sibling under a
+font-size:0 body) where innerText counts invisible text. No depth / CSS-string row drops any more.
+Mutation proofs (exit 0, control EQUIVALENT): source-only end tags (IMPLIED), depth keep-more (DEPTH), quoted CSS
+string (CSS quoted display:none), U5 refresh (I24). One honest INERT: the paren-depth guard is equivalent for the
+quoted-string test input (quote handling alone prevents that split).
+Suites: html-visible-loop5 16/0, feed-staleness 98/0, redteam 77/0 (now exits 1 on failure), task-proposals 204/0,
+inbound-email 72/0, tsc 0.
