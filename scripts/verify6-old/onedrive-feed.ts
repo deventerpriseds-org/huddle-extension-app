@@ -1,0 +1,891 @@
+// WHAT:       Pure half of the OneDrive file feed: server config, snapshot validation, and mapping of
+//             the ORIGINAL Outlook records into Huddle's existing InboundMessage / CalendarEvent shapes.
+// WHY:        The owner's work mailbox (another company's tenant) cannot be read by Huddle's app-only
+//             Graph key, and the employer refused the app's admin consent (2026-11-05). A Power Automate
+//             flow run by the owner in that tenant publishes bounded JSON snapshots of the work Inbox and
+//             one work calendar into the owner's EDS OneDrive. This is a SECOND SOURCE for that mailbox
+//             only; every existing Graph tool stays exactly as it is.
+// SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+// EVIDENCE:   .claude/actions.md ACT:trinnex-onedrive-feed; scripts/onedrive-feed.test.ts.
+// 2026-11-12: the same config now also carries the rolling Teams log (`teams`, OFF when absent) and the
+//             correspondence ingest switches (`correspondence`, all OFF by default); the Teams parser is
+//             teams-log.ts. AC: docs/ac/AC-correspondence-checklist.md sections 1, 6.
+//
+// THIS REPO IS PUBLIC: no tenant, drive, flow or calendar identifiers live in code. Everything that
+// binds the feed to a person comes from the server-only HUDDLE_ONEDRIVE_FEEDS setting.
+
+import type { InboundMessage } from "../../src/features/huddle/lib/email/inbound-email";
+
+/** One feed file (email or appointments) inside the owner's EDS OneDrive. */
+export interface FeedFileConfig {
+  enabled: boolean;
+  /** Drive-relative path, e.g. "/automation/email/emails.json". */
+  path: string;
+}
+
+/** The rolling Teams JSON Lines log (correspondence feature, 2026-11-12). Same drive + owner binding as
+ *  the email/appointments files; `source` is the label every line must carry, `ownerSenderIds` the owner's
+ *  own Teams sender ids as they appear in `from.user.id` (config key `ownerSenderIds`; `ownerIds` accepted as
+ *  an alias), lower-cased, used only to recognise HIS replies, never to address anyone. None configured =>
+ *  every chat is "can't tell" (OQ-4). */
+export interface TeamsFeedConfig extends FeedFileConfig {
+  source: string;
+  ownerSenderIds: string[];
+}
+
+/** Correspondence ingest switches (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence turns them on).
+ *  `ingest` alone reads the sources into the processing ledger; `bell` / `proposals` select the
+ *  processors that a later pass plugs in. Nothing here runs unless `ingest` is true. */
+export interface CorrespondenceConfig {
+  ingest: boolean;
+  sources: ("teams" | "email")[];
+  bell: boolean;
+  proposals: boolean;
+  maxAttempts: number;
+  /** Minimum gap between two eTag checks of the Teams log (the flow writes once a weekday evening). */
+  minIntervalMinutes: number;
+  /** File-staleness alert on the bell (owner decision 2026-11-13). OFF unless literally `true`; independent of
+   *  `ingest`. lib/correspondence/feed-staleness.ts. */
+  staleAlerts: boolean;
+  /** email / sent are stale after MORE than this many working hours (Mon-Fri 8-18 ET) unchanged. */
+  staleHours: number;
+}
+
+/** The REAL file the owner's Teams flow writes (read from the drive 2026-11-13, graph-permission-check run
+ *  43407021220 folder listing): its own "Teams Chats" folder, not the email folder the first contract named. */
+export const TEAMS_LOG_PATH_DEFAULT = "/automation/Teams Chats/teams-chats.jsonl";
+/** Sent Items snapshot (owner decision 2026-11-12, option A): a SEPARATE replace-in-place file beside the
+ *  inbox snapshot, feed_type "sent_snapshot". */
+export const SENT_PATH_DEFAULT = "/automation/email/sent.json";
+/** The `source` value every line of the real file carries (run 43408812837: 50/50 lines "teams"). */
+export const TEAMS_SOURCE_EXPECTED = "teams";
+export const CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT = 5;
+export const CORRESPONDENCE_MIN_INTERVAL_DEFAULT = 10;
+/** Owner decision 2026-11-13: email/sent stale after N working hours; N defaults to 6. */
+export const CORRESPONDENCE_STALE_HOURS_DEFAULT = 6;
+
+export interface OneDriveFeedsConfig {
+  enabled: boolean;
+  /** Huddle logins / data-scope emails this feed belongs to (lower-cased). A caller not listed gets nothing. */
+  ownerLogins: string[];
+  /** The EDS user whose OneDrive holds the files (read with the app token: /users/{driveUser}/drive). */
+  driveUser: string;
+  /** The SOURCE mailbox every snapshot must declare (e.g. the work address). */
+  mailbox: string;
+  /** Optional: the source_login every snapshot must declare. */
+  sourceLogin?: string;
+  /** true while the flows publish synthetic test data only: snapshots MUST say synthetic=true, and only
+   *  subjects starting with subjectPrefix are ingested. false = live data (owner-authorised later). */
+  synthetic: boolean;
+  subjectPrefix?: string;
+  /** Upper bound on a file's size; a bigger file is rejected and the last good snapshot kept. */
+  maxBytes: number;
+  /** Email received before this instant is never announced (stops replaying old test mail). */
+  notBeforeUtc?: string;
+  email: FeedFileConfig;
+  appointments: FeedFileConfig;
+  /** Absent `teams` key => disabled (unlike email/appointments, which predate it and default on). */
+  teams: TeamsFeedConfig;
+  /** Absent `sent` key => disabled: with no Sent Items file, owed work email behaves exactly as today. */
+  sent: FeedFileConfig;
+  correspondence: CorrespondenceConfig;
+}
+
+export const FEED_MAX_BYTES_DEFAULT = 2_000_000;
+export const FEED_MAX_RECORDS = 1000;
+
+const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+const isIso = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
+
+/** Pure (red-team S1): an ISO date-time with NO zone (`2026-11-10T10:00:00`) is read as UTC, never in the
+ *  host's local zone (Date.parse would), so settle/order decisions do not depend on where the server runs.
+ *  A value that already carries Z or an offset, or a date-only value (already UTC in JS), is unchanged.
+ *  Used by the NEW correspondence paths only (Sent Items, Teams log); NaN when it does not parse. */
+export function parseUtcMs(v: unknown): number {
+  if (typeof v !== "string") return NaN;
+  const s = v.trim();
+  if (!s) return NaN;
+  const zoneless = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s);
+  return Date.parse(zoneless ? `${s.replace(" ", "T")}Z` : s);
+}
+
+/** Pure (red-team F18): drop leading reply/forward markers in the common languages (RE:, Re:, FW:, Fwd:,
+ *  AW: German, TR: French, WG: German forward, SV: Nordic, RV: Spanish), repeated, with optional [n]. */
+export function stripReplyPrefixes(subject: string): string {
+  let s = subject;
+  for (let i = 0; i < 10; i++) {
+    const next = s.replace(/^\s*(re|fw|fwd|aw|tr|wg|sv|rv|antw)(\[\d+\])?\s*:\s*/i, "");
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
+/**
+ * Pure: parse the server-only HUDDLE_ONEDRIVE_FEEDS JSON. Returns null (feature OFF) when it is absent,
+ * unparseable, disabled, or missing a binding field -- fail closed, never half-configured.
+ */
+export function parseFeedsConfig(raw: string | undefined | null): OneDriveFeedsConfig | null {
+  if (!raw || !raw.trim()) return null;
+  let j: Record<string, unknown>;
+  try {
+    j = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!j || typeof j !== "object" || j.enabled !== true) return null;
+  const ownerLogins = (Array.isArray(j.ownerLogins) ? j.ownerLogins : [])
+    .map((e) => str(e).toLowerCase())
+    .filter((e) => e.includes("@"));
+  const driveUser = str(j.driveUser).toLowerCase();
+  const mailbox = str(j.mailbox).toLowerCase();
+  if (!ownerLogins.length || !driveUser.includes("@") || !mailbox.includes("@")) return null;
+  const file = (v: unknown, fallback: string): FeedFileConfig => {
+    const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+    const path = str(o.path) || fallback;
+    return { enabled: o.enabled !== false && path.startsWith("/") && !path.includes(".."), path };
+  };
+  const synthetic = j.synthetic !== false; // default SAFE: synthetic-only until explicitly set false
+  const subjectPrefix = str(j.subjectPrefix) || undefined;
+  if (synthetic && !subjectPrefix) return null; // synthetic mode without its filter is not configured
+  const maxBytes = Number(j.maxBytes);
+  return {
+    enabled: true,
+    ownerLogins,
+    driveUser,
+    mailbox,
+    sourceLogin: str(j.sourceLogin).toLowerCase() || undefined,
+    synthetic,
+    subjectPrefix,
+    maxBytes: Number.isFinite(maxBytes) && maxBytes > 0 ? Math.min(maxBytes, 10_000_000) : FEED_MAX_BYTES_DEFAULT,
+    notBeforeUtc: isIso(j.notBeforeUtc) ? str(j.notBeforeUtc) : undefined,
+    email: file(j.email, "/automation/email/emails.json"),
+    appointments: file(j.appointments, "/automation/appointments/appointments.json"),
+    teams: teamsFile(j.teams, file),
+    sent: optInFile(j.sent, SENT_PATH_DEFAULT, file),
+    correspondence: correspondenceFlags(j.correspondence),
+  };
+}
+
+/** Pure: an OPT-IN file key (teams, sent -- the keys that postdate the feed). Red-team F1/F2: only an object
+ *  (or a literal `true`, meaning "on at the default path") can switch one on. Absent, null, `false`, "off",
+ *  0, an array or any other non-object is OFF -- a value written to be safe must never enable a source. An
+ *  object goes through the SAME `file()` path rule as email/appointments (AC-1.1). email/appointments keep
+ *  their original default-on `file()` behaviour untouched (they predate this rule). */
+function optInFile(v: unknown, fallback: string, file: (v: unknown, fallback: string) => FeedFileConfig): FeedFileConfig {
+  if (v === true) return file({}, fallback);
+  if (!v || typeof v !== "object" || Array.isArray(v)) return { enabled: false, path: fallback };
+  // Verifier loop 3, M1: inside an opt-in object, `enabled` must be absent or literally `true`. "false", 0,
+  // "off", null written to switch it OFF must never leave it on (file()'s `!== false` is email-only).
+  const en = (v as Record<string, unknown>).enabled;
+  if (en !== undefined && en !== true) return { ...file(v, fallback), enabled: false };
+  return file(v, fallback);
+}
+
+/** Pure: the Teams entry (opt-in, see optInFile). An absent key is OFF -- a new source must never switch
+ *  itself on for an existing config (AC-6.1). */
+function teamsFile(v: unknown, file: (v: unknown, fallback: string) => FeedFileConfig): TeamsFeedConfig {
+  const o = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
+  const base = optInFile(v, TEAMS_LOG_PATH_DEFAULT, file);
+  return {
+    ...base,
+    source: str(o.source) || TEAMS_SOURCE_EXPECTED,
+    ownerSenderIds: [
+      ...new Set(
+        [...(Array.isArray(o.ownerSenderIds) ? o.ownerSenderIds : []), ...(Array.isArray(o.ownerIds) ? o.ownerIds : [])]
+          .map((x) => str(x).toLowerCase())
+          .filter(Boolean),
+      ),
+    ],
+  };
+}
+
+/** Pure: correspondence switches. Every flag defaults OFF; only a literal `true` turns one on. */
+function correspondenceFlags(v: unknown): CorrespondenceConfig {
+  const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  const sources = (Array.isArray(o.sources) ? o.sources : ["teams", "email"]).filter(
+    (s): s is "teams" | "email" => s === "teams" || s === "email",
+  );
+  const n = (x: unknown, dflt: number, max: number) => {
+    const k = Number(x);
+    return Number.isFinite(k) && k >= 1 ? Math.min(Math.floor(k), max) : dflt;
+  };
+  return {
+    ingest: o.ingest === true,
+    sources: [...new Set(sources)],
+    bell: o.bell === true,
+    proposals: o.proposals === true,
+    maxAttempts: n(o.maxAttempts, CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT, 20),
+    minIntervalMinutes: n(o.minIntervalMinutes, CORRESPONDENCE_MIN_INTERVAL_DEFAULT, 24 * 60),
+    staleAlerts: o.staleAlerts === true,
+    staleHours: n(o.staleHours, CORRESPONDENCE_STALE_HOURS_DEFAULT, 200),
+  };
+}
+
+/** Pure: is this feed bound to the person making the call? Either identity may match. */
+export function feedBelongsTo(cfg: OneDriveFeedsConfig, ...identities: (string | undefined | null)[]): boolean {
+  return identities.some((e) => !!e && cfg.ownerLogins.includes(e.trim().toLowerCase()));
+}
+
+export type FeedRejection =
+  | "not_json"
+  | "wrong_schema"
+  | "wrong_feed_type"
+  | "wrong_mailbox"
+  | "wrong_source_login"
+  | "synthetic_mismatch"
+  | "incomplete"
+  | "bad_timestamps"
+  | "too_many_records"
+  | "bad_records"
+  | "wrong_source";
+
+export const FEED_SOURCE_EXPECTED = "power-automate-outlook";
+/** A snapshot dated further ahead than this is refused (a wrong clock or a forged file). */
+const FUTURE_SKEW_MS = 10 * 60_000;
+
+export interface ValidSnapshot<R> {
+  publishedUtc: string;
+  /** Records dropped because they had no id (the rest of the snapshot is still used). */
+  skipped?: number;
+  windowStartUtc: string;
+  windowEndUtc?: string;
+  runId?: string;
+  records: R[];
+}
+
+type Validation<R> = { ok: true; snapshot: ValidSnapshot<R> } | { ok: false; reason: FeedRejection };
+
+function validateEnvelope(
+  j: unknown,
+  cfg: OneDriveFeedsConfig,
+  feedType: "email_snapshot" | "appointments_snapshot" | "sent_snapshot",
+  nowMs: number,
+): Validation<Record<string, unknown>> {
+  if (!j || typeof j !== "object" || Array.isArray(j)) return { ok: false, reason: "not_json" };
+  const e = j as Record<string, unknown>;
+  if (str(e.schema_version).split(".")[0] !== "1") return { ok: false, reason: "wrong_schema" };
+  if (e.feed_type !== feedType) return { ok: false, reason: "wrong_feed_type" };
+  if (e.source !== FEED_SOURCE_EXPECTED) return { ok: false, reason: "wrong_source" };
+  if (str(e.mailbox).toLowerCase() !== cfg.mailbox) return { ok: false, reason: "wrong_mailbox" };
+  if (cfg.sourceLogin && str(e.source_login).toLowerCase() !== cfg.sourceLogin) {
+    return { ok: false, reason: "wrong_source_login" };
+  }
+  // While configured synthetic-only, a snapshot that is NOT marked synthetic is refused (live mail must
+  // not start flowing before the owner switches the config). Live config accepts either.
+  if (cfg.synthetic && e.synthetic !== true) return { ok: false, reason: "synthetic_mismatch" };
+  // ...and the reverse: once live, a file still marked synthetic (or unmarked) is a misconfigured flow.
+  if (!cfg.synthetic && e.synthetic !== false) return { ok: false, reason: "synthetic_mismatch" };
+  // complete=false means the flow hit a cap or pagination: partial is NOT the same as empty.
+  if (e.complete !== true) return { ok: false, reason: "incomplete" };
+  if (!isIso(e.published_utc) || !isIso(e.window_start_utc)) return { ok: false, reason: "bad_timestamps" };
+  const published = Date.parse(str(e.published_utc));
+  if (published > nowMs + FUTURE_SKEW_MS) return { ok: false, reason: "bad_timestamps" };
+  if ((feedType === "email_snapshot" || feedType === "sent_snapshot") && Date.parse(str(e.window_start_utc)) > published) {
+    return { ok: false, reason: "bad_timestamps" };
+  }
+  if (feedType === "appointments_snapshot") {
+    if (!isIso(e.window_end_utc) || Date.parse(str(e.window_end_utc)) <= Date.parse(str(e.window_start_utc))) {
+      return { ok: false, reason: "bad_timestamps" };
+    }
+  }
+  const snap = e.snapshot as Record<string, unknown> | undefined;
+  const value = snap && Array.isArray(snap.value) ? (snap.value as unknown[]) : null;
+  if (!value) return { ok: false, reason: "bad_records" };
+  if (value.length >= FEED_MAX_RECORDS) return { ok: false, reason: "too_many_records" };
+  // One malformed record must not freeze the whole feed on its last-good copy: drop it, count it.
+  const records = value.filter(
+    (r) => r && typeof r === "object" && !Array.isArray(r) && str((r as Record<string, unknown>).id),
+  ) as Record<string, unknown>[];
+  const skipped = value.length - records.length;
+  return {
+    ok: true,
+    snapshot: {
+      publishedUtc: str(e.published_utc),
+      windowStartUtc: str(e.window_start_utc),
+      windowEndUtc: str(e.window_end_utc) || undefined,
+      runId: str(e.run_id) || undefined,
+      records,
+      ...(skipped ? { skipped } : {}),
+    },
+  };
+}
+
+export const validateEmailSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowMs: number = Date.now()) =>
+  validateEnvelope(j, cfg, "email_snapshot", nowMs);
+export const validateAppointmentSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowMs: number = Date.now()) =>
+  validateEnvelope(j, cfg, "appointments_snapshot", nowMs);
+/** Sent Items snapshot: the SAME envelope rules as the inbox snapshot, feed_type "sent_snapshot". */
+export const validateSentSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowMs: number = Date.now()) =>
+  validateEnvelope(j, cfg, "sent_snapshot", nowMs);
+
+/** One sent message, reduced to what reply detection needs (no body, no recipients). */
+export interface SentMessage {
+  conversationId: string;
+  sentAt: string;
+}
+
+/**
+ * Pure: Sent Items records -> {conversationId, sentAt}. `conversationId` is the match key and required;
+ * `sentDateTime` (fallback `receivedDateTime`) must parse. While synthetic, only subjects carrying the test
+ * prefix count (same rule as the inbox). Anything else is dropped and counted.
+ */
+export function mapSentRecords(records: Record<string, unknown>[], cfg: OneDriveFeedsConfig): { sent: SentMessage[]; skipped: number } {
+  const sent: SentMessage[] = [];
+  let skipped = 0;
+  for (const r of records) {
+    const conversationId = str(r.conversationId);
+    const atMs = Number.isFinite(parseUtcMs(r.sentDateTime)) ? parseUtcMs(r.sentDateTime) : parseUtcMs(r.receivedDateTime);
+    // F18: the owner's reply to a synthetic test email is "RE: <prefix>...": reply/forward prefixes are
+    // stripped before the synthetic prefix test (the prefix itself is still required).
+    if (!conversationId || !Number.isFinite(atMs) || (cfg.synthetic && !stripReplyPrefixes(str(r.subject)).startsWith(cfg.subjectPrefix ?? "\u0000"))) {
+      skipped++;
+      continue;
+    }
+    sent.push({ conversationId, sentAt: new Date(atMs).toISOString() });
+  }
+  return { sent, skipped };
+}
+
+/** Pure (owner decision 2026-11-12, option A): an owed WORK email is answered when a sent message in the same
+ *  conversation is LATER than the email's receipt. No conversation id, no receipt time, or no later sent
+ *  message => not settled (it stays owed, exactly as today). */
+export function sentReplySettles(
+  row: { conversation_id: string | null; received_at: string | Date | null },
+  latestSent: Map<string, number>,
+): boolean {
+  if (!row.conversation_id || !row.received_at) return false;
+  const received = row.received_at instanceof Date ? row.received_at.getTime() : Date.parse(row.received_at);
+  const sent = latestSent.get(row.conversation_id);
+  return Number.isFinite(received) && sent !== undefined && sent > received;
+}
+
+/** Pure: latest sent time per conversation (ms). */
+export function latestSentByConversation(sent: SentMessage[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const s of sent) m.set(s.conversationId, Math.max(m.get(s.conversationId) ?? -Infinity, Date.parse(s.sentAt)));
+  return m;
+}
+
+/** Prefix that marks an id as coming from a feed. EDS Graph ids never start with it, so a feed record
+ *  can never be mistaken for (or collide with) an EDS Graph message or event. */
+export const FEED_ID_PREFIX = "feed:";
+export const isFeedId = (id: string | null | undefined): boolean => String(id ?? "").startsWith(FEED_ID_PREFIX);
+const feedId = (mailbox: string, originalId: string) => `${FEED_ID_PREFIX}${mailbox}:${originalId}`;
+
+/** Pure: "Name <addr>" | "addr" | {emailAddress:{name,address}} -> { address, name }. */
+export function parseAddress(v: unknown): { address: string; name: string } {
+  if (v && typeof v === "object") {
+    const ea = ((v as Record<string, unknown>).emailAddress ?? v) as Record<string, unknown>;
+    return { address: str(ea.address).toLowerCase(), name: str(ea.name) };
+  }
+  const s = str(v);
+  const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(s);
+  if (m) return { address: m[2].trim().toLowerCase(), name: m[1].trim() };
+  return { address: s.toLowerCase(), name: "" };
+}
+
+/** Pure: crude HTML -> text for a body that arrived as HTML (the screen only needs the words). */
+/** Removes every <blockquote>, innermost first, so a nested quote cannot leak its parent's tail;
+ *  an unclosed one swallows the rest (verifier loop 3, D5). */
+function stripBlockquotes(html: string): string {
+  const innermost = /<blockquote\b[^>]*>(?:(?!<blockquote\b)[\s\S])*?<\/blockquote\s*>/gi;
+  let prev = "";
+  let out = html;
+  for (let i = 0; i < 50 && out !== prev; i++) {
+    prev = out;
+    out = out.replace(innermost, " ");
+  }
+  return out.replace(/<blockquote\b[\s\S]*$/i, " ");
+}
+
+/** An inline style or attribute that hides an element from the reader (red-team F8). font-size:0 is kept
+ *  SEPARATE: responsive templates set it on a wrapper to kill inline-block gaps and give the real size to
+ *  the content inside, so on its own it hides only what is not re-sized (fix-pass F8 over-match).
+ *  `mso-hide:all` is NOT here: it hides only in Outlook desktop, and this converter reads the mail the way a
+ *  browser does. Outlook's own copy sits in an `<!--[if mso]>` comment, which is dropped, so each piece of
+ *  text survives exactly once (verifier loop 4, W4). */
+const HIDDEN_STYLE =
+  /(?:^|[;\s"'])(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\s*(?:!important)?\s*(?:;|$))/i;
+/** max-height:0 hides ONLY together with overflow:hidden (the Gmail preheader trick). On its own the text
+ *  overflows the zero box and renders (verifier loop 3, V7). */
+const MAX_HEIGHT_ZERO = /(?:^|[;\s"'])max-height\s*:\s*0(?:px)?\s*(?:!important)?\s*(?:;|$)/i;
+const OVERFLOW_HIDDEN = /(?:^|[;\s"'])overflow(?:-y)?\s*:\s*(?:hidden|clip)\b/i;
+/** A descendant that sets visibility:visible shows inside a visibility:hidden parent (CSS rule; V13). */
+const VISIBLE_AGAIN = /(?:^|[;\s"'])visibility\s*:\s*visible\b/i;
+const VIS_HIDDEN_ONLY = /(?:^|[;\s"'])visibility\s*:\s*hidden\b/i;
+const FONT_ZERO_STYLE = /(?:^|[;\s"'])font-size\s*:\s*0(?:\.0+)?(?:px|pt|em|rem|%)?\s*(?:!important)?\s*(?:;|$)/i;
+/** A declaration that gives text a real (non-zero) size again. `inherit`/`unset` inherit the zero. */
+const SIZED_STYLE =
+  /(?:^|[;\s"'])(?:font-size\s*:\s*(?:(?!0(?:\.0+)?(?![0-9.]))\d*\.?\d+|xx-small|x-small|small|medium|large|x-large|xx-large|larger|initial)|font\s*:[^;]*?(?:^|[\s/:])(?!0(?:\.0+)?(?![0-9.]))\d*\.?\d+(?:px|pt|em|rem|%))/i;
+/** Pure: the attributes of one start tag, tokenized the way a browser does it -- a name, then an optional
+ *  `=value` (double-quoted, single-quoted or bare). A quoted value is opaque, so ` style="display:none"`
+ *  written INSIDE another attribute's value is never a style (verifier loop 4, W7), and the word `hidden`
+ *  inside a value is never the attribute (loop 3, V2). The FIRST occurrence of a name wins, as in a browser. */
+export function attrsOf(tag: string): Map<string, string> {
+  const attrs = new Map<string, string>();
+  const body = tag.replace(/^<[a-z][a-z0-9]*/i, " ").replace(/\/?>$/, "");
+  // A name may hold a stray quote (`<div "style="...">` names an attribute `"style`), as in the HTML tokenizer.
+  const re = /([^\s/>][^\s/>=]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]*)))?/g;
+  for (let a = re.exec(body); a; a = re.exec(body)) {
+    const name = a[1].toLowerCase();
+    if (!attrs.has(name)) attrs.set(name, a[2] ?? a[3] ?? a[4] ?? "");
+  }
+  return attrs;
+}
+const styleOf = (tag: string): string => {
+  const style = attrsOf(tag).get("style");
+  return style === undefined ? "" : ` ${style}`;
+};
+/** Pure: does the tag carry the `hidden` ATTRIBUTE (bare or with any value)? */
+const hasHiddenAttr = (tag: string): boolean => attrsOf(tag).has("hidden");
+type HiddenKind = "hidden" | "font0" | "vis";
+const hiddenKind = (tag: string): HiddenKind | null => {
+  if (hasHiddenAttr(tag)) return "hidden";
+  const v = styleOf(tag);
+  if (!v.trim()) return null;
+  if (HIDDEN_STYLE.test(v)) {
+    // visibility:hidden ALONE lets a visibility:visible descendant show (V13); every other hiding rule wins.
+    const other = v.replace(/(?:^|[;\s"'])visibility\s*:\s*hidden\b/gi, " ");
+    return VIS_HIDDEN_ONLY.test(v) && !HIDDEN_STYLE.test(other) && !(MAX_HEIGHT_ZERO.test(v) && OVERFLOW_HIDDEN.test(v)) ? "vis" : "hidden";
+  }
+  if (MAX_HEIGHT_ZERO.test(v) && OVERFLOW_HIDDEN.test(v)) return "hidden";
+  return FONT_ZERO_STYLE.test(v) ? "font0" : null;
+};
+const VOID_TAGS = new Set(["br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"]);
+const OPEN_TAG = /<([a-z][a-z0-9]*)\b[^>]*>/gi;
+const isSelfContained = (name: string, tag: string) => VOID_TAGS.has(name) || tag.endsWith("/>");
+
+/** Start tags that close an open <p> (HTML parsing spec, "in body" insertion mode). */
+const P_CLOSERS = new Set([
+  "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "fieldset",
+  "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "li",
+  "main", "menu", "nav", "ol", "p", "pre", "section", "summary", "table", "ul", "dd", "dt", "search", "listing", "xmp",
+]);
+const HEADINGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
+const CELL = new Set(["td", "th"]);
+const SECTION = new Set(["tbody", "thead", "tfoot"]);
+/** Elements a <p> close-by-block-start cannot reach past (scope boundaries). */
+const SCOPE_BARRIERS = new Set(["table", "td", "th", "caption", "button", "object", "marquee", "applet", "template", "html"]);
+/** The HTML parsing spec's "special" elements: an <li> / <dd> / <dt> start tag's search for the item it
+ *  closes stops at any of these except address, div and p. */
+const SPECIAL = new Set([
+  "address", "applet", "area", "article", "aside", "base", "basefont", "bgsound", "blockquote", "body", "br", "button",
+  "caption", "center", "col", "colgroup", "dd", "details", "dir", "div", "dl", "dt", "embed", "fieldset", "figcaption",
+  "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr",
+  "html", "iframe", "img", "input", "keygen", "li", "link", "listing", "main", "marquee", "menu", "meta", "nav",
+  "noembed", "noframes", "noscript", "object", "ol", "p", "param", "plaintext", "pre", "script", "search", "section",
+  "select", "source", "style", "summary", "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead",
+  "title", "tr", "track", "ul", "wbr", "xmp",
+]);
+/** Formatting elements. The parser RE-OPENS these after an implied close (the "active formatting elements"
+ *  list), so a hidden `<b>`/`<font>` keeps hiding the text after its `<p>` closes (Chromium-checked, W1b). */
+const FORMATTING = new Set(["a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]);
+
+/** Pure: the open-element stack's length after the implied closes a start tag `x` causes, before `x` itself
+ *  is pushed (HTML parsing spec, "in body" / table modes): an `<li>` closes the open `<li>` it reaches past
+ *  only non-special elements (and address/div/p); `<dd>`/`<dt>` likewise; every p-end-tag-omission start tag
+ *  closes a `<p>` in button scope; a heading closes a heading; a cell, row or section closes the open cell,
+ *  row or section of the same table. Used for the ANCESTORS of a hidden element (verifier loop 4, W1-W3). */
+function lengthAfterStartTag(stack: readonly string[], x: string): number {
+  let len = stack.length;
+  if (x === "li" || x === "dd" || x === "dt") {
+    for (let i = len - 1; i >= 0; i--) {
+      const n = stack[i];
+      if (x === "li" ? n === "li" : n === "dd" || n === "dt") {
+        len = i;
+        break;
+      }
+      if (SPECIAL.has(n) && n !== "address" && n !== "div" && n !== "p") break;
+    }
+  }
+  if (P_CLOSERS.has(x)) {
+    for (let i = len - 1; i >= 0; i--) {
+      if (stack[i] === "p") {
+        len = i;
+        break;
+      }
+      if (SCOPE_BARRIERS.has(stack[i])) break;
+    }
+  }
+  if (HEADINGS.has(x) && len > 0 && HEADINGS.has(stack[len - 1])) len--;
+  if (CELL.has(x) || x === "tr" || SECTION.has(x) || x === "caption") {
+    for (let i = len - 1; i >= 0; i--) {
+      const n = stack[i];
+      if (n === "table" || (CELL.has(x) && n === "tr") || (x === "tr" && SECTION.has(n))) {
+        len = i + 1;
+        break;
+      }
+      if ((CELL.has(x) && CELL.has(n)) || (x === "tr" && n === "tr") || (SECTION.has(x) && SECTION.has(n))) {
+        len = i;
+        break;
+      }
+    }
+  }
+  return len;
+}
+/** Pure: the stack after an end tag `x` -- popped to the matching open element when one is in scope
+ *  (table parts reach past cells to their table; anything else stops at a scope barrier); else unchanged. */
+function lengthAfterEndTag(stack: readonly string[], x: string): number {
+  const tablePart = CELL.has(x) || x === "tr" || SECTION.has(x) || x === "caption" || x === "table";
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (stack[i] === x) return i;
+    if (tablePart ? stack[i] === "table" : SCOPE_BARRIERS.has(stack[i])) break;
+  }
+  return stack.length;
+}
+
+/** Pure: does start tag `x` end the open element `e` (with `inner` = the tags opened inside `e` and still
+ *  open) the way a browser implies it? `<p>` is closed by the next block, a cell by the next cell or row,
+ *  a row by the next row, an `<li>` by the next `<li>`, and any non-table element sitting in a cell by the
+ *  start of the next cell or row (verifier loop 3, V19). A table opened inside `e` shields its own parts. */
+function startTagEnds(e: string, x: string, inner: string[]): boolean {
+  const tablePart = CELL.has(x) || x === "tr" || SECTION.has(x) || x === "caption";
+  if (tablePart && !inner.includes("table") && e !== "table") {
+    if (e === "tr") return !CELL.has(x);
+    if (SECTION.has(e)) return SECTION.has(x) || x === "caption";
+    return true; // a cell, or anything sitting in one, ends at the next cell / row
+  }
+  if (e === "p") return P_CLOSERS.has(x) && !inner.some((n) => SCOPE_BARRIERS.has(n));
+  if (HEADINGS.has(e)) return HEADINGS.has(x) && inner.length === 0;
+  if (e === "li") return x === "li" && !inner.some((n) => n === "ul" || n === "ol");
+  if (e === "dt" || e === "dd") return (x === "dt" || x === "dd") && !inner.includes("dl");
+  return false;
+}
+/** Siblings that implicitly close each other INSIDE the hidden element (keeps the inner stack honest). */
+const SELF_SIBLING = new Set(["p", "li", "td", "th", "tr", "dt", "dd", "option"]);
+
+/** Pure: where the element `name` opened at `openEnd` ends, the way a browser builds the tree.
+ *  One walk over every tag with a stack of the tags opened inside it:
+ *  - its own close tag with nothing of that name open inside -> just after that close tag;
+ *  - a close tag for something NOT open inside it (its parent's `</p>`, `</td>`, `</tr>`, a stray close)
+ *    -> it ends just BEFORE that tag (a browser closes it there; a later stray same-name close tag no
+ *    longer captures the visible text in between -- verifier loop 3, V1);
+ *  - a start tag that implies its end (`startTagEnds`) -> just before that tag (V19);
+ *  - a start tag whose implied closes pop one of its ANCESTORS (`ancestors`, outermost first: the `<p>` it
+ *    sits in closed by the next block, the `<li>` closed by the next `<li>`) -> just before that tag, since
+ *    the browser pops it together with that ancestor (verifier loop 4, W1-W3). A formatting element is the
+ *    exception: the browser re-opens it after the close, so it keeps hiding (W1b);
+ *  - none of these -> the end of the document (an unclosed hidden tail stays hidden).
+ *  `inner` is the content between the open tag and that end. Errors lean toward ending EARLY, so text
+ *  that may be visible is kept rather than dropped. */
+function elementEnd(html: string, name: string, openEnd: number, ancestors: readonly string[] = []): { end: number; inner: string } {
+  const any = /<(\/?)([a-z][a-z0-9]*)\b[^>]*>/gi;
+  any.lastIndex = openEnd;
+  const stack: string[] = [];
+  for (let t = any.exec(html); t; t = any.exec(html)) {
+    const x = t[2].toLowerCase();
+    if (!t[1]) {
+      // Checked before the void skip: a void <hr> closes an open <p> too (Chromium-checked, PCLOSE-hr).
+      if (startTagEnds(name, x, stack)) return { end: t.index, inner: html.slice(openEnd, t.index) };
+      if (ancestors.length && !FORMATTING.has(name) && lengthAfterStartTag([...ancestors, name, ...stack], x) <= ancestors.length) {
+        return { end: t.index, inner: html.slice(openEnd, t.index) };
+      }
+      if (isSelfContained(x, t[0])) continue;
+      if (SELF_SIBLING.has(x) && stack[stack.length - 1] === x) stack.pop();
+      stack.push(x);
+      continue;
+    }
+    const at = stack.lastIndexOf(x);
+    if (at >= 0) {
+      stack.length = at;
+      continue;
+    }
+    if (x === name) return { end: t.index + t[0].length, inner: html.slice(openEnd, t.index) };
+    return { end: t.index, inner: html.slice(openEnd, t.index) };
+  }
+  return { end: html.length, inner: html.slice(openEnd) };
+}
+
+/** Pure: may this tag give text a real size again inside a font-size:0 wrapper? An inline size, a legacy
+ *  `<font size=...>`, or ANY class (a `<style>` rule may size it -- this converter cannot see CSS
+ *  classes). When in doubt the text is KEPT; only text certainly at size 0 is dropped (verifier loop 3,
+ *  V5/V6). */
+const mayResize = (name: string, tag: string): boolean => {
+  const attrs = attrsOf(tag);
+  return SIZED_STYLE.test(styleOf(tag)) || /\S/.test(attrs.get("class") ?? "") || (name === "font" && attrs.has("size"));
+};
+
+/** Pure: inside a font-size:0 element, keep ONLY the descendants that may set a real size again (with
+ *  their content); every other text node and element there is zero-size and dropped. With `vis`, the
+ *  wrapper is visibility:hidden and the kept descendants are the ones set visibility:visible. */
+function keepResizedDescendants(inner: string, keep: (name: string, tag: string) => boolean = mayResize): string {
+  let out = "";
+  let pos = 0;
+  for (let guard = 0; guard < 10_000; guard++) {
+    OPEN_TAG.lastIndex = pos;
+    const m = OPEN_TAG.exec(inner);
+    if (!m) break;
+    const name = m[1].toLowerCase();
+    const openEnd = m.index + m[0].length;
+    if (isSelfContained(name, m[0]) || !keep(name, m[0])) {
+      pos = openEnd;
+      continue;
+    }
+    const { end } = elementEnd(inner, name, openEnd);
+    out += " " + inner.slice(m.index, end) + " ";
+    pos = end;
+  }
+  return out;
+}
+
+/** Pure (red-team F8): remove every element the reader cannot see -- inline-style hidden (display:none,
+ *  visibility:hidden, opacity:0, max-height:0 with overflow hidden) or the `hidden` attribute -- together with
+ *  everything inside it, matching nested same-name tags. An element at font-size:0 keeps only the
+ *  descendants that set a real size again (fix pass). An UNCLOSED hidden element ends where its parent
+ *  closes, not at the end of the email (fix pass: it used to swallow every real ask after broken HTML). */
+export function stripHiddenElements(html: string): string {
+  let out = "";
+  let pos = 0;
+  // The open elements around the current position (outermost first), so a hidden element knows which
+  // ancestor closes would pop it (verifier loop 4, W1-W3).
+  const ancestors: string[] = [];
+  const anyTag = /<(\/?)([a-z][a-z0-9]*)\b[^>]*>/gi;
+  for (let guard = 0; guard < 200_000; guard++) {
+    anyTag.lastIndex = pos;
+    const m = anyTag.exec(html);
+    if (!m) break;
+    const name = m[2].toLowerCase();
+    const openEnd = m.index + m[0].length;
+    if (m[1]) {
+      ancestors.length = lengthAfterEndTag(ancestors, name);
+      out += html.slice(pos, openEnd);
+      pos = openEnd;
+      continue;
+    }
+    const selfContained = isSelfContained(name, m[0]);
+    ancestors.length = lengthAfterStartTag(ancestors, name); // a void <hr> closes a <p> too
+    const kind = selfContained ? null : hiddenKind(m[0]);
+    if (!kind) {
+      if (!selfContained) ancestors.push(name);
+      out += html.slice(pos, openEnd);
+      pos = openEnd;
+      continue;
+    }
+    const { end, inner } = elementEnd(html, name, openEnd, ancestors);
+    out += html.slice(pos, m.index) + " ";
+    if (kind === "font0") out += stripHiddenElements(keepResizedDescendants(inner)) + " ";
+    if (kind === "vis") out += stripHiddenElements(keepResizedDescendants(inner, (_n, tag) => VISIBLE_AGAIN.test(styleOf(tag)))) + " ";
+    pos = end;
+  }
+  return out + html.slice(pos);
+}
+
+const NAMED_ENTITIES: Record<string, string> = {
+  nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'",
+  // Typographic quotes decode to their plain form (the converter already wrote &#39; as "'").
+  rsquo: "'", lsquo: "'", sbquo: "'", rdquo: '"', ldquo: '"', bdquo: '"',
+  ndash: "\u2013", mdash: "\u2014", hellip: "\u2026", bull: "\u2022", middot: "\u00b7", copy: "\u00a9",
+  reg: "\u00ae", trade: "\u2122", euro: "\u20ac", pound: "\u00a3", yen: "\u00a5", cent: "\u00a2",
+  deg: "\u00b0", times: "\u00d7", divide: "\u00f7", laquo: "\u00ab", raquo: "\u00bb", shy: "",
+  zwnj: "", zwj: "", ensp: " ", emsp: " ", thinsp: " ",
+};
+/** Pure (red-team F19): decode numeric (&#8217; &#x2019;) and common named entities in ONE pass, so
+ *  "&amp;lt;" becomes the literal "&lt;" (never double-decoded). Unknown names stay literal. */
+export function decodeHtmlEntities(s: string): string {
+  return s.replace(/&(#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});/gi, (whole, ent: string) => {
+    if (ent[0] === "#") {
+      const cp = ent[1] === "x" || ent[1] === "X" ? parseInt(ent.slice(2), 16) : parseInt(ent.slice(1), 10);
+      if (!Number.isFinite(cp) || cp <= 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return " ";
+      return String.fromCodePoint(cp);
+    }
+    const v = NAMED_ENTITIES[ent.toLowerCase()];
+    return v === undefined ? whole : v;
+  });
+}
+
+export function htmlToText(html: string): string {
+  const visible = stripHiddenElements(
+    // <head> (title, meta, styles) is never message text (red-team F8); comments neither.
+    html.replace(/<head\b[\s\S]*?<\/head\s*>/gi, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, " "),
+  );
+  return decodeHtmlEntities(
+    stripBlockquotes(
+      // Quoted history is the OTHER person's old words, not this email's ask: Outlook's reply/forward
+      // header block and everything after it, and any <blockquote>, are dropped (verifier D5).
+      visible.replace(/<div[^>]*id=["']?(divRplyFwdMsg|appendonsend)["']?[\s\S]*$/i, " "),
+    )
+      .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+      .replace(/<br\s*\/?>|<\/(p|div|li|tr|h\d)>/gi, "\n")
+      .replace(/<[^>]+>/g, " "),
+  )
+    .replace(/\u00a0/g, " ")
+    // A URL's "?" is a query string, not a question.
+    .replace(/\bhttps?:\/\/\S+/gi, "[link]")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n+/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Pure: one ORIGINAL Outlook message record -> InboundMessage, so the existing screenMessage runs on
+ * the real sender, headers and words (never on the relay). inferenceClassification is NOT in the
+ * connector's output and is left undefined rather than invented, so the "Other folder" rule simply
+ * does not apply to feed mail (documented gap).
+ */
+export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): InboundMessage {
+  // Outlook connectors write header items as {name,value} or {Name,Value}; accept both.
+  const headers = (Array.isArray(rec.internetMessageHeaders) ? rec.internetMessageHeaders : []).map((h) => {
+    const o = (h && typeof h === "object" ? h : {}) as Record<string, unknown>;
+    return { name: o.name ?? o.Name, value: o.value ?? o.Value };
+  });
+  const header = (n: string) => headers.find((h) => str(h?.name).toLowerCase() === n);
+  const from = parseAddress(rec.from);
+  // Display name: the connector's From is often a bare address; the original From header has the name.
+  const fromHeader = header("from");
+  const name = from.name || (fromHeader ? parseAddress(fromHeader.value).name : "");
+  const body = rec.body as unknown;
+  const bodyRaw =
+    typeof body === "string" ? body : body && typeof body === "object" ? str((body as Record<string, unknown>).content) : "";
+  const isHtml =
+    rec.isHtml === true ||
+    (body && typeof body === "object" && str((body as Record<string, unknown>).contentType).toLowerCase() === "html");
+  const val = (n: string) => {
+    const h = header(n);
+    return h ? str(h.value).toLowerCase() || null : null;
+  };
+  return {
+    id: feedId(mailbox, str(rec.id)),
+    subject: str(rec.subject) || null,
+    receivedDateTime: str(rec.receivedDateTime) || null,
+    bodyPreview: str(rec.bodyPreview) || null,
+    bodyText: bodyRaw ? (isHtml ? htmlToText(bodyRaw) : bodyRaw) : null,
+    fromAddress: from.address || null,
+    fromName: name || null,
+    conversationId: str(rec.conversationId) || null,
+    inferenceClassification: undefined,
+    headerNames: headers.map((h) => str(h?.name).toLowerCase()).filter(Boolean),
+    precedence: val("precedence"),
+    autoSubmitted: val("auto-submitted"),
+  };
+}
+
+/**
+ * Pure: which feed messages are eligible to be screened this run -- inside the lookback, after the
+ * configured notBefore, and (while synthetic) carrying the test subject prefix. The prefix rule is the
+ * in-Huddle twin of the flow's own filter, so real mail cannot slip through a misconfigured flow.
+ */
+export function eligibleFeedMessages(
+  msgs: InboundMessage[],
+  cfg: OneDriveFeedsConfig,
+  sinceIso: string,
+): InboundMessage[] {
+  const since = Date.parse(sinceIso);
+  const notBefore = cfg.notBeforeUtc ? Date.parse(cfg.notBeforeUtc) : -Infinity;
+  const seen = new Set<string>();
+  return msgs.filter((m) => {
+    const t = Date.parse(String(m.receivedDateTime ?? ""));
+    if (Number.isNaN(t) || t < since || t < notBefore) return false;
+    if (cfg.synthetic && !String(m.subject ?? "").startsWith(cfg.subjectPrefix ?? "\u0000")) return false;
+    if (seen.has(m.id)) return false; // the flow unions the trigger message in; dedupe by original id
+    seen.add(m.id);
+    return true;
+  });
+}
+
+/** Pure: an ISO instant rendered as Graph renders a dateTime in `timeZone` ("YYYY-MM-DDTHH:mm:ss.0000000"). */
+export function zonedGraphDateTime(iso: string, timeZone: string): string | null {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).formatToParts(new Date(t));
+  } catch {
+    return null; // unknown time zone
+  }
+  const p = (k: string) => parts.find((x) => x.type === k)?.value ?? "00";
+  return `${p("year")}-${p("month")}-${p("day")}T${p("hour")}:${p("minute")}:${p("second")}.0000000`;
+}
+
+/** Pure: a calendarView window bound. Like Graph, a bound with no offset is read as UTC. */
+export function windowBoundMs(bound: string): number {
+  const s = bound.trim();
+  return Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : `${s}Z`);
+}
+
+export interface FeedCalendarEvent {
+  id: string;
+  subject: string;
+  start: string | null;
+  end: string | null;
+  location: string | null;
+  isAllDay: boolean;
+  organizer: string | null;
+  source: string;
+}
+
+const instant = (rec: Record<string, unknown>, withTz: string, plain: string): number => {
+  const a = str(rec[withTz]);
+  if (a && !Number.isNaN(Date.parse(a))) return Date.parse(a);
+  const b = rec[plain];
+  const s = typeof b === "string" ? b : b && typeof b === "object" ? str((b as Record<string, unknown>).dateTime) : "";
+  return s ? windowBoundMs(s) : NaN;
+};
+
+/** The calendar date written in the record itself (no zone conversion) -- what an all-day event means. */
+const rawDate = (rec: Record<string, unknown>, withTz: string, plain: string): string => {
+  const b = rec[plain];
+  const s =
+    str(rec[withTz]) ||
+    (typeof b === "string" ? b : b && typeof b === "object" ? str((b as Record<string, unknown>).dateTime) : "");
+  return s.slice(0, 10);
+};
+
+/**
+ * Pure: the appointments that overlap [startISO, endISO], mapped to the CalendarEvent shape with times
+ * rendered in `timeZone` exactly as getGraphCalendarEvents returns them. Ids are feed-prefixed so the
+ * schedule brief's T-60 reminders stay idempotent and never collide with an EDS event.
+ */
+export function mapFeedAppointments(
+  records: Record<string, unknown>[],
+  mailbox: string,
+  startISO: string,
+  endISO: string,
+  timeZone: string,
+): FeedCalendarEvent[] {
+  const ws = windowBoundMs(startISO);
+  const we = windowBoundMs(endISO);
+  const out: FeedCalendarEvent[] = [];
+  for (const r of records) {
+    const s = instant(r, "startWithTimeZone", "start");
+    const e = instant(r, "endWithTimeZone", "end");
+    if (Number.isNaN(s) || Number.isNaN(e)) continue;
+    const overlaps = s === e ? s >= ws && s < we : s < we && e > ws;
+    if (!overlaps) continue;
+    const allDay = r.isAllDay === true;
+    const loc = r.location;
+    const org = r.organizer;
+    out.push({
+      id: feedId(mailbox, str(r.id)),
+      subject: str(r.subject) || "(no subject)",
+      // An all-day event's date IS its start date; converting midnight across zones would shift the day.
+      start: allDay ? `${rawDate(r, "startWithTimeZone", "start")}T00:00:00.0000000` : zonedGraphDateTime(new Date(s).toISOString(), timeZone),
+      end: allDay ? `${rawDate(r, "endWithTimeZone", "end")}T00:00:00.0000000` : zonedGraphDateTime(new Date(e).toISOString(), timeZone),
+      location:
+        (typeof loc === "string" ? str(loc) : loc && typeof loc === "object" ? str((loc as Record<string, unknown>).displayName) : "") ||
+        null,
+      isAllDay: allDay,
+      organizer: (() => {
+        const a = parseAddress(org);
+        return a.name || a.address || null;
+      })(),
+      source: mailbox,
+    });
+  }
+  return out;
+}
+
+/** Pure: does the snapshot's covered window include the whole requested window? */
+export function coversWindow(snap: { windowStartUtc: string; windowEndUtc?: string }, startISO: string, endISO: string): boolean {
+  if (!snap.windowEndUtc) return false;
+  return Date.parse(snap.windowStartUtc) <= windowBoundMs(startISO) && Date.parse(snap.windowEndUtc) >= windowBoundMs(endISO);
+}
