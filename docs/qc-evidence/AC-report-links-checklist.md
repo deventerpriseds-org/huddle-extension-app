@@ -204,6 +204,57 @@ anyone the email is forwarded to, so the existing gap becomes reachable.
 | F-3 | Given a link opens on a phone, when measured from load to highlighted row, then it is under 4 s on the deployed app at p50 over 5 runs (FOCUS_WAIT_MS 6 s is the hard ceiling). | performance | verify-uat timing |
 | F-4 | Given 200 report rows, when the renderer runs, then it finishes under 200 ms (no per-row DB call: one read for all rows). | performance | timed test; store spy 1 call |
 
+### C. Row CATEGORY + owner-controlled hiding (owner input 2026-11-15)
+
+> *"Meeting invites, time keeping, verification codes can be toggled off in settings."*
+
+Observation: the judge's only label today is `JUDGE_CATEGORIES = needs_reply | action_for_owner | fyi |
+meeting_minutes | calendar | automated_or_broadcast` (`needs-you.ts:253`), which is the VERDICT (what he must do),
+not the TOPIC (what kind of message). The owner's list is a topic, so it is a SECOND field beside the verdict, not
+a replacement for it. Existing settings to extend: **`chat.attention_settings`** (`email-replies.server.ts:63`,
+one row per owner, `urgent_kinds TEXT[]`) read/written by `setAttentionKindsFn` (`attention.functions.ts:61`) and
+shown in the bell's settings (`AttentionBell.tsx`). A new nullable column `hidden_categories TEXT[]` there, NOT a
+new settings table.
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| C-1 | Given the judge schema, when extended, then each judged conversation (and each stored proposal) carries exactly one `category` from the fixed enum `person_request, shared_with_you, introduction_or_welcome, mention, meeting_invite, timekeeping, verification_code, automated_notice, announcement, newsletter, other`; a value outside the enum fails validation (`bad_category` path) and never becomes a row. | happy-path | validator unit test, one case per enum value + one invalid |
+| C-2 | Given the verdict (`needs_reply` / `action_for_owner` / ...) and the category, when both are stored, then they are independent fields: changing one in a fixture never changes the other, and the existing verdict rules (minutes / calendar / broadcast never become reply items) still hold. | regression | offline judge-flow tests unchanged + new pairing test |
+| C-3 | Given an owner with NO settings row, when the report or checklist renders, then `meeting_invite`, `timekeeping`, `verification_code` are hidden by default and everything else shows. The three-value default lives in ONE seed constant in code; nothing else hard-codes it. | happy-path (config-centric) | test: default list; grep: one constant |
+| C-4 | Given the Settings screen, when the owner opens it, then every category appears as a labelled on/off switch with its current value, and the screen says the three defaults were set for him and can be changed. | happy-path | Playwright: 11 switches, 3 off on a fresh owner |
+| C-5 | Given the owner switches `timekeeping` ON and `newsletter` OFF, when the next report and the checklist render, then timekeeping rows show and newsletter rows are hidden, on BOTH surfaces, and the choice survives a reload and a second device. | happy-path + cross-surface | Playwright + DB `hidden_categories` read |
+| C-6 | Given a hidden category, when the report renders, then its rows are NOT deleted, not dismissed, and not dropped from the store: they collapse into one line per category, "3 hidden: timekeeping (show)", and the counts line still includes them. Report total = shown + hidden. | edge (collapse, never delete) | render test: sum check; DB row count unchanged |
+| C-7 | Given the checklist in Iris's chat, when a category is hidden, then its rows are collapsed under the same "N hidden" line, expandable in place, and still actionable when expanded. | edge | Playwright |
+| C-8 | Given a row link (L-1) or Wrong link (W-1) for a row whose category the owner later hides, when opened, then the row still shows (a direct link is never swallowed by the filter). | edge | Playwright |
+| C-9 | Given a `verification_code` row, when shown in any form (expanded, collapsed, report, checklist, Wrong page, correction record), then the code itself is never displayed or stored in a title, evidence span or note: the row reads "Verification code from <sender display name>". Applies with the category shown or hidden. | error (secret) | test: fixture with a 6-digit code; regex for the code over HTML, DB rows, logs = 0 |
+| C-10 | Given hiding changes, when they are saved, then they only change what is SHOWN: the judge's input, the stored verdicts, the proposals and the ledger are byte-identical with the setting on or off. | regression | test: store snapshots equal across settings |
+| C-11 | Given a correction (W) "Wrong category", when recorded, then it stores the category the owner says is right (enum value) alongside the one shown, so category errors are tunable like verdict errors. | happy-path (tuning) | real-PG test |
+| C-12 | Given `setAttentionKindsFn` and the new category setter share the row, when one is written, then the other column is unchanged (the existing whole-row upsert must not wipe `hidden_categories`, nor the new write wipe `urgent_kinds`). | regression | real-PG test: write each, read both |
+| C-13 | Given the flag off, when any surface renders, then no category is read or shown and `urgent_kinds` behaviour is exactly today's. | regression | V-1 snapshot + bell tests |
+
+### K. Reply items with no question, and answered rows (owner input 2026-11-15)
+
+> *"There are several items that require replies even if no clear action item."*
+
+Observation: today `needs_reply` requires that the latest OTHER message "asks the owner something" with a verbatim
+asking sentence (`needs-you.ts:310-311`), and a SETTLED conversation (owner wrote after the latest OTHER) is never
+sent to the model and appears only as a count. Both are changes to existing judge behaviour, which the owner has
+now asked for; the PR must list them in the change table (Huddle CLAUDE.md "never change existing design without
+thumbs-up").
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| K-1 | Given a personal (non-automated, addressed to him) latest OTHER message that sends what he asked for, shares files with him, introduces or welcomes him, or mentions him by name, with NO question in it, when judged, then it is an OPEN item of kind **Reply** (listed under "Needs your reply"), not `fyi`. One synthetic fixture per case (4). | happy-path | judge-flow test with stubbed judge + validator; report row present |
+| K-2 | Given K-1, when validated, then the item still needs a verbatim span from the latest OTHER message (the sentence that delivers / shares / introduces / mentions), so the "verbatim or downgraded" guard is kept, with a new reason field (`acknowledge`) instead of `ask`. A non-verbatim span downgrades as today. | error (grounding kept) | validator test: fabricated span -> not a row |
+| K-3 | Given the same four shapes sent by an automated sender, a mailing list, an announcement or a newsletter, when judged, then they are NOT Reply items (category `automated_notice` / `announcement` / `newsletter`). | error (over-match) | fixture per shape: no Reply row |
+| K-4 | Given an introduction where the owner is on CC and the ask is to someone else ("Alex, meet Sam"), when judged, then it is a Reply item only if the message speaks to him (existing addressing rule 1), else not. | edge | fixture both ways |
+| K-5 | Given a conversation that WAS an open Reply or action row, when the owner later replies (inbox or Sent Items), then the row shows as "Answered by your reply" with the reply time, in the report and in the checklist; it is not dropped and not shown as "nothing open". | happy-path | test: stored row transitions; render shows the label |
+| K-6 | Given a conversation the owner answered BEFORE it was ever judged (settled on first sight), when the report renders, then the behaviour follows OQ-7 (recommended: a count "answered by you: N" plus no model call), and it is never silently counted as `fyi`. | edge | render test |
+| K-7 | Given an answered row, when the OTHER person writes again after his reply, then the row re-opens as a fresh open item (new latest OTHER message), keeping one row per conversation. | edge | test: one row, state open again |
+| K-8 | Given an answered row, when the Wrong link is tapped, then "Still needs a reply" is one of the labels (a reply that did not actually close it). | happy-path (tuning) | Playwright label list |
+| K-9 | Given the Sent Items feed is unusable (`sentKnown=false`), when a Reply row would show, then it shows as "can't tell if you replied" (today's `cant_tell_no_sent_items`), never as "Answered". | error | test |
+| K-10 | Given the change, when the existing judge fixture set (`scripts/fixtures/needs-you-judge-cases.json`) is re-run, then every previous `needs_reply` case is still `needs_reply`, and every case that moves from `fyi` to Reply is one of K-1's four shapes (listed in the PR). | regression | fixture diff table |
+
 ## Spelling table
 PENDING
 
