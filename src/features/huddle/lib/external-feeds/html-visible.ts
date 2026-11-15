@@ -281,6 +281,9 @@ export function visibleHtml(html: string): string {
   // for these tags either (Q2: line structure unchanged) -- and keeps a real `id` only when it is a plain token, so the
   // reply-header cut still sees `id="divRplyFwdMsg"` (Q1: only the real id attribute, never a look-alike).
   const tagEdits: [number, number, string][] = [];
+  // Built ONCE: rebuilding the prefixed body per element copied the whole email per tag -- on Node (production) a
+  // ~950 KB Outlook body took 10-12 s (verifier loop 11; bun's string ropes hid it).
+  const prefixed = `${PREFIX}${html}`;
   const seenStarts = new Set<number>();
   const SAFE_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
   const tagStack: Node[] = [doc];
@@ -294,7 +297,7 @@ export function visibleHtml(html: string): string {
     const st = loc?.startTag;
     // A rebuilt formatting element reuses the ORIGINAL start tag's span: rewrite that span once (AC-12).
     if (st && Number.isFinite(st.startOffset) && !seenStarts.has(st.startOffset)) {
-      const src = `${PREFIX}${html}`.slice(st.startOffset, st.endOffset);
+      const src = prefixed.slice(st.startOffset, st.endOffset);
       if (src.slice(0, -1).includes(">")) {
         seenStarts.add(st.startOffset);
         const id = (n.attrs ?? []).find((a) => a.name.toLowerCase() === "id")?.value ?? "";
@@ -303,7 +306,7 @@ export function visibleHtml(html: string): string {
     }
     const et = loc?.endTag;
     if (et && Number.isFinite(et.startOffset)) {
-      const src = `${PREFIX}${html}`.slice(et.startOffset, et.endOffset);
+      const src = prefixed.slice(et.startOffset, et.endOffset);
       if (src.slice(0, -1).includes(">")) tagEdits.push([et.startOffset, et.endOffset, `</${name} _>`]);
     }
   }

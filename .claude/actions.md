@@ -1,3 +1,7 @@
+- [x] Verifier loop 11 (claude_verify-correspondence-proposals-11 @ 40ea8726) = FIX FIRST, speed only: the tag-span
+      rewrite rebuilt the prefixed body per element -> ~950 KB Outlook body 10-12 s on Node (bun hid it). Fixed: built
+      once (`prefixed`). Node: 950 KB 142-177 ms, 217 KB report 81-157 ms. New suite
+      scripts/html-visible-node-timing.test.mts (run with node --experimental-strip-types). All text checks held.
 - [x] 2026-11-15: live HUDDLE_ONEDRIVE_FEEDS has NO `teams` / `sent` keys (onedrive-feed-flags dry run: keys
       correspondence, driveUser, enabled, mailbox, maxBytes, notBeforeUtc, ownerLogins, sourceLogin, synthetic) -- so
       collection would skip Teams + Sent. Teams parser now takes the owner from each line's ownerUserId when no ids are
