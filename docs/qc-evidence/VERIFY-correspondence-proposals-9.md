@@ -14,7 +14,7 @@ Verifier started 2026-11-15 17:36 UTC. Budget 2 h of active time. All fixtures s
 
 - Claim 0 (suites): CONFIRMED
 - Claim 1 (1d + 1e fixes, loop-8 re-check): REFUTED (1d: `=`+quote shapes drop a visible ask; 1e: guard bypassable, 62 KB -> 7 s)
-- Claim 2 (bell "Teams chats" removed): PENDING
+- Claim 2 (bell "Teams chats" removed): CONFIRMED in code; UI not browser-verified (MERGE-PENDING-UAT)
 - Claim 3 (forwarded.ts + preview scripts): PENDING
 - Claim 4 (merge readiness, flags off): PENDING
 
@@ -141,3 +141,23 @@ it only loses the approved hidden-text cut for that one email.
 `htmlToText` from onedrive-feed.ts is also imported by `src/features/huddle/lib/external-feeds/teams-log.ts:26` (new on
 the branch, not in the brief's radius) -- checked under claim 4. `inbox-read.ts` has its OWN `htmlToText` (line 254),
 byte-identical to main (diff empty), so the Graph inbox tool is outside the radius.
+
+## Claim 2: bell "What counts" no longer offers "Teams chats"; nothing else changed for the owner -- CONFIRMED in code, UI NOT browser-verified (MERGE-PENDING-UAT)
+
+Read `git diff origin/main...1c0171d7` of `lib/attention/attention.ts`, `attention.functions.ts`, `components/AttentionBell.tsx`,
+and the bell's store (`email/email-replies.server.ts`).
+
+| check | observed |
+|---|---|
+| settings list | `AttentionBell.tsx:157` maps `SETTINGS_KINDS`; `attention.ts:35` = `ATTENTION_KINDS.filter(k => k !== "chat")`; `attention.test.ts` A0 pins `["email","meeting","appointment"]` (attention: all passed). Same three labels as main. |
+| badge count | `badgeCount` skips only `uncertain` items; `uncertain` is set only in the `chat` branch of `toAttentionItem` -> identical to `items.length` while no chat row exists |
+| empty state | `count === 0` -> `items.length === 0`: identical while no uncertain row exists |
+| row layout | the row button is now wrapped in `<div class="min-w-0 flex-1">` with `w-full` on the button; same text, classes and click target for email/meeting/appointment rows. `Open in Teams` renders only when `it.link` (chat rows only). |
+| what the bell lists | `bellItems` also passes `feed` rows; `listOpenAttention` sorts `kind='feed'` first. Chat rows are written only by `ingest.server.ts` (needs `correspondence.ingest` + `bell`), feed rows only by `feed-staleness.server.ts` (`correspondence.staleAlerts === true`); flags off => no such row, list identical. |
+| stored setting | reading: `resolveStoredUrgentKinds` adds the hidden `chat` kind to a saved list (no chat rows -> no visible effect). Saving: `serializeUrgentKinds` writes the kinds (now including `chat` unless unchecked) and `-chat` for an opt-out; main's `parseUrgentKinds` ignores both, so a later revert reads the setting cleanly. |
+| schema | bootstrap adds three nullable columns to `chat.email_replies` (`needs_context`, `source_link`, `feed_pending`, `ADD COLUMN IF NOT EXISTS`); `listOpenAttention` now selects two of them. Additive; a failed ALTER would make the bell read fail (caught -> empty bell), but the app role created the table. |
+| settle-in-chat | `settleAttentionForHuddle`: `kind <> 'email'` -> `kind NOT IN ('email','chat','feed')`: same rows while no chat/feed rows exist. |
+
+UI-UNVERIFIED: the rendered settings panel was not seen in a browser. The branch is not deployed, and the existing
+`attention-bell-checks.mjs` (verify-uat.yml) never opens the settings panel. Browser check still owed after landing:
+open the bell, open "What counts", expect exactly three checkboxes: Emails, Meetings, Appointments & reminders.
