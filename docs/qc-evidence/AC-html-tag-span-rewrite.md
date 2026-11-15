@@ -14,7 +14,7 @@ WRITER:        independent AC-writing subagent, cold, no access to the implement
 
 # Acceptance Criteria — html tag span rewrite (Tier 1, live work-email text path)
 
-Status: IN PROGRESS (skeleton committed first; sections appended as written)
+Status: COMPLETE except section 4 (NOT REACHED at the 30-minute budget)
 
 ## 0. Sources read
 - `src/features/huddle/lib/external-feeds/html-visible.ts` (whole file, base c479cc33): `guardedParse` (budget:
@@ -197,7 +197,38 @@ direction for this screen); FALSE PASS = residue or hidden/quoted text kept.
 | N-08 | `<xmp><b title="a>b">raw</b></xmp>Can you sign?` | RAWTEXT: inner tag is TEXT (Chromium shows it literally) | `b">raw Can you sign?` | `b">raw Can you sign?` (= base, AC-17) | rewriting inside raw text |
 
 ## 4. Goal -> AC coverage
-PENDING
+NOT REACHED (30-minute budget). Rough map, not checked: fragments gone -> AC-1, AC-2, S-01..S-36; never drop a visible ask ->
+AC-3, AC-4, AC-5, AC-19, S-04..S-13, N-*; Iris's alerts still ignore quoted history -> AC-7, AC-8, S-40..S-51; no regression
+or throw -> AC-6, AC-9..AC-18, AC-21; fast enough -> AC-20.
 
 ## 5. Open questions for the owner
-PENDING
+Each one is a fork. The recommendation comes first, and every choice can be undone (it changes one function).
+
+**Q1 -- The reply-header cut and lookalike markers (S-46, S-47).** Today the cut that drops Outlook's quoted history also fires
+when the marker name appears in some OTHER attribute (`data-id="divRplyFwdMsg"`, `title="id=appendonsend"`). Rewriting tags
+down to just the real `id` stops that over-match.
+| Option | What actually happens | Cost / what you lose | What it makes easy later | What it makes hard later |
+|---|---|---|---|---|
+| **A (recommended): cut only on the real `id`** | the lookalike bodies keep their text | if any client really writes the marker as `data-id`, old quoted asks would show as new ones (none seen in any corpus) | simple and matches the browser | nothing |
+| B: also carry main's raw match into the clean tag | exactly main's behaviour | a second regex reading attribute text, the thing this change exists to remove | nothing | brings back the guessing |
+
+**Q2 -- Line breaks for `<br class="x">` and `</p >` (S-52, S-53).** Main turns these into a SPACE, because its line-break
+rule only matches the bare spellings. A browser shows a line break. Clean tags would naturally become `<br>`, which means a newline.
+| Option | What actually happens | Cost | Easy later | Hard later |
+|---|---|---|---|---|
+| **A (recommended): keep main's line structure exactly** (the clean tag keeps a marker so main's rule still misses it) | AC-6 holds with an empty list | keeps a known main quirk | the change only fixes fragments | a later line-break fix is its own small change |
+| B: normalise to `<br>` and `</p>` | the line structure moves closer to the browser | the ask screen sees new line breaks on some bodies, a second behaviour change in the same PR | nothing | separating cause from effect if an ask flips |
+
+**Q3 -- Text that merely looks like a tag (N-01: `a < b > c`).** Main deletes `< b >` and a browser shows it. This change
+cannot fix that, because those characters are text, not tags. Fixing it would mean escaping the `<` characters inside text.
+That is new behaviour (more text shown), so it needs its own approval.
+| Option | What actually happens | Cost | Easy later | Hard later |
+|---|---|---|---|---|
+| **A (recommended): out of scope, log one backlog row** | N-01 stays exactly as main | the browser difference stays | this PR stays to one cause | nothing |
+| B: escape `<` inside located text spans in the same pass | N-01 matches the browser | changes what the ask screen sees on bodies that contain `<` (math, code) | one less browser difference | ask flips land in this PR |
+
+### Gaps
+- The WHATWG tokenizer section was cited from memory, not opened this session. The rows were cross-checked against parse5's
+  measured behaviour only.
+- S-33 / S-37 / S-27 have no Chromium recording. Record them before the verifier relies on the REQUIRED column there.
+- The loop 7 and loop 8 reports were not read in full.
