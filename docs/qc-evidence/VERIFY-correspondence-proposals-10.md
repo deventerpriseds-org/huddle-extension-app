@@ -14,9 +14,9 @@ Verifier started 2026-11-15 18:21 UTC. Budget 90 min of active time. All fixture
 
 - Claim 0 (suites): CONFIRMED
 - Claim 1 (email text = main except the three approved changes): REFUTED (1d-new: a cut comment removes the `>` main's tag rule stopped at -> visible ask dropped; 1e: loop-9 shapes fixed, but per-token stack walks under the limit stay linear x ~2000: 810 KB -> 3.3 s)
-- Claim 2 (bell, code): PENDING
-- Claim 3 (preview-only code + public-log hygiene): PENDING
-- Claim 4 (merge readiness, flags off): PENDING
+- Claim 2 (bell, code): CONFIRMED in code (unchanged since loop 9); UI NOT browser-verified (MERGE-PENDING-UAT)
+- Claim 3 (preview-only code + public-log hygiene): CONFIRMED (3d body shapes all fixed; 9 locale subject prefixes still missed, preview only)
+- Claim 4 (merge readiness, flags off): REFUTED (OpenAI-path schema = main byte-for-byte; the Lovable-backend build_checklist still offers `proposals` with flags off)
 
 ## Claim 0: every suite at 907dade7 -- CONFIRMED
 
@@ -116,3 +116,62 @@ not work: parse5 reports tokenizer errors only, so stray end tags are never char
 ### Radius
 `teams-log.ts:103` also calls this `htmlToText` (flag-gated ingest path, claim 4). `inbox-read.ts:254` has its own
 `htmlToText`, unchanged vs main.
+
+## Claim 2: bell -- CONFIRMED in code, UI-UNVERIFIED
+No attention / bell file changed between 1c0171d7 and 907dade7 (`git diff --stat 1c0171d7 907dade7 -- src` = forwarded.ts,
+html-visible.ts, onedrive-feed.ts, huddle.functions.ts, tools.ts). Loop 9's code reading stands; `attention` suite all
+passed (A0 pins `["email","meeting","appointment"]`). The branch is not deployed, so no browser run against it is possible
+from here. **NOT YET UAT-VERIFIED**: after landing, open the bell -> "What counts" -> expect exactly Emails, Meetings,
+Appointments & reminders.
+
+## Claim 3: preview-only code + public-log hygiene -- CONFIRMED
+- 3a: `correspondence/forwarded` is imported only by `scripts/action-scan-steps.ts` (+ tests / verifier probes); nothing in `src/`.
+- 3b/3d (`bun scripts/verify9-forwarded.ts`): hostile inputs never throw, 0-287 ms, output capped. Body shapes 9/9 now
+  read the forwarded ask (OWA `appendonsend` + `divRplyFwdMsg` and plain-text CRLF both fixed). Subjects: `[EXTERNAL] FW:` and
+  `EXT: FW:` fixed; still missed (preview only, not claimed): `ENC:`, `I:`, `VS:`, `VB:`, `VL:`, `PD:`, `Antw: Fw:`, full-width
+  colon, `Re[2]: Fw:`; over-matches `RV:`/`TR:`/`WG:` abbreviations.
+- 3c: `action-scan-steps.ts:219` no longer prints `webUrl` (`void webUrl`). Every `console.*` in the 32 changed non-test scripts
+  (51 lines, `/tmp` sweep) prints counts, HTTP statuses, yes/no flags, OneDrive paths under `/automation/Huddle Preview/` or
+  fixed-list vendor domains. One per-row field: `onedrive-feed-dryrun.ts:48` prints each record's sender DOMAIN (not a name or
+  address) -- no SharePoint webUrl, name, address, subject or body is printed anywhere.
+
+## Claim 4: merge readiness with every flag OFF -- REFUTED (one row)
+| check | observed |
+|---|---|
+| OpenAI path `checklistTool(proposalsOn)` (`huddle.functions.ts:3886-3934`) | `bun scripts/verify10-checklist-schema.ts`: `checklistTool(false)` JSON **===** origin/main's `CHECKLIST_TOOL` (2362 = 2362 chars); `proposalsOn` = `proposalsConfig() !== null`, import failure -> false. checklist-tool 6/0. |
+| **Lovable path `lovableTools.build_checklist` (`huddle.functions.ts:6283-6292`)** | **`inputSchema: z.object({ title, task_ids, proposals: z.boolean().optional() })` -- unconditional.** origin/main (`:6273-6276`) is `{ title, task_ids }`. Any agent on the Lovable backend is still offered `proposals` with every flag off; `true` routes `dispatchBuildChecklist` -> `proposalChecklistForUser` (the "not switched on" reply) instead of main's checklist. The loop-9 row 6 fix covered one of the two backends. |
+| rows 7/8 (sent.json settling, `checklist` payload input) | code unchanged since loop 9; still dormant without a `correspondence.*` flag (sent settle needs `cfg.sent.enabled`, `email-replies.server.ts:297`; payload needs a caller that sends one) |
+| rest of loop-9's 15-row table | no other src file changed since 1c0171d7 -- rows hold; row 4 (line 474) is gone |
+| merge | `git merge-tree --write-tree origin/main 907dade7`: one conflict, `.claude/memory.md` (ledger text) |
+
+Minimal fix: in the Lovable block build the schema from the same gate, e.g.
+`inputSchema: proposalsOn ? z.object({ title, task_ids, proposals: z.boolean().optional() }) : z.object({ title, task_ids })`
+(compute `proposalsOn` where that block can see it), and add a C7 to `checklist-tool.test.ts` for the second backend.
+
+## Regressions checked
+Branch not deployed (prod = origin/main), so a live golden-path walk would test main: NOT RUN. In-repo: every suite
+(claim 0), `npm run build` exit 0, `tsc` exit 0, loop 5-9 probes (claim 1a/1b).
+
+## Verdict -- FIX FIRST
+
+| claim | result |
+|---|---|
+| 0 suites | CONFIRMED (97/107 exit 0; the 10 others identical on main or `bun test` files, 26/11/30/12 pass) |
+| 1 loop-9 fixes (1d regex, 1e loop-9 shapes) | CONFIRMED -- 0 drops on loop-9 shapes; loop-9 hostile inputs 9-138 ms |
+| 1d-new comment cut | **REFUTED** -- raw visible `<` + a comment: `<td>x < y <!-- c --> Can you approve the budget?</td>` -> branch "x" (asks=false), main + Chromium keep the ask; 2 of 20 new rows drop words |
+| 1e residual | **PARTLY** -- linear but ~2000x main under the limit (svg x1990 + stray end tags: 810 KB -> 3.3 s; templates 1-2 MB -> ~2 s). Hostile only; no real-looking email trips the guard |
+| 2 bell | CONFIRMED in code; **UI-UNVERIFIED** |
+| 3 preview + public logs | CONFIRMED |
+| 4 merge readiness | **REFUTED** -- Lovable-backend `build_checklist` still offers `proposals` with flags off |
+
+PASS 4 | FAIL 2 (1d-new, 4) | PARTLY 1 (1e residual) | UI-UNVERIFIED 1 (bell settings panel)
+
+### Required before done (minimal fix per refute)
+1. **1d-new**: in `visibleHtml`, splice a cut COMMENT as `<!---->` (text cuts stay `" "`). Measured with
+   `scripts/verify10-comment-fix-proto.py`: 0 drops / 0 flips on loop-10 + loop-9 shapes, 0 regression drops on all 370 rows of
+   `verify8-chromium-rows`, every correspondence suite green.
+2. **4**: gate the Lovable `build_checklist` zod schema on `proposalsOn` exactly as the OpenAI path; pin it in checklist-tool.
+3. **1e residual (owner's call on severity; hostile sender only)**: depth limit `min(2000, 5e7 / tokens)` + template content
+   inheriting its template's depth -- prototype `scripts/verify10-guard-proto.ts`: every hostile shape 5-38 ms, 0 trips on
+   398 corpus rows + 5 real-looking emails.
+4. After landing: one browser check of the bell's What counts panel -- NOT YET UAT-VERIFIED.
