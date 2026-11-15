@@ -213,3 +213,35 @@ Preview-only (the judge's input), so no live behaviour is affected; it under-rea
 Minimal fixes: match `divRplyFwdMsg` before `appendonsend` (or rename every marker up to and including the first
 `divRplyFwdMsg`), and fall back to `afterCut` when the marker path yields nothing; strip `\r` before `afterCut`;
 optionally allow a leading `[...]` tag / `EXT:` and the missing Outlook locale prefixes.
+
+## Claim 4: merge readiness with every flag OFF -- PARTLY REFUTED
+
+`git diff origin/main...1c0171d7` (merge-base `aa29eef5`): 75 files. origin/main's 6 newer commits (`aa29eef5..ab6c87a0`)
+touch only `.claude/*.md` and two workflows, so this is the whole `src/` difference on merge.
+`git merge-tree --write-tree origin/main 1c0171d7`: one conflict, `.claude/memory.md` (ledger text only).
+
+Every `src/` file read (non-new files diffed hunk by hunk; new files checked for their gate):
+
+| # | change that reaches LIVE behaviour with every `correspondence.*` flag off | where | status |
+|---|---|---|---|
+| 1 | hidden text / comments / head / script cut from work-email text (visibleHtml) | `onedrive-feed.ts:457-481`, `html-visible.ts` | approved (a) -- but see claim 1d/1e |
+| 2 | entities decoded once; raw ` ` -> space; raw typographic quotes folded | `onedrive-feed.ts:445-456, 476-480` | approved (b). The folding of RAW quote characters is not strictly an entity; it cannot move the ask decision (`ASK` and the English cut rules contain no apostrophe) |
+| 3 | non-English reply headers / attributions / "Original Message" forms cut | `inbound-email.ts:72-152` | approved (c) |
+| 4 | quote-aware tag regex | `onedrive-feed.ts:474` | **NOT approved, drops visible asks (claim 1d)** |
+| 5 | "Teams chats" hidden from What counts | `attention.ts:35`, `AttentionBell.tsx:157` | expected |
+| 6 | **`build_checklist` tool schema gains a `proposals` boolean** that every agent turn sees; when the model sets it, the result is `{"error":"not_enabled","message":"Task proposals are not switched on. Say so in one line."}` | `tools.ts:99-103` + dispatch `tools.ts:129-139`; Lovable path `huddle.functions.ts:6287`; message `proposals.server.ts:246` | **NOT in the expected list** -- model-visible with flags off; a "show my proposed tasks / to-dos from my email" ask now gets a "not switched on" line instead of main's ordinary checklist. Carried since loop 5 (loop-7 row 4-11), never owner-approved |
+| 7 | owed WORK-email rows settle from `sent.json` | `email-replies.server.ts:257-302` | dormant: only when the deploy secret `HUDDLE_ONEDRIVE_FEEDS` carries a `sent` key (separate opt-in, NOT under `correspondence`; `optInFile`, `onedrive-feed.ts:188-201`). The only in-repo writer of that secret (`onedrive-feed-config.yml:92-103`) emits no `sent` key; owner chose this design (option A, 2026-11-12). Inference: off in prod -- the secret's value cannot be read from here |
+| 8 | `sendHuddleMessage` input accepts a `checklist` payload; `ensureChecklistDelivered` attaches it to the target agent's reply (or adds "Hello Sir, here is what's waiting for your review.") | `huddle.functions.ts:306-311, 7225-7227, 7466-7478` | dormant: only a caller that sends `checklist` triggers it (the flagged evening proposals posting); a signed-in client could send one into its own chat (sanitized, no new data reachable) |
+| 9 | bootstrap adds 3 nullable columns to `chat.email_replies`; bell SELECT reads 2 of them | `email-replies.server.ts:56-62, 346` | schema-additive, no behaviour change |
+| 10 | heartbeat starts two more dynamic imports and awaits them | `scheduler.server.ts:287-296, 317-318, 364-365` | zero work with flags off (`runIngestOnly` returns at `!cfg.correspondence.ingest`; `runProposalsPass` at `!proposalsConfig()`) |
+| 11 | `readFeed` I/O moved into `fetchDriveFile` (+ `id` in `$select`, explicit GET, `etag` on the result) | `onedrive-feed.server.ts:97-330` | equivalent: same short-circuit (`state.last_good ? state.etag : null`), same size cap, same error strings |
+| 12 | build_checklist reply sanitising moved into `sanitizeChecklistPayload` | `huddle.functions.ts:7153-7160`, `proposals.ts:792-837` | equivalent for rows with no `kind` (same 4 fields, same BACKLOG default, same tag filter, same `more`, undefined when empty) |
+| 13 | ChecklistCard reconcile split into proposal / task reads; stream summary splits proposal rows | `HuddleView.tsx:609-686`, `stream-context.ts:92-114` | equivalent with no proposal rows (same single `getBoardTasks`, same summary line) |
+| 14 | bell: badgeCount, layout wrapper, feed-first order, hidden `chat` kind in stored settings, settle excludes chat/feed | claim 2 | no visible change with flags off |
+| 15 | `fetchTranscript` exported; type-only fields in `seed.ts` / `store.ts`; `mapFeedMessage` optional fields; parse5 (server bundle only: `.output/server/_libs/parse5.mjs`, absent from `.output/public`) | -- | no behaviour change |
+
+So beyond the expected four, row 4 (a defect) and row 6 (a model-visible tool parameter) change live behaviour with
+every flag off; rows 7 and 8 are dormant paths that do not depend on a `correspondence.*` flag.
+
+Minimal fixes: row 4 -> claim 1d. Row 6 -> add `proposals` to the tool schema only when `proposalsConfig()` is non-null
+(build the tool list per turn), or accept it explicitly. Rows 7/8 -> owner acknowledgement, or gate on `correspondence.*`.
