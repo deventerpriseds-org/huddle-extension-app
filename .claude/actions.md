@@ -1,3 +1,10 @@
+- [ ] Owner APPROVED 2026-11-15 (both "as long as it's reversible"):
+      (1) FIX THE CAUSE of the `b">` fragments (main's tag rule ends a tag at the first `>` inside a quoted attribute):
+          rewrite each tag at parse5's own startTag/endTag source span instead of guessing with a regex. A 4th LIVE
+          change to Iris's email text (owner thumbs-up given). Tier 1: AC subagent -> build -> verifier. Owner's catch:
+          lowering the test to 75 accepted the fragments instead of fixing them.
+      (2) Report email links into Iris's EXISTING proposals checklist, plus a "Wrong" link per row (feeds tuning).
+          Depends on proposals being stored = flag on, which needs the loop-7 before-switch-on hardening. AC first.
 - [x] Verifier loop 9 (claude_verify-correspondence-proposals-9 @ f669c0b5) = FIX FIRST. Fixed: (1d) quote-aware
       tag regex REMOVED -- tags end exactly as on main (`=`-then-quote shapes dropped words); (1e) parse5 bounded by what
       it BUILDS (tree depth 2000 + elements 4/tag+2000, tree-adapter abort -> main's text), was a regex estimate beaten
