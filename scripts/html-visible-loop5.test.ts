@@ -69,6 +69,30 @@ t("LOOP7 a hidden formatting element rebuilt by the parser in a later <p> never 
   norm(htmlToText('<p><strong style="display:none">pre<table><tr><td>Can you sign the NDA?</td></tr></table><p>Thanks</p>')), "Can you sign the NDA?");
 t("LOOP7 past the depth guard a visibility:visible child is kept (keep-more, never a drop)",
   norm(htmlToText('<div style="visibility:hidden">' + "<div>".repeat(405) + '<span style="visibility:visible">Can you call?</span>' + "</div>".repeat(406))).includes("Can you call?"), true);
+// Verifier loop 8, 1d: a quote opens a quoted run only right after `=`; a quote anywhere else is an ordinary
+// character, so the tag ends at its first `>` exactly as on main and Chromium.
+t("LOOP8 apostrophe in an unquoted attribute value never swallows the visible ask",
+  norm(htmlToText("<p><b data-x=it's>Can you approve the budget? it's urgent</b></p>")), "Can you approve the budget? it's urgent");
+t("LOOP8 apostrophe in an unquoted href keeps the visible name",
+  norm(htmlToText("<p><a href=mailto:o'neil@corp.example>Dana O'Neil</a> wrote to us. Can you approve the budget?</p>")), "Dana O'Neil wrote to us. Can you approve the budget?");
+t("LOOP8 control: a balanced Outlook style with inner double quotes still strips cleanly",
+  norm(htmlToText(`<p style='font-family:"Calibri",sans-serif'>Can you sign?</p>`)), "Can you sign?");
+t("LOOP8 control: a > inside a quoted value still does not end the tag (GT-in-alt)",
+  norm(htmlToText('<p><img alt="a > b">Can you sign?</p>')), "Can you sign?");
+t("LOOP8 control: whitespace around = before a quoted value",
+  norm(htmlToText('<p><img alt = "a > b">Can you sign?</p>')), "Can you sign?");
+// Verifier loop 8, 1e: the parser is skipped above PARSE_DEPTH_LIMIT (keep-more = main's text, linear time).
+{
+  const deep = "<div>".repeat(40_000) + "Can you approve?" + "</div>".repeat(40_000);
+  const t0 = performance.now();
+  const out = htmlToText(deep);
+  const ms = performance.now() - t0;
+  t("LOOP8 40k nested <div> is handled in under 1.5 s (was ~5 s through the parser)", ms < 1500, true);
+  t("LOOP8 40k nested <div> still keeps the text", norm(out).includes("Can you approve?"), true);
+  t("LOOP8 40k unclosed <div> (no end tags) also skips the parser", (() => { const s0 = performance.now(); htmlToText("<div>".repeat(40_000) + "x"); return performance.now() - s0 < 1500; })(), true);
+}
+t("LOOP8 just under the limit the parser still runs: a hidden ancestor's text is still cut",
+  norm(htmlToText('<div style="display:none">secret ' + "<div>".repeat(1500) + "inner" + "</div>".repeat(1501) + "Can you call?")), "Can you call?");
 console.log(`exact ${exact.length}/${cases.length}`);
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

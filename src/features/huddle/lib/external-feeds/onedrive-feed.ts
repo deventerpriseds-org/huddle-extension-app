@@ -467,7 +467,11 @@ export function htmlToText(html: string): string {
       .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
       .replace(/<br\s*\/?>|<\/(p|div|li|tr|h\d)>/gi, "\n")
       // A `>` inside a quoted attribute value does not end the tag (verifier loop 5, GT-in-alt); then main's plain rule.
-      .replace(/<[a-zA-Z\/!?](?:[^>"']|"[^"]*"|'[^']*')*>/g, " ")
+      // A quote opens a quoted run ONLY right after `=` (as the HTML tokenizer does): a quote in a name or inside an
+      // unquoted value (`data-x=it's`, `href=mailto:o'neil@...`) is an ordinary character, so this match fails there
+      // and main's plain rule ends the tag at the first `>` (verifier loop 8, 1d: the old any-quote rule swallowed
+      // visible text up to the next apostrophe).
+      .replace(/<[a-zA-Z\/!?](?:[^>"'=]|=\s*"[^"]*"|=\s*'[^']*'|=)*>/g, " ")
       .replace(/<[^>]+>/g, " "),
   )
     .replace(/\u00a0/g, " ")

@@ -1,3 +1,8 @@
+- [x] Verifier loop 8 (artifact @ 4857ac27; agent killed by a container restart mid-pass) found 1d: the quote-aware tag
+      regex swallowed visible text after an apostrophe in an unquoted attribute (live screen, flags off), and 1e: parse5
+      roughly quadratic on 20k+ nested blocks. FIXED: quote opens a run only right after `=` (tokenizer rule); visibleHtml
+      skips the parser above an estimated nesting of 2000 (keep-more = main). Loop-8 probes re-run: quote 8/8 same as
+      main+Chromium, 63-shape set only the 2 font-size:0 rows it classed deliberate; loop-7 39/39, loop-6 8/8 identical.
 - [x] Verifier loop 7 (46ff73f8) = FIX FIRST on claim 1 (malformed HTML still flipped Iris's live ask decision in 11/39
       shapes). Fixed: html-visible.ts now only LOCATES hidden text with parse5 and cuts those text/comment spans out of
       the ORIGINAL html; every tag stays where the email wrote it, so main's conversion runs unchanged (39/39 + 8/8

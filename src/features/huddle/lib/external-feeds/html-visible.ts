@@ -151,7 +151,26 @@ const VOID = new Set(["br", "hr", "img", "input", "meta", "link", "area", "base"
  * htmlToText uses to cut Outlook's reply header) and its visible text, escaped. Never throws (parse5 never throws on
  * malformed input; a pathological input falls back to the empty string).
  */
+/** Cheap linear upper bound on element nesting: start tags (not void) minus end tags, clamped at 0. Over-counts
+ *  unclosed <p>/<li>/<td>, which only ever errs toward the keep-more fallback. */
+export function estimatedDepth(html: string): number {
+  let depth = 0;
+  let max = 0;
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)/g;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    if (m[1]) depth = Math.max(0, depth - 1);
+    else if (!VOID.has(m[2].toLowerCase())) max = Math.max(max, ++depth);
+  }
+  return max;
+}
+
+/** Above this estimated nesting the parser is skipped (its cost grows roughly with depth squared: 40k nested <div>
+ *  measured at 5 s, 80k at 24 s -- verifier loop 8, 1e). No real email nests anywhere near this; 2000 costs ~10 ms. */
+export const PARSE_DEPTH_LIMIT = 2000;
+
 export function visibleHtml(html: string): string {
+  // A pathologically nested body is returned unchanged: exactly main's text (keep-more), in linear time.
+  if (estimatedDepth(html) > PARSE_DEPTH_LIMIT) return html;
   const PREFIX = "<!doctype html>";
   let doc: Node;
   try {
