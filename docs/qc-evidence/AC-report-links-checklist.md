@@ -256,13 +256,98 @@ thumbs-up").
 | K-10 | Given the change, when the existing judge fixture set (`scripts/fixtures/needs-you-judge-cases.json`) is re-run, then every previous `needs_reply` case is still `needs_reply`, and every case that moves from `fyi` to Reply is one of K-1's four shapes (listed in the PR). | regression | fixture diff table |
 
 ## Spelling table
-PENDING
+
+This covers the app reading `?huddle=&proposal=&correction=&list=` (extending `parseFocusParams`). The accepted
+id shape is the one that already exists, `^prop-[0-9a-f]{1,32}$` (`proposals.functions.ts:15`). The reader is
+`URLSearchParams` (WHATWG URL Standard, application/x-www-form-urlencoded parser). **Gap: I did not open RFC 3986
+or the WHATWG spec in this pass. The "Documented by" cells name the section to check, and the red-team pre-pass
+must confirm each row against the document before it becomes a test.**
+
+| # | Input (after the host) | Documented by | Expected verdict | Wrong answer would be |
+|---|---|---|---|---|
+| S-1 | `/?huddle=dm-iris-chase&proposal=prop-0a1b2c` | builder output (L-1) | FOCUS prop-0a1b2c | FALSE REFUSAL |
+| S-2 | `/?proposal=prop-0a1b2c&huddle=dm-iris-chase` (order swapped) | WHATWG URLSearchParams: order does not matter for `get` | FOCUS | FALSE REFUSAL |
+| S-3 | `/?huddle=dm-iris-chase&proposal=prop%2D0a1b2c` (`-` percent-encoded) | RFC 3986 2.3: encoded unreserved is equivalent; URLSearchParams decodes | FOCUS (decoded value matches) | FALSE REFUSAL |
+| S-4 | `/?huddle=dm-iris-chase&proposal=prop-0A1B2C` (upper hex) | existing zod regex is lowercase only | IGNORE (as `/?huddle=dm-iris-chase`) | FALSE PASS |
+| S-5 | `/?huddle=dm-iris-chase&Proposal=prop-0a1b2c` (key case) | URLSearchParams keys are case-sensitive | IGNORE | FALSE PASS |
+| S-6 | `/?huddle=dm-iris-chase&proposal=prop-0a1b2c&proposal=prop-ffff` | URLSearchParams `get` returns the FIRST | FOCUS prop-0a1b2c only; second never used | FALSE PASS (acts on a second id) |
+| S-7 | `/?huddle=dm-iris-chase&proposal=+prop-0a1b2c` (`+` = space) | x-www-form-urlencoded: `+` decodes to space | after `.trim()` as `parseFocusParams` does: FOCUS; with no trim: IGNORE. Pick one and test it; recommended trim (matches existing) | either way, untested = defect |
+| S-8 | `/?huddle=dm-iris-chase&proposal=prop-0a1b2c%00` / `%0A` | percent-decoding yields a control char | IGNORE | FALSE PASS |
+| S-9 | `/?huddle=dm-iris-chase&proposal=prop-0a1b2c/` (trailing slash in value) | not in the id pattern | IGNORE | FALSE PASS |
+| S-10 | `/?huddle=dm-iris-chase/&proposal=prop-0a1b2c` / `//?huddle=...` / `/index.html?huddle=...` | app route shape | as today's `?huddle=` handling for that path (no new behaviour) | FALSE PASS |
+| S-11 | `/?proposal=prop-0a1b2c` (no huddle) | `parseFocusParams`: email without huddle is ignored | IGNORE (same rule for proposal) | FALSE PASS |
+| S-12 | `/?huddle=dm-sam-trent&proposal=prop-0a1b2c` (other agent) | proposals live only in `dm-iris-chase` | open Iris's 1:1 and focus, or IGNORE; recommended IGNORE proposal, open Sam (no cross-huddle jump) | FALSE PASS |
+| S-13 | `/?huddle=dm-iris-chase&proposal=prop-0a1b2c&src=report&utm_source=x&fbclid=y` | extra params | FOCUS; extras ignored, all stripped by `replaceState` | FALSE REFUSAL |
+| S-14 | `/?huddle=dm-iris-chase&proposal=prop-0a1b2c#frag` | fragment is not part of search | FOCUS; hash kept | FALSE REFUSAL |
+| S-15 | Safe Links wrapped: `https://<x>.safelinks.protection.outlook.com/?url=<encoded original>&data=...` | Microsoft Defender Safe Links rewrites, then redirects to the original | app receives the ORIGINAL; FOCUS. Scanner GET writes nothing (L-10) | FALSE PASS on prefetch |
+| S-16 | `HTTPS://APP-HOST/?huddle=dm-iris-chase&proposal=prop-0a1b2c` | RFC 3986 3.1 / 3.2.2: scheme and host case-insensitive | FOCUS (browser normalises) | FALSE REFUSAL |
+| S-17 | `/?huddle=dm-iris-chase&proposal=prop-` + 33 hex | id max 32 | IGNORE | FALSE PASS |
+| S-18 | replayed: the same link opened a week later after Approve | state lives in the store, not the link | FOCUS, closed state (L-6) | FALSE PASS (re-act) |
+| S-19 | forwarded: the link opened by another signed-in identity | owner-scoped store + verified token | "not in your checklist" (A-5) | FALSE PASS |
+| S-20 | `/?huddle=dm-iris-chase&proposal=all` | R-1 reserved word | REVIEW ALL | FALSE REFUSAL |
+| S-21 | `/?huddle=dm-iris-chase&proposal=ALL` / `all ` / `all/` | exact match only | IGNORE (S-7's trim rule applies to `all ` too) | FALSE PASS |
+| S-22 | `/?huddle=dm-iris-chase&correction=prop-0a1b2c&list=todo` | W-2 | OPEN WRONG PAGE (no write) | FALSE REFUSAL |
+| S-23 | `...&correction=prop-0a1b2c&list=TODO` / `list=reply%20` / missing `list` | `list` is a fixed enum, exact | OPEN WRONG PAGE with list unknown -> owner picks; never guessed | FALSE PASS (wrong list recorded) |
+| S-24 | `...&correction=prop-0a1b2c&label=not_mine` (label in URL) | W-3: recording needs an in-app tap | label param IGNORED, 0 writes | FALSE PASS (one-step action) |
+| S-25 | over-match negative: `prop-0a1b2c` appearing in the `email=` value or in the hash | only the `proposal` key is read | no proposal focus | FALSE PASS |
 
 ## Goal -> AC coverage
-PENDING
 
-## Build plan
-PENDING
+| Owner goal | ACs |
+|---|---|
+| Act on report items from the email via Iris's existing checklist | L-1..L-12, R-1..R-4, D-1..D-4 |
+| A "Wrong" link per row that feeds tuning | W-1..W-13, C-11, K-8 |
+| Only he can act | A-1..A-7, E-9, S-19 |
+| No forms / no one-step actions / no Actionable Messages | E-1, L-9, L-10, W-3, W-13, S-24 |
+| Works in Outlook desktop and mobile | E-2..E-8 |
+| Reversible | V-1..V-7, W-9, C-6, C-10 |
+| Safe to switch proposals on first | G-1..G-8 |
+| Public repo: nothing leaks | P-1..P-4, C-9 |
+| Hide noise categories in Settings (new) | C-1..C-13 |
+| Reply items with no question; answered rows shown (new) | K-1..K-10 |
+
+No AC lacks a goal. Performance: F-3, F-4, E-8.
+
+## Build plan (smallest reversible slice first)
+
+| Slice | What | Reversible by | Needs flag on? |
+|---|---|---|---|
+| 0 | G-1..G-7 hardening (forged headers, null doer, rules in code) + mutation proofs | revert commit; `proposals` stays OFF | no |
+| 1 | Verified identity on the three proposal server fns (A-2..A-4, A-7). Separate commit. Owner sign-off first (OQ-5) | revert commit | no |
+| 2 | App reads `proposal=` (spelling table), focuses the row, standalone row fallback (L-3..L-8, F-1). Inert until a link exists | revert; param ignored | no |
+| 3 | Report rendered FROM the store, links + "Review all" (L-1, L-2, L-12, R, D, E, V-1), behind `correspondence.reportLinks` | flag off = byte-identical report | yes (`proposals` on, after slice 0) |
+| 4 | Wrong page + `owner_correction` columns + undo (W, V-2, V-3) | flag off; documented SQL undo | yes |
+| 5 | Categories + Settings hiding (C) | clear `hidden_categories`; flag off | yes |
+| 6 | Reply-without-question + answered rows (K), judge schema change listed for the owner | revert commit; fixture diff | yes |
+
+Slices 0-2 change nothing the owner sees. Then: red-team pre-pass from the spelling table, independent verifier,
+owner live check in Outlook (E-4).
 
 ## Open questions for the owner
-PENDING
+
+| # | Fork | Options | Recommendation |
+|---|---|---|---|
+| OQ-1 | Name of the switch | `correspondence.reportLinks` / something else | `reportLinks`. Low risk, reversible. |
+| OQ-2 | Where a "Needs your reply" row's link goes (it is not a checklist to-do) | A: Wrong link only (slice 1). B: the existing email reply card (`?huddle=&email=`), which needs the bell's email rows, currently off (`emailBell`). C: make reply rows checklist rows | A now, B later. B reuses an existing system, C would build a second reply list. |
+| OQ-3 | Where corrections are stored | A: a column on the two existing tables. B: one new `chat.report_corrections` table keyed by row id | A: extends what exists, and the undo is a column clear. B only if he wants one place to read every correction. |
+| OQ-4 | "Review all" shape | A: client-rendered card, no chat message. B: posts the evening checklist into the chat | A: re-opening twice adds nothing to the chat (R-3). |
+| OQ-5 | Require a verified sign-in on the proposal buttons (tightens existing behaviour) | yes / no | Yes. Without it, a forwarded link plus a typed email address can act. Reversible commit. |
+| OQ-6 | Does "Wrong" on a to-do also dismiss it? | A: no, it only records. B: it records and dismisses | A: one tap has one effect. He can still Dismiss from the checklist. |
+| OQ-7 | Threads he answered before they were ever judged | A: count only, no model call. B: judge them too so they list as "answered" | A: B costs a model call per settled thread for rows that need nothing. |
+| OQ-8 | Where the report is built | A: in the app (it can read the store, and Graph send already exists with the recipient gate). B: on the runner, which needs a database path | A: D-1/D-4 are only reachable from where the store is. |
+
+Restated in one line each:
+- OQ-1: switch name. Recommend `reportLinks`.
+- OQ-2: reply-row links. Recommend Wrong-only now, the email reply card later.
+- OQ-3: correction storage. Recommend a column on the existing tables.
+- OQ-4: Review all. Recommend a client card with no chat message.
+- OQ-5: verified sign-in on proposal buttons. Recommend yes.
+- OQ-6: Wrong also dismisses? Recommend no.
+- OQ-7: already-answered, never-judged threads. Recommend count only.
+- OQ-8: build the report in the app, not the runner. Recommend the app.
+
+## Gaps
+
+- The loop-7 verifier text was not found, so G-6 lists rules from the brief. The verifier must name any rule G-6 misses.
+- RFC 3986 and the WHATWG URL spec were not opened in this pass (spelling-table note above).
+- Still open from the brief and not covered here: a browser UAT for the triage buttons, the 2-day triage lookback, the preview cap.
