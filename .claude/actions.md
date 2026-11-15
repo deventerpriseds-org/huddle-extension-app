@@ -1,4 +1,5 @@
 # Action Tracker — huddle-extension-app
+- [x] parked.md (2026-11-15): owner go recorded for correspondence-branch, correspondence-collection, report-links-checklist, parked-work-reminder; verify-loop-work-slug-alias still open.
 - [x] .claude/parked.md on main (2026-11-15): the parked-work list lives on the default branch, which the reminder hook reads first.
 - [x] correspondence-backfill.yml + onedrive-feed-flags teams/sent (2026-11-15): one-time ledger back-fill from OneDrive versions (dry run default; DB firewall rule for the runner only); flags tool can switch on the Teams and Sent files without touching other keys.
 - [x] onedrive-feed-flags.yml (2026-11-15): merges allow-listed correspondence switches into HUDDLE_ONEDRIVE_FEEDS without overwriting the rest (onedrive-feed-config.yml rebuilds the whole secret). Dry-run by default.
