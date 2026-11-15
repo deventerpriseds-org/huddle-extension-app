@@ -1,0 +1,82 @@
+name: Set correspondence switches in HUDDLE_ONEDRIVE_FEEDS (merge, never overwrite)
+
+# WHAT:       Merges named correspondence.* switches into the EXISTING HUDDLE_ONEDRIVE_FEEDS secret and stores it
+#             back. Every other key (mailbox, drive, Teams settings, owner ids) is kept exactly as it was.
+# WHY:        onedrive-feed-config.yml rebuilds the whole secret from its inputs, so running it would wipe the
+#             Teams and correspondence keys added since. Owner 2026-11-15: "Push everything there and make sure
+#             it's used going forward" -- switching collection on must not lose the rest of the config.
+#             THIS REPO IS PUBLIC: only the switch NAMES and the values passed in are printed (both already public
+#             here); the secret's other values never are. Only an allow-listed set of switches can be set.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/actions.md (2026-11-15 "Push everything there"); onedrive-feed.ts parseCorrespondence.
+
+on:
+  workflow_dispatch:
+    inputs:
+      set:
+        description: "Comma list of name=value, e.g. ingest=true,teamsLoadAt=18:00. Allowed: ingest, bell, proposals, meetingTriage, staleAlerts, conversations, emailBell (true/false); teamsLoadAt (HH:MM or off); minIntervalMinutes (number); sources (teams+email | teams | email)."
+        required: true
+      apply:
+        description: "true = store the merged secret; false = dry run (print the switch names and values only)"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GHUB_KEY }}
+      REPO: ${{ github.repository }}
+      CURRENT: ${{ secrets.HUDDLE_ONEDRIVE_FEEDS }}
+      IN_SET: ${{ inputs.set }}
+      IN_APPLY: ${{ inputs.apply }}
+    steps:
+      - name: Merge switches into the secret
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then echo "::error::GHUB_KEY is empty for this repo"; exit 1; fi
+          if [ -z "$CURRENT" ]; then echo "::error::HUDDLE_ONEDRIVE_FEEDS is empty; configure the feed first (onedrive-feed-config.yml)"; exit 1; fi
+          python3 - <<'PY' > /tmp/cfg.json
+          import json, os, re, sys
+          cur = json.loads(os.environ["CURRENT"])
+          BOOL = {"ingest", "bell", "proposals", "meetingTriage", "staleAlerts", "conversations", "emailBell"}
+          corr = dict(cur.get("correspondence") or {})
+          changes = []
+          for part in [p.strip() for p in os.environ["IN_SET"].split(",") if p.strip()]:
+              if "=" not in part:
+                  sys.exit(f"bad entry (want name=value): {part}")
+              k, v = [x.strip() for x in part.split("=", 1)]
+              if k in BOOL:
+                  if v not in ("true", "false"): sys.exit(f"{k} must be true or false")
+                  corr[k] = v == "true"
+              elif k == "teamsLoadAt":
+                  if v == "off": corr[k] = "off"
+                  elif re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", v): corr[k] = v
+                  else: sys.exit("teamsLoadAt must be HH:MM or off")
+              elif k == "minIntervalMinutes":
+                  if not v.isdigit() or not (1 <= int(v) <= 1440): sys.exit("minIntervalMinutes must be 1-1440")
+                  corr[k] = int(v)
+              elif k == "sources":
+                  m = {"teams+email": ["teams", "email"], "teams": ["teams"], "email": ["email"]}
+                  if v not in m: sys.exit("sources must be teams+email, teams or email")
+                  corr[k] = m[v]
+              else:
+                  sys.exit(f"{k} is not an allowed switch")
+              changes.append(f"{k}={v}")
+          cur["correspondence"] = corr
+          print(json.dumps(cur))
+          print("changes: " + ", ".join(changes), file=sys.stderr)
+          print("correspondence switches now: " + ", ".join(f"{k}={corr[k]}" for k in sorted(corr) if k in BOOL or k in ("teamsLoadAt", "minIntervalMinutes", "sources")), file=sys.stderr)
+          print("top-level keys kept: " + ", ".join(sorted(cur.keys())), file=sys.stderr)
+          PY
+          if [ "$IN_APPLY" = "true" ]; then
+            gh secret set HUDDLE_ONEDRIVE_FEEDS --repo "$REPO" < /tmp/cfg.json
+            echo "HUDDLE_ONEDRIVE_FEEDS updated. The next deploy-swa.yml run (or push to main) applies it to the app."
+          else
+            echo "Dry run: nothing stored."
+          fi
+          rm -f /tmp/cfg.json
