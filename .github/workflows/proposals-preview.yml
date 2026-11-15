@@ -34,6 +34,19 @@ on:
         required: false
         type: boolean
         default: false
+      as_of:
+        description: "Read the feed files AS THEY WERE at this ISO UTC time (OneDrive version history), e.g. 2026-11-14T21:00:00Z. Blank = current files."
+        required: false
+        default: ""
+      step:
+        description: "Tuning step to run instead of the full preview: blank = full preview; reply = step 1 (which emails need a reply); action = steps 2+3 (open items when you are on To; actions when CC'd or on a list)"
+        required: false
+        default: ""
+      probe:
+        description: "Run the counts-only correspondence probes (scripts/correspondence-probes.ts) INSTEAD of the preview"
+        required: false
+        type: boolean
+        default: false
       accept_unmarked_teams:
         description: "Preview only: read Teams lines that predate the synthetic:false marker"
         required: false
@@ -70,6 +83,10 @@ jobs:
           PREVIEW_EMAIL: ${{ inputs.email && '1' || '0' }}
           HUDDLE_EMAIL_FROM: ${{ secrets.HUDDLE_EMAIL_FROM }}
           PREVIEW_ACCEPT_UNMARKED: ${{ inputs.accept_unmarked_teams && '1' || '0' }}
+          PREVIEW_PROBE: ${{ inputs.probe && '1' || '0' }}
+          PREVIEW_STEP: ${{ inputs.step }}
+          PREVIEW_AS_OF: ${{ inputs.as_of }}
+          FIREFLIES_API_KEY: ${{ inputs.probe && secrets.FIREFLIES_API_KEY || '' }}
         run: |
           TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
             -d "client_id=$CLIENT_ID" --data-urlencode "client_secret=$CLIENT_SECRET" \
@@ -77,4 +94,6 @@ jobs:
             | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
           if [ -z "$TOKEN" ]; then echo "::error::could not get an app-only Graph token"; exit 1; fi
           echo "::add-mask::$TOKEN"
+          if [ "$PREVIEW_STEP" = "reply" ] || [ "$PREVIEW_STEP" = "action" ]; then TOKEN="$TOKEN" bun scripts/reply-scan-preview.ts; exit $?; fi
+          if [ "$PREVIEW_PROBE" = "1" ]; then TOKEN="$TOKEN" bun scripts/correspondence-probes.ts; exit $?; fi
           TOKEN="$TOKEN" bun scripts/proposals-preview.ts

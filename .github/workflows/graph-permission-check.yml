@@ -42,6 +42,11 @@ on:
         description: "Section 5b: comma-separated drive-relative folders to LIST (names/sizes/modified only; needs feed_drive_users)."
         required: false
         default: ""
+      feed_links:
+        description: "Section 5b: also print each file's OneDrive web link -- ONLY for the /automation/Huddle Preview folder (owner's own report files; no content)."
+        required: false
+        type: boolean
+        default: false
       mail_probe_subject:
         description: "Section 7: find messages whose subject STARTS WITH this text in each mailbox (all folders, incl. Junk). Prints count, folder, time only."
         required: false
@@ -70,6 +75,7 @@ jobs:
           FEED_USERS: ${{ inputs.feed_drive_users }}
           FEED_PATHS: ${{ inputs.feed_paths }}
           FEED_FOLDERS: ${{ inputs.feed_list_folders }}
+          FEED_LINKS: ${{ inputs.feed_links && '1' || '0' }}
           MAIL_PROBE: ${{ inputs.mail_probe_subject }}
           # A SECRET, never a workflow input: inputs are printed in this public log's env block
           # (VERIFY-trinnex-onedrive-feed-1 D1 -- an earlier run printed the config that way).
@@ -256,10 +262,11 @@ jobs:
               for f in "${FF[@]}"; do
                 f=$(echo "$f" | xargs)
                 L=$(curl -s -o /tmp/l.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
-                  "https://graph.microsoft.com/v1.0/users/$u/drive/root:$f:/children?\$select=name,size,lastModifiedDateTime,folder,file&\$top=200")
+                  "https://graph.microsoft.com/v1.0/users/$u/drive/root:$f:/children?\$select=name,size,lastModifiedDateTime,folder,file,webUrl&\$top=200")
                 echo "$f | list HTTP $L"
-                python3 -c '
-          import json, re
+                FOLDER="$f" python3 -c '
+          import json, re, os
+          links=os.environ.get("FEED_LINKS")=="1" and os.environ.get("FOLDER","").rstrip("/") in ("/automation/Huddle Preview","/automation/Huddle%20Preview")
           d=json.load(open("/tmp/l.json"))
           e=(d.get("error") or {}).get("code")
           if e: print("   error", e); raise SystemExit
@@ -267,7 +274,8 @@ jobs:
               n=c.get("name","")
               if "@" in n or re.search(r"\d{7,}", n): n="<masked name>"
               kind="folder" if c.get("folder") is not None else "file"
-              print("   ", kind, n, "| size", c.get("size","-"), "| modified", c.get("lastModifiedDateTime","-"))' 2>/dev/null || echo "   (unreadable listing)"
+              print("   ", kind, n, "| size", c.get("size","-"), "| modified", c.get("lastModifiedDateTime","-"))
+              if links and kind=="file" and n.lower().endswith(".html"): print("      link", c.get("webUrl","-"))' 2>/dev/null || echo "   (unreadable listing)"
               done
             done
           fi

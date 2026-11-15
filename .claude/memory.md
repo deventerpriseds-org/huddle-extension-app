@@ -4023,3 +4023,14 @@ here as fact three times before being checked.)
   meaning; its ask quote must be verbatim in the latest OTHER message. Owner rejected keyword capture. Report is
   EMAIL ONLY. Meeting action items only via the triage ping (Mine / For someone / Skip). Iris's live alert screen
   (inbound-email.ts) is pinned unchanged.
+  UPDATE 2026-11-13 ~23:00 UTC: loop-4 repair pass DONE at claude_task-proposals 03cabacc (12 items; implementer
+  reports all suites green, 33 mutations FIRED) -- CLAIMED, NOT yet independently verified. Verifier LOOP 5 running
+  (report -> branch claude_verify-correspondence-proposals-5, docs/qc-evidence/VERIFY-correspondence-proposals-5.md).
+  Merge adds nullable chat.email_replies.feed_pending at bootstrap (live DDL, additive). Files: emails.json + sent.json
+  complete:true; Teams still broken -- re-run at 22:19 UTC wrote 59 new concat(' text lines (108-166). Nothing live.
+  Teams FIXED 23:13 UTC: 166/166 parse, 626 msgs to Nov 13 19:39 UTC (Nov 9-11 duplicated by the re-run; dedup
+  on chatId+message.id handles it). Lines now carry ownerUserId (owner's Teams id -- never print/commit it).
+  Owner decisions 23:30 UTC: 3 live work-email changes APPROVED; complete:false stays refused (no warn-and-use) but
+  is URGENT -> bell + Iris chat (dm-iris-chase, push) + self-email, once per incident (feed-staleness 'incomplete'
+  state reads chat.external_feed_state.last_status; email/sent only). Container restarted 3x in ~30 min and killed
+  verifier loop 5 twice -- commit+push per step.

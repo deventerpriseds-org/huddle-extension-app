@@ -88,6 +88,13 @@
       docs/qc-evidence/IMPL-meeting-triage.md). All suites green on the merge. NOT live; flags conversations /
       meetingTriage OFF. Verifier loop 7 + real-mail report next.
 # Action Tracker — huddle-extension-app
+- [x] parked.md (2026-11-15): owner go recorded for correspondence-branch, correspondence-collection, report-links-checklist, parked-work-reminder; verify-loop-work-slug-alias still open.
+- [x] .claude/parked.md on main (2026-11-15): the parked-work list lives on the default branch, which the reminder hook reads first.
+- [x] correspondence-backfill.yml + onedrive-feed-flags teams/sent (2026-11-15): one-time ledger back-fill from OneDrive versions (dry run default; DB firewall rule for the runner only); flags tool can switch on the Teams and Sent files without touching other keys.
+- [x] onedrive-feed-flags.yml (2026-11-15): merges allow-listed correspondence switches into HUDDLE_ONEDRIVE_FEEDS without overwriting the rest (onedrive-feed-config.yml rebuilds the whole secret). Dry-run by default.
+- [x] proposals-preview.yml as_of input (2026-11-15): tuning reads the feed files as they were at a time (live email file shrank 127 -> 17 records).
+- [x] proposals-preview.yml step=action (2026-11-14): runs scripts/reply-scan-preview.ts steps 2+3 from the chosen ref
+      (owner's step-1 review: "next ask for all that include me directly... then indirectly with an action").
 Last updated: 2026-10-27
 
 ## ACT:correspondence-checklist — Teams + email unanswered correspondence on the bell; task proposals in Iris's checklist (2026-11-12)
@@ -137,15 +144,58 @@ replies to work email = option A (Power Automate adds Sent Items) with instructi
       (redundant outer gate, recorded). Evidence docs/qc-evidence/IMPL-feed-staleness.md. NOT live.
 - [x] Verifier loop-3 fixes D1-D6, M1, M2 all on claude_task-proposals (D6 restored at 648e6f64 after a stale-base
       revert by 4fc54efe). NOT live.
-- [x] Independent verifier loop 4 over the whole branch: FIX FIRST; repair agent running (commits through 18:03 UTC).
-- [ ] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history).
+- [x] Independent verifier loop 4 over the whole branch: FIX FIRST; repair pass DONE at 03cabacc (12 items, claimed;
+      evidence docs/qc-evidence/IMPL-task-proposals.md + IMPL-feed-staleness.md "Verifier loop-4 fix pass").
+- [ ] Independent verifier loop 5 at 03cabacc: RUNNING (3h budget; report pushed per claim to
+      claude_verify-correspondence-proposals-5). Merge decision waits on its verdict.
+- [x] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history):
+      APPROVED 2026-11-13 ("I'm fine with your 3 live work email changes").
+- [x] Verifier loop 5 (b4e76df7) = FIX FIRST: F1-F3 hidden-text drops (23/88 Chromium rows) + urgent alert double-fire
+      (U1/U4) + X3-X6. All fixed on claude_task-proposals @ d849f0da (parse5 tree for htmlToText; incomplete incident
+      only ends on a non-incomplete read; year+clock for name-only wrapped attributions); 7 mutations FIRED. Verifier
+      loop 6 next. Owner still to OK a 4th live change: an English Gmail attribution wrapped over 2 lines is now cut.
+- [x] Verifier loop 6 (9afa8eb6) = FIX FIRST: implied end tags flipped live ask decision on malformed HTML, depth-guard
+      drop, CSS-string ';' split, U5 stuck incomplete sent alert. All fixed @ claude_task-proposals 800e7fec (5 mutations
+      FIRED, 1 equivalent). Loop 7 will cover these + the redesign once its two parts merge in.
+- [ ] Owner 2026-11-14 (later): report is EMAIL ONLY for now (no Teams); CC-only counts only when the message names him
+      or addresses the group ("everyone", "all", "team"...); Teams later must be judged from CONTEXT using the
+      speaker-tagged thread (his messages vs others), not @mention rules. Sent to the part-A implementer. His message
+      "I just need a way to..." was cut off -- asked.
+- [ ] Owner 2026-11-14: "you are trying to apply keyword capture instead of using ai's ability to determine it
+      contextually" -> redesign switched to an AI conversation judge: code computes FACTS only (thread, who said what,
+      To/CC position, calendar/bulk header stamps, settled-by-owner-reply); the model judges meaning per conversation
+      (needs_reply / action_for_owner / fyi / minutes / calendar / broadcast, addressed?, verbatim ask quote, owner-only
+      to-dos), validated (quote must be in the message; to-dos through existing validators; failure = needs_context).
+      Keyword spelling tables superseded for meaning. Both implementers redirected.
+- [ ] Redesign build IN PROGRESS: ACs on claude_ac-correspondence-redesign @ 5b8ba7d3 (~85 ACs, 10 open questions w/
+      defaults); probes docs/qc-evidence/PROBES-correspondence-redesign.md (invites = Exchange calendar headers, no
+      Content-Class; owner alone on To 93/127). Part A (needs-you classifier + report) on claude_redesign-needs-you,
+      part B (meeting triage) on claude_redesign-meeting-triage.
+- [ ] Owner 2026-11-14 redesign answers: (1) Iris's live email alerts are good -- do NOT change them (two-line
+      attribution join removed from the live screen, ddc7b55d); (2) "needs you" = addressed to me directly OR a group
+      conversation that includes me (not literal broadcasts), email AND Teams [assumed: "This is an email and 6pm" =
+      "email and Teams"]; (3) meeting minutes: Fireflies can't tag owners, so ping on minutes arrival with a drop list
+      per action item (mine / type who it's for / skip) -> only then into a meeting action-item queue. AC pass next.
+- [ ] Owner 2026-11-14 on the open-vs-replied report: "The logic and tuning is horrible" -- meeting minutes listed as
+      needing a reply, mass broadcasts, meeting invites, same-thread replies listed separately, to-dos for things not
+      directed at him. Root causes read in code: inbound-email.ts asksSomething (keyword ASK regex + INVITE_SUBJECT =
+      always open), no thread grouping, no To/CC test (emails.json HAS toRecipients 126/127, ccRecipients 13). The same
+      screenMessage drives the LIVE Iris email alerts. Redesign plan put to owner for thumbs-up; verifier loop 5 parked.
+- [x] Owner 2026-11-13: incomplete (complete:false) stays a hard refusal, but must alert by bell + Huddle chat + email
+      (urgent). Built on claude_task-proposals 84b4a613/b7dd9343 (feed-staleness I1-I22 95/0, 4 mutations FIRED);
+      NOT live, NOT independently verified yet -- covered by verifier loop 5. Flag: correspondence.staleAlerts.
 - [x] PA emails.json: FIXED 2026-11-13 (run 43473391504): complete:true, 127 records Nov 6 08:24 -> Nov 13 15:17 UTC,
       published 15:18 UTC. sent.json: complete:true, 29 records, sentDateTime 29/29, published 15:37 UTC.
-- [ ] PA Teams backfill: RAN but WRITES BROKEN LINES. teams-chats.jsonl now 224 lines; the 117 new lines (108-224, written
+- [x] PA Teams backfill: FIXED 2026-11-13 23:13 UTC (run 43525408545, file modified 22:58 UTC): 166/166 lines parse,
+      626 messages Nov 9 14:03 -> Nov 13 19:39 UTC; Nov 9-11 counts exactly double (re-captured; reader dedups on
+      chatId+message.id); new per-line key ownerUserId on 59 lines (reader ignores it). HISTORY: RAN but WROTE BROKEN LINES. teams-chats.jsonl now 224 lines; the 117 new lines (108-224, written
       2026-11-13) all start with the literal text `concat('{"...` -- the append step stores its FORMULA as plain text
       instead of evaluating it (runs 43473581711/43474056808/43478709377, branch claude_teams-parse-diag). The Huddle
       Teams reader skips each as `not_json_line`, so none of today's backfill is usable. Fix is in PA: enter the line
       content through the expression editor (fx), then clear lines 108-224 and re-run the backfill.
+      RE-CHECK 2026-11-13 22:31 UTC (run 43519970343, file modified 22:19 UTC): old bad lines were cleared, but the
+      re-run appended 59 NEW lines (108-166) with the identical `concat('` prefix and char-313 break -- formula still
+      stored as text. Still 107 usable lines / 271 messages (Nov 9 14:03 -> Nov 11 21:04 UTC). Still blocked on PA.
 - [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
       docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
 - [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
@@ -5323,3 +5373,9 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
   taps (10-19..11-02) was PARK or BACKLOG -> `GIVE_UP route=NONE http=0`, i.e. never sent. The 5 DONE taps in the same
   window succeeded via the fallback. Since 11-05 no PARK/BACKLOG tap has been traced yet, so "fixed" is inferred
   from token presence, not observed.
+- [x] proposals-preview.yml: `step` input (reply = tuning step 1, scripts/reply-scan-preview.ts on the chosen ref). Workflow-only.
+- [ ] Tuning step 1 run 43557012507 (2026-11-14 04:33 UTC): 94 conversations since Nov 9, 74 judged, 0 failures ->
+      NEEDS REPLY 13 (10 high, 3 medium; every quote found word-for-word), no reply 61, settled 6, owner-only 14.
+      Report: OneDrive /automation/Huddle Preview/reply-scan-2026-11-14T04-33-28.html (+ emailed). Waiting on the
+      owner to mark wrong YES / missed NO before tuning further.
+- [x] graph-permission-check: `feed_links` input prints OneDrive web links for report files in /automation/Huddle Preview only (owner 2026-11-14: "You have to provide links I can click").
