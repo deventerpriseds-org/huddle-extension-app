@@ -1,3 +1,8 @@
+- [ ] Owner 2026-11-15: "this report should be running against the table that has everything since Monday. If it
+      hasn't been signaled to be ignored or added as a task etc it should still be showing up". FACT (azure-pg-query,
+      2026-11-15 22:4x): chat.correspondence_ledger and chat.task_proposals DO NOT EXIST in prod (only
+      chat.external_feed_state) -- nothing has been collected, ingest was never switched on. P-7 probe lists OneDrive
+      version history per feed file (timestamps + counts only) to see whether a back-fill since Monday is possible.
 - [x] Fragment-cause fix BUILT (owner-approved 2026-11-15; AC branch claude_ac-html-tag-span-rewrite @ 94f0a867):
       visibleHtml rewrites ONLY tags whose source holds a `>` before their end, at parse5's exact startTag/endTag
       span, to `<name _ [id]>` / `</name _>`. Loop-5 exact 83/88 again (the 8 fragment rows match Chromium); all

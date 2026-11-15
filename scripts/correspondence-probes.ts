@@ -40,6 +40,29 @@ try {
   console.log("P-1/P-2/P-5: email file is not JSON");
 }
 console.log(`email records: ${records.length}`);
+
+// P-7 (2026-11-15): OneDrive version history of each feed file -- can the ledger be back-filled since Monday? Prints
+// ONLY each version's timestamp and record/line count (no content). The owner: the report must cover everything
+// since Monday that he has not resolved, but the live email file shrank 127 -> 17 overnight.
+for (const path of [cfg.email.path, "/automation/email/sent.json", ...(cfg.teams?.path ? [cfg.teams.path] : [])]) {
+  const h = { Authorization: `Bearer ${token}` };
+  const v = await fetch(`${drive}${enc(path)}:/versions`, { headers: h });
+  const list = v.ok ? (((await v.json()) as { value?: { id: string; lastModifiedDateTime: string }[] }).value ?? []) : [];
+  const rows: string[] = [];
+  for (const x of list) {
+    const r = await fetch(`${drive}${enc(path)}:/versions/${encodeURIComponent(x.id)}/content`, { headers: h });
+    const t = r.ok ? await r.text() : "";
+    let n = -1;
+    try {
+      const j = JSON.parse(t) as { snapshot?: { value?: unknown[] }; records?: unknown[] };
+      n = Array.isArray(j.snapshot?.value) ? j.snapshot!.value!.length : Array.isArray(j.records) ? j.records.length : -1;
+    } catch {
+      n = t ? t.split("\n").filter(Boolean).length : 0; // JSONL (Teams): line count
+    }
+    rows.push(`${x.lastModifiedDateTime}=${n}`);
+  }
+  console.log(`P-7 versions ${path.split("/").pop()} (HTTP ${v.status}): ${rows.join(" ")}`);
+}
 const headerNames: Record<string, number> = {};
 const contentClass: Record<string, number> = {};
 const xHeaderHits: Record<string, number> = {};
