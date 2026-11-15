@@ -186,6 +186,21 @@ t("S-9 (provisional) blank lines ignored, not counted", (() => {
 t("S-10 (provisional) CRLF line endings accepted", parse([L(), L({ chatId: "c2" })].join("\r\n")).messages.length, 2);
 t("S-14 a URL-only body maps to [link] (its '?' is not a question)", parse(L({}, [{ id: "m1", timestamp: "2026-11-11T10:00:00Z", body: { contentType: "html", content: "HUDDLE-PA-SBX- https://x.example/form?id=1" }, sender: "u1" }])).messages[0].text, "HUDDLE-PA-SBX- [link]");
 t("S-16 (provisional) deleted message skipped", parse(L({}, [{ id: "m1", timestamp: "2026-11-11T10:00:00Z", deletedDateTime: "2026-11-11T11:00:00Z", body: "HUDDLE-PA-SBX- x" }])).skipped.deleted, 1);
+// The line's own ownerUserId names the owner when the config carries no owner ids (2026-11-15): the owner's Teams
+// id stays out of the app config. Configured ids still win when present.
+{
+  const noIds = { ...cfg, teams: { ...cfg.teams, ownerSenderIds: [] as string[] } };
+  const ln = JSON.stringify({ source: "teams", synthetic: true, chatId: "c-own", ownerUserId: "USER-OWNER-9", messages: [
+    { id: "o1", createdDateTime: "2026-11-11T10:00:00Z", body: "HUDDLE-PA-SBX- mine", from: { user: { id: "user-owner-9" } } },
+    { id: "o2", createdDateTime: "2026-11-11T10:01:00Z", body: "HUDDLE-PA-SBX- theirs", from: { user: { id: "user-other-3" } } },
+  ] });
+  const r = parseTeamsLog(ln, noIds);
+  t("TO-1 no configured ids: the line's ownerUserId marks the owner's message (case-insensitive) and not the other's", r.messages.map((m) => m.fromOwner), [true, false]);
+  const r2 = parseTeamsLog(JSON.stringify({ ...JSON.parse(ln), ownerUserId: undefined }), noIds);
+  t("TO-2 no configured ids and no ownerUserId: can't tell (null), never false", r2.messages.map((m) => m.fromOwner), [null, null]);
+  const r3 = parseTeamsLog(ln, { ...cfg, teams: { ...cfg.teams, ownerSenderIds: ["user-other-3"] } });
+  t("TO-3 configured ids win over the line's ownerUserId", r3.messages.map((m) => m.fromOwner), [false, true]);
+}
 t("Graph createdDateTime / value aliases accepted", parse(JSON.stringify({ source: "teams", synthetic: true, chatId: "c9", value: [{ id: "g1", createdDateTime: "2026-11-11T10:00:00Z", body: { contentType: "text", content: "HUDDLE-PA-SBX- hi" }, from: { user: { id: "U1", displayName: "N" } } }] })).messages[0].senderId, "u1");
 t("PA contract: the doc's exact Graph message shape (createdDateTime, from.user, body object, webUrl, messageType)", (() => {
   const line = JSON.stringify({ source: "teams", synthetic: true, chatId: "19:chat-alpha@thread.example", chatName: "HUDDLE-PA-SBX- Alpha chat", capturedUtc: "2026-11-11T23:00:00Z", messages: [{ id: "1001", createdDateTime: "2026-11-10T14:00:00Z", messageType: "message", webUrl: "https://teams.example/l/message/1001", body: { contentType: "text", content: "HUDDLE-PA-SBX- Can you send me the Q3 deck by Friday?" }, from: { user: { id: "USER-OWNER-1", displayName: "Owner Example" } } }] });

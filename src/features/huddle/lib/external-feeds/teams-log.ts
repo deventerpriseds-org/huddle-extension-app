@@ -167,6 +167,9 @@ export function parseTeamsLog(
     }
     parsedLines++;
     const rec = j as Record<string, unknown>;
+    // Whose messages are the owner's: the configured ids, else the line's own `ownerUserId` (the flow writes it on
+    // every line since 2026-11-13), so the owner's Teams id never has to sit in the app config (2026-11-15).
+    const lineOwners = owners.size ? owners : new Set([str(rec.ownerUserId).toLowerCase()].filter(Boolean));
     if (str(rec.source) !== cfg.teams.source) {
       skip("wrong_source", "line");
       continue;
@@ -245,7 +248,7 @@ export function parseTeamsLog(
         senderIsApp: who.isApp,
         // Red-team F16: no sender id means we cannot tell whose message it is (it may be the owner's own
         // reply) -- null ("can't tell"), never false.
-        fromOwner: owners.size && who.id ? owners.has(who.id) : null,
+        fromOwner: lineOwners.size && who.id ? lineOwners.has(who.id.toLowerCase()) : null,
         text: textOut,
         ...(chatName ? { chatName } : {}),
         ...(str(m.webUrl) ? { webUrl: str(m.webUrl) } : {}),

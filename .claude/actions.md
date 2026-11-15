@@ -1,3 +1,8 @@
+- [x] 2026-11-15: live HUDDLE_ONEDRIVE_FEEDS has NO `teams` / `sent` keys (onedrive-feed-flags dry run: keys
+      correspondence, driveUser, enabled, mailbox, maxBytes, notBeforeUtc, ownerLogins, sourceLogin, synthetic) -- so
+      collection would skip Teams + Sent. Teams parser now takes the owner from each line's ownerUserId when no ids are
+      configured (TO-1..3), so the Teams id never enters the config. scripts/correspondence-backfill.ts added (every
+      saved OneDrive version, oldest first, same mappers + pgLedger.observe; dry run unless BACKFILL_APPLY=1).
 - [ ] Owner 2026-11-15: "This data should be in azure not a branch ... Push everything there and make sure it's used
       going forward. The files should be for loads only. The teams file should be scheduled to load everyday at 6pm"
       + "Make a mechanized rule ... reminding about it each turn until determined to skip or go". DONE so far: Teams
