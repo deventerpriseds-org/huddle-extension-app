@@ -1,0 +1,18 @@
+== (1) real-looking emails through the 907dade7 guard + prototype
+outlook-word-3000p+vml         len= 969573 907dade7=parsed(hidden cut)   157ms | proto=parsed work/len=0.1 depthMax=6 errors=0 75ms
+report-6000-rows-unclosed-td   len= 222148 907dade7=parsed(hidden cut)   63ms | proto=parsed work/len=0.8 depthMax=6 errors=0 36ms
+newsletter-12-nested-tables    len= 533862 907dade7=parsed(hidden cut)   70ms | proto=parsed work/len=3.8 depthMax=101 errors=0 50ms
+gmail-thread-150-deep          len=  42159 907dade7=parsed(hidden cut)   4ms | proto=parsed work/len=1.4 depthMax=154 errors=0 2ms
+gmail-thread-600-deep          len=  33703 907dade7=parsed(hidden cut)   4ms | proto=parsed work/len=32.2 depthMax=1203 errors=0 8ms
+5000-unclosed-p+font           len= 180106 907dade7=parsed(hidden cut)   46ms | proto=parsed work/len=0.7 depthMax=7 errors=0 31ms
+== (2) prototype on the 398-row Chromium corpus + loop 8/9 shapes
+corpus rows=398 prototype-trips=0 max work/len=99.7 (NEST-600-b)
+== (3) prototype on hostile stack-walk shapes (800 KB-1.4 MB)
+svg+stray-x            len=  809950 proto=parsed 4712ms
+span+stray-x           len=  811940 proto=parsed 1696ms
+div+p-pairs            len= 1409950 proto=work 299ms
+div+stray-li           len= 1009950 proto=parsed 1574ms
+ul+li                  len=  807960 proto=work 213ms
+div+dt                 len=  809950 proto=work 287ms
+template-nest-100k     len= 1000000 proto=RangeError 2156ms
+template-div-130k      len= 1950000 proto=RangeError 2636ms

@@ -1,0 +1,12 @@
+svg+stray-x              len=  809950 proto=depth 25ms
+span+stray-x             len=  811940 proto=depth 19ms
+div+p-pairs              len= 1409950 proto=depth 38ms
+div+stray-li             len= 1009950 proto=depth 14ms
+ul+li                    len=  807960 proto=depth 17ms
+svg+stray-x-2MB          len= 2009950 proto=depth 29ms
+template-nest-100k       len= 1000000 proto=depth 7ms
+template-div-130k        len= 1950000 proto=depth 17ms
+template-span-blocks     len=  639000 proto=depth 5ms
+loop9-stray-div-i-40k    len=  360000 proto=depth 8ms
+loop9-1990b+p-5000       len=   62770 proto=parsed 128ms
+corpus+real rows=403 prototype-trips=0
