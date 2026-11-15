@@ -111,3 +111,44 @@ Notes for the owner (no refute; each is main's behaviour or inside an approved c
 `teams-log.ts:103` also calls this `htmlToText` (flag-gated ingest path). `inbox-read.ts:254` has its own `htmlToText`,
 unchanged. `forwarded.ts:44,49` reads the reply-marker id from the RAW body, then converts a slice with this `htmlToText`.
 
+- Claim 2 (bell, code): CONFIRMED in code; UI NOT browser-verified (branch not deployed) -> MERGE-PENDING-UAT for this claim
+- Claim 3 (preview-only code + public-log hygiene): CONFIRMED
+- Claim 4 (merge readiness, flags off): REFUTED -- the checklist schemas are fixed (both = main), but the 1-PERF defect
+  is live with every flag off (it is in `htmlToText`, Iris's work-email screen). Merge itself: one ledger conflict only.
+
+## Claim 2: bell -- CONFIRMED in code, UI-UNVERIFIED
+No attention / bell file changed between 907dade7 and 90af5f3a (`git diff --stat 907dade7 90af5f3a -- src` = html-visible.ts,
+huddle.functions.ts, tools.ts). `attention.ts:35` `SETTINGS_KINDS = ATTENTION_KINDS.filter((k) => k !== "chat")`;
+`AttentionBell.tsx:157` renders the "What counts" list from `SETTINGS_KINDS`; attention suite all passed (A0 pins
+`["email","meeting","appointment"]`). The branch is not deployed, so the GHA browser runner (which drives the deployed SWA)
+cannot reach it. **NOT YET UAT-VERIFIED**: after landing, open the bell -> "What counts" -> expect exactly Emails, Meetings,
+Appointments & reminders.
+
+## Claim 3: preview-only code + public-log hygiene -- CONFIRMED
+- `correspondence/forwarded` is still imported by nothing under `src/` (grep empty).
+- New since loop 10: `scripts/action-scan-steps.ts` (categories, "answered by your reply", hidden-by-settings section) and
+  `scripts/reply-scan-preview.ts` (`PREVIEW_AS_OF` version-history read). Their `console.*` lines (`action-scan-steps.ts`
+  113/185/250/262, `reply-scan-preview.ts` 29/49/75/171/207/216) print counts, HTTP statuses, the model name, category
+  NAMES with counts, the feed file's base name, the chosen version's time and the OneDrive output path. The category
+  names cannot carry email text: the schema enum is enforced (`callOpenAIRouter` sends `strict: true`,
+  `openai-responses.server.ts:37`) and a missing value falls back to `"other"`. Subjects, names, reasons and quotes appear
+  only in the HTML report written to OneDrive / mailed to the owner, never in the log. No SharePoint webUrl is printed.
+
+## Claim 4: merge readiness with every flag OFF -- REFUTED (1-PERF only)
+| check | result | evidence |
+|---|---|---|
+| OpenAI-path `build_checklist` schema, flags off | = main byte-for-byte | `verify10-checklist-schema.ts` (MAIN_TREE = origin/main e546e4c2): 2362 = 2362; on adds `proposals` |
+| Lovable-path schema, flags off (loop-10 refute) | **fixed**: = main | `bun scripts/verify11-checklist-schema.ts` 4/4: keys `title, task_ids`, `ZodString, ZodArray`, unknownKeys `strip`, a model-sent `proposals` stripped exactly as on main; on adds exactly `proposals` |
+| Lovable gate expression | same as the OpenAI path | `huddle.functions.ts:3890` and `:6285` both `proposalsConfig() !== null`, `.catch(() => false)`; `proposalsConfig()` returns null unless `correspondence.proposals === true` |
+| Rest of the `origin/main...90af5f3a` src diff, flags off | unchanged since loop 10 except the three files above | loop 10's sweep stands for the other files; html-visible.ts is claim 1 |
+| `htmlToText` cost, flags off | **REFUTED** | 1-PERF: on Node every HTML email costs one body copy per element (217 KB: 2.9 s; 947 KB: 10-12.5 s) |
+| merge onto current `origin/main` (e546e4c2, 16 commits ahead of the merge base) | one conflict: `.claude/memory.md` (ledger). No src / scripts / workflow conflict; main's 16 commits touch only `.claude/*` and 4 workflows | `git merge-tree --write-tree origin/main 90af5f3a` |
+
+## Verdict
+PASS: claims 0, 3; claim 2 in code | FAIL: claim 1 (1-PERF), claim 4 (same defect) | UI-UNVERIFIED: 1 (claim 2 bell)
+**Verdict: FIX FIRST.** Minimal fix: in `visibleHtml`, build `${PREFIX}${html}` once before the tag-span loop and slice that
+(`docs/qc-evidence/VERIFY-correspondence-proposals-11-hoist-fix.patch`, measured: Node times back to the base, outputs
+unchanged). Add a Node-run timing guard (bun cannot see the defect warm). Resolve the `.claude/memory.md` conflict when
+merging. After the fix lands, the bell claim still needs a browser run (MERGE-PENDING-UAT for claim 2).
+Everything else in this loop's scope held: 1d-new fixed, 1e bounded, the tag-span rewrite meets all 66 spelling-table rows
+and 0 ask flips against Chromium over 113 + 398 rows, both checklist schemas = main with flags off.
