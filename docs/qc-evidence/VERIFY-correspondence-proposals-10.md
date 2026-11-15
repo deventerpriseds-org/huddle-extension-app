@@ -13,7 +13,7 @@ Verifier started 2026-11-15 18:21 UTC. Budget 90 min of active time. All fixture
 ## Results (appended per claim as each lands)
 
 - Claim 0 (suites): CONFIRMED
-- Claim 1 (email text = main except the three approved changes): PENDING
+- Claim 1 (email text = main except the three approved changes): REFUTED (1d-new: a cut comment removes the `>` main's tag rule stopped at -> visible ask dropped; 1e: loop-9 shapes fixed, but per-token stack walks under the limit stay linear x ~2000: 810 KB -> 3.3 s)
 - Claim 2 (bell, code): PENDING
 - Claim 3 (preview-only code + public-log hygiene): PENDING
 - Claim 4 (merge readiness, flags off): PENDING

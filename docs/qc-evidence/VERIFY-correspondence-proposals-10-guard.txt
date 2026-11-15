@@ -1,0 +1,32 @@
+template-nest-40k              len=  400073 visibleHtml=   494ms ABORTED(main text) htmlToText=   437ms main=   1ms realDepth=unguarded-parse-threw:RangeError sameAsMain=true askKept=true
+template-div-20k               len=  300073 visibleHtml=   140ms ABORTED(main text) htmlToText=   136ms main=   1ms realDepth=unguarded-parse-threw:RangeError sameAsMain=true askKept=true
+template-span-blocks           len=  239073 visibleHtml=    44ms parsed             htmlToText=    46ms main=   1ms realDepth=39844 sameAsMain=false askKept=false
+span1999+stray-x-200k          len=  812067 visibleHtml=     2ms ABORTED(main text) htmlToText=     9ms main=   7ms realDepth=2003 sameAsMain=true askKept=true
+div1999+stray-li-200k          len= 1010068 visibleHtml=    11ms ABORTED(main text) htmlToText=    17ms main=   7ms realDepth=2003 sameAsMain=true askKept=true
+div1999+p-pairs-100k           len=  710068 visibleHtml=    12ms ABORTED(main text) htmlToText=    19ms main=   6ms realDepth=2003 sameAsMain=true askKept=true
+div1999+stray-h1-200k          len= 1010068 visibleHtml=    10ms ABORTED(main text) htmlToText=    17ms main=   5ms realDepth=2003 sameAsMain=true askKept=true
+div1999+stray-button-200k      len= 1810068 visibleHtml=    12ms ABORTED(main text) htmlToText=    24ms main=  11ms realDepth=2003 sameAsMain=true askKept=true
+svg1999+stray-x-200k           len=  810068 visibleHtml=     5ms ABORTED(main text) htmlToText=    13ms main=   7ms realDepth=2001 sameAsMain=true askKept=true
+span1999+stray-body-100k       len=  712067 visibleHtml=     2ms ABORTED(main text) htmlToText=     8ms main=   6ms realDepth=2003 sameAsMain=true askKept=true
+span1999+stray-form-200k       len= 1412067 visibleHtml=     3ms ABORTED(main text) htmlToText=    12ms main=   8ms realDepth=2003 sameAsMain=true askKept=true
+span1999+stray-dd-200k         len= 1012067 visibleHtml=     3ms ABORTED(main text) htmlToText=    17ms main=  10ms realDepth=2003 sameAsMain=true askKept=true
+span1999+caption-200k          len= 2012067 visibleHtml=     3ms ABORTED(main text) htmlToText=    13ms main=  11ms realDepth=2003 sameAsMain=true askKept=true
+span1999+td-close-200k         len= 1012067 visibleHtml=     4ms ABORTED(main text) htmlToText=    12ms main=   8ms realDepth=2003 sameAsMain=true askKept=true
+table-nest-499                 len=    7559 visibleHtml=     6ms parsed             htmlToText=     4ms main=   0ms realDepth=2000 sameAsMain=false askKept=true
+table-nest-499+stray-x         len=  807576 visibleHtml=     2ms ABORTED(main text) htmlToText=    12ms main=   8ms realDepth=2003 sameAsMain=true askKept=true
+foster-b-20k                   len=   80080 visibleHtml=     6ms ABORTED(main text) htmlToText=     4ms main=   1ms realDepth=20004 sameAsMain=true askKept=true
+foster-text-in-table-100k      len=  500080 visibleHtml=   167ms parsed             htmlToText=   160ms main=   5ms realDepth=5 sameAsMain=false askKept=true
+adoption-a-div-20k             len=  300073 visibleHtml=    23ms ABORTED(main text) htmlToText=    22ms main=   1ms realDepth=20005 sameAsMain=true askKept=true
+adoption-b-p-20k               len=  320073 visibleHtml=    96ms parsed             htmlToText=   107ms main=   4ms realDepth=5 sameAsMain=false askKept=true
+adoption-nested-b-div          len=   23073 visibleHtml=     6ms ABORTED(main text) htmlToText=     6ms main=   0ms realDepth=4001 sameAsMain=true askKept=true
+adoption-i-b-div-10k           len=  150073 visibleHtml=     5ms ABORTED(main text) htmlToText=     6ms main=   1ms realDepth=30002 sameAsMain=true askKept=true
+select-option-100k             len=  900081 visibleHtml=   162ms parsed             htmlToText=   162ms main=   5ms realDepth=5 sameAsMain=false askKept=true
+select-nest-optgroup-50k       len=  900073 visibleHtml=    14ms ABORTED(main text) htmlToText=    12ms main=   3ms realDepth=25004 sameAsMain=true askKept=true
+math-mi-10k                    len=  410073 visibleHtml=     3ms ABORTED(main text) htmlToText=     6ms main=   3ms realDepth=2004 sameAsMain=true askKept=true
+comment-padded-budget          len= 1061970 visibleHtml=   224ms parsed             htmlToText=   215ms main=   1ms realDepth=1994 sameAsMain=false askKept=true
+frameset-in-body-50k           len=  500073 visibleHtml=    24ms parsed             htmlToText=    19ms main=   2ms realDepth=4 sameAsMain=false askKept=true
+noscript-nest                  len=  400073 visibleHtml=    14ms parsed             htmlToText=     8ms main=   1ms realDepth=4 sameAsMain=false askKept=false
+ruby-rt-100k                   len=  512067 visibleHtml=     5ms ABORTED(main text) htmlToText=    10ms main=   3ms realDepth=102003 sameAsMain=true askKept=true
+li-in-ul-1999+li-100k          len=  408069 visibleHtml=    11ms ABORTED(main text) htmlToText=    14ms main=   3ms realDepth=2004 sameAsMain=true askKept=true
+dd-1999+dt-100k                len=  410068 visibleHtml=    11ms ABORTED(main text) htmlToText=    14ms main=   3ms realDepth=2004 sameAsMain=true askKept=true
+heading-switch-100k            len=  410068 visibleHtml=    11ms ABORTED(main text) htmlToText=    14ms main=   2ms realDepth=2004 sameAsMain=true askKept=true

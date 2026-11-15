@@ -1,0 +1,22 @@
+{
+ "lt3-then-comment": "I <3 this plan Can you approve the budget? Thanks",
+ "lt-space-then-mso-comment": "Latency < 200ms today Can you approve the budget?",
+ "lte-then-comment": "Budget <= 5k Can you approve the budget?",
+ "lt-in-td-then-comment": "x < y Can you approve the budget?",
+ "lt-then-comment-gt-inside": "Score <5 then Can you approve the budget?",
+ "lt-then-two-comments": "Range <10 mid Can you approve the budget?",
+ "lt-then-comment-then-tag": "Q <4 done\n\nCan you approve the budget?",
+ "lt-arrow-then-comment": "Step 1 <- start Can you approve the budget?",
+ "lt-then-conditional-block": "Use <=3 seats\n\nCan you approve the budget?",
+ "comment-gt-no-lt": "Hello Can you approve the budget?",
+ "comment-blockquote-close": "Can you approve the budget?",
+ "comment-blockquote-open": "Can you approve the budget?\n\nThanks, Pat",
+ "crlf-hidden": "Hi team, Can you approve the budget? Thanks",
+ "lone-cr-hidden": "Hi team, Can you approve the budget? Thanks",
+ "bom-hidden": "﻿\n\nCan you approve the budget?",
+ "nul-hidden": "ab Can you approve the budget?",
+ "astral-hidden": "😀😀 hi Can you approve the budget? 😀",
+ "crlf-many-hidden": "line 0\n\nline 1\n\nline 2\n\nline 3\n\nline 4\n\nline 5\n\nline 6\n\nline 7\n\nline 8\n\nline 9\n\nline 10\n\nline 11\n\nline 12\n\nline 13\n\nline 14\n\nline 15\n\nline 16\n\nline 17\n\nline 18\n\nline 19\n\nline 20\n\nline 21\n\nline 22\n\nline 23\n\nline 24\n\nline 25\n\nline 26\n\nline 27\n\nline 28\n\nline 29\n\nline 30\n\nline 31\n\nline 32\n\nline 33\n\nline 34\n\nline 35\n\nline 36\n\nline 37\n\nline 38\n\nline 39\n\nCan you approve the budget?",
+ "crlf-in-attr-hidden": "Can you approve the budget?",
+ "comment-crlf": "Hi Can you approve the budget?"
+}
