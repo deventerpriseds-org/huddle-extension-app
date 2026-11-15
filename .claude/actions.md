@@ -1,3 +1,8 @@
+- [ ] 2026-11-15: the live work-email file now holds 17 records (127 on 2026-11-14; counts-only probe run, Teams file
+      unchanged 166 lines). Not a code change. Tuning continues on the Nov 14 file via OneDrive version history
+      (PREVIEW_AS_OF in reply-scan-preview.ts; workflow input as_of). Owner asked whether the Power Automate email
+      flow changed (we do not touch his flows). Product impact: the ledger ingest must run more often than the file
+      is replaced -- note for switch-on.
 - [ ] Owner review of steps 2+3 (2026-11-15, screenshots): personal messages expecting acknowledgement need a REPLY
       even with no task (Keith's attachment, Amy's shares/first day, Patricia's list+deck, Harshitha intro, Thad mention);
       already-replied rows were shown as "nothing open"; Zito Quality Month forward still unread; "Meeting invites,

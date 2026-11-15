@@ -10,7 +10,7 @@
 //             THIS REPO'S LOGS ARE PUBLIC: the console prints counts and the file path only.
 // SUPERSEDES: nothing (scripts/proposals-preview.ts stays the full preview).  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   run by .github/workflows/proposals-preview.yml with step=reply.
-// Env: TOKEN, HUDDLE_ONEDRIVE_FEEDS, OPENAI_API_KEY, PREVIEW_SINCE, PREVIEW_DAYS, PREVIEW_MAX_SOURCES, PREVIEW_EMAIL=1,
+// Env: TOKEN, HUDDLE_ONEDRIVE_FEEDS, OPENAI_API_KEY, PREVIEW_AS_OF, PREVIEW_SINCE, PREVIEW_DAYS, PREVIEW_MAX_SOURCES, PREVIEW_EMAIL=1,
 //      HUDDLE_EMAIL_FROM.
 import {
   conversationFacts,
@@ -34,8 +34,25 @@ const maxCalls = Number(process.env.PREVIEW_MAX_SOURCES ?? 200) || 200;
 const sinceMs = process.env.PREVIEW_SINCE ? Date.parse(process.env.PREVIEW_SINCE) : Date.now() - days * 86_400_000;
 const drive = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.driveUser)}/drive/root:`;
 const enc = (p: string) => p.split("/").map((s) => encodeURIComponent(s)).join("/");
+// PREVIEW_AS_OF (ISO): read each file AS IT WAS at that time, from OneDrive's version history, so tuning can re-run on
+// the same emails the owner already reviewed after the live file changes (2026-11-15: the email file shrank from 127
+// records to 17 overnight). Blank = the current file. The log prints only the chosen version's time.
+const asOfMs = process.env.PREVIEW_AS_OF ? Date.parse(process.env.PREVIEW_AS_OF) : NaN;
 const read = async (path: string) => {
-  const r = await fetch(`${drive}${enc(path)}:/content`, { headers: { Authorization: `Bearer ${token}` } });
+  const h = { Authorization: `Bearer ${token}` };
+  if (Number.isFinite(asOfMs)) {
+    const v = await fetch(`${drive}${enc(path)}:/versions`, { headers: h });
+    const list = v.ok ? (((await v.json()) as { value?: { id: string; lastModifiedDateTime: string }[] }).value ?? []) : [];
+    const pick = list
+      .filter((x) => Date.parse(x.lastModifiedDateTime) <= asOfMs)
+      .sort((x, y) => Date.parse(y.lastModifiedDateTime) - Date.parse(x.lastModifiedDateTime))[0];
+    console.log(`as-of ${new Date(asOfMs).toISOString()}: ${path.split("/").pop()} versions ${list.length} | using ${pick ? pick.lastModifiedDateTime : "NONE (falls back to current)"}`);
+    if (pick) {
+      const r = await fetch(`${drive}${enc(path)}:/versions/${encodeURIComponent(pick.id)}/content`, { headers: h });
+      return { status: r.status, text: r.ok ? await r.text() : "" };
+    }
+  }
+  const r = await fetch(`${drive}${enc(path)}:/content`, { headers: h });
   return { status: r.status, text: r.ok ? await r.text() : "" };
 };
 const parse = (t: string): unknown => {
