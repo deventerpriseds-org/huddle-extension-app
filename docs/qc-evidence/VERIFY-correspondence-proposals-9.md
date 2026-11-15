@@ -15,7 +15,7 @@ Verifier started 2026-11-15 17:36 UTC. Budget 2 h of active time. All fixtures s
 - Claim 0 (suites): CONFIRMED
 - Claim 1 (1d + 1e fixes, loop-8 re-check): REFUTED (1d: `=`+quote shapes drop a visible ask; 1e: guard bypassable, 62 KB -> 7 s)
 - Claim 2 (bell "Teams chats" removed): CONFIRMED in code; UI not browser-verified (MERGE-PENDING-UAT)
-- Claim 3 (forwarded.ts + preview scripts): PENDING
+- Claim 3 (forwarded.ts + preview scripts): (a)(b)(c) CONFIRMED; (d) PARTLY (OWA appendonsend + CRLF forwards read as null; 11 subject misses) -- preview only
 - Claim 4 (merge readiness, flags off): PENDING
 
 ## Claim 0: every suite at 1c0171d7 -- CONFIRMED
@@ -161,3 +161,55 @@ and the bell's store (`email/email-replies.server.ts`).
 UI-UNVERIFIED: the rendered settings panel was not seen in a browser. The branch is not deployed, and the existing
 `attention-bell-checks.mjs` (verify-uat.yml) never opens the settings panel. Browser check still owed after landing:
 open the bell, open "What counts", expect exactly three checkboxes: Emails, Meetings, Appointments & reminders.
+
+## Claim 3: forwarded.ts + preview scripts -- (a) (b) (c) CONFIRMED, (d) PARTLY (preview-only gaps, no live impact)
+
+### 3a. Live path untouched -- CONFIRMED
+`grep` for any import of `correspondence/forwarded` across `src/` and `scripts/`: only `scripts/action-scan-steps.ts:16`
+and `scripts/forwarded.test.ts:7` (plus comments). Nothing in `src/` imports it. forwarded.ts only CALLS `htmlToText`
+and `newTextOnly`; it changes neither. `FORWARD_SUBJECT` is used only in forwarded.ts and action-scan-steps.ts.
+
+### 3b. Never throws, bounded -- CONFIRMED (`bun scripts/verify9-forwarded.ts`, hostile section)
+`"re:"` x100k subject 36 ms (null); 100k spaces 2 ms; 2 MB of repeated markers 233 ms; 100k unclosed marker divs 17 ms;
+1 MB plain lines 87 ms; 1 MB of From/Sent pairs 4 ms (capped at 6000 chars); number subject / object body / null /
+undefined -> null. No throw on any. The output is capped at `max` (6000). Its time is bounded by `htmlToText`, so it
+inherits claim 1e's hostile shapes (preview only).
+
+### 3c. Public-log output -- CONFIRMED (one privacy note)
+Every `console.*` in `action-scan-steps.ts` (lines 95, 160, 218, 219, 228) and `reply-scan-preview.ts` (29, 58, 154, 190,
+199) prints counts, HTTP statuses, the model name, the OneDrive path `/automation/Huddle Preview/...-<stamp>.html` and
+(action scan only) `OPEN THE REPORT: <webUrl>`. Per-row text (names, subjects, quotes, reasons) goes only into the HTML
+written to OneDrive / emailed. Model failures are counted (`catch { failures++ }`), never printed. Note for the owner:
+the repo is PUBLIC, so its Actions logs are world-readable, and a OneDrive for Business `webUrl` is normally a
+`https://<tenant>-my.sharepoint.com/personal/<user_name>/...` link, i.e. it carries the work tenant and the owner's name.
+The brief allows "the report link"; main's #243 already prints such links from graph-permission-check. Inference
+(not observed: no run was made from this session); the owner may prefer the link only in the emailed copy.
+
+### 3d. Spelling table and body shapes -- PARTLY
+`FORWARD_SUBJECT = /^\s*(?:(?:re|aw|sv)\s*:\s*)*(?:fw|fwd|tr|wg|rv|doorst)\s*:/i`. 31 subjects (want = a reader calls it
+a forward):
+
+| result | subjects |
+|---|---|
+| correct (13 + 4 negatives) | `FW:`, `Fw:`, `Fwd:`, `FWD:`, `RE: FW:`, `Re: Re: Fwd:`, `TR:`, `WG:`, `AW: WG:`, `RV:`, `Doorst:`, `Fw :`, leading space; negatives `Re:`, `... fw: notes`, `Fwiw:`, `Trial:` |
+| missed forwards (11) | **`[EXTERNAL] FW:`** and `EXT: FW:` (corporate external-sender tags are common), `ENC:` (pt), `I:` (it), `VS:` (da/no), `VB:` (sv), `VL:` (fi), `PD:` (pl), `Antw: Fw:` (nl reply prefix), `FW：` (full-width colon), `Re[2]: Fw:` |
+| over-matches (3) | `RV: cabin for sale`, `TR: tax return question`, `WG: flat share keys` (abbreviations that collide with es / fr / de prefixes; consequence: only that the preview also reads a forwarded part) |
+
+Body shapes (`forwardedText("FW: REMINDER", body, isHtml)`, want = the forwarded ask is returned):
+
+| shape | result |
+|---|---|
+| Outlook classic: `<div id="divRplyFwdMsg">` | ask returned |
+| **OWA / new Outlook: `<div id="appendonsend"></div><hr><div id="divRplyFwdMsg">`** | **null** -- `RPLY_FWD` matches `appendonsend` first, only that id is renamed, so htmlToText cuts again at `divRplyFwdMsg` (the forward header itself) and nothing is left; the plain-header fallback is not tried when a marker was found |
+| prefixed `x_divRplyFwdMsg` (no marker match) -> plain-header fallback | ask returned |
+| Gmail `---------- Forwarded message ---------` + From/Date | ask returned |
+| plain `From:`/`Sent:` header, no marker | ask returned |
+| plain text LF + `-----Original Message-----` | ask returned |
+| **plain text CRLF** + `-----Original Message-----` | **null** -- `newTextOnly` strips `\r`, so `text.startsWith(fresh)` in `afterCut` fails |
+| plain text with a `>` line before the forward | ask returned |
+| plain text `Begin forwarded message:` | ask returned |
+
+Preview-only (the judge's input), so no live behaviour is affected; it under-reads forwards rather than mis-reading.
+Minimal fixes: match `divRplyFwdMsg` before `appendonsend` (or rename every marker up to and including the first
+`divRplyFwdMsg`), and fall back to `afterCut` when the marker path yields nothing; strip `\r` before `afterCut`;
+optionally allow a leading `[...]` tag / `EXT:` and the missing Outlook locale prefixes.
