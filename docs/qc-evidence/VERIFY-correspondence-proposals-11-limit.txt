@@ -1,0 +1,58 @@
+svg+</x> N=25000                     100 KB limit=2000 branch   471 ms main   1 ms aborted=false ask=true hiddenCut=true
+span+</x> N=25000                    102 KB limit=2000 branch   301 ms main   1 ms aborted=false ask=true hiddenCut=true
+div+</li> N=25000                    122 KB limit=2000 branch   225 ms main   1 ms aborted=false ask=true hiddenCut=true
+div+</h1> N=25000                    122 KB limit=2000 branch   208 ms main   1 ms aborted=false ask=true hiddenCut=true
+ul+<li> N=25000                       98 KB limit=2000 branch   659 ms main   1 ms aborted=false ask=true hiddenCut=true
+div+<dt> N=25000                     100 KB limit=2000 branch   635 ms main   2 ms aborted=false ask=true hiddenCut=true
+b+</i> N=25000                        96 KB limit=2000 branch   171 ms main   1 ms aborted=false ask=true hiddenCut=true
+math+</x> N=25000                    102 KB limit=2000 branch   488 ms main   1 ms aborted=false ask=true hiddenCut=true
+table+</x> N=25000                   104 KB limit=2000 branch    19 ms main   1 ms aborted=false ask=true hiddenCut=true
+select+</x> N=25000                  103 KB limit=2000 branch    21 ms main   1 ms aborted=false ask=true hiddenCut=true
+svg+</x> N=50000                     196 KB limit=1000 branch   483 ms main   1 ms aborted=false ask=true hiddenCut=true
+span+</x> N=50000                    197 KB limit=1000 branch   233 ms main   1 ms aborted=false ask=true hiddenCut=true
+div+</li> N=50000                    244 KB limit=1000 branch   148 ms main   1 ms aborted=false ask=true hiddenCut=true
+div+</h1> N=50000                    244 KB limit=1000 branch   162 ms main   1 ms aborted=false ask=true hiddenCut=true
+ul+<li> N=50000                      195 KB limit=1000 branch   205 ms main   2 ms aborted=false ask=true hiddenCut=true
+div+<dt> N=50000                     196 KB limit=1000 branch   172 ms main   2 ms aborted=false ask=true hiddenCut=true
+b+</i> N=50000                       194 KB limit=1000 branch   124 ms main   1 ms aborted=false ask=true hiddenCut=true
+math+</x> N=50000                    197 KB limit=1000 branch   488 ms main   1 ms aborted=false ask=true hiddenCut=true
+table+</x> N=50000                   198 KB limit=1000 branch     9 ms main   1 ms aborted=false ask=true hiddenCut=true
+select+</x> N=50000                  198 KB limit=1000 branch     8 ms main   1 ms aborted=false ask=true hiddenCut=true
+svg+</x> N=100000                    391 KB limit= 500 branch   482 ms main   3 ms aborted=false ask=true hiddenCut=true
+span+</x> N=100000                   392 KB limit= 500 branch   206 ms main   3 ms aborted=false ask=true hiddenCut=true
+div+</li> N=100000                   488 KB limit= 500 branch   158 ms main   3 ms aborted=false ask=true hiddenCut=true
+div+</h1> N=100000                   488 KB limit= 500 branch   171 ms main   3 ms aborted=false ask=true hiddenCut=true
+ul+<li> N=100000                     391 KB limit= 500 branch   288 ms main   3 ms aborted=false ask=true hiddenCut=true
+div+<dt> N=100000                    391 KB limit= 500 branch   234 ms main   4 ms aborted=false ask=true hiddenCut=true
+b+</i> N=100000                      390 KB limit= 500 branch   153 ms main   3 ms aborted=false ask=true hiddenCut=true
+math+</x> N=100000                   392 KB limit= 500 branch   618 ms main   3 ms aborted=false ask=true hiddenCut=true
+table+</x> N=100000                  392 KB limit= 500 branch    23 ms main   2 ms aborted=false ask=true hiddenCut=true
+select+</x> N=100000                 392 KB limit= 500 branch    14 ms main   3 ms aborted=false ask=true hiddenCut=true
+svg+</x> N=200000                    782 KB limit= 250 branch   604 ms main  11 ms aborted=false ask=true hiddenCut=true
+span+</x> N=200000                   782 KB limit= 250 branch   337 ms main   7 ms aborted=false ask=true hiddenCut=true
+div+</li> N=200000                   977 KB limit= 250 branch   183 ms main   6 ms aborted=false ask=true hiddenCut=true
+div+</h1> N=200000                   977 KB limit= 250 branch   196 ms main   5 ms aborted=false ask=true hiddenCut=true
+ul+<li> N=200000                     781 KB limit= 250 branch   449 ms main   9 ms aborted=false ask=true hiddenCut=true
+div+<dt> N=200000                    782 KB limit= 250 branch   443 ms main   9 ms aborted=false ask=true hiddenCut=true
+b+</i> N=200000                      781 KB limit= 250 branch   148 ms main   6 ms aborted=false ask=true hiddenCut=true
+math+</x> N=200000                   782 KB limit= 250 branch   562 ms main   6 ms aborted=false ask=true hiddenCut=true
+table+</x> N=200000                  782 KB limit= 250 branch    66 ms main   5 ms aborted=false ask=true hiddenCut=true
+select+</x> N=200000                 782 KB limit= 250 branch    30 ms main   5 ms aborted=false ask=true hiddenCut=true
+svg+</x> N=400000                   1563 KB limit= 125 branch   498 ms main  10 ms aborted=false ask=true hiddenCut=true
+span+</x> N=400000                  1563 KB limit= 125 branch   294 ms main  11 ms aborted=false ask=true hiddenCut=true
+div+</li> N=400000                  1953 KB limit= 125 branch   259 ms main  11 ms aborted=false ask=true hiddenCut=true
+div+</h1> N=400000                  1953 KB limit= 125 branch   251 ms main  11 ms aborted=false ask=true hiddenCut=true
+ul+<li> N=400000                    1563 KB limit= 125 branch   705 ms main  12 ms aborted=false ask=true hiddenCut=true
+div+<dt> N=400000                   1563 KB limit= 125 branch   857 ms main  17 ms aborted=false ask=true hiddenCut=true
+b+</i> N=400000                     1562 KB limit= 125 branch   261 ms main  10 ms aborted=false ask=true hiddenCut=true
+math+</x> N=400000                  1563 KB limit= 125 branch   578 ms main  14 ms aborted=false ask=true hiddenCut=true
+table+</x> N=400000                 1563 KB limit= 125 branch   121 ms main  16 ms aborted=false ask=true hiddenCut=true
+select+</x> N=400000                1563 KB limit= 125 branch    93 ms main  13 ms aborted=false ask=true hiddenCut=true
+template-nest x1000                   10 KB limit=2000 branch    14 ms main   0 ms aborted=false ask=false hiddenCut=true
+template-nest x1990                   20 KB limit=2000 branch    26 ms main   0 ms aborted=false ask=false hiddenCut=true
+template-nest x5000                   49 KB limit=2000 branch     6 ms main   0 ms aborted=true ask=true hiddenCut=false
+template-nest x100000                977 KB limit= 499 branch    13 ms main   6 ms aborted=true ask=true hiddenCut=false
+template+div x1000 +</x>x20k          93 KB limit=2000 branch     4 ms main   1 ms aborted=true ask=true hiddenCut=false
+template+div x1990 +</x>x20k         107 KB limit=2000 branch     5 ms main   1 ms aborted=true ask=true hiddenCut=false
+template+div x3000 +</x>x20k         122 KB limit=1922 branch     5 ms main   1 ms aborted=true ask=true hiddenCut=false
+worst branch time 857 ms

@@ -1,0 +1,4 @@
+small-6KB            first=8ms warm=3ms hiddenCut=true
+report-217KB         first=2388ms warm=2615ms hiddenCut=true
+plain-p-20k-332KB    first=4847ms warm=4535ms hiddenCut=true
+outlook-word-947KB   first=10296ms warm=12744ms hiddenCut=true

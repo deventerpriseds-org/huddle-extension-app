@@ -1,0 +1,30 @@
+diff --git a/src/features/huddle/lib/external-feeds/html-visible.ts b/src/features/huddle/lib/external-feeds/html-visible.ts
+index 8f98a689..10c290f3 100644
+--- a/src/features/huddle/lib/external-feeds/html-visible.ts
++++ b/src/features/huddle/lib/external-feeds/html-visible.ts
+@@ -280,6 +280,7 @@ export function visibleHtml(html: string): string {
+   // form `<name _>` / `</name _>` is never matched by main's `<br>` / `</p>` newline rules -- main produced no newline
+   // for these tags either (Q2: line structure unchanged) -- and keeps a real `id` only when it is a plain token, so the
+   // reply-header cut still sees `id="divRplyFwdMsg"` (Q1: only the real id attribute, never a look-alike).
++  const SRC11 = `${PREFIX}${html}`;
+   const tagEdits: [number, number, string][] = [];
+   const seenStarts = new Set<number>();
+   const SAFE_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
+@@ -294,7 +295,7 @@ export function visibleHtml(html: string): string {
+     const st = loc?.startTag;
+     // A rebuilt formatting element reuses the ORIGINAL start tag's span: rewrite that span once (AC-12).
+     if (st && Number.isFinite(st.startOffset) && !seenStarts.has(st.startOffset)) {
+-      const src = `${PREFIX}${html}`.slice(st.startOffset, st.endOffset);
++      const src = SRC11.slice(st.startOffset, st.endOffset);
+       if (src.slice(0, -1).includes(">")) {
+         seenStarts.add(st.startOffset);
+         const id = (n.attrs ?? []).find((a) => a.name.toLowerCase() === "id")?.value ?? "";
+@@ -303,7 +304,7 @@ export function visibleHtml(html: string): string {
+     }
+     const et = loc?.endTag;
+     if (et && Number.isFinite(et.startOffset)) {
+-      const src = `${PREFIX}${html}`.slice(et.startOffset, et.endOffset);
++      const src = SRC11.slice(et.startOffset, et.endOffset);
+       if (src.slice(0, -1).includes(">")) tagEdits.push([et.startOffset, et.endOffset, `</${name} _>`]);
+     }
+   }

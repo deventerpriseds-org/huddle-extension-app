@@ -1,0 +1,8 @@
+outlook-word-3000      797 KB  branch    122 ms  base907    97 ms  main    3 ms  ask-kept=true hidden-cut=true
+report-6000-rows       217 KB  branch     81 ms  base907    46 ms  main    2 ms  ask-kept=true hidden-cut=true
+newsletter-8000       1039 KB  branch    179 ms  base907   138 ms  main    5 ms  ask-kept=true hidden-cut=true
+plain-p-20k            332 KB  branch     66 ms  base907    63 ms  main    3 ms  ask-kept=true hidden-cut=true
+plain-p-60k            996 KB  branch    179 ms  base907   144 ms  main    8 ms  ask-kept=true hidden-cut=true
+plain-p-120k          1992 KB  branch    374 ms  base907   272 ms  main   16 ms  ask-kept=true hidden-cut=true
+no-hidden-20k-div     1348 KB  branch    197 ms  base907   141 ms  main    7 ms  ask-kept=true hidden-cut=true
+gt-attr-8000           242 KB  branch     31 ms  base907    19 ms  main    1 ms  ask-kept=true hidden-cut=true

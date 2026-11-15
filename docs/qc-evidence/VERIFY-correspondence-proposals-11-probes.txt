@@ -1,0 +1,566 @@
+same-ask              =chrome S-01  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b\">Can you sign?"
+   main  ="b\">Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-02  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b'>Can you sign?"
+   main  ="b'>Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-03  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-04  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-05  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-06  asks b/m/c=true/true/true
+   branch="Lee can you sign?"
+   base10="Lee can you sign?"
+   main  ="Lee can you sign?"
+   chrome="Lee can you sign?"
+same-ask              =chrome S-07  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-08  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-09  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-10  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-11  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-12  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="d\">Can you sign?"
+   main  ="d\">Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-13  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-14  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b\">Can you sign?"
+   main  ="b\">Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-15  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b\">Can you sign?"
+   main  ="b\">Can you sign?"
+   chrome="Can you sign?"
+FLIP(branch=chromium) NEWLINES b/m=1/2 =chrome S-16  asks b/m/c=true/false/true
+   branch="Can you sign?"
+   base10="b\"\n>Can you sign?"
+   main  ="b\"\n>Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-17  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="c\">Can you sign?"
+   main  ="c\">Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-18  asks b/m/c=false/false/false
+   branch="a\nb\nc d"
+   base10="a\nb\nc d"
+   main  ="a\nb\nc d"
+   chrome="a b c d"
+same-ask              =chrome S-19  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b\"/>Can you sign?"
+   main  ="b\"/>Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-20  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b\">Can you sign?"
+   main  ="b\">Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-21  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b\">Can you sign?"
+   main  ="b\">Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-22  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b\"/>Can you sign?"
+   main  ="b\"/>Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-23  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-24  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b\">Can you sign?"
+   main  ="b\">Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-25  asks b/m/c=true/true/true
+   branch="Can you sign? next"
+   base10="Can you sign? b\">next"
+   main  ="Can you sign? b\">next"
+   chrome="Can you sign? next"
+same-ask              =chrome S-26  asks b/m/c=true/true/true
+   branch="Can you sign? next"
+   base10="b\">Can you sign? next"
+   main  ="b\">Can you sign? next"
+   chrome="Can you sign? next"
+same-ask              S-27  asks b/m/c=true/true/true
+   branch="Can you sign? b\">next"
+   base10="Can you sign? b\">next"
+   main  ="Can you sign? b\">next"
+   chrome="Can you sign?b\">next"
+same-ask              S-28  asks b/m/c=true/true/true
+   branch="Can you sign? next"
+   base10="Can you sign? next"
+   main  ="Can you sign? next"
+   chrome="Can you sign?next"
+same-ask              S-29  asks b/m/c=true/true/true
+   branch="a b Can you sign?"
+   base10="a b d\">Can you sign?"
+   main  ="a b d\">Can you sign?"
+   chrome="ab Can you sign?"
+same-ask              =chrome S-30  asks b/m/c=false/false/false
+   branch="one two"
+   base10="y\">one two"
+   main  ="y\">one two"
+   chrome="one two"
+same-ask              S-31  asks b/m/c=false/false/false
+   branch="one two"
+   base10="y\"> one two"
+   main  ="y\"> one two"
+   chrome="onetwo"
+same-ask              S-32  asks b/m/c=false/false/false
+   branch="one two"
+   base10="1\">one 2\">two"
+   main  ="1\">one 2\">two"
+   chrome="onetwo"
+same-ask              S-33  asks b/m/c=true/true/true
+   branch="d Can you sign?"
+   base10="b\">d Can you sign?"
+   main  ="b\">d Can you sign?"
+   chrome="Can you sign?"
+same-ask              S-34  asks b/m/c=true/true/true
+   branch="x Can you sign?"
+   base10="b\"> x Can you sign?"
+   main  ="b\"> x Can you sign?"
+   chrome="𝑥 Can you sign?"
+same-ask              =chrome S-35  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b\"> Can you sign?"
+   main  ="b\">t Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-36  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="b\"> d\"> Can you sign?"
+   main  ="b\"> d\"> Can you sign?"
+   chrome="Can you sign?"
+same-ask              S-37  asks b/m/c=true/true/true
+   branch="raw Can you sign?"
+   base10="b\"> raw Can you sign?"
+   main  ="b\"> raw Can you sign?"
+   chrome="Can you sign?"
+same-ask              S-38  asks b/m/c=true/true/true
+   branch="a y]]>b Can you sign?"
+   base10="a y]]>b Can you sign?"
+   main  ="a y]]>b Can you sign?"
+   chrome="ay]]>b Can you sign?"
+same-ask              S-39  asks b/m/c=true/true/true
+   branch="a b c Can you sign?"
+   base10="a b c Can you sign?"
+   main  ="a b c Can you sign?"
+   chrome="abc Can you sign?"
+same-ask              S-40  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign? From: old old ask?"
+same-ask              S-41  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign? From: old old ask?"
+same-ask              S-42  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign? old ask?"
+same-ask              DROPS[from,old,ask] TOKDROPS[old,ask?] NEWLINES b/m=1/3 S-43  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?\n y\" id=\"divRplyFwdMsg\">From: old\n old ask?"
+   main  ="Can you sign?\n y\" id=\"divRplyFwdMsg\">From: old\n old ask?"
+   chrome="Can you sign? From: old old ask?"
+same-ask              S-44  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign? From: old old ask?"
+same-ask              S-45  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign? From: old old ask?"
+same-ask              S-46  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign? kept?"
+same-ask              S-47  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign? kept?"
+same-ask              =chrome S-50  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-51  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?"
+   chrome="Can you sign?"
+same-ask              =chrome S-52  asks b/m/c=false/false/false
+   branch="a b"
+   base10="a b"
+   main  ="a b"
+   chrome="a b"
+same-ask              =chrome S-53  asks b/m/c=false/false/false
+   branch="a b"
+   base10="a b"
+   main  ="a b"
+   chrome="a b"
+same-ask              S-54  asks b/m/c=true/true/true
+   branch="a Can you sign?"
+   base10="a Can you sign?"
+   main  ="a Can you sign?"
+   chrome="aCan you sign?"
+same-ask              S-55  asks b/m/c=true/true/true
+   branch="He\u0000llo Can you sign?"
+   base10="He\u0000llo d\">Can you sign?"
+   main  ="He\u0000llo d\">Can you sign?"
+   chrome="Hello Can you sign?"
+same-ask              =chrome S-56  asks b/m/c=true/true/true
+   branch="x\n\n Can you sign?"
+   base10="x\n\n d\">Can you sign?"
+   main  ="x\n\n d\">Can you sign?"
+   chrome="x Can you sign?"
+same-ask              S-57  asks b/m/c=true/true/true
+   branch="😀 Can you sign?"
+   base10="😀 d\">Can you sign?"
+   main  ="😀 d\">Can you sign?"
+   chrome="😀Can you sign?"
+same-ask              S-58  asks b/m/c=true/true/true
+   branch="Can you sign? b"
+   base10="Can you sign? b"
+   main  ="Can you sign? b"
+   chrome="Can you sign?"
+same-ask              N-01  asks b/m/c=true/true/true
+   branch="if a c, can you sign?"
+   base10="if a c, can you sign?"
+   main  ="if a c, can you sign?"
+   chrome="if a < b > c, can you sign?"
+same-ask              =chrome N-02  asks b/m/c=true/true/true
+   branch="5<6 so can you sign?"
+   base10="5<6 so can you sign?"
+   main  ="5<6 so can you sign?"
+   chrome="5<6 so can you sign?"
+same-ask              =chrome N-03  asks b/m/c=true/true/true
+   branch="love you <3 can you sign?"
+   base10="love you <3 can you sign?"
+   main  ="love you <3 can you sign?"
+   chrome="love you <3 can you sign?"
+same-ask              =chrome N-04  asks b/m/c=true/true/true
+   branch="From Lee can you sign?"
+   base10="From Lee can you sign?"
+   main  ="From Lee can you sign?"
+   chrome="From Lee can you sign?"
+same-ask              =chrome N-05  asks b/m/c=true/true/true
+   branch="a <b title=\"x>y\"> can you sign?"
+   base10="a <b title=\"x>y\"> can you sign?"
+   main  ="a <b title=\"x>y\"> can you sign?"
+   chrome="a <b title=\"x>y\"> can you sign?"
+same-ask              N-06  asks b/m/c=false/false/false
+   branch="if a y"
+   base10="if a y"
+   main  ="if a y"
+   chrome="if ay"
+same-ask              NEWLINES b/m=1/2 =chrome N-07  asks b/m/c=true/true/true
+   branch="Can you sign?"
+   base10="Can you sign?"
+   main  ="Can you sign?\n b\"> -->"
+   chrome="Can you sign?"
+same-ask              N-08  asks b/m/c=true/true/true
+   branch="b\">raw Can you sign?"
+   base10="b\">raw Can you sign?"
+   main  ="b\">raw Can you sign?"
+   chrome="<b title=\"a>b\">raw</b> Can you sign?"
+same-ask              B-lt-comment-td  asks b/m/c=true/true/true
+   branch="x Can you approve the budget?"
+   base10="x"
+   main  ="x Can you approve the budget?"
+   chrome="x < y Can you approve the budget?"
+same-ask              B-lt-comment-p-next  asks b/m/c=true/true/true
+   branch="Q done\n Can you approve the budget?"
+   base10="Q Can you approve the budget?"
+   main  ="Q done\n Can you approve the budget?"
+   chrome="Q <4 done Can you approve the budget?"
+same-ask              B-lt-two-comments  asks b/m/c=true/true/true
+   branch="a mid Can you approve the budget?"
+   base10="a < b mid Can you approve the budget?"
+   main  ="a mid Can you approve the budget?"
+   chrome="a < b mid Can you approve the budget?"
+same-ask              B-lt-mso-cond  asks b/m/c=true/true/true
+   branch="score Can you approve the budget?"
+   base10="score <5 Can you approve the budget?"
+   main  ="score m Can you approve the budget?"
+   chrome="score <5 Can you approve the budget?"
+same-ask              B-lt-comment-bang-end  asks b/m/c=true/true/true
+   branch="x Can you approve the budget?"
+   base10="x <- y Can you approve the budget?"
+   main  ="x Can you approve the budget?"
+   chrome="x <- y Can you approve the budget?"
+same-ask              B-lt-short-comment  asks b/m/c=true/true/true
+   branch="x Can you approve the budget?"
+   base10="x <= y Can you approve the budget?"
+   main  ="x Can you approve the budget?"
+   chrome="x <= y Can you approve the budget?"
+same-ask              B-lt-hidden-gt-text  asks b/m/c=true/true/true
+   branch="x Can you approve the budget?"
+   base10="x Can you approve the budget?"
+   main  ="x hid>den ZZHID Can you approve the budget?"
+   chrome="x < y Can you approve the budget?"
+same-ask              B-lt-hidden-plain  asks b/m/c=true/true/true
+   branch="x Can you approve the budget?"
+   base10="x Can you approve the budget?"
+   main  ="x gone Can you approve the budget?"
+   chrome="x < y Can you approve the budget?"
+same-ask              B-lt-hidden-then-tag  asks b/m/c=true/true/true
+   branch="x more\n Can you approve the budget?"
+   base10="x more\n Can you approve the budget?"
+   main  ="x a > b more\n Can you approve the budget?"
+   chrome="x < y more Can you approve the budget?"
+same-ask              =chrome B-lt-unclosed-comment-eof  asks b/m/c=true/true/true
+   branch="Can you approve the budget?\n x < y"
+   base10="Can you approve the budget?\n x < y"
+   main  ="Can you approve the budget?\n x < y <!-- never closed"
+   chrome="Can you approve the budget? x < y"
+same-ask              B-comment-in-hidden  asks b/m/c=true/true/true
+   branch="x Can you approve the budget?"
+   base10="x Can you approve the budget?"
+   main  ="x t u Can you approve the budget?"
+   chrome="x < y Can you approve the budget?"
+same-ask              B-lt-comment-gtattr  asks b/m/c=true/true/true
+   branch="x Can you approve the budget?"
+   base10="x q\">Can you approve the budget?"
+   main  ="x q\">Can you approve the budget?"
+   chrome="x < y Can you approve the budget?"
+same-ask              B-lt-gtattr-no-comment  asks b/m/c=true/true/true
+   branch="x Can you approve the budget?"
+   base10="x q\">Can you approve the budget?"
+   main  ="x q\">Can you approve the budget?"
+   chrome="x < y Can you approve the budget?"
+same-ask              B-comment-before-quote  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="Can you approve the budget?"
+   main  ="Can you approve the budget?"
+   chrome="Can you approve the budget? From: old old ask?"
+same-ask              =chrome B-comment-in-blockquote  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="Can you approve the budget?"
+   main  ="Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome B-lt-in-li-comment  asks b/m/c=true/true/true
+   branch="a Can you approve the budget?"
+   base10="a Can you approve the budget?"
+   main  ="a Can you approve the budget?"
+   chrome="a Can you approve the budget?"
+same-ask              NEWLINES b/m=1/2 B-preheader-lt  asks b/m/c=true/true/true
+   branch="a Can you approve the budget?"
+   base10="a Can you approve the budget?"
+   main  ="pre x\n a Can you approve the budget?"
+   chrome="a < b Can you approve the budget?"
+same-ask              B-hidden-comment-only  asks b/m/c=true/true/true
+   branch="x \n Can you approve the budget?"
+   base10="x \n Can you approve the budget?"
+   main  ="x \n Can you approve the budget?"
+   chrome="x < y Can you approve the budget?"
+FLIP(branch=chromium) NEWLINES b/m=1/2 =chrome C-recon-hidden  asks b/m/c=false/true/false
+   branch=""
+   base10="y\" style=\"display:none\">"
+   main  ="y\" style=\"display:none\">h1 h2\n Can you approve the budget?"
+   chrome=""
+same-ask              =chrome C-recon-visible-3  asks b/m/c=true/true/true
+   branch="one two Can you approve the budget?"
+   base10="y\">one two Can you approve the budget?"
+   main  ="y\">one two Can you approve the budget?"
+   chrome="one two Can you approve the budget?"
+same-ask              C-adoption-gt-end  asks b/m/c=true/true/true
+   branch="one Can you approve the budget?"
+   base10="y\"> one n\">Can you approve the budget?"
+   main  ="y\"> one n\">Can you approve the budget?"
+   chrome="oneCan you approve the budget?"
+same-ask              =chrome C-foster-table  asks b/m/c=true/true/true
+   branch="foster cell \n Can you approve the budget?"
+   base10="b\">foster cell \n Can you approve the budget?"
+   main  ="b\">foster cell \n Can you approve the budget?"
+   chrome="foster cell Can you approve the budget?"
+same-ask              C-foster-text  asks b/m/c=true/true/true
+   branch="c \nstray text Can you approve the budget?"
+   base10="u\"> c \nstray text Can you approve the budget?"
+   main  ="u\"> c \nstray text Can you approve the budget?"
+   chrome="stray text c Can you approve the budget?"
+same-ask              =chrome C-select  asks b/m/c=true/true/true
+   branch="opt Can you approve the budget?"
+   base10="b\"> d\">opt Can you approve the budget?"
+   main  ="b\"> d\">opt Can you approve the budget?"
+   chrome="opt Can you approve the budget?"
+same-ask              C-end-br  asks b/m/c=true/true/true
+   branch="line one b\">line two\n Can you approve the budget?"
+   base10="line one b\">line two\n Can you approve the budget?"
+   main  ="line one b\">line two\n Can you approve the budget?"
+   chrome="line one line two Can you approve the budget?"
+same-ask              =chrome C-image  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="b\">Can you approve the budget?"
+   main  ="b\">Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-svg-case  asks b/m/c=true/true/true
+   branch="fo\n Can you approve the budget?"
+   base10="b\"> d\">fo\n Can you approve the budget?"
+   main  ="b\"> d\">fo\n Can you approve the budget?"
+   chrome="fo Can you approve the budget?"
+same-ask              =chrome C-gt-next-to-hidden  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="b\"> d\">Can you approve the budget?"
+   main  ="b\">ZZHID d\">Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-hidden-inside-gt  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="b\"> Can you approve the budget?"
+   main  ="b\"> ZZHID Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-gt-in-hidden-comment-sib  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="b\">Can you approve the budget?"
+   main  ="b\">Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              NEWLINES b/m=3/1 LEAK =chrome C-data-id-gt  asks b/m/c=true/true/true
+   branch="Can you approve the budget?\n From: old\n old ask?"
+   base10="Can you approve the budget?"
+   main  ="Can you approve the budget?"
+   chrome="Can you approve the budget? From: old old ask?"
+same-ask              NEWLINES b/m=3/1 LEAK =chrome C-id-unsafe-gt  asks b/m/c=true/true/true
+   branch="Can you approve the budget?\n From: old\n old ask?"
+   base10="Can you approve the budget?"
+   main  ="Can you approve the budget?"
+   chrome="Can you approve the budget? From: old old ask?"
+same-ask              =chrome C-p-id-gt  asks b/m/c=true/true/true
+   branch="Can you approve the budget?\n From: old\n old ask?"
+   base10="Can you approve the budget?\n b\">From: old\n old ask?"
+   main  ="Can you approve the budget?\n b\">From: old\n old ask?"
+   chrome="Can you approve the budget? From: old old ask?"
+same-ask              C-gt-blockquote-endattr  asks b/m/c=false/false/true
+   branch=""
+   base10=""
+   main  =""
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-gt-style  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="Can you approve the budget?"
+   main  ="Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-gt-script-end  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="b\"> Can you approve the budget?"
+   main  ="x() b\"> Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-lt-in-attr  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="0\">Can you approve the budget?"
+   main  ="0\">Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-many-gt  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="b>c>d\" title='e>f'>Can you approve the budget?"
+   main  ="b>c>d\" title='e>f'>Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-dup-attr  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="b\" title=\"c>d\">Can you approve the budget?"
+   main  ="b\" title=\"c>d\">Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-name-lt-gt  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="b\">Can you approve the budget?"
+   main  ="b\">Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-nested-a  asks b/m/c=true/true/true
+   branch="one Can you approve the budget?"
+   base10="q\">one s\">Can you approve the budget?"
+   main  ="q\">one s\">Can you approve the budget?"
+   chrome="one Can you approve the budget?"
+same-ask              =chrome C-table-in-p-gt  asks b/m/c=true/true/true
+   branch="intro Can you approve the budget?"
+   base10="b\">intro Can you approve the budget?"
+   main  ="b\">intro Can you approve the budget?"
+   chrome="intro Can you approve the budget?"
+same-ask              =chrome C-li-implied  asks b/m/c=true/true/true
+   branch="one Can you approve the budget?"
+   base10="b\">one d\">Can you approve the budget?"
+   main  ="b\">one d\">Can you approve the budget?"
+   chrome="one Can you approve the budget?"
+same-ask              =chrome C-tr-implied  asks b/m/c=true/true/true
+   branch="one Can you approve the budget?"
+   base10="b\"> one d\"> Can you approve the budget?"
+   main  ="b\"> one d\"> Can you approve the budget?"
+   chrome="one Can you approve the budget?"
+same-ask              =chrome C-deep-450  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="b\">Can you approve the budget?"
+   main  ="b\">Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              DROPS[ns] C-noscript  asks b/m/c=true/true/true
+   branch="Can you approve the budget?"
+   base10="b\"> Can you approve the budget?"
+   main  ="b\"> d\">ns Can you approve the budget?"
+   chrome="ns Can you approve the budget?"
+same-ask              C-iframe  asks b/m/c=true/true/true
+   branch="raw Can you approve the budget?"
+   base10="b\"> raw Can you approve the budget?"
+   main  ="b\"> raw Can you approve the budget?"
+   chrome="Can you approve the budget?"
+same-ask              =chrome C-crlf-attr  asks b/m/c=true/true/true
+   branch="x\n\n Can you approve the budget?"
+   base10="x\n\n d\">Can you approve the budget?"
+   main  ="x\n\n d\">Can you approve the budget?"
+   chrome="x Can you approve the budget?"
+same-ask              =chrome C-mixed-hidden-gt-dups  asks b/m/c=true/true/true
+   branch="v1 v2 Can you approve the budget?"
+   base10="y\">v1 v2 Can you approve the budget?"
+   main  ="y\">v1 ZZHID v2 Can you approve the budget?"
+   chrome="v1 v2 Can you approve the budget?"
+rows=113 word-drops=2 token-drops=1 ask-flips-vs-main=2 flips-against-chromium=0 newline-count-changed=7 new-leaks=2 branch==chrome=67 main==chrome=23
