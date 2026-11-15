@@ -273,7 +273,41 @@ export function visibleHtml(html: string): string {
     for (const c of n.childNodes ?? []) walk(c, v.state, depth + 1);
   };
   walk(doc, { visHidden: false, fontZero: false }, 0);
-  if (!cuts.length) return html;
+  // TAG SPANS (owner-approved 2026-11-15, AC-html-tag-span-rewrite): main's tag rule `<[^>]+>` ends a tag at its FIRST
+  // `>`, so `<img alt="a > b">` leaves `b">` glued to the next word. The tokenizer already knows each tag's exact
+  // extent, so a tag whose source text holds a `>` before its last character is replaced, at that exact span, by a
+  // neutral tag with no inner `>`. Only those tags change; every other byte stays as the email wrote it. The neutral
+  // form `<name _>` / `</name _>` is never matched by main's `<br>` / `</p>` newline rules -- main produced no newline
+  // for these tags either (Q2: line structure unchanged) -- and keeps a real `id` only when it is a plain token, so the
+  // reply-header cut still sees `id="divRplyFwdMsg"` (Q1: only the real id attribute, never a look-alike).
+  const tagEdits: [number, number, string][] = [];
+  const seenStarts = new Set<number>();
+  const SAFE_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
+  const tagStack: Node[] = [doc];
+  while (tagStack.length) {
+    const n = tagStack.pop()!;
+    for (const c of n.childNodes ?? []) tagStack.push(c);
+    if (n.content) tagStack.push(n.content);
+    if (!n.tagName) continue;
+    const loc = n.sourceCodeLocation as unknown as { startTag?: Loc; endTag?: Loc } | null | undefined;
+    const name = n.tagName.toLowerCase().replace(/[\s>/]/g, "") || "x";
+    const st = loc?.startTag;
+    // A rebuilt formatting element reuses the ORIGINAL start tag's span: rewrite that span once (AC-12).
+    if (st && Number.isFinite(st.startOffset) && !seenStarts.has(st.startOffset)) {
+      const src = `${PREFIX}${html}`.slice(st.startOffset, st.endOffset);
+      if (src.slice(0, -1).includes(">")) {
+        seenStarts.add(st.startOffset);
+        const id = (n.attrs ?? []).find((a) => a.name.toLowerCase() === "id")?.value ?? "";
+        tagEdits.push([st.startOffset, st.endOffset, `<${name} _${SAFE_ID.test(id) ? ` id="${id}"` : ""}>`]);
+      }
+    }
+    const et = loc?.endTag;
+    if (et && Number.isFinite(et.startOffset)) {
+      const src = `${PREFIX}${html}`.slice(et.startOffset, et.endOffset);
+      if (src.slice(0, -1).includes(">")) tagEdits.push([et.startOffset, et.endOffset, `</${name} _>`]);
+    }
+  }
+  if (!cuts.length && !tagEdits.length) return html;
   // Merge overlapping spans, then splice them out of the ORIGINAL string (offsets shifted past the prefix).
   cuts.sort((a, b) => a[0] - b[0]);
   const merged: [number, number][] = [];
@@ -282,12 +316,22 @@ export function visibleHtml(html: string): string {
     if (last && a <= last[1]) last[1] = Math.max(last[1], b);
     else merged.push([a, b]);
   }
+  // One ordered list of edits: hidden-text cuts (replacement chosen below) and tag rewrites (fixed replacement). Tag
+  // spans never overlap text/comment spans; an overlapping edit is skipped rather than allowed to cut twice.
+  const edits: [number, number, string | null][] = [...merged.map(([a, b]) => [a, b, null] as [number, number, null]), ...tagEdits];
+  edits.sort((x, y) => x[0] - y[0]);
   let out = "";
   let pos = 0;
-  for (const [a0, b0] of merged) {
+  for (const [a0, b0, fixed] of edits) {
     const a = Math.max(0, a0 - PREFIX.length);
     const b = Math.max(0, b0 - PREFIX.length);
     if (b <= pos) continue;
+    if (fixed !== null) {
+      if (a < pos) continue;
+      out += html.slice(pos, a) + fixed;
+      pos = b;
+      continue;
+    }
     // A removed span that held a `>` (a comment's `-->`) leaves an empty comment, not a space: main's tag rule may
     // have STOPPED at that `>` after a raw visible `<` earlier in the text (`x < y <!-- c --> Can you ...`); without
     // a `>` there it would run on and swallow visible words (verifier loop 10, 1d-new). `<!---->` is removed whole.

@@ -1,3 +1,9 @@
+- [x] Fragment-cause fix BUILT (owner-approved 2026-11-15; AC branch claude_ac-html-tag-span-rewrite @ 94f0a867):
+      visibleHtml rewrites ONLY tags whose source holds a `>` before their end, at parse5's exact startTag/endTag
+      span, to `<name _ [id]>` / `</name _>`. Loop-5 exact 83/88 again (the 8 fragment rows match Chromium); all
+      loop 6-10 Chromium probes 0 drops / 0 flips against Chromium (font-size:0 row unchanged); main's line structure
+      kept (Q2-A); real id only (Q1-A); `a < b > c` out of scope (Q3-A). Also fixes main's missed reply-header cut
+      when a `>`-attribute precedes the id (AC-7). Verifier next (loop 11).
 - [ ] 2026-11-15: the live work-email file now holds 17 records (127 on 2026-11-14; counts-only probe run, Teams file
       unchanged 166 lines). Not a code change. Tuning continues on the Nov 14 file via OneDrive version history
       (PREVIEW_AS_OF in reply-scan-preview.ts; workflow input as_of). Owner asked whether the Power Automate email

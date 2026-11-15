@@ -45,9 +45,11 @@ t(`LOOP5 no row drops a word Chromium shows (${cases.length} rows; opacity:0 hid
 t("LOOP5 the fixture is the verifier's 88 rows", cases.length, 88);
 t("LOOP5 the verifier's F1 repro: the ask in a table cell after a hidden unclosed <b> in a <li> is kept",
   norm(htmlToText('<ul><li><b style="display:none">pre<li><table><tr><td>Can you sign the NDA?</td></tr></table></ul>')).includes("Can you sign the NDA?"), true);
-// 83 with the quote-aware tag rule; 75 without it (verifier loop 9 removed it). The 8 rows differ only by main's
-// `b">`-style residue -- no dropped word (asserted above), no lost ask.
-t("LOOP5 at least 75 rows match Chromium exactly (measured 2026-11-15, main's tag rule)", exact.length >= 75, true);
+// 75 with main's tag rule alone; 83 since the owner-approved tag-span rewrite removed main's `b">` residue at its
+// source (AC-html-tag-span-rewrite AC-1). The owner caught that lowering this to 75 accepted the fragments.
+t("LOOP5 at least 83 rows match Chromium exactly (tag-span rewrite)", exact.length >= 83, true);
+const FRAG = ["GT-in-alt-inside-hidden", "GT-in-alt-phantom-hidden", "GT-in-title-hidden-tag", "GT-in-href-inside-hidden"].flatMap((x) => [x, `${x}#quirks`]);
+t("AC-1 the 8 fragment rows now match Chromium exactly", FRAG.filter((id) => !exact.includes(id)), []);
 // Browser CSS rules the converter must follow (each confirmed in Chromium 2026-11-14 by the verifier's loop-5 rows or
 // by the CSS spec: an invalid declaration is dropped, so it can neither hide nor un-hide).
 t("CSS an invalid display value cannot un-hide a hidden-attribute element", norm(htmlToText('<div hidden style="display:nonex">Wire 5000</div><p>shown</p>')), "shown");
@@ -84,8 +86,10 @@ t("LOOP8 control: a balanced Outlook style with inner double quotes still strips
   norm(htmlToText(`<p style='font-family:"Calibri",sans-serif'>Can you sign?</p>`)), "Can you sign?");
 // Verifier loop 9: the quote-aware tag rule is GONE -- a `>` inside a quoted value ends the tag exactly as on main,
 // leaving main's residue; the ask is still detected.
-t("LOOP9 a > inside a quoted value gives main's residue and keeps the ask",
-  [norm(htmlToText('<p><img alt="a > b">Can you sign?</p>')), asksSomething({ subject: "x", bodyText: htmlToText('<p><img alt="a > b">Can you sign?</p>') })], ['b">Can you sign?', true]);
+// Was main's residue `b">Can you sign?` (verifier loop 9); the tag-span rewrite gives Chromium's text (AC-21 allows
+// a residue pin to change ONLY to the browser's text).
+t("LOOP9 a > inside a quoted value gives the browser's text and keeps the ask",
+  [norm(htmlToText('<p><img alt="a > b">Can you sign?</p>')), asksSomething({ subject: "x", bodyText: htmlToText('<p><img alt="a > b">Can you sign?</p>') })], ["Can you sign?", true]);
 t("LOOP9 the verifier's `=`-then-quote shapes keep every visible word (main's tag rule)",
   [`<b class="hi"='x>Can you approve the budget? it's urgent</b>`, `<b title=='x>Can you approve the budget? it's urgent</b>`, `<b ='x>Can you approve the budget? it's urgent</b>`, `<b='x>Can you approve the budget? it's urgent</b>`]
     .map((h) => norm(htmlToText(h)).includes("Can you approve the budget? it's urgent")), [true, true, true, true]);
@@ -124,6 +128,20 @@ t("LOOP10 raw `<4` then a comment then a tag: the word between is kept",
   t("LOOP10 1990 open <svg> + 200k stray end tags (810 KB) is bounded under 1 s (was 3.3 s)", timed("<svg>".repeat(1990) + "</x>".repeat(200_000)) < 1000, true);
   t("LOOP10 100k nested <template> (1 MB) is bounded under 1 s (was ~2 s)", timed("<template>".repeat(100_000)) < 1000, true);
 }
+// AC-html-tag-span-rewrite (owner-approved 2026-11-15).
+t("AC-2 a `>` inside an attribute with NO hidden text is fixed too (not skipped by the no-cut early exit)",
+  [norm(htmlToText('<p>Hello <span title="a>b">Can you sign?</span></p>')), norm(htmlToText("<p style='color:red' data-x='1>0'>Can you sign?</p>"))], ["Hello Can you sign?", "Can you sign?"]);
+t("AC-7 the reply-header cut fires even when a `>`-bearing attribute precedes the id (main missed it)",
+  norm(htmlToText('<p>Can you sign?</p><div title="x>y" id="divRplyFwdMsg">From: old</div><p>old old ask?</p>')), "Can you sign?");
+t("AC-8 a blockquote with a `>` in cite is still cut", norm(htmlToText('<blockquote cite="a>b">old words</blockquote><p>Can you sign?</p>')), "Can you sign?");
+t("AC-9 past the parse budget the output is main's, residue included (the fallback ran, not the rewrite)",
+  norm(htmlToText("<div>".repeat(2100) + '<b title="a>b">Can you sign?</b>')).endsWith('b">Can you sign?'), true);
+t("AC-10 deep but inside the budget: the ask is whole tokens", norm(htmlToText("<div>".repeat(450) + '<b title="a>b">Can you sign?</b>')).split(" ").slice(-3).join(" "), "Can you sign?");
+t("AC-12 a reconstructed formatting element's shared start tag is rewritten once", norm(htmlToText('<p><b title="x>y">one<p>two</p>')), "one two");
+t("AC-16 an end tag with a `>` inside is rewritten; line structure unchanged", JSON.stringify(htmlToText('<p>a</p title="x>y"><p>b</p>')).includes('y\\"'), false);
+t("AC-15 an id that is not a plain token is dropped, never emitted raw",
+  norm(htmlToText('<div title="a>b" id="x&quot;><script>">Can you sign?</div>')), "Can you sign?");
+t("Q2 keep main's line structure: a rewritten <br> makes no newline, as on main", htmlToText('<br title="a>b">x').includes("\n"), false);
 console.log(`exact ${exact.length}/${cases.length}`);
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
