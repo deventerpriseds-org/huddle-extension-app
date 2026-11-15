@@ -6280,16 +6280,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // tools array: CHECKLIST_SYSTEM_HINT is appended to BOTH backends' instructions, so omitting
         // it here told this backend to call a tool it was never offered.
         {
-          const { dispatchBuildChecklist } = await import("./tasks/tools");
+          const { dispatchBuildChecklist, lovableChecklistSchema } = await import("./tasks/tools");
+          const lovableProposalsOn = await import("./proposals/proposals.server")
+            .then((m) => m.proposalsConfig() !== null)
+            .catch(() => false);
           lovableTools.build_checklist = tool({
             description:
               "Render an INTERACTIVE CHECKLIST of the user's existing tasks in the chat (tick-boxes plus a per-row Doing/Backlog/parking-lot control). ONLY when the user EXPLICITLY asks for a checklist — an ordinary 'what are my tasks' question wants a prose answer from schedule_and_priorities instead. Call schedule_and_priorities first and pass ITS task ids; never invent one.",
-            inputSchema: z.object({
-              title: z.string(),
-              task_ids: z.array(z.string()),
-              // Same proposals mode as the OpenAI tool (task proposals, AC-correspondence-checklist 5).
-              proposals: z.boolean().optional(),
-            }),
+            // Same gate as the OpenAI tool: `proposals` is offered only while task proposals are switched on.
+            inputSchema: lovableChecklistSchema(z, lovableProposalsOn),
             execute: async (args) => {
               // Same per-turn ledger claim as the OpenAI path: in a group turn two responders would
               // otherwise each render their own widget over the same tasks.

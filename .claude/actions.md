@@ -1,3 +1,9 @@
+- [x] Verifier loop 10 (claude_verify-correspondence-proposals-10 @ 4e23d5aa) = FIX FIRST. Fixed: (1d-new) a cut
+      span holding a `>` (a comment) leaves `<!---->`, not a space, so main's tag rule still stops there after a raw
+      visible `<`; (1e) depth limit min(2000, 5e7/tokens) + template content inherits its template's depth (hostile
+      810 KB shapes 3.3 s -> 7-21 ms; Outlook 970 KB / Gmail 600-deep still parse); (4) the SECOND backend's (Lovable)
+      build_checklist schema gated like the OpenAI one (lovableChecklistSchema; checklist-tool C7/C8). Loop-6..10
+      probes: 0 drops, 0 flips against Chromium except the deliberate font-size:0 row.
 - [ ] Owner APPROVED 2026-11-15 (both "as long as it's reversible"):
       (1) FIX THE CAUSE of the `b">` fragments (main's tag rule ends a tag at the first `>` inside a quoted attribute):
           rewrite each tag at parse5's own startTag/endTag source span instead of guessing with a regex. A 4th LIVE

@@ -157,6 +157,12 @@ const VOID = new Set(["br", "hr", "img", "input", "meta", "link", "area", "base"
  *  by many distinct unclosed formatting tags re-opened in every later paragraph (62 KB: 7.1 s). Counting the parser's
  *  own work cannot be fooled by how the markup is spelled. Prototype: scripts/verify9-guard-proto.ts (verifier). */
 export const PARSE_DEPTH_LIMIT = 2000;
+/** Verifier loop 10, 1e: parse5 walks the open-element stack on many tokens that create no element (stray end tags,
+ *  scope checks), so a 1990-deep stack plus 200k such tokens cost 3.3 s while creating nothing the budget counted.
+ *  The depth limit therefore SHRINKS with the token count so (stack depth x tokens) stays near 5e7, whatever the
+ *  markup. Real-looking 1 MB Outlook/Gmail/newsletter bodies stay far inside it (verify10-realistic). */
+export const parseDepthLimit = (html: string) =>
+  Math.min(PARSE_DEPTH_LIMIT, Math.floor(5e7 / Math.max(1, html.match(/<\/?[a-zA-Z]/g)?.length ?? 0)));
 /** Elements the parser may create: 4 per start tag written, plus 2000. Reconstructed formatting elements are the
  *  only way past 1 per tag; no Chromium-recorded corpus row (398) comes near it. */
 export const parseNodeLimit = (html: string) => 4 * (html.match(/<[a-zA-Z]/g)?.length ?? 0) + 2000;
@@ -165,11 +171,15 @@ class ParseBudget extends Error {}
 
 function guardedParse(html: string): Node {
   const maxNodes = parseNodeLimit(html);
+  const maxDepth = parseDepthLimit(html);
   const depth = new WeakMap<object, number>();
+  // <template> content is a separate fragment: it inherits its template's depth, never restarts at 0 (verifier loop 10).
+  const templateOf = new WeakMap<object, object>();
   let nodes = 0;
+  const depthOf = (n: object): number => depth.get(n) ?? (templateOf.has(n) ? depth.get(templateOf.get(n)!) ?? 0 : 0);
   const place = (parent: object, child: object) => {
-    const v = (depth.get(parent) ?? 0) + 1;
-    if (v > PARSE_DEPTH_LIMIT) throw new ParseBudget("depth");
+    const v = depthOf(parent) + 1;
+    if (v > maxDepth) throw new ParseBudget("depth");
     depth.set(child, v);
   };
   const adapter = {
@@ -177,6 +187,10 @@ function guardedParse(html: string): Node {
     createElement(...a: Parameters<typeof defaultTreeAdapter.createElement>) {
       if (++nodes > maxNodes) throw new ParseBudget("nodes");
       return defaultTreeAdapter.createElement(...a);
+    },
+    setTemplateContent(t: never, c: never) {
+      templateOf.set(c, t);
+      return defaultTreeAdapter.setTemplateContent(t, c);
     },
     appendChild(p: never, c: never) {
       place(p, c);
@@ -274,7 +288,11 @@ export function visibleHtml(html: string): string {
     const a = Math.max(0, a0 - PREFIX.length);
     const b = Math.max(0, b0 - PREFIX.length);
     if (b <= pos) continue;
-    out += html.slice(pos, Math.max(pos, a)) + " ";
+    // A removed span that held a `>` (a comment's `-->`) leaves an empty comment, not a space: main's tag rule may
+    // have STOPPED at that `>` after a raw visible `<` earlier in the text (`x < y <!-- c --> Can you ...`); without
+    // a `>` there it would run on and swallow visible words (verifier loop 10, 1d-new). `<!---->` is removed whole.
+    const removed = html.slice(Math.max(pos, a), b);
+    out += html.slice(pos, Math.max(pos, a)) + (removed.includes(">") ? "<!---->" : " ");
     pos = b;
   }
   return out + html.slice(pos);

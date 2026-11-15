@@ -113,6 +113,17 @@ t("LOOP8 just under the limit the parser still runs: a hidden ancestor's text is
   const bt = htmlToText(big);
   t("LOOP9 a realistic 180 KB Outlook body still goes through the parser (its hidden text is cut)", !bt.includes("HIDDENX") && bt.includes(ASK), true);
 }
+// Verifier loop 10, 1d-new: a cut comment leaves `<!---->`, so main's tag rule still stops where it stopped at `-->`.
+t("LOOP10 raw `<` then a comment: the visible ask after the comment is kept (main and Chromium keep it)",
+  norm(htmlToText("<table><tr><td>x < y <!-- c --> Can you approve the budget?</td></tr></table>")).includes("Can you approve the budget?"), true);
+t("LOOP10 raw `<4` then a comment then a tag: the word between is kept",
+  norm(htmlToText("<p>Q <4 <!-- c --> done</p><p>Can you approve the budget?</p>")).includes("done"), true);
+// Verifier loop 10, 1e: the depth limit shrinks with the token count; template content inherits its template's depth.
+{
+  const timed = (h: string) => { const t0 = performance.now(); htmlToText(h); return performance.now() - t0; };
+  t("LOOP10 1990 open <svg> + 200k stray end tags (810 KB) is bounded under 1 s (was 3.3 s)", timed("<svg>".repeat(1990) + "</x>".repeat(200_000)) < 1000, true);
+  t("LOOP10 100k nested <template> (1 MB) is bounded under 1 s (was ~2 s)", timed("<template>".repeat(100_000)) < 1000, true);
+}
 console.log(`exact ${exact.length}/${cases.length}`);
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

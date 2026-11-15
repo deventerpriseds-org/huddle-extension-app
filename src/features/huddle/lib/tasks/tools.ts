@@ -112,6 +112,14 @@ export const CHECKLIST_PROPOSALS_PROPERTY = {
     "Set true ONLY when the user asks to see their PROPOSED tasks -- to-dos found in their email, Teams chats or meetings that are waiting for them to approve, edit, mark done or dismiss (e.g. 'show my proposed tasks'). Ignores match/task_ids. These are suggestions, NOT tasks on their board.",
 } as const;
 
+/** The SECOND backend's build_checklist schema (Lovable / ai-sdk zod), gated exactly like `checklistTool`: main's
+ *  `{ title, task_ids }` unless proposals are switched on (verifier loop 10, claim 4 -- loop 9's gate covered only the
+ *  OpenAI path). `z` is passed in so this module needs no zod import. */
+export function lovableChecklistSchema(z: typeof import("zod").z, proposalsOn: boolean) {
+  const base = { title: z.string(), task_ids: z.array(z.string()) };
+  return proposalsOn ? z.object({ ...base, proposals: z.boolean().optional() }) : z.object(base);
+}
+
 /** The build_checklist tool as the model should see it: main's schema, plus `proposals` only when switched on. */
 export function checklistTool(proposalsOn: boolean): typeof CHECKLIST_TOOL {
   if (!proposalsOn) return CHECKLIST_TOOL;
