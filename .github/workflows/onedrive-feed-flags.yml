@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       set:
-        description: "Comma list of name=value, e.g. ingest=true,teamsLoadAt=18:00. Allowed: ingest, bell, proposals, meetingTriage, staleAlerts, conversations, emailBell (true/false); teamsLoadAt (HH:MM or off); minIntervalMinutes (number); sources (teams+email | teams | email)."
+        description: "Comma list of name=value, e.g. ingest=true,teamsLoadAt=18:00. Allowed: ingest, bell, proposals, meetingTriage, staleAlerts, conversations, emailBell (true/false); teamsLoadAt (HH:MM or off); minIntervalMinutes (number); sources (teams+email | teams | email); teams, sent (true = read that file at its default path; an existing settings object is kept; false = off)."
         required: true
       apply:
         description: "true = store the merged secret; false = dry run (print the switch names and values only)"
@@ -60,6 +60,11 @@ jobs:
               elif k == "minIntervalMinutes":
                   if not v.isdigit() or not (1 <= int(v) <= 1440): sys.exit("minIntervalMinutes must be 1-1440")
                   corr[k] = int(v)
+              elif k in ("teams", "sent"):
+                  # Top-level opt-in feed files. true keeps an existing settings object (path, ids) untouched.
+                  if v not in ("true", "false"): sys.exit(f"{k} must be true or false")
+                  if v == "false": cur[k] = False
+                  elif not isinstance(cur.get(k), dict): cur[k] = True
               elif k == "sources":
                   m = {"teams+email": ["teams", "email"], "teams": ["teams"], "email": ["email"]}
                   if v not in m: sys.exit("sources must be teams+email, teams or email")
@@ -72,6 +77,7 @@ jobs:
           print("changes: " + ", ".join(changes), file=sys.stderr)
           print("correspondence switches now: " + ", ".join(f"{k}={corr[k]}" for k in sorted(corr) if k in BOOL or k in ("teamsLoadAt", "minIntervalMinutes", "sources")), file=sys.stderr)
           print("top-level keys kept: " + ", ".join(sorted(cur.keys())), file=sys.stderr)
+          print("feed files: " + ", ".join(f"{k}={'settings' if isinstance(cur.get(k), dict) else cur.get(k)}" for k in ("teams", "sent")), file=sys.stderr)
           PY
           if [ "$IN_APPLY" = "true" ]; then
             gh secret set HUDDLE_ONEDRIVE_FEEDS --repo "$REPO" < /tmp/cfg.json

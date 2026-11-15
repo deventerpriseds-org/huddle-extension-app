@@ -1,4 +1,5 @@
 # Action Tracker — huddle-extension-app
+- [x] correspondence-backfill.yml + onedrive-feed-flags teams/sent (2026-11-15): one-time ledger back-fill from OneDrive versions (dry run default; DB firewall rule for the runner only); flags tool can switch on the Teams and Sent files without touching other keys.
 - [x] onedrive-feed-flags.yml (2026-11-15): merges allow-listed correspondence switches into HUDDLE_ONEDRIVE_FEEDS without overwriting the rest (onedrive-feed-config.yml rebuilds the whole secret). Dry-run by default.
 - [x] proposals-preview.yml as_of input (2026-11-15): tuning reads the feed files as they were at a time (live email file shrank 127 -> 17 records).
 - [x] proposals-preview.yml step=action (2026-11-14): runs scripts/reply-scan-preview.ts steps 2+3 from the chosen ref
