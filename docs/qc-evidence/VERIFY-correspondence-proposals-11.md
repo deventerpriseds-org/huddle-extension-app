@@ -152,3 +152,9 @@ unchanged). Add a Node-run timing guard (bun cannot see the defect warm). Resolv
 merging. After the fix lands, the bell claim still needs a browser run (MERGE-PENDING-UAT for claim 2).
 Everything else in this loop's scope held: 1d-new fixed, 1e bounded, the tag-span rewrite meets all 66 spelling-table rows
 and 0 ask flips against Chromium over 113 + 398 rows, both checklist schemas = main with flags off.
+
+### Addendum to 1e / 1-PERF: hostile shapes under Node WITH the hoist fix applied (temporarily; src restored)
+`node --experimental-strip-types scripts/verify11-node-hostile.mts`: svg+`</x>` 781 KB 898 ms; math+`</x>` 391 KB 1356 ms;
+div+`<dt>` 99 KB 531 ms / 1.5 MB 1181 ms; ul+`<li>` 1.5 MB 1122 ms (bun: 453-894 ms). Linear and bounded, hostile sender
+only. (These rows hold no hidden text, so `visibleHtml` returns the input unchanged by design; the script's `aborted`
+column is therefore not a budget signal for them.) Without the fix, Node adds one body copy per element on top of each.
