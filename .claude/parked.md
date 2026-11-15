@@ -1,0 +1,7 @@
+# Parked work -- built but NOT live (owner rule 2026-11-15: remind every turn until he decides go or skip)
+# Format: - [ ] PARKED: <slug> | <what> | state: <...> | since <date> | decide: go/skip
+#         resolved only as: - [x] PARKED: ... | DECIDED: go <date>  or  DECIDED: skip <date>
+- [ ] PARKED: correspondence-branch | Email/Teams correspondence work (approved email-text fixes, proposals checklist, meeting triage, judge, staleness alerts) on branch claude_task-proposals | state: not merged (verifier loop 11 running) | since 2026-11-14 | decide: go/skip
+- [ ] PARKED: correspondence-collection | Collect email + Teams files into Azure (ledger) since Monday, back-fill from OneDrive versions, Teams daily from 6pm | state: switched off (correspondence.ingest), tables not created in prod | since 2026-11-15 | decide: go given 2026-11-15 ("Push everything there") -- executing after loop 11
+- [ ] PARKED: report-links-checklist | Report email links into Iris's checklist + Wrong link + category settings | state: ACs written, not built | since 2026-11-15 | decide: go given 2026-11-15 (option A) -- building after collection
+- [ ] PARKED: verify-loop-work-slug-alias | eds-claude-skills #138 checker fix | state: not merged (three AC findings open) | since 2026-11-15 | decide: go/skip

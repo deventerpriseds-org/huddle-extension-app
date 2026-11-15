@@ -39,7 +39,7 @@ import {
   type SourceItem,
   type TeamsMessage,
 } from "../src/features/huddle/lib/correspondence/source-item";
-import { ledgerEmailItems, runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
+import { inDailyWindow, ledgerEmailItems, runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
 
 let fail = 0;
 let pass = 0;
@@ -94,6 +94,8 @@ t("AC-6.1 correspondence switches all OFF by default", noTeams.correspondence, {
   meetingTriage: false,
   maxAttempts: 5,
   minIntervalMinutes: 10,
+  // Owner 2026-11-15: the Teams file loads every day from 6pm (America/New_York); seeded default.
+  teamsLoadAt: "18:00",
   // File-staleness alert (2026-11-13, scripts/feed-staleness.test.ts): OFF by default like every switch.
   staleAlerts: false,
   staleHours: 6,
@@ -376,6 +378,35 @@ t("AC-7.1 skip counts reported per source", [r1.sources.teams?.skipped, r1.sourc
 t("AC-6.3 no processor switched on -> nothing claimed, every row stays pending", [tw1.calls.includes("claim"), [...tw1.rows.values()].every((r) => r.status === "pending")], [false, true]);
 t("AC-2.2 email rows keyed (email, mailbox:outlook id)", [...tw1.rows.values()].filter((r) => r.source === "email").map((r) => r.id).sort(), ["owner@work.example:AAMk-sample-1", "owner@work.example:AAMk-sample-2"]);
 t("AC-1.7 Teams rows keyed (encoded chat id : message id)", [...tw1.rows.values()].some((r) => r.id === teamsSourceItemId("19:chat-alpha@thread.example", "1001")), true);
+
+// Teams daily load at 6pm ET (owner 2026-11-15). The shared read counters are saved and restored around this block.
+{
+  const savedReads = { teams: reads.teams, email: reads.email };
+  const at = (iso: string) => Date.parse(iso);
+  t("TL-1 window: 17:59 ET is before the 6pm load", inDailyWindow(at("2026-11-16T22:59:00Z"), "18:00"), false);
+  t("TL-2 window: 18:00 ET is in", inDailyWindow(at("2026-11-16T23:00:00Z"), "18:00"), true);
+  t("TL-3 window: 23:59 ET is still in (late flow writes are picked up)", inDailyWindow(at("2026-11-17T04:59:00Z"), "18:00"), true);
+  t("TL-4 window: 00:30 ET next day is out", inDailyWindow(at("2026-11-17T05:30:00Z"), "18:00"), false);
+  t("TL-5 window follows daylight saving (July: 18:00 EDT = 22:00Z)", [inDailyWindow(at("2026-07-10T21:59:00Z"), "18:00"), inDailyWindow(at("2026-07-10T22:00:00Z"), "18:00")], [false, true]);
+  const pc = (v: unknown) => parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { teamsLoadAt: v } }))!.correspondence.teamsLoadAt;
+  t("TL-6 config: a valid HH:MM is kept; off/null/false disable the window; junk falls back to 18:00", [pc("19:30"), pc("off"), pc(null), pc(false), pc("25:00"), pc(7)], ["19:30", null, null, null, "18:00", "18:00"]);
+  // A pass outside the window, with Teams already loaded once, reads nothing from Teams; email is unaffected.
+  const twL = makeTwin(); // clock starts 18:05 ET (in the window)
+  reads.teams = reads.email = 0;
+  const first = await runIngestPass(onCfg({ teamsLoadAt: "18:00" }), deps(twL));
+  t("TL-7 first pass in the window reads Teams", [first.sources.teams?.status !== "scheduled", reads.teams], [true, 1]);
+  twL.tick(12 * 3600_000); // 06:05 ET next morning
+  const morning = await runIngestPass(onCfg({ teamsLoadAt: "18:00" }), deps(twL));
+  t("TL-8 next morning: Teams waits for 6pm, email still loads", [morning.sources.teams?.status, reads.teams, morning.sources.email?.status !== "scheduled"], ["scheduled", 1, true]);
+  // Never loaded before: the first load happens at once, whatever the time (the back-fill must not wait for 6pm).
+  const twM = makeTwin();
+  twM.tick(12 * 3600_000); // 06:05 ET, no Teams cursor yet
+  reads.teams = 0;
+  const cold = await runIngestPass(onCfg({ teamsLoadAt: "18:00" }), deps(twM));
+  t("TL-9 a Teams file never loaded is read at once, even outside the window", [cold.sources.teams?.status !== "scheduled", reads.teams], [true, 1]);
+  reads.teams = savedReads.teams;
+  reads.email = savedReads.email;
+}
 
 // AC-3.5 / AC-1.6: an immediate second pass is throttled; after the throttle an unchanged file is not re-read
 const r2 = await runIngestPass(onCfg(), deps(tw1));

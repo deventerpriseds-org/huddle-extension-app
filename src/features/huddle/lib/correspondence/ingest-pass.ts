@@ -94,6 +94,21 @@ export function ledgerEmailItems(
 }
 
 /** Pure: the processors the config switches on (AC-6.3: bell and proposals independently). */
+/** Pure: is `ms` at or after the daily local time `hhmm` (America/New_York), before midnight? Owner 2026-11-15:
+ *  the Teams file loads every day at 6pm. Never throws; a bad clock value reads as "in the window" (keep-loading). */
+export function inDailyWindow(ms: number, hhmm: string): boolean {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(ms));
+    const h = Number(parts.find((p) => p.type === "hour")?.value);
+    const m = Number(parts.find((p) => p.type === "minute")?.value);
+    const [H, M] = hhmm.split(":").map(Number);
+    if (![h, m, H, M].every(Number.isFinite)) return true;
+    return h * 60 + m >= H * 60 + M;
+  } catch {
+    return true;
+  }
+}
+
 export function activeProcessors(cfg: OneDriveFeedsConfig, all: ItemProcessor[]): ItemProcessor[] {
   return all.filter((p) => (p.name === "bell" ? cfg.correspondence.bell : p.name === "proposals" ? cfg.correspondence.proposals : false));
 }
@@ -145,6 +160,12 @@ export async function runIngestPass(
       // Download the content only when the file changed OR due work needs the item text (the ledger never
       // stores text). Otherwise honour the read throttle: the flow writes once a weekday evening.
       const needPayload = processors.length > 0 && (await deps.ledger.hasDue(owner, [source], cc.maxAttempts));
+      // Teams daily window (owner 2026-11-15, 6pm): outside it, no Teams read at all -- unless it has never been read
+      // (the first load / back-fill) or due work needs the item text.
+      if (source === "teams" && cc.teamsLoadAt && !needPayload && cur?.checkedAtMs != null && !inDailyWindow(start, cc.teamsLoadAt)) {
+        result.sources.teams = { status: "scheduled" };
+        continue;
+      }
       if (!needPayload && cur?.checkedAtMs != null && start - cur.checkedAtMs < minIntervalMs) {
         result.sources[source] = { status: "throttled" };
         continue;

@@ -50,6 +50,11 @@ export interface CorrespondenceConfig {
   maxAttempts: number;
   /** Minimum gap between two eTag checks of the Teams log (the flow writes once a weekday evening). */
   minIntervalMinutes: number;
+  /** Teams daily load (owner 2026-11-15: "The teams file should be scheduled to load everyday at 6pm"): the Teams
+   *  file is read only from this local time (America/New_York, "HH:MM") until midnight each day, at the normal
+   *  interval, so the evening file is picked up whenever the flow writes it after 6pm. null = no daily window
+   *  (read at the interval all day, the previous behaviour). Seeded default "18:00"; change it in the config. */
+  teamsLoadAt: string | null;
   /** File-staleness alert on the bell (owner decision 2026-11-13). OFF unless literally `true`; independent of
    *  `ingest`. lib/correspondence/feed-staleness.ts. */
   staleAlerts: boolean;
@@ -79,6 +84,8 @@ export const SENT_PATH_DEFAULT = "/automation/email/sent.json";
 export const TEAMS_SOURCE_EXPECTED = "teams";
 export const CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT = 5;
 export const CORRESPONDENCE_MIN_INTERVAL_DEFAULT = 10;
+/** Owner 2026-11-15: the Teams file loads every day at 6pm (America/New_York). */
+export const CORRESPONDENCE_TEAMS_LOAD_AT_DEFAULT = "18:00";
 /** Owner decision 2026-11-13: email/sent stale after N working hours; N defaults to 6. */
 export const CORRESPONDENCE_STALE_HOURS_DEFAULT = 6;
 
@@ -236,6 +243,12 @@ function correspondenceFlags(v: unknown): CorrespondenceConfig {
     meetingTriage: o.meetingTriage === true,
     maxAttempts: n(o.maxAttempts, CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT, 20),
     minIntervalMinutes: n(o.minIntervalMinutes, CORRESPONDENCE_MIN_INTERVAL_DEFAULT, 24 * 60),
+    teamsLoadAt:
+      o.teamsLoadAt === null || o.teamsLoadAt === false || o.teamsLoadAt === "off"
+        ? null
+        : typeof o.teamsLoadAt === "string" && /^([01]?\d|2[0-3]):[0-5]\d$/.test(o.teamsLoadAt.trim())
+          ? o.teamsLoadAt.trim()
+          : CORRESPONDENCE_TEAMS_LOAD_AT_DEFAULT,
     staleAlerts: o.staleAlerts === true,
     staleHours: n(o.staleHours, CORRESPONDENCE_STALE_HOURS_DEFAULT, 200),
     conversations: o.conversations === true,

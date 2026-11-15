@@ -1,3 +1,10 @@
+- [ ] Owner 2026-11-15: "This data should be in azure not a branch ... Push everything there and make sure it's used
+      going forward. The files should be for loads only. The teams file should be scheduled to load everyday at 6pm"
+      + "Make a mechanized rule ... reminding about it each turn until determined to skip or go". DONE so far: Teams
+      daily window (correspondence.teamsLoadAt, default "18:00" ET, reads 18:00-midnight so a late flow write is caught;
+      a never-loaded file loads at once for the back-fill; tests TL-1..9); .claude/parked.md started; the reminder hook
+      is being built in eds-claude-skills (claude_parked-work-reminder). NEXT: loop 11 verdict -> merge -> tables in
+      Azure -> back-fill from OneDrive versions -> flags via a MERGING config workflow (the existing one overwrites).
 - [ ] Owner 2026-11-15: "this report should be running against the table that has everything since Monday. If it
       hasn't been signaled to be ignored or added as a task etc it should still be showing up". FACT (azure-pg-query,
       2026-11-15 22:4x): chat.correspondence_ledger and chat.task_proposals DO NOT EXIST in prod (only
