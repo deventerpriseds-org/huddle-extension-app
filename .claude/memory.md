@@ -169,7 +169,7 @@ emails can pick the profile with zero tasks. (:1032, :1033, :2786)
 | Memory | Azure `public.rag_chunks` | every user msg auto-written `scope='global'`; retrieval filters scope/agent only, **no huddle filter** — this is the only cross-huddle bridge. Score floor **0.3** (`text-embedding-3-large` scores real hits 0.4–0.5). |
 | Fast read from CCR | `getTurnUpdates` server fn over HTTPS (~1s) | **but the deployed SWA host is frequently NOT in session egress** (measured 2026-10-15: curl → `CONNECT tunnel failed, 403`; node fetch → `ENOTFOUND`). When it is blocked, use `azure-pg-query.yml` or the pg MCP. |
 | Seroval CONST map | `0=null 1=undefined 2=true 3=false 4=-0 5=Infinity 6=-Infinity 7=NaN` | `huddle.mjs` ships a WRONG map that decodes `true` as `null`. |
-Last updated: 2026-09-21 (PR triage pass, 4 open PRs: merged #39 — docs-only spec research,
+Last updated: 2026-11-15 (parked.md: owner go on verify-loop-work-slug-alias.) Previously: 2026-09-21 (PR triage pass, 4 open PRs: merged #39 — docs-only spec research,
 re-verified its two load-bearing technical claims against live code before merging (see
 ACT:pr-triage-2026-09-21 in actions.md). Its finding worth carrying: `eds-claude-skills/CLAUDE.md`'s
 "Realtime AS EAR ONLY (Huddle `useVoiceCallRealtime`)" line is STALE — Huddle's current default 1:1
