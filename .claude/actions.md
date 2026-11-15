@@ -1,3 +1,9 @@
+- [ ] Owner review of steps 2+3 (2026-11-15, screenshots): personal messages expecting acknowledgement need a REPLY
+      even with no task (Keith's attachment, Amy's shares/first day, Patricia's list+deck, Harshitha intro, Thad mention);
+      already-replied rows were shown as "nothing open"; Zito Quality Month forward still unread; "Meeting invites,
+      time keeping, verification codes can be toggled off in settings". BUILT (preview): reply rule + "answered by your
+      reply" section + per-row category with default-hidden meeting_invite/timekeeping/verification_code (collapsed,
+      never dropped; PREVIEW_HIDE_CATEGORIES). Settings screen toggle folded into AC-report-links-checklist.
 - [x] Verifier loop 10 (claude_verify-correspondence-proposals-10 @ 4e23d5aa) = FIX FIRST. Fixed: (1d-new) a cut
       span holding a `>` (a comment) leaves `<!---->`, not a space, so main's tag rule still stops there after a raw
       visible `<`; (1e) depth limit min(2000, 5e7/tokens) + template content inherits its template's depth (hostile
