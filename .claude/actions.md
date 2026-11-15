@@ -1,3 +1,9 @@
+- [x] Verifier loop 9 (claude_verify-correspondence-proposals-9 @ f669c0b5) = FIX FIRST. Fixed: (1d) quote-aware
+      tag regex REMOVED -- tags end exactly as on main (`=`-then-quote shapes dropped words); (1e) parse5 bounded by what
+      it BUILDS (tree depth 2000 + elements 4/tag+2000, tree-adapter abort -> main's text), was a regex estimate beaten
+      by stray end tags / re-opened formatting; (4) build_checklist `proposals` param offered only when proposals are on
+      (checklistTool(), schema identical to main when off); preview-only: forwards prefer divRplyFwdMsg over
+      appendonsend, CRLF, "[EXTERNAL] FW:"; report web link no longer printed in public logs.
 - [x] Verifier loop 8 (artifact @ 4857ac27; agent killed by a container restart mid-pass) found 1d: the quote-aware tag
       regex swallowed visible text after an apostrophe in an unquoted attribute (live screen, flags off), and 1e: parse5
       roughly quadratic on 20k+ nested blocks. FIXED: quote opens a run only right after `=` (tokenizer rule); visibleHtml

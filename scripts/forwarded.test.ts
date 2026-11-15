@@ -28,6 +28,12 @@ t("F2 subject FWD: is a forward", FORWARD_SUBJECT.test("FWD: x"));
 t("F3 subject RE: FW: is a forward", FORWARD_SUBJECT.test("RE: FW: x"));
 t("F4 subject Re: only is NOT a forward", !FORWARD_SUBJECT.test("Re: Fw stuff"));
 t("F5 subject with Fw later is NOT a forward", !FORWARD_SUBJECT.test("Notes on the Fw: topic"));
+t("F5b gateway tag then FW: is a forward", FORWARD_SUBJECT.test("[EXTERNAL] FW: Invoice"));
+t("F5c EXT: FW: is a forward", FORWARD_SUBJECT.test("EXT: FW: Invoice"));
+t("F5d a bracket tag alone is NOT a forward", !FORWARD_SUBJECT.test("[EXTERNAL] Invoice due"));
+const newOutlook = '<div>Mark<br>555-0100</div><div id="appendonsend"></div><hr><div id="divRplyFwdMsg"><b>From:</b> Compliance<br><b>Sent:</b> Mon</div><div>Please finish the training by Dec 2.</div>';
+t("F5e new-Outlook shape (appendonsend before divRplyFwdMsg) keeps the forwarded body", (forwardedText("FW: training", newOutlook, true) ?? "").includes("Please finish the training by Dec 2."));
+t("F5f CRLF plain-text forward keeps the forwarded part", (forwardedText("FW: t", "See below.\r\n\r\n-----Original Message-----\r\nFrom: A\r\nPlease send the timesheet today.", false) ?? "").includes("Please send the timesheet today."));
 
 const f = forwardedText("Fw: REMINDER", fwdHtml, true) ?? "";
 t("F6 forwarded body is kept", f.includes("Please complete the Risk Assessment by November 12."), f);

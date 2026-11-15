@@ -216,7 +216,9 @@ ${noTable(step3)}
     /* no link in the response */
   }
   console.log(`action scan file: HTTP ${put.status} -> OneDrive ${out}`);
-  if (webUrl) console.log(`OPEN THE REPORT: ${webUrl}`);
+  // The web link is NOT printed: it carries the owner's OneDrive path, and this repo's Actions logs are public
+  // (verifier loop 9, 3c). The session builds the link from the file path above.
+  void webUrl;
   if (!put.ok) process.exitCode = 1;
   if (process.env.PREVIEW_EMAIL === "1") {
     const from = (process.env.HUDDLE_EMAIL_FROM || "dev@enterpriseds.io").split(",")[0].trim();

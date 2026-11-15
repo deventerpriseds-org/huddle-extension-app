@@ -10,10 +10,13 @@ import { htmlToText } from "../external-feeds/onedrive-feed";
 import { newTextOnly } from "../email/inbound-email";
 
 /** A subject that marks a forward (English plus the common Outlook locales). */
-export const FORWARD_SUBJECT = /^\s*(?:(?:re|aw|sv)\s*:\s*)*(?:fw|fwd|tr|wg|rv|doorst)\s*:/i;
+// Leading mail-gateway tags ("[EXTERNAL] FW: ...", "EXT: FW: ...") are skipped (verifier loop 9, 3d).
+export const FORWARD_SUBJECT = /^\s*(?:\[[^\]]{1,30}\]\s*|ext\s*:\s*)*(?:(?:re|aw|sv)\s*:\s*)*(?:fw|fwd|tr|wg|rv|doorst)\s*:/i;
 
 /** The text after newTextOnly's cut (the quoted / forwarded part), or null when nothing meaningful follows. */
-function afterCut(text: string): string | null {
+function afterCut(input: string): string | null {
+  // CRLF bodies: newTextOnly drops "\r", so the prefix test below would never match (verifier loop 9, 3d).
+  const text = input.replace(/\r\n?/g, "\n");
   const fresh = newTextOnly(text);
   if (!text.startsWith(fresh) || text.length - fresh.length < 20) return null;
   return text.slice(fresh.length).trim();
@@ -32,7 +35,9 @@ export function forwardedText(subject: string | null | undefined, body: string |
   if (!raw.trim()) return null;
   let out = "";
   if (isHtml) {
-    const m = RPLY_FWD.exec(raw);
+    // Prefer the forward HEADER (divRplyFwdMsg): new Outlook puts an empty `appendonsend` div before it, and starting
+    // there would also cut at the header itself (verifier loop 9, 3d).
+    const m = /<div[^>]*id=["']?divRplyFwdMsg["']?/i.exec(raw) ?? RPLY_FWD.exec(raw);
     if (m) {
       // Rename only THIS marker so htmlToText keeps it; a deeper marker (the forward's own history) is still cut.
       const rest = raw.slice(m.index).replace(/id=(["']?)(?:divRplyFwdMsg|appendonsend)/i, "id=$1fwdpart");

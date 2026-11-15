@@ -26,7 +26,7 @@
 //  Parsed in STANDARDS mode (as a webmail page embeds the message), whatever doctype the email carries.
 //  CSS declarations are parsed the way a browser does: comments removed, the LAST declaration of a property wins,
 //  `!important` beats a later normal one, and an invalid value (e.g. `display:nonex`) is ignored.
-import { parse } from "parse5";
+import { defaultTreeAdapter, parse } from "parse5";
 
 type Node = {
   nodeName: string;
@@ -151,33 +151,54 @@ const VOID = new Set(["br", "hr", "img", "input", "meta", "link", "area", "base"
  * htmlToText uses to cut Outlook's reply header) and its visible text, escaped. Never throws (parse5 never throws on
  * malformed input; a pathological input falls back to the empty string).
  */
-/** Cheap linear upper bound on element nesting: start tags (not void) minus end tags, clamped at 0. Over-counts
- *  unclosed <p>/<li>/<td>, which only ever errs toward the keep-more fallback. */
-export function estimatedDepth(html: string): number {
-  let depth = 0;
-  let max = 0;
-  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)/g;
-  for (let m = re.exec(html); m; m = re.exec(html)) {
-    if (m[1]) depth = Math.max(0, depth - 1);
-    else if (!VOID.has(m[2].toLowerCase())) max = Math.max(max, ++depth);
-  }
-  return max;
+/** The parser is BOUNDED BY WHAT IT BUILDS: a tree deeper than this, or more elements created than PARSE_NODE_LIMIT
+ *  allows, aborts the parse and the html is returned unchanged (main's text, keep-more). Verifier loop 9, 1e: a regex
+ *  estimate of nesting was beaten by stray end tags (`<div></i>` x 40k reads as depth 1, builds 40k deep: 7.7 s) and
+ *  by many distinct unclosed formatting tags re-opened in every later paragraph (62 KB: 7.1 s). Counting the parser's
+ *  own work cannot be fooled by how the markup is spelled. Prototype: scripts/verify9-guard-proto.ts (verifier). */
+export const PARSE_DEPTH_LIMIT = 2000;
+/** Elements the parser may create: 4 per start tag written, plus 2000. Reconstructed formatting elements are the
+ *  only way past 1 per tag; no Chromium-recorded corpus row (398) comes near it. */
+export const parseNodeLimit = (html: string) => 4 * (html.match(/<[a-zA-Z]/g)?.length ?? 0) + 2000;
+
+class ParseBudget extends Error {}
+
+function guardedParse(html: string): Node {
+  const maxNodes = parseNodeLimit(html);
+  const depth = new WeakMap<object, number>();
+  let nodes = 0;
+  const place = (parent: object, child: object) => {
+    const v = (depth.get(parent) ?? 0) + 1;
+    if (v > PARSE_DEPTH_LIMIT) throw new ParseBudget("depth");
+    depth.set(child, v);
+  };
+  const adapter = {
+    ...defaultTreeAdapter,
+    createElement(...a: Parameters<typeof defaultTreeAdapter.createElement>) {
+      if (++nodes > maxNodes) throw new ParseBudget("nodes");
+      return defaultTreeAdapter.createElement(...a);
+    },
+    appendChild(p: never, c: never) {
+      place(p, c);
+      return defaultTreeAdapter.appendChild(p, c);
+    },
+    insertBefore(p: never, c: never, r: never) {
+      place(p, c);
+      return defaultTreeAdapter.insertBefore(p, c, r);
+    },
+  };
+  return parse(html, { sourceCodeLocationInfo: true, treeAdapter: adapter as never }) as unknown as Node;
 }
 
-/** Above this estimated nesting the parser is skipped (its cost grows roughly with depth squared: 40k nested <div>
- *  measured at 5 s, 80k at 24 s -- verifier loop 8, 1e). No real email nests anywhere near this; 2000 costs ~10 ms. */
-export const PARSE_DEPTH_LIMIT = 2000;
-
 export function visibleHtml(html: string): string {
-  // A pathologically nested body is returned unchanged: exactly main's text (keep-more), in linear time.
-  if (estimatedDepth(html) > PARSE_DEPTH_LIMIT) return html;
   const PREFIX = "<!doctype html>";
   let doc: Node;
   try {
     // Standards mode, always: a webmail reader (Outlook on the web, Gmail) shows a message INSIDE a standards-mode
     // page, so the email's own missing or legacy doctype never puts it in quirks mode (where <table> would not close
     // an open <p>). A second doctype is ignored by the parser, so prefixing one is safe either way.
-    doc = parse(`${PREFIX}${html}`, { sourceCodeLocationInfo: true }) as unknown as Node;
+    // A ParseBudget abort lands in the catch below: the html unchanged (keep-more), never a partial cut.
+    doc = guardedParse(`${PREFIX}${html}`);
   } catch {
     return html;
   }

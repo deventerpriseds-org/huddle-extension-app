@@ -94,13 +94,6 @@ export const CHECKLIST_TOOL = {
         description:
           "Only for an EXPLICIT, hand-picked set of specific tasks. For any category-shaped ask use `match` instead -- enumerating ids means YOU are doing the filtering, which silently drops tasks. When given, these ids are used verbatim and `match` is ignored.",
       },
-      // Task proposals (2026-11-12, AC-correspondence-checklist section 5): the SAME widget, a second row
-      // kind. Inert unless HUDDLE_ONEDRIVE_FEEDS.correspondence.proposals is on (the dispatcher says so).
-      proposals: {
-        type: "boolean",
-        description:
-          "Set true ONLY when the user asks to see their PROPOSED tasks -- to-dos found in their email, Teams chats or meetings that are waiting for them to approve, edit, mark done or dismiss (e.g. 'show my proposed tasks'). Ignores match/task_ids. These are suggestions, NOT tasks on their board.",
-      },
     },
     required: ["title"],
   },
@@ -109,6 +102,24 @@ export const CHECKLIST_TOOL = {
 
 export const CHECKLIST_SYSTEM_HINT =
   "When the user EXPLICITLY asks for a checklist (\"give me a checklist of…\", \"make a checklist for…\", \"what do I need to track for X as a checklist\"), call `build_checklist` with `match` keywords describing the set (e.g. financial -> [\"financ\",\"pay\",\"transfer\",\"bill\",\"card\",\"amex\",\"klarna\",\"hsa\",\"budget\"]). The app sweeps ALL their open tasks itself, so nothing is missed -- do NOT hand-pick ids for a category-shaped ask, and do not pre-filter with schedule_and_priorities first — the app renders it as real tick-boxes wired to their board. An ordinary question about tasks (\"what are the tasks related to my kids\", \"what's on my plate\") is NOT a checklist request: answer it in prose. When you do render a checklist, keep your own message SHORT — one line of context at most — because the checklist itself is the answer; do not also list the tasks in text.";
+
+/** Task proposals (2026-11-12, AC-correspondence-checklist section 5): the SAME widget, a second row kind. The
+ *  `proposals` parameter is OFFERED to the model only while HUDDLE_ONEDRIVE_FEEDS.correspondence.proposals is on
+ *  (verifier loop 9, claim 4: with the flag off, the schema every agent sees must be byte-identical to main's). */
+export const CHECKLIST_PROPOSALS_PROPERTY = {
+  type: "boolean",
+  description:
+    "Set true ONLY when the user asks to see their PROPOSED tasks -- to-dos found in their email, Teams chats or meetings that are waiting for them to approve, edit, mark done or dismiss (e.g. 'show my proposed tasks'). Ignores match/task_ids. These are suggestions, NOT tasks on their board.",
+} as const;
+
+/** The build_checklist tool as the model should see it: main's schema, plus `proposals` only when switched on. */
+export function checklistTool(proposalsOn: boolean): typeof CHECKLIST_TOOL {
+  if (!proposalsOn) return CHECKLIST_TOOL;
+  return {
+    ...CHECKLIST_TOOL,
+    parameters: { ...CHECKLIST_TOOL.parameters, properties: { ...CHECKLIST_TOOL.parameters.properties, proposals: CHECKLIST_PROPOSALS_PROPERTY } },
+  } as typeof CHECKLIST_TOOL;
+}
 
 /**
  * Execute a `build_checklist` call. Returns a JSON string for the model AND the structured payload the

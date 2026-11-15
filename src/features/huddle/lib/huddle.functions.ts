@@ -3883,8 +3883,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           emailTools.push(SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL);
         }
 
-        const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
+        const { PRIORITIZE_TOOL, checklistTool, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
           await import("./tasks/tools");
+        // build_checklist offers `proposals` only while task proposals are switched on (verifier loop 9, claim 4).
+        const proposalsOn = await import("./proposals/proposals.server")
+          .then((m) => m.proposalsConfig() !== null)
+          .catch(() => false);
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
         const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
@@ -3927,7 +3931,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           CANCEL_REMINDER_TOOL,
           MOVE_REMINDER_TOOL,
           PRIORITIZE_TOOL,
-          CHECKLIST_TOOL,
+          checklistTool(proposalsOn),
           // The two in-chat journey widgets. Ungated, exactly like CHECKLIST_TOOL above: whichever
           // agent is answering is the one the user asked, so gating these to a single agent would
           // make the widget reachable only by talking to that agent.

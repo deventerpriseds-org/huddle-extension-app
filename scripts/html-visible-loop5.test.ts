@@ -33,7 +33,10 @@ const drops: string[] = [];
 const exact: string[] = [];
 for (const r of cases) {
   const got = norm(htmlToText(r.html));
-  const words = got.split(" ");
+  // Main's tag rule ends a tag at its first `>`, so an attribute value containing `>` leaves residue such as `b">`
+  // glued to the next word. That is main's own text (verifier loop 9: the quote-aware rule that removed it dropped
+  // visible words in other shapes, so it was taken out). Residue is not a dropped word.
+  const words = got.split(" ").map((w) => w.replace(/^[^"'>\s]*["']>/, ""));
   const missing = norm(r.browser).split(" ").filter((w) => w && !words.includes(w));
   if (missing.length && !INTENTIONAL(r.html)) drops.push(`${r.id}: missing ${JSON.stringify(missing)}`);
   if (got === norm(r.browser)) exact.push(r.id);
@@ -42,7 +45,9 @@ t(`LOOP5 no row drops a word Chromium shows (${cases.length} rows; opacity:0 hid
 t("LOOP5 the fixture is the verifier's 88 rows", cases.length, 88);
 t("LOOP5 the verifier's F1 repro: the ask in a table cell after a hidden unclosed <b> in a <li> is kept",
   norm(htmlToText('<ul><li><b style="display:none">pre<li><table><tr><td>Can you sign the NDA?</td></tr></table></ul>')).includes("Can you sign the NDA?"), true);
-t("LOOP5 at least 83 rows match Chromium exactly (measured 2026-11-14)", exact.length >= 83, true);
+// 83 with the quote-aware tag rule; 75 without it (verifier loop 9 removed it). The 8 rows differ only by main's
+// `b">`-style residue -- no dropped word (asserted above), no lost ask.
+t("LOOP5 at least 75 rows match Chromium exactly (measured 2026-11-15, main's tag rule)", exact.length >= 75, true);
 // Browser CSS rules the converter must follow (each confirmed in Chromium 2026-11-14 by the verifier's loop-5 rows or
 // by the CSS spec: an invalid declaration is dropped, so it can neither hide nor un-hide).
 t("CSS an invalid display value cannot un-hide a hidden-attribute element", norm(htmlToText('<div hidden style="display:nonex">Wire 5000</div><p>shown</p>')), "shown");
@@ -77,10 +82,13 @@ t("LOOP8 apostrophe in an unquoted href keeps the visible name",
   norm(htmlToText("<p><a href=mailto:o'neil@corp.example>Dana O'Neil</a> wrote to us. Can you approve the budget?</p>")), "Dana O'Neil wrote to us. Can you approve the budget?");
 t("LOOP8 control: a balanced Outlook style with inner double quotes still strips cleanly",
   norm(htmlToText(`<p style='font-family:"Calibri",sans-serif'>Can you sign?</p>`)), "Can you sign?");
-t("LOOP8 control: a > inside a quoted value still does not end the tag (GT-in-alt)",
-  norm(htmlToText('<p><img alt="a > b">Can you sign?</p>')), "Can you sign?");
-t("LOOP8 control: whitespace around = before a quoted value",
-  norm(htmlToText('<p><img alt = "a > b">Can you sign?</p>')), "Can you sign?");
+// Verifier loop 9: the quote-aware tag rule is GONE -- a `>` inside a quoted value ends the tag exactly as on main,
+// leaving main's residue; the ask is still detected.
+t("LOOP9 a > inside a quoted value gives main's residue and keeps the ask",
+  [norm(htmlToText('<p><img alt="a > b">Can you sign?</p>')), asksSomething({ subject: "x", bodyText: htmlToText('<p><img alt="a > b">Can you sign?</p>') })], ['b">Can you sign?', true]);
+t("LOOP9 the verifier's `=`-then-quote shapes keep every visible word (main's tag rule)",
+  [`<b class="hi"='x>Can you approve the budget? it's urgent</b>`, `<b title=='x>Can you approve the budget? it's urgent</b>`, `<b ='x>Can you approve the budget? it's urgent</b>`, `<b='x>Can you approve the budget? it's urgent</b>`]
+    .map((h) => norm(htmlToText(h)).includes("Can you approve the budget? it's urgent")), [true, true, true, true]);
 // Verifier loop 8, 1e: the parser is skipped above PARSE_DEPTH_LIMIT (keep-more = main's text, linear time).
 {
   const deep = "<div>".repeat(40_000) + "Can you approve?" + "</div>".repeat(40_000);
@@ -93,6 +101,18 @@ t("LOOP8 control: whitespace around = before a quoted value",
 }
 t("LOOP8 just under the limit the parser still runs: a hidden ancestor's text is still cut",
   norm(htmlToText('<div style="display:none">secret ' + "<div>".repeat(1500) + "inner" + "</div>".repeat(1501) + "Can you call?")), "Can you call?");
+// Verifier loop 9, 1e: the parser is bounded by what it BUILDS, not by a regex estimate of nesting.
+{
+  const ASK = "Can you approve the budget?";
+  const timed = (h: string) => { const t0 = performance.now(); const o = htmlToText(h); return { ms: performance.now() - t0, kept: o.includes(ASK) }; };
+  const stray = timed("<div></i>".repeat(40_000) + ASK);
+  t("LOOP9 stray end tags (`<div></i>` x 40k, reads as depth 1) are bounded: under 1.5 s and the ask kept", stray.ms < 1500 && stray.kept, true);
+  const fmt = timed("<p>" + Array.from({ length: 1990 }, (_, i) => `<b id=b${i}>`).join("") + "x</p>" + "<p>y</p>".repeat(5000) + ASK);
+  t("LOOP9 1990 distinct unclosed <b> re-opened in 5000 paragraphs is bounded: under 1.5 s and the ask kept", fmt.ms < 1500 && fmt.kept, true);
+  const big = "<div class=WordSection1>" + Array.from({ length: 900 }, (_, i) => `<table class=MsoNormalTable border=0><tr><td style='padding:0in'><p class=MsoNormal><span style='font-size:11.0pt;font-family:"Calibri",sans-serif'>Row ${i} item<o:p></o:p></span></p></td></tr></table>`).join("") + `<p style="display:none">HIDDENX</p><p>${ASK}</p></div>`;
+  const bt = htmlToText(big);
+  t("LOOP9 a realistic 180 KB Outlook body still goes through the parser (its hidden text is cut)", !bt.includes("HIDDENX") && bt.includes(ASK), true);
+}
 console.log(`exact ${exact.length}/${cases.length}`);
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
