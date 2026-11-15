@@ -34,6 +34,10 @@ on:
         required: false
         type: boolean
         default: false
+      as_of:
+        description: "Read the feed files AS THEY WERE at this ISO UTC time (OneDrive version history), e.g. 2026-11-14T21:00:00Z. Blank = current files."
+        required: false
+        default: ""
       step:
         description: "Tuning step to run instead of the full preview: blank = full preview; reply = step 1 (which emails need a reply); action = steps 2+3 (open items when you are on To; actions when CC'd or on a list)"
         required: false
@@ -81,6 +85,7 @@ jobs:
           PREVIEW_ACCEPT_UNMARKED: ${{ inputs.accept_unmarked_teams && '1' || '0' }}
           PREVIEW_PROBE: ${{ inputs.probe && '1' || '0' }}
           PREVIEW_STEP: ${{ inputs.step }}
+          PREVIEW_AS_OF: ${{ inputs.as_of }}
           FIREFLIES_API_KEY: ${{ inputs.probe && secrets.FIREFLIES_API_KEY || '' }}
         run: |
           TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \

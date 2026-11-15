@@ -1,4 +1,5 @@
 # Action Tracker — huddle-extension-app
+- [x] proposals-preview.yml as_of input (2026-11-15): tuning reads the feed files as they were at a time (live email file shrank 127 -> 17 records).
 - [x] proposals-preview.yml step=action (2026-11-14): runs scripts/reply-scan-preview.ts steps 2+3 from the chosen ref
       (owner's step-1 review: "next ask for all that include me directly... then indirectly with an action").
 Last updated: 2026-10-27
