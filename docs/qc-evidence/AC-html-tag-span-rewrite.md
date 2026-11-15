@@ -116,7 +116,85 @@ Performance note: the base returns the input unchanged when nothing is hidden; a
 attribute) are rebuilt, so the change is not free. AC-20 bounds it.
 
 ## 3. Spelling table
-PENDING
+Source of validity: WHATWG HTML Living Standard section 13.2.5 "Tokenization": tag open, end tag open, tag name, before
+attribute name, attribute name, after attribute name, before attribute value, attribute value (double-quoted) / (single-quoted)
+/ (unquoted), after attribute value (quoted), self-closing start tag, bogus comment, markup declaration open, comment
+start / comment start dash; 13.2.6 tree construction for reconstruction / adoption agency / implied end tags; 13.2.3.5
+input preprocessing (CR/LF). **Caveat (Gaps):** this writer could not open the spec page this session (time budget); state
+names are cited from recall and the state-machine reading of each row was cross-checked against parse5 7.3.0's measured
+behaviour (`scratchpad/locs.ts`, `scratchpad/spell.ts`), not against Chromium. The rows marked `CHROMIUM: not recorded` must
+be recorded with `scripts/html-visible-text-truth.mjs` before the verifier relies on them.
+
+Columns: **base** = measured c479cc33 output (= main's tag handling), `norm`ed. **REQUIRED** = what the branch must output
+(`norm`ed) -- binary. **Wrong answer** = direction a failure takes: FALSE REFUSAL = a visible word/ask lost (the dangerous
+direction for this screen); FALSE PASS = residue or hidden/quoted text kept.
+
+| # | Input (synthetic) | Tokenizer path that makes it valid | base | REQUIRED | Wrong answer |
+|---|---|---|---|---|---|
+| S-01 | `<p><b title="a > b">Can you sign?</b></p>` | attr value (double-quoted): `>` is data | `b">Can you sign?` | `Can you sign?` | FALSE REFUSAL (`">Can` glued) |
+| S-02 | `<p><b title='a > b'>Can you sign?</b></p>` | attr value (single-quoted) | `b'>Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-03 | `<p><b title=a>Can you sign?</b></p>` | attr value (unquoted): `>` ends the tag | `Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-04 | `<p><b title=a"b>Can you sign?</b></p>` | unquoted value: `"` is a parse error but DATA, `>` ends | `Can you sign?` | `Can you sign?` | FALSE REFUSAL (loop 8/9 class) |
+| S-05 | `<p><b title=it's>Can you sign?</b></p>` | unquoted value: `'` is data | `Can you sign?` | `Can you sign?` | FALSE REFUSAL (loop 8 `data-x=it's`) |
+| S-06 | `<p><a href=mailto:o'neil@host.example>Lee</a> can you sign?</p>` | unquoted value with `'` | `Lee can you sign?` | `Lee can you sign?` | FALSE REFUSAL (loop 9) |
+| S-07 | `<p><b ="x">Can you sign?</b></p>` | before attr name: `=` STARTS a name (parse error); `"` is a name char | `Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-08 | `<p><b ='x>Can you sign?</b></p>` | same; `'` in name, `>` ends tag | `Can you sign?` | `Can you sign?` | FALSE REFUSAL (loop 9 `attr-name-starts-eq`) |
+| S-09 | `<p><b class="hi"='x>Can you sign?</b></p>` | after attr value (quoted): `=` reconsumed in before-attr-name -> new name `='x` | `Can you sign?` | `Can you sign?` | FALSE REFUSAL (loop 9) |
+| S-10 | `<p><span title=='x>Can you sign?</span></p>` | before attr value: second `=` -> unquoted value `='x` | `Can you sign?` | `Can you sign?` | FALSE REFUSAL (loop 9 `double-eq`) |
+| S-11 | `<p><b='x>Can you sign?</b></p>` | tag name state: `=`, `'` are name chars -> element `b='x` | `Can you sign?` | `Can you sign?` | FALSE REFUSAL (loop 9 `tag-name-eq`) |
+| S-12 | `<p><b a"b="c>d">Can you sign?</b></p>` | attr name: `"` is a name char (parse error); then `=` + double-quoted `c>d` | `d">Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-13 | `<p><b a'b=c>Can you sign?</b></p>` | `'` in name, unquoted value | `Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-14 | `<p><b title = "a>b">Can you sign?</b></p>` | after attr name / before attr value skip whitespace | `b">Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-15 | `<p><b title=\n"a>b">Can you sign?</b></p>` | tag split across lines (LF is whitespace) | `b">Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-16 | `<p><b\ntitle="a>b"\n>Can you sign?</b></p>` | LF between name/attrs/`>` | `b" >Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-17 | `<p><b title="a\nb>c">Can you sign?</b></p>` | newline INSIDE a quoted value | `c">Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-18 | `<p>a<br/>b<br />c<br/ >d</p>` | self-closing start tag; `/` then space -> before-attr-name | `a b c d` (newline count 1 on `a`,`b`,`c` lines: base text `a\nb\nc d`) | newline structure === base (AC-6) | line-structure drift |
+| S-19 | `<p><img alt="a>b"/>Can you sign?</p>` | quoted value then self-closing | `b"/>Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-20 | `<p><b / title="a>b">Can you sign?</b></p>` | self-closing state: `/` not followed by `>` -> reconsume as attr | `b">Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-21 | `<p><img/alt="a>b">Can you sign?</p>` | `/` between name and attr | `b">Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-22 | `<p><b title="a>b"/>Can you sign?</p>` | self-closing flag on a non-void element (ignored by tree builder) | `b"/>Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-23 | `<p><a<b>Can you sign?</a<b></p>` | tag name: `<` is a name char -> ONE element `a<b` (measured) | `Can you sign?` | `Can you sign?` | FALSE REFUSAL (sanitized `<a<b>` must still be one tag to `/<[^>]+>/`) |
+| S-24 | `<p><B TITLE="a>b">Can you sign?</B></p>` | ASCII upper alpha lowercased in name states | `b">Can you sign?` | `Can you sign?` | FALSE REFUSAL |
+| S-25 | `<p>Can you sign?</p title="a>b">next` | END tag with attributes (parse error, attrs dropped) -- located endTag | `Can you sign? b">next` | `Can you sign? next` | FALSE REFUSAL |
+| S-26 | `<p title="a>b">Can you sign?<p>next` | implied end tag: no endTag location | `b">Can you sign? next` | `Can you sign? next`, newline count === base | line-structure drift / duplicate insertion |
+| S-27 | `Can you sign?</ x title="a>b">next` | end tag open + space -> BOGUS COMMENT to first `>` (not a tag) | `Can you sign? b">next` | `Can you sign? b">next` (= base; it is a comment node in parse5 -- if the base already cuts comments this row must show the comment cut: verifier records the actual) | FALSE PASS acceptable, FALSE REFUSAL not |
+| S-28 | `Can you sign?</>next` | end tag open + `>`: dropped entirely | `Can you sign? next` | `Can you sign? next` | FALSE REFUSAL |
+| S-29 | `a<!doctype html>b <b title="c>d">Can you sign?</b>` | DOCTYPE token in body: ignored, no node | `a b d">Can you sign?` | `a b Can you sign?` | FALSE REFUSAL |
+| S-30 | `<p><b title="x>y">one<p>two</p>` | reconstruct active formatting elements: 2 `b`, ONE span (measured) | `y">one two` | `one two` | duplicate rewrite / garbled offsets |
+| S-31 | `<b title="x>y"><p>one</b>two</p>` | adoption agency: clone has NO location | `y"> one two` | `one two` | FALSE REFUSAL |
+| S-32 | `<a href="x>1">one<a href="y>2">two</a>` | nested `<a>`: first implicitly closed, no endTag | `1">one 2">two` | `one two` | FALSE REFUSAL |
+| S-33 | `<svg><desc title="a>b">d</desc></svg>Can you sign?` | foreign content; attr states identical | `b">d Can you sign?` | `d Can you sign?` (CHROMIUM: not recorded; may hide `d`) | FALSE REFUSAL |
+| S-34 | `<math title="a>b"><mi>x</mi></math> Can you sign?` | foreign content (MathML) | `b"> x Can you sign?` | `x Can you sign?` | FALSE REFUSAL |
+| S-35 | `<template><b title="a>b">t</b></template>Can you sign?` | template contents (located, measured) | `b"> Can you sign?` | `Can you sign?` | FALSE PASS (residue) |
+| S-36 | `<html lang="a>b"><body class="c>d"><p>Can you sign?</p></body></html>` | written html/body tags are located | `b"> d"> Can you sign?` | `Can you sign?` | FALSE PASS |
+| S-37 | `<textarea title="a>b"><b>raw</b></textarea><p>Can you sign?</p>` | RCDATA: inner `<b>` is TEXT | `b"> raw Can you sign?` | `raw Can you sign?` (inner text === base, AC-17) | rewriting text inside RCDATA |
+| S-38 | `a<![CDATA[x>y]]>b Can you sign?` | markup declaration open in HTML content: bogus comment to first `>` | `a y]]>b Can you sign?` | `a y]]>b Can you sign?` (= base) | FALSE REFUSAL if `y]]>b` lost |
+| S-39 | `a<!-->b<!--->c Can you sign?` | comment start / comment start dash + `>`: empty comments | `a b c Can you sign?` | `a b c Can you sign?` | FALSE REFUSAL |
+| S-40 | `<p>Can you sign?</p><div id="divRplyFwdMsg">From: old</div><p>old ask?</p>` | ordinary dq id | `Can you sign?` | `Can you sign?` | FALSE PASS (old ask kept -> false alert) |
+| S-41 | same with `id=divRplyFwdMsg` | unquoted value | `Can you sign?` | `Can you sign?` | FALSE PASS |
+| S-42 | `<p>Can you sign?</p><DIV ID='appendonsend'></DIV><p>old ask?</p>` | upper-case name+attr, sq | `Can you sign?` | `Can you sign?` | FALSE PASS |
+| S-43 | `<p>Can you sign?</p><div title="x>y" id="divRplyFwdMsg">From: old</div><p>old ask?</p>` | `>` in an attr BEFORE id | `Can you sign? y" id="divRplyFwdMsg">From: old old ask?` (main does NOT cut) | `Can you sign?` | FALSE PASS (old ask surfaces as new) |
+| S-44 | same with title AFTER id | | `Can you sign?` | `Can you sign?` | FALSE PASS |
+| S-45 | OWA pair `<div id="appendonsend"></div><hr><div id="divRplyFwdMsg">` after the ask | | `Can you sign?` | `Can you sign?` | FALSE PASS |
+| S-46 | `<p>Can you sign?</p><div data-id="divRplyFwdMsg">kept?</div>` | over-match NEGATIVE on main's reply regex (`id=` inside `data-id=`) | `Can you sign?` | see Q1 | either direction -- Q1 decides |
+| S-47 | `<p>Can you sign?</p><div title="id=appendonsend">kept?</div>` | over-match NEGATIVE (marker text inside another attr value) | `Can you sign?` | see Q1 | Q1 |
+| S-50 | `<blockquote cite="a>b">old words</blockquote><p>Can you sign?</p>` | dq value in blockquote | `Can you sign?` | `Can you sign?` | FALSE PASS |
+| S-51 | `<BLOCKQUOTE TYPE=cite>old</BLOCKQUOTE>Can you sign?` | upper case, unquoted | `Can you sign?` | `Can you sign?` | FALSE PASS |
+| S-52 | `a<br class="x">b` | `<br>` with an attribute | `a b` (main: SPACE, `<br\s*\/?>` does not match) | per Q2 (default: `a b`, newline count === base) | line-structure drift |
+| S-53 | `a</p >b` | end tag with trailing whitespace | `a b` (main: space) | per Q2 (default: === base) | line-structure drift |
+| S-54 | `a<script type="a>b">x()</script>Can you sign?` | raw text; script tag with `>` in attr | `a Can you sign?` | `a Can you sign?` | FALSE PASS (`x()` kept) / FALSE REFUSAL |
+| S-55 | `<p>He\u0000llo <b title="c\u0000>d">Can you sign?</b></p>` | NUL in text and in a quoted value (offsets measured exact) | `He\u0000llo d">Can you sign?` | `He\u0000llo Can you sign?` | offset drift garbles text |
+| S-56 | `<p>x</p>\r\n<b title="c>d">Can you sign?</b>` | CRLF preprocessing (offsets measured exact) | `x d">Can you sign?` | `x Can you sign?` | offset drift |
+| S-57 | `﻿<p>\u{1F600}<b title="c>d">Can you sign?</b></p>` | mid-string BOM (after the prefix) + astral char (UTF-16 offsets) | `\u{1F600} d">Can you sign?` | `\u{1F600} Can you sign?` | offset drift |
+| S-58 | `Can you sign? <b title="a>b` | EOF in attr value: token dropped, no element | `Can you sign? b` | `Can you sign? b` (= base; nothing located to rewrite) | FALSE REFUSAL if `Can you sign?` lost |
+| N-01 | `<p>if a < b > c, can you sign?</p>` | OVER-MATCH NEGATIVE: tag open + space -> `<` is TEXT | `if a c, can you sign?` (main eats `< b >`) | `if a c, can you sign?` (= base; Chromium shows `if a < b > c, ...`: Q3) | the rewrite must NOT treat text as a tag |
+| N-02 | `<p>5<6 so can you sign?</p>` | `<` + digit is TEXT | `5<6 so can you sign?` | `5<6 so can you sign?` | FALSE REFUSAL |
+| N-03 | `<p>love you <3 can you sign?</p>` | `<` + digit is TEXT | `love you <3 can you sign?` | `love you <3 can you sign?` | FALSE REFUSAL |
+| N-04 | `<p>From Lee <lee@host.example> can you sign?</p>` | `<` + letter IS a tag: element `lee@host.example` (Chromium hides it) | `From Lee can you sign?` | `From Lee can you sign?` | FALSE PASS acceptable only if the address shows whole; never a residue fragment |
+| N-05 | `<p>a &lt;b title=&quot;x&gt;y&quot;&gt; can you sign?</p>` | escaped markup is TEXT; must never become a tag | `a <b title="x>y"> can you sign?` | `a <b title="x>y"> can you sign?` | FALSE REFUSAL (rewrite applied to decoded text) |
+| N-06 | `<p>if a<b and it's fine, can you sign? I'd say x>y</p>` | `<b` + attrs to the first `>` IS a tag (loop 8 `text-lt-letter-apostrophe`; Chromium `if ay`) | `if a y` | `if a y` (Ask false, = base and Chromium) | FALSE PASS if `can you sign?` resurfaces |
+| N-07 | `<p>Can you sign?</p><!-- <b title="a>b"> -->` | tag inside a comment is comment data | `Can you sign?` | `Can you sign?` | FALSE PASS (`b">` residue) |
+| N-08 | `<xmp><b title="a>b">raw</b></xmp>Can you sign?` | RAWTEXT: inner tag is TEXT (Chromium shows it literally) | `b">raw Can you sign?` | `b">raw Can you sign?` (= base, AC-17) | rewriting inside raw text |
 
 ## 4. Goal -> AC coverage
 PENDING
