@@ -1,6 +1,12 @@
 # Project Memory — huddle-extension-app
 
 ## Correspondence + proposals (ACT:correspondence-checklist) -- 2026-11-13, NOT live, branch claude_task-proposals
+- TUNING ORDER (owner 2026-11-14): one question at a time. Step 1 = needs a reply (reply-scan, reviewed: no YES
+  disputed; six NO rows need ACTION not a reply). Step 2 = on To -> open item (reply or do-it). Step 3 = CC/list ->
+  action for him. Step 4 = cut off in his message ("Next ask for"). Run: proposals-preview.yml step=reply|action.
+  Forwards: the text path cuts at the forward header (right for Iris, which must not change), so the judge reads the
+  forwarded email separately via lib/correspondence/forwarded.ts. Always give him the OneDrive web link (logged as
+  "OPEN THE REPORT:").
 - Owner decisions: ETL route A (OneDrive files -> Huddle ingest -> Azure PG chat.correspondence_ledger; no new
   endpoint) + a file-staleness alert (built, flag correspondence.staleAlerts, default OFF, bell kind 'feed').
 - Real files (read via graph-permission-check, counts only -- public repo, never print content):

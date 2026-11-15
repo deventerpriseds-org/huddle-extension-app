@@ -17,6 +17,9 @@
       CC/list action; report action-scan-<stamp>.html with a printed web link). His 4th step was cut off ("Next ask for").
       RUN 1 (43612968787): step 2 open 49/76, step 3 action 1/4, forwards read only 1 -> held; fallback for forwards
       whose header is plain "From:/Sent:" text added (F11b) + counts-only forward diagnostics; re-run before sending.
+      RUN 2 (43613632327): Fw subjects 5, Outlook marker 3, forwarded text read 3 (was 1); step 2 open 51/76 (quote not
+      found 1), step 3 action 1/4. Link sent to owner for review. 2 of 5 forwards still unread (no marker, header shape
+      unknown -- cannot inspect content in public logs; owner's review will show if the Zito pair is still blind).
 - [x] Redesign parts merged into claude_task-proposals (2026-11-14): part A AI conversation judge
       (needs-you.ts, email-only report; docs/qc-evidence/IMPL-needs-you-redesign.md, 14/14 mutations FIRED) + part B
       meeting triage (meeting-triage.ts, Mine/For someone/Skip, chat.task_proposals untriaged/delegated states;
