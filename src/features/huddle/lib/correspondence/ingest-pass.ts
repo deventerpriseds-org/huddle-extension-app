@@ -256,6 +256,6 @@ export async function runIngestPass(
   );
   if (result.processed || result.needsContext || result.failed) parts.push(`processed=${result.processed} needs_context=${result.needsContext} failed=${result.failed}`);
   if (result.yielded) parts.push("yielded");
-  if (parts.some((p) => !/=(throttled|unchanged)$/.test(p))) deps.log(`[correspondence] ${parts.join(" | ")}`);
+  if (parts.some((p) => !/=(throttled|unchanged|scheduled)$/.test(p))) deps.log(`[correspondence] ${parts.join(" | ")}`);
   return result;
 }

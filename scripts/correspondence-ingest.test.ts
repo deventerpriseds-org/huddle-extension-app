@@ -413,6 +413,10 @@ t("AC-1.7 Teams rows keyed (encoded chat id : message id)", [...tw1.rows.values(
   twL.tick(12 * 3600_000); // 06:05 ET next morning
   const morning = await runIngestPass(onCfg({ teamsLoadAt: "18:00" }), deps(twL));
   t("TL-8 next morning: Teams waits for 6pm, email still loads", [morning.sources.teams?.status, reads.teams, morning.sources.email?.status !== "scheduled"], ["scheduled", 1, true]);
+  // Loop 12 finding: before 6pm every 1-minute pass is "teams=scheduled | email=throttled", which logged a line a minute.
+  logs.length = 0;
+  const quiet = await runIngestPass(onCfg({ teamsLoadAt: "18:00" }), deps(twL));
+  t("TL-10 a pass with Teams scheduled and email throttled logs nothing", [quiet.sources.teams?.status, quiet.sources.email?.status, logs.filter((l) => l.startsWith("[correspondence]")).length], ["scheduled", "throttled", 0]);
   // Never loaded before: the first load happens at once, whatever the time (the back-fill must not wait for 6pm).
   const twM = makeTwin();
   twM.tick(12 * 3600_000); // 06:05 ET, no Teams cursor yet
