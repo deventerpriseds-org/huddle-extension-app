@@ -96,7 +96,8 @@ if (cfg.teams.enabled) {
       continue;
     }
     const items = parsed.messages.map((m) => teamsSourceItem(m, { path: cfg.teams.path, etag: `version:${v.id}` }));
-    console.log(`teams version ${v.at}: lines ${parsed.lines} | messages ${items.length}`);
+    // Reason NAMES and counts only (public repo): why a version's lines produced no messages.
+    console.log(`teams version ${v.at}: lines ${parsed.lines} | messages ${items.length} | skipped ${JSON.stringify(parsed.skipped)}`);
     await store("teams", items);
   }
 }
