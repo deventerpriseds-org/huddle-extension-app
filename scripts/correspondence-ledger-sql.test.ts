@@ -257,6 +257,49 @@ CREATE TABLE IF NOT EXISTS chat.correspondence_cursor (owner_email TEXT NOT NULL
     await fresh.end();
   }
 
+  // CM-1 (live-DB risk, 2026-11-16): several app instances start at once and each runs the bootstrap against the
+  // OLD-DDL table. Measured on an earlier version of the migration: 90 of 120 such bootstraps died with 40P01
+  // (each held the due_idx ShareLock, then asked for ACCESS EXCLUSIVE). Every bootstrap must succeed, the rows must
+  // survive, and exactly one source CHECK (accepting 'sent') must remain.
+  {
+    const errs: string[] = [];
+    let survived = 0;
+    for (let round = 0; round < 4; round++) {
+      const seedC = await db(`ledger_conc${round}`);
+      await seedC.query(OLD_DDL);
+      await seedC.query(`INSERT INTO chat.correspondence_ledger (source, source_item_id, owner_email, identity_basis, content_hash, status)
+                         SELECT (ARRAY['email','teams','transcript'])[1 + g % 3], 'id-'||g, 'o', 'provider_id', 'h'||g, 'processed' FROM generate_series(1,300) g`);
+      const cs = await Promise.all(Array.from({ length: 8 }, async () => {
+        const c = new Client({ connectionString: `postgres://postgres@127.0.0.1:${PORT}/ledger_conc${round}` });
+        await c.connect();
+        return c;
+      }));
+      for (const r of await Promise.allSettled(cs.map((c) => c.query(LS.BOOTSTRAP_SQL)))) if (r.status === "rejected") errs.push(String((r.reason as { code?: string }).code));
+      const rows = Number((await seedC.query(`SELECT count(*) n FROM chat.correspondence_ledger`)).rows[0].n);
+      const checks = (await seedC.query(`SELECT pg_get_constraintdef(oid) d FROM pg_constraint WHERE conrelid='chat.correspondence_ledger'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%(source = ANY%'`)).rows;
+      if (rows === 300 && checks.length === 1 && String(checks[0].d).includes("'sent'")) survived++;
+      await Promise.all(cs.map((c) => c.end()));
+      await seedC.end();
+    }
+    t("CM-1 8 CONCURRENT bootstraps on the old-DDL table (x4 rounds): none fails (no deadlock), rows kept, one 'sent' CHECK", [errs, survived], [[], 4]);
+  }
+  // CM-2: once migrated, a bootstrap (every process start) takes no lock an open reader blocks -- the lock footprint
+  // of main's bootstrap (the due_idx ShareLock), not an ACCESS EXCLUSIVE that queues behind any open transaction.
+  {
+    const a = await db("ledger_steady");
+    await a.query(OLD_DDL);
+    await a.query(LS.BOOTSTRAP_SQL);
+    const reader = new Client({ connectionString: `postgres://postgres@127.0.0.1:${PORT}/ledger_steady` });
+    await reader.connect();
+    await reader.query("BEGIN");
+    await reader.query("SELECT 1 FROM chat.correspondence_ledger LIMIT 1");
+    await a.query("SET lock_timeout = '500ms'");
+    t("CM-2 an already-migrated bootstrap is not blocked by an open reader", await a.query(LS.BOOTSTRAP_SQL).then(() => "ok", (e: { code?: string }) => `blocked ${e.code}`), "ok");
+    await reader.query("ROLLBACK");
+    await reader.end();
+    await a.end();
+  }
+
   // JSONB stores object keys in its own order: compare content canonically (keys sorted, recursively).
   const canon = (v: unknown): unknown => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon((v as Record<string, unknown>)[k])])) : v);
   const content = (n: string) => canon({ kind: "teams" as const, chatId: "chat-1", chatName: `SYNTH chat ${n}`, messageId: n, at: "2026-11-11T10:00:00.000Z", sender: { id: "u1", name: "Synth Sender", isApp: false }, fromOwner: false, text: `SYNTH body ${n}`, webUrl: null }) as never;

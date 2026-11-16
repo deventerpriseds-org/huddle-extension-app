@@ -55,7 +55,6 @@ function getPool(): Pool {
 /** How long a claimed item is held before another pass may take it (a killed pass's claim lapses). */
 export const LEDGER_LEASE_SECONDS = 300;
 
-
 export const BOOTSTRAP_SQL = `
 CREATE SCHEMA IF NOT EXISTS chat;
 CREATE TABLE IF NOT EXISTS chat.correspondence_ledger (
@@ -85,17 +84,36 @@ CREATE TABLE IF NOT EXISTS chat.correspondence_ledger (
   processed_at        TIMESTAMPTZ,
   PRIMARY KEY (source, source_item_id)
 );
-CREATE INDEX IF NOT EXISTS correspondence_ledger_due_idx
-  ON chat.correspondence_ledger (owner_email, source, next_attempt_at)
-  WHERE status IN ('pending','failed_retryable');
--- 2026-11-16 (owner decision: content stored in Azure). Idempotent on the LIVE table, which was created by the
--- earlier DDL: CREATE TABLE IF NOT EXISTS above does not touch an existing table, so the columns are ADDed and the
--- source CHECK (created by CREATE TABLE, auto-named) is found in pg_constraint by its definition and replaced.
-ALTER TABLE chat.correspondence_ledger ADD COLUMN IF NOT EXISTS content JSONB;
-ALTER TABLE chat.correspondence_ledger ADD COLUMN IF NOT EXISTS content_purged_at TIMESTAMPTZ;
-DO $ledger_source_check$
+-- 2026-11-16 (owner decision: content stored in Azure). Migrates the LIVE table, which was created by the earlier
+-- DDL (CREATE TABLE IF NOT EXISTS above never touches an existing table): adds the content columns, replaces the
+-- auto-named source CHECK (found in pg_constraint by its definition) with one that accepts 'sent', and adds the
+-- content-age index. LOCKING (measured, docs/qc-evidence/BUILD-correspondence-content.md "Live-DB risks"):
+--   * Already migrated -> RETURN before any table lock. Every later bootstrap has main's lock footprint (the
+--     ShareLock of the due_idx CREATE INDEX below), never an AccessExclusiveLock that an open reader would block.
+--   * Not yet migrated -> ACCESS EXCLUSIVE is taken FIRST, before any weaker lock on the table in this
+--     transaction (this block runs before the CREATE INDEX statements), so concurrent bootstraps queue on it
+--     instead of each holding a ShareLock and deadlocking on the upgrade (an earlier version of this block
+--     deadlocked 90 of 120 concurrent bootstraps). The loser re-runs the idempotent steps as no-ops.
+DO $ledger_content_migration$
 DECLARE c record;
 BEGIN
+  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'chat.correspondence_ledger'::regclass
+                AND attname = 'content' AND NOT attisdropped)
+     AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'chat.correspondence_ledger'::regclass
+                   AND attname = 'content_purged_at' AND NOT attisdropped)
+     AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'chat.correspondence_ledger'::regclass AND contype = 'c'
+                   AND pg_get_constraintdef(oid) LIKE '%(source = ANY%' AND pg_get_constraintdef(oid) LIKE '%''sent''%')
+     AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'chat.correspondence_ledger'::regclass AND contype = 'c'
+                       AND pg_get_constraintdef(oid) LIKE '%(source = ANY%' AND pg_get_constraintdef(oid) NOT LIKE '%''sent''%')
+     AND to_regclass('chat.correspondence_ledger_content_age_idx') IS NOT NULL THEN
+    RETURN;
+  END IF;
+  -- A queued ACCESS EXCLUSIVE request blocks every later query on the table, so it waits at most 5s (this
+  -- transaction only); on timeout the bootstrap fails, ensureBootstrapped resets, and the next call retries.
+  PERFORM set_config('lock_timeout', '5s', true);
+  LOCK TABLE chat.correspondence_ledger IN ACCESS EXCLUSIVE MODE;
+  ALTER TABLE chat.correspondence_ledger ADD COLUMN IF NOT EXISTS content JSONB;
+  ALTER TABLE chat.correspondence_ledger ADD COLUMN IF NOT EXISTS content_purged_at TIMESTAMPTZ;
   FOR c IN SELECT conname FROM pg_constraint
             WHERE conrelid = 'chat.correspondence_ledger'::regclass AND contype = 'c'
               AND pg_get_constraintdef(oid) LIKE '%(source = ANY%'
@@ -109,11 +127,13 @@ BEGIN
     ALTER TABLE chat.correspondence_ledger ADD CONSTRAINT correspondence_ledger_source_check
       CHECK (source IN ('email','teams','transcript','sent'));
   END IF;
-EXCEPTION WHEN duplicate_object THEN NULL;  -- a concurrent bootstrap added it first
-END $ledger_source_check$;
-CREATE INDEX IF NOT EXISTS correspondence_ledger_content_age_idx
-  ON chat.correspondence_ledger ((COALESCE(item_at, first_seen_at)))
-  WHERE content IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS correspondence_ledger_content_age_idx
+    ON chat.correspondence_ledger ((COALESCE(item_at, first_seen_at)))
+    WHERE content IS NOT NULL;
+END $ledger_content_migration$;
+CREATE INDEX IF NOT EXISTS correspondence_ledger_due_idx
+  ON chat.correspondence_ledger (owner_email, source, next_attempt_at)
+  WHERE status IN ('pending','failed_retryable');
 CREATE TABLE IF NOT EXISTS chat.correspondence_cursor (
   owner_email  TEXT NOT NULL,
   source       TEXT NOT NULL,
