@@ -158,6 +158,7 @@ if (cfg.sent.enabled) {
     totals.sent.versions++;
     const records = snapshotRecords(v.text);
     const { items, skipped } = sentSourceItems(records, cfg, { path: cfg.sent.path, etag: `version:${v.id}` });
+    for (const r of records) if (typeof r.id === "string" && r.id) rawById.set(`sent\u0000${cfg.mailbox}:${r.id.trim()}`, r);
     console.log(`sent version ${v.at}: records ${records.length} | items ${items.length} | skipped ${skipped}`);
     await store("sent", items);
   }
@@ -212,14 +213,14 @@ if (cfg.sent.enabled) {
       const r = rawById.get(k);
       const { raw, isHtml } = r ? feedRecordBody(r) : { raw: "", isHtml: false };
       const reason = !r
-        ? s.source === "sent" ? "sent_item" : "not_in_any_version"
+        ? "not_in_any_version"
         : !raw.trim() ? "empty_body"
         : /id=["']?(?:divRplyFwdMsg|appendonsend)/i.test(raw) ? "outlook_marker_unread"
         : /<blockquote\b/i.test(raw) ? "blockquote_unread"
         : /^\s*(?:From|De|Von)\s*:/im.test(isHtml ? htmlToText(raw) : raw) ? "header_unread"
         : r.hasAttachments === true ? "no_header_has_attachments"
         : "no_header";
-      why[reason] = (why[reason] ?? 0) + 1;
+      why[`${s.source}:${reason}`] = (why[`${s.source}:${reason}`] ?? 0) + 1;
     }
     console.log(`forwards still missing by shape: ${JSON.stringify(why)}`);
   }
