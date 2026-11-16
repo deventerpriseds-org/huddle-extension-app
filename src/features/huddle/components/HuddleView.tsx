@@ -102,7 +102,7 @@ import {
 } from "../lib/identity/scheduling-config.functions";
 import type { JobCadence } from "../lib/identity/scheduling-config.server";
 import { Switch } from "@/components/ui/switch";
-import { autoStandupLabel } from "../lib/identity/auto-job-label";
+import { cadenceLine } from "../lib/identity/auto-job-label";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -299,7 +299,12 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
               aria-checked={autoStandupOn}
               className="justify-between"
             >
-              <span className="min-w-0 flex-1">{autoStandupLabel(standupCadence)}</span>
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span>Automatic stand-up</span>
+                {standupCadence && (
+                  <span className="text-xs text-muted-foreground">{cadenceLine(standupCadence)}</span>
+                )}
+              </span>
               <Switch
                 checked={autoStandupOn}
                 tabIndex={-1}

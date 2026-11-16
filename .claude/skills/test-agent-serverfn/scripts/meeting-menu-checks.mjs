@@ -30,6 +30,12 @@ export const checks = [
     });
     const a = await lx(daily), b = await lx(row);
     check("Its label starts at the same left edge as 'Daily stand-up' (within 1px)", a != null && b != null && Math.abs(a - b) <= 1, `daily=${a} standup=${b}`);
+    // The title must sit on ONE line (the first version wrapped "(daily / 8:00)" mid-phrase).
+    const titleLines = await row.evaluate((el) => {
+      const t = [...el.querySelectorAll("span")].find((s) => s.textContent.trim() === "Automatic stand-up");
+      if (!t) return -1; const lh = parseFloat(getComputedStyle(t).lineHeight) || 20; return Math.round(t.getBoundingClientRect().height / lh);
+    });
+    check("The 'Automatic stand-up' title sits on one line", titleLines === 1, `lines=${titleLines}`);
     const state = await row.getAttribute("data-state-on");
     const swState = await sw.getAttribute("data-state");
     check("Switch position matches the saved setting", (state === "true") === (swState === "checked"), `saved=${state} switch=${swState}`);
