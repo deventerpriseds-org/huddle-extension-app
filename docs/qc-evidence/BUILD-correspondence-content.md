@@ -65,3 +65,53 @@ the container restart. Paths are under `src/features/huddle/lib/` unless they st
   steady state holds only main's ShareLock, migration of 300 rows ~3 ms. New checks CM-1/CM-2/CM-3 in
   scripts/correspondence-ledger-sql.test.ts (76/0).
 
+
+### Final results at the resume head (synthetic data only)
+
+| check | result |
+|---|---|
+| scripts/correspondence-ingest.test.ts | 186 passed, 0 failed |
+| scripts/correspondence-ledger-sql.test.ts | 76 passed, 0 failed (real local PG 16; +CM-1..CM-3) |
+| scripts/fireflies-minutes.test.ts | 72 passed, 3 failed (G3, G5, G8: identical on main fe495ec6, 64/3; not touched) |
+| 16 related suites (list above) | all green |
+| `npx tsc --noEmit` | 0 errors |
+| `npm run build` | rc 0 |
+
+### Mutation proofs (`mutate.sh`, every FIRED controlled by a comment-only edit)
+
+| # | guard | mutation | check | verdict |
+|---|---|---|---|---|
+| a1 | sent never claimed | `STORE_ONLY_SQL` -> `true` | CS-3 | FIRED (control EQUIVALENT) |
+| a2 | sent inserted processed | insert status always `'pending'` | CS-1 | FIRED (control EQUIVALENT) |
+| b | Fireflies store failure isolated | catch rethrows | J5 | first run UNDETERMINED (J5 passed with the defect: the branches record their own results, so J5 could not see processMeeting abort before release()). J5 strengthened (lease released, pass not failed); re-run FIRED (control EQUIVALENT) |
+| c | NULL content filled on unchanged hash | `ELSE l.content` | CC-2 | FIRED (control EQUIVALENT) |
+| d1 | purge by age | `<` -> `>` | CP-2 | FIRED (control EQUIVALENT) |
+| d2 | purged row never refilled | no `content_purged_at` stamp | CP-4 | FIRED (control EQUIVALENT) |
+| d3 | purge once a day | due always true | HP-1 | FIRED (control EQUIVALENT) |
+| e1 | old-DDL CHECK replaced | DROP -> `NULL` | CT-1 | FIRED (control EQUIVALENT) |
+| e2 | no deadlock (AE before ShareLock) | due_idx CREATE INDEX moved ahead of the migration | CM-1 | FIRED (control EQUIVALENT) |
+| e3 | no lock once migrated | `RETURN` -> `NULL` | CM-2 | FIRED (control EQUIVALENT) |
+| e4 | 5s lock cap | cap removed | CM-3 | FIRED (control EQUIVALENT) |
+| f1 | pass log carries no content | Sent body put into the status | HL-2 | FIRED (control EQUIVALENT) |
+| f2 | Fireflies log carries no content | `String(e)` instead of the code | J6 | FIRED (control EQUIVALENT) |
+
+### Changes to EXISTING behaviour (each needs the owner's separate thumbs-up)
+
+| existing today (main) | on this branch | impact |
+|---|---|---|
+| The ledger stores ids, hashes and statuses only; content is "NEVER stored" | Bodies, subjects, addresses, chat names, Teams text and transcripts are stored in `content` | This is the owner's decision A. The header rule is superseded for storage; logs still carry no content |
+| `correspondence.ingest` OFF = zero work (AC-6.1) | With `FIREFLIES_API_KEY` set, the heartbeat still runs the daily content purge even when ingest is OFF, so it bootstraps (creates and migrates) `chat.correspondence_ledger` | The first heartbeat after deploy touches the live DB even with ingest off |
+| Fireflies minutes flow writes only its own queue tables | Every processed meeting also upserts a `transcript` ledger row (first call bootstraps or migrates the ledger) and awaits it before release() | Additive; a failure is isolated (J5/J6). A HUNG store, though, delays release(), because the pool has no statement timeout |
+| A transcript row is first inserted by meeting triage (`inserted`) | If the minutes flow stores first, the row exists as `processed`; triage's observe then counts it as `changed` and reopens it to pending | Triage still runs (CT-4). The "observed" count is unchanged because it sums inserted + changed |
+| The ingest pass reads the email and Teams files | It also reads Sent Items (same reader and throttle), adds a `sent` cursor row and a `sent=...` part to the pass log | One more Graph read per pass when Sent is configured |
+| A back-fill dry run reads OneDrive versions only | A dry run also calls the Fireflies API once per known meeting (read only); apply writes content | More outbound calls in a dry run |
+| Source CHECK accepts 3 sources | The live table's CHECK is dropped and re-added with `'sent'` | Schema change on the live table |
+
+### Live-DB risks (measured on local PG 16; not run against Azure)
+
+1. Migration lock: one ACCESS EXCLUSIVE, about 3 ms for 300 rows. The ADD COLUMNs are nullable with no default (metadata only); ADD CHECK scans 300 rows; the new index starts empty. The wait is capped at 5s (CM-3): behind a long open transaction it fails with 55P03 and retries on the next call, instead of queueing every ledger query behind it.
+2. Concurrent bootstraps: at c9faff39, 90 of 120 deadlocked. Fixed (CM-1: 8 x 4 rounds, 0 errors, one `sent` CHECK, rows kept). Steady state takes only main's ShareLock (CM-2).
+3. **Public logs.** `azure-pg-query.yml` prints psql result rows into the Actions log, and this repo is PUBLIC. Once content is stored, a `SELECT *` (or `SELECT content`) on `chat.correspondence_ledger` through that workflow would publish message bodies. Select named non-content columns only.
+4. Size: transcripts are tens of KB of JSONB per meeting (TOASTed); purged after 90 days by default.
+5. Rollback: main's code ignores the new columns, never claims `sent` rows (they are `processed`), and its observe leaves `content` alone. Reverting after deploy is safe; the stored content stays until it is purged by hand.
+6. Every instance runs the purge once a day. It is an idempotent UPDATE, so parallel runs are harmless.
