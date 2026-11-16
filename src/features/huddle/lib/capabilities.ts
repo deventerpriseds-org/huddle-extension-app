@@ -238,8 +238,15 @@ function deferralPatterns(name: string): RegExp[] {
     new RegExp(`\\bpass(?:ed|ing)?\\s+(?:(?:this|it|that)\\s+)?(?:(?:along|over)\\s+)?to\\s+${n}\\b`, "i"),
     new RegExp(`\\bhand(?:ed|ing)?\\s+(?:(?:this|it|that)\\s+)?(?:(?:off|over)\\s+)?to\\s+${n}\\b`, "i"),
     new RegExp(`\\b${n}(?:'s|’s|\\s+is)\\s+(?:much\\s+|really\\s+)?(?:better\\s+suited|the\\s+(?:right|best)\\s+(?:person|one|fit))`, "i"),
-    new RegExp(`\\b${n}(?:\\s+will|'ll|’ll)\\s+(?:reach\\s+out|follow\\s+up|be\\s+in\\s+touch|get\\s+back|pick\\s+(?:this|it)\\s+up|take\\s+it\\s+from\\s+here)`, "i"),
-    new RegExp(`\\b(?:have|get|let)\\s+${n}\\s+(?:reach\\s+out|follow\\s+up|take\\s+(?:this|it|over))`, "i"),
+    new RegExp(`\\b${n}(?:\\s+will|\\s+can|'ll|’ll)\\s+(?:reach\\s+out|follow\\s+up|be\\s+in\\s+touch|get\\s+back|pick\\s+(?:this|it)\\s+up|take\\s+(?:it|this|that|over)\\b|handle\\b|look\\s+into\\b|work\\s+on\\b)`, "i"),
+    new RegExp(`\\b(?:have|get|let)\\s+${n}\\s+(?:reach\\s+out|follow\\s+up|take\\s+(?:this|it|over)|look\\s+(?:into|at)|handle|work\\s+on|dig\\s+into)`, "i"),
+    // Verify loop 3 (VERIFY-handoff-confirm-flow-3.md, C1 D-5..D-13): nine more ways of promising a teammate.
+    new RegExp(`\\bbring(?:ing)?\\s+(?:in\\s+${n}\\b|${n}\\s+in\\b)`, "i"),
+    new RegExp(`\\bask(?:ed|ing)?\\s+${n}\\s+to\\b`, "i"),
+    new RegExp(`\\bget\\s+${n}\\s+on\\s+(?:it|this|that)\\b`, "i"),
+    new RegExp(`\\bping(?:ed|ing)?\\s+${n}\\b`, "i"),
+    new RegExp(`\\bin\\s+${n}(?:'s|’s)\\s+hands\\b`, "i"),
+    new RegExp(`\\bsend(?:ing)?\\s+(?:(?:this|it|that)\\s+)?(?:over\\s+)?to\\s+${n}\\b`, "i"),
     new RegExp(`\\b${n}(?:'s|’s)\\s+(?:area|lane|domain|wheelhouse)\\b`, "i"),
     // #131 answer-first wording (lane-handoff.ts laneAnswerFirstDirective): "<Name> knows this area best —
     // I'm looping them in". A sentence that names the teammate AND loops a pronoun in is a deferral.

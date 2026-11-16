@@ -29,7 +29,11 @@ const between = (a: string, b: string) => {
   const i = HF.indexOf(a);
   const j = HF.indexOf(b, i + a.length);
   if (i < 0 || j < 0) throw new Error(`anchor not found: ${i < 0 ? a : b}`);
-  return HF.slice(i, j);
+  // Assert against CODE only: a commented-out copy of a wired line must not satisfy a wiring check
+  // (verify loop 3, M8/M12 INERT). Anchors may be comments, so strip after slicing. Keeps "https://".
+  return HF.slice(i, j)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1");
 };
 
 const use = (agentId: string, tool: string, summary: string, ok = true, detail?: string): ToolUseLike => ({
@@ -166,6 +170,16 @@ describe("F1-4 stripTeammateDeferral", () => {
     "Tess will reach out shortly.",
     "Let me hand it off to Tess.",
     "Tess's better suited here.",
+    // verify loop 3 C1 D-5..D-13
+    "Let me bring Finn in on the numbers.",
+    "I've asked Finn to take a look.",
+    "I'll get Finn on it.",
+    "Finn can take it from here.",
+    "Finn will handle the spreadsheet.",
+    "I'll have Finn look into it.",
+    "I'll ping Finn about it.",
+    "I'm putting this in Finn's hands.",
+    "I'm sending this over to Finn.",
   ]) {
     test(`removes: ${phrase}`, () => {
       expect(stripTeammateDeferral(`Done — research is underway. ${phrase}`, A)).toBe("Done — research is underway.");
@@ -176,6 +190,14 @@ describe("F1-4 stripTeammateDeferral", () => {
     expect(stripTeammateDeferral("Finn mentioned the budget last week; I've started the research.", A)).toBe(
       "Finn mentioned the budget last week; I've started the research.",
     );
+    // over-match negatives for the loop-3 patterns: a teammate named without a deferral stays
+    for (const keep of [
+      "Finn's numbers from last week look right; I've updated the sheet.",
+      "I sent the draft to you, and Finn's notes are attached.",
+      "You asked about Finn's budget, so here it is.",
+    ]) {
+      expect(stripTeammateDeferral(keep, A)).toBe(keep);
+    }
   });
   test("a reply that is ONLY a deferral is left intact (never emptied)", () => {
     expect(stripTeammateDeferral("Tess is better suited.", A)).toBe("Tess is better suited.");
