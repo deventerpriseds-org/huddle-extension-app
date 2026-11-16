@@ -145,8 +145,10 @@ export interface ChatInvolvement {
 
 /**
  * UNINVOLVED_CHAT_RULE (owner decision 2026-11-16), pure and reusable by the in-app judge:
- *   A Teams GROUP or MEETING chat is HIDDEN when the owner never sent a message in it AND was never @mentioned in it.
- *   1:1 chats ALWAYS show. Channels and chats of unknown kind are not covered by the decision and show.
+ *   A Teams GROUP, MEETING or CHANNEL chat is HIDDEN when the owner never sent a message in it AND was never
+ *   @mentioned in it. 1:1 chats ALWAYS show. Chats of unknown kind are not covered by the decision and show.
+ *   Team / channel / tag mentions name no user (teams-log mentionUserIds skips them), so they are not the owner.
+ *   ONE implementation: the open-items report and the Actions view (lib/actions) both call this.
  * Identity: the owner's Teams ids are the configured `teams.ownerSenderIds` plus every stored message's line
  * `ownerUserId`; mention ids are the same GUID format; all compared case-insensitively.
  * FAIL TOWARD SHOWING: the chat is hidden only when BOTH facts are known for EVERY message -- whose message it is
@@ -157,7 +159,8 @@ export interface ChatInvolvement {
 export function chatInvolvement(chatId: string, messages: readonly TeamsContent[], configuredOwnerIds: readonly string[] = []): ChatInvolvement {
   const kind = teamsChatKind(chatId);
   if (kind === "one_on_one") return { hide: false, kind, reason: "one_on_one" };
-  if (kind !== "group" && kind !== "meeting") return { hide: false, kind, reason: "not_group_or_meeting" };
+  // 2026-11-16 (Actions view, owner's accepted answers): team CHANNELS (thread.tacv2) are treated like group chats.
+  if (kind !== "group" && kind !== "meeting" && kind !== "channel") return { hide: false, kind, reason: "not_group_or_meeting" };
   const ownerIds = new Set<string>();
   for (const id of configuredOwnerIds) if (String(id ?? "").trim()) ownerIds.add(String(id).trim().toLowerCase());
   for (const m of messages) if (m.ownerUserId) ownerIds.add(m.ownerUserId.trim().toLowerCase());
