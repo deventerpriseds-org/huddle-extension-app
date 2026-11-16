@@ -19,7 +19,9 @@ import {
   emailSourceItem,
   errorCategory,
   ledgerKey,
+  sentSourceItems,
   teamsSourceItem,
+  type ContentStore,
   type CorrespondenceSource,
   type CursorStore,
   type ItemProcessor,
@@ -39,6 +41,9 @@ export interface PassDeps {
   recordTeamsStatus(cfg: OneDriveFeedsConfig, status: string, note: string | null, etag?: string): Promise<void>;
   /** MUST be the existing email feed reader (readFeed(cfg,"email")): no second reader of emails.json (AC-2.1). */
   readEmail(cfg: OneDriveFeedsConfig): Promise<EmailFileRead>;
+  /** 2026-11-16: the existing Sent Items reader (readFeed(cfg,"sent")), the same one reply settling uses. Absent =>
+   *  Sent Items are not stored (a caller that predates it behaves exactly as before). */
+  readSent?(cfg: OneDriveFeedsConfig): Promise<EmailFileRead>;
   /** Every processor that exists; the pass runs only those the config switches on. */
   processors: ItemProcessor[];
   now(): number;
@@ -216,6 +221,34 @@ export async function runIngestPass(
     }
   }
 
+  // Sent Items (owner decision 2026-11-16): STORED ONLY. Observed when the file changed (same eTag cursor + read
+  // throttle as the other sources), inserted `processed` by the ledger, and never added to `withPayload`, so the
+  // processing loop below can never claim one (the ledger's claim SQL also excludes 'sent').
+  if (cfg.sent.enabled && deps.readSent) {
+    try {
+      const cur = await deps.cursor.get(owner, "sent");
+      if (cur?.checkedAtMs != null && start - cur.checkedAtMs < minIntervalMs) {
+        result.sources.sent = { status: "throttled" };
+      } else {
+        const r = await deps.readSent(cfg);
+        if (!r.ok) {
+          result.sources.sent = { status: r.reason };
+          await deps.cursor.set(owner, "sent");
+        } else if (r.etag && r.etag === (cur?.etag ?? null)) {
+          result.sources.sent = { status: "unchanged" };
+          await deps.cursor.set(owner, "sent");
+        } else {
+          const { items, skipped } = sentSourceItems(r.records, cfg, { path: r.path, etag: r.etag || null });
+          const o = await deps.ledger.observe(owner, items);
+          await deps.cursor.set(owner, "sent", r.etag);
+          result.sources.sent = { status: "ok", new: o.inserted, changed: o.changed, unchanged: o.unchanged, skipped };
+        }
+      }
+    } catch (e) {
+      result.sources.sent = { status: `error:${errorCategory(e)}` };
+    }
+  }
+
   // No processor switched on: items stay `pending` in the ledger, ready for when one is (AC-6.3).
   if (processors.length && withPayload.length) {
     const nowMs = () => deps.now();
@@ -258,4 +291,33 @@ export async function runIngestPass(
   if (result.yielded) parts.push("yielded");
   if (parts.some((p) => !/=(throttled|unchanged|scheduled)$/.test(p))) deps.log(`[correspondence] ${parts.join(" | ")}`);
   return result;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Stored-content retention (owner brief 2026-11-16): content older than correspondence.contentRetentionDays
+// (default 90, by the item's own time) is set to NULL once a day; the row is kept. Rides the heartbeat.
+
+export const CONTENT_PURGE_EVERY_MS = 24 * 3600_000;
+
+/** Pure: is a purge due? Never run => due; otherwise once per CONTENT_PURGE_EVERY_MS. */
+export function contentPurgeDue(lastRunMs: number | null, nowMs: number): boolean {
+  return lastRunMs == null || !Number.isFinite(lastRunMs) || nowMs - lastRunMs >= CONTENT_PURGE_EVERY_MS;
+}
+
+/** One purge attempt. Never throws; logs a COUNT only. Returns rows purged, or null when not due / failed. */
+export async function runContentPurge(
+  retentionDays: number,
+  deps: { store: Pick<ContentStore, "purgeContent">; lastRunMs: number | null; now(): number; markRun(ms: number): void; log(line: string): void },
+): Promise<number | null> {
+  const now = deps.now();
+  if (!contentPurgeDue(deps.lastRunMs, now)) return null;
+  deps.markRun(now); // a failing purge is retried tomorrow, never every minute
+  try {
+    const n = await deps.store.purgeContent(retentionDays);
+    if (n) deps.log(`[correspondence] content purged=${n} retention_days=${retentionDays}`);
+    return n;
+  } catch (e) {
+    deps.log(`[correspondence] content purge failed ${errorCategory(e)}`);
+    return null;
+  }
 }

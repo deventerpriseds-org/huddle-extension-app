@@ -146,6 +146,18 @@ mock.module("../src/features/huddle/lib/openai-responses.server", () => ({
   },
 }));
 let lastModelInput = "";
+// 2026-11-16: the transcript-content store (correspondence ledger storeContent), faked like the other stores.
+const ledgerCalls: Array<{ owner: string; items: Row[] }> = [];
+let ledgerDown = false;
+mock.module("../src/features/huddle/lib/correspondence/ledger.server", () => ({
+  pgLedger: {
+    storeContent: async (owner: string, items: Row[]) => {
+      if (ledgerDown) throw new Error("SYNTH CANARY-7f3a transcript text owner@example.com");
+      ledgerCalls.push({ owner, items });
+      return { inserted: 1, updated: 0 };
+    },
+  },
+}));
 
 let ffTranscript: Row | null = null;
 let ffCalls = 0;
@@ -202,6 +214,8 @@ const reset = () => {
   uploadStatus = 201;
   modelReply = LUNA_OK;
   settingsDown = false;
+  ledgerCalls.length = 0;
+  ledgerDown = false;
 };
 
 // ---------------------------------------------------------------- A: signature
@@ -404,6 +418,46 @@ const drain = async (n = 6) => {
   const bad = (await deliver(evt("ab/../c"))) as Row;
   t("G23 a meeting id with path characters is REJECTED, not cleaned (verify loop 1, C2)", [bad.thrown, db.meetings.size], ["invalid_meeting_id", 0]);
   t("G24 safeSendError never carries Graph's message text", [S.safeSendError("Graph sendMail failed (403): user x@y.io blocked"), S.safeSendError("x", true)], ["graph_send_403", "email_refused_by_send_gate"]);
+}
+
+// ---------------------------------------------------------------- J: transcript + summary stored in Azure (2026-11-16)
+{
+  reset();
+  ffTranscript = baseTranscript({ summary: { overview: "Team agreed to ship Friday.", action_items: "Sam: draft notes", extended_sections: [{ title: "Decisions", content: "- Ship" }] } });
+  await deliver(evt("m20"));
+  t("J0 the webhook stores nothing (it only queues)", ledgerCalls.length, 0);
+  await tick();
+  const call = ledgerCalls[0];
+  const it = call?.items[0];
+  t("J1 one store per processed meeting: owner, (transcript, meeting_id), store-only", [ledgerCalls.length, call?.owner, it?.source, it?.sourceItemId, it?.identityBasis, it?.storeOnly], [1, "owner@example.com", "transcript", "m20", "meeting_id", true]);
+  t("J2 BOTH the raw transcript (every sentence) and the full summary (incl. extended_sections) are stored", [it?.content?.sentences, it?.content?.summary], [
+    [{ speaker: "Sam", text: "Let's ship Friday.", start: "65.2", end: null }, { speaker: "Ana", text: "Agreed.", start: "70", end: null }],
+    { overview: "Team agreed to ship Friday.", action_items: "Sam: draft notes", extended_sections: [{ title: "Decisions", content: "- Ship" }] },
+  ]);
+  t("J3 the meeting time and title are stored", [it?.content?.meetingAt, it?.content?.title, it?.at], ["2026-11-09T15:00:00.000Z", "Launch sync", "2026-11-09T15:00:00.000Z"]);
+  t("J4 the minutes email and the OneDrive save still happened, unchanged", [sent.length, uploads.length, db.meetings.get("m20")?.onedrive_status], [1, 1, "saved"]);
+
+  reset();
+  ffTranscript = baseTranscript();
+  ledgerDown = true;
+  const errs: string[] = [];
+  const origErr = console.error;
+  console.error = (...a: unknown[]) => void errs.push(a.map(String).join(" "));
+  const failsBefore = S.transcriptStoreFailures.count;
+  await deliver(evt("m21"));
+  await tick();
+  console.error = origErr;
+  const m21 = db.meetings.get("m21");
+  // The lease and worker-pass fields matter: a store failure that escaped processMeeting would leave the email and
+  // OneDrive results recorded (the branches record them) but skip release(), so only these two catch it.
+  t("J5 a failed transcript store does NOT fail the meeting: email sent, OneDrive saved, nothing left pending, no attempt used, row released, pass not failed", [sent.length, uploads.length, m21?.pending_email, m21?.pending_onedrive, m21?.attempts, m21?.lease_until ?? null, errs.some((l) => l.includes("worker pass failed"))], [1, 1, false, false, 0, null, false]);
+  t("J6 the failure is counted and logged as a CODE only (no transcript text, address or message)", [S.transcriptStoreFailures.count - failsBefore, errs.filter((l) => /CANARY|SYNTH|@/.test(l)), errs.some((l) => l.includes("transcript store failed transcript_store_failed"))], [1, [], true]);
+
+  reset();
+  ffTranscript = null; // Fireflies has no transcript: the fetch fails, nothing to store
+  await deliver(evt("m22"));
+  await tick();
+  t("J7 a failed Fireflies fetch stores nothing", ledgerCalls.length, 0);
 }
 
 // ---------------------------------------------------------------- H: safe HTML + misc

@@ -93,7 +93,7 @@ try {
   // AC-3.2 columns; AC-3.8 nothing that could hold content
   const cols = (await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='chat' AND table_name='correspondence_ledger'`)).rows.map((r) => r.column_name as string);
   t("AC-3.2 ledger carries every handoff field", ["thread_id", "item_at", "drive_path", "drive_item_id", "file_etag", "first_seen_at", "status", "result_ids", "last_error_category", "content_hash", "internet_message_id", "identity_basis", "missing_field", "attempts"].filter((c) => !cols.includes(c)), []);
-  t("AC-3.8 no body / subject / sender / text / name column", cols.filter((c) => /body|subject|sender|text|name|preview|address/.test(c)), []);
+  t("AC-3.8 (2026-11-16: content lives ONLY in the single JSONB content column) no body / subject / sender / text / name column", cols.filter((c) => /body|subject|sender|text|name|preview|address/.test(c)), []);
 
   // AC-3.5 unchanged re-read: only last_seen_at moves
   const before = await row("c1:m1");
@@ -208,6 +208,166 @@ try {
   const sentMap = new Map([["conv-1", Date.parse("2026-11-10T15:00:00Z")], ["conv-2", Date.parse("2026-11-10T15:00:00Z")]]);
   t("a later sent message settles e-1 'replied'; e-2 (received after the sent one) stays owed", [await R.reconcileRepliedFromSentItems(W, { feedSent: async () => sentMap }), (await pool.query(`SELECT id, status FROM chat.email_replies WHERE id IN ('e-1','e-2') ORDER BY id`)).rows], [1, [{ id: "e-1", status: "replied" }, { id: "e-2", status: "owed" }]]);
   t("a failing Sent Items read changes nothing", await R.reconcileRepliedFromSentItems(W, { feedSent: async () => { throw new Error("graph_500"); } }), 0);
+
+  // ---- Section 5 (owner decision 2026-11-16): content stored in Azure; Sent Items store-only; purge ----
+  const LS = await import("../src/features/huddle/lib/correspondence/ledger.server");
+  const { Client } = await import("pg");
+  const db = async (name: string) => {
+    await pool.query(`CREATE DATABASE ${name}`);
+    const c = new Client({ connectionString: `postgres://postgres@127.0.0.1:${PORT}/${name}` });
+    await c.connect();
+    return c;
+  };
+  // CT-1: the LIVE table was created by the OLD DDL (a byte copy of origin/main fe495ec6 below). The new bootstrap must
+  // keep its rows, add the content columns, and replace the auto-named source CHECK so 'sent' is accepted.
+  const OLD_DDL = `CREATE SCHEMA IF NOT EXISTS chat;
+CREATE TABLE IF NOT EXISTS chat.correspondence_ledger (
+  source TEXT NOT NULL CHECK (source IN ('email','teams','transcript')), source_item_id TEXT NOT NULL, owner_email TEXT NOT NULL,
+  identity_basis TEXT NOT NULL, thread_id TEXT, item_at TIMESTAMPTZ, drive_path TEXT, drive_item_id TEXT, file_etag TEXT,
+  internet_message_id TEXT, content_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processed','needs_context','failed_retryable','failed')),
+  missing_field TEXT, attempts INT NOT NULL DEFAULT 0, claim_version BIGINT NOT NULL DEFAULT 0, lease_until TIMESTAMPTZ,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(), result_ids JSONB NOT NULL DEFAULT '{}'::jsonb, last_error_category TEXT,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), processed_at TIMESTAMPTZ, PRIMARY KEY (source, source_item_id));
+CREATE INDEX IF NOT EXISTS correspondence_ledger_due_idx ON chat.correspondence_ledger (owner_email, source, next_attempt_at)
+  WHERE status IN ('pending','failed_retryable');
+CREATE TABLE IF NOT EXISTS chat.correspondence_cursor (owner_email TEXT NOT NULL, source TEXT NOT NULL, file_etag TEXT,
+  checked_at TIMESTAMPTZ, observed_at TIMESTAMPTZ, PRIMARY KEY (owner_email, source));`;
+  const ins = (c: InstanceType<typeof Client>, src: string, id: string) =>
+    c.query(`INSERT INTO chat.correspondence_ledger (source, source_item_id, owner_email, identity_basis, content_hash, status) VALUES ($1,$2,'o','provider_id','h','processed')`, [src, id]).then(() => "accepted", () => "rejected");
+  {
+    const old = await db("ledger_old");
+    await old.query(OLD_DDL);
+    await ins(old, "email", "old-1");
+    await ins(old, "teams", "old-2");
+    t("CT-1 old DDL: 'sent' is REJECTED before the migration (the test really starts from the old constraint)", await ins(old, "sent", "pre"), "rejected");
+    await old.query(LS.BOOTSTRAP_SQL);
+    await old.query(LS.BOOTSTRAP_SQL); // idempotent: a second bootstrap is a no-op
+    t("CT-1 migration keeps the existing rows and their status", (await old.query(`SELECT source_item_id, status FROM chat.correspondence_ledger ORDER BY 1`)).rows, [{ source_item_id: "old-1", status: "processed" }, { source_item_id: "old-2", status: "processed" }]);
+    t("CT-1 after the migration 'sent' is accepted and an unknown source still rejected", [await ins(old, "sent", "s-1"), await ins(old, "fax", "f-1")], ["accepted", "rejected"]);
+    t("CT-1 exactly ONE source CHECK remains (the old one was dropped, not stacked)", Number((await old.query(`SELECT count(*) n FROM pg_constraint WHERE conrelid='chat.correspondence_ledger'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%(source = ANY%'`)).rows[0].n), 1);
+    t("CT-1 content (jsonb) and content_purged_at columns added", (await old.query(`SELECT column_name, data_type FROM information_schema.columns WHERE table_schema='chat' AND table_name='correspondence_ledger' AND column_name LIKE 'content%' ORDER BY 1`)).rows, [{ column_name: "content", data_type: "jsonb" }, { column_name: "content_hash", data_type: "text" }, { column_name: "content_purged_at", data_type: "timestamp with time zone" }]);
+    t("CT-1 the status CHECK is untouched", await old.query(`INSERT INTO chat.correspondence_ledger (source, source_item_id, owner_email, identity_basis, content_hash, status) VALUES ('email','x','o','provider_id','h','bogus')`).then(() => "accepted", () => "rejected"), "rejected");
+    await old.end();
+    const fresh = await db("ledger_fresh");
+    await fresh.query(LS.BOOTSTRAP_SQL);
+    await fresh.query(LS.BOOTSTRAP_SQL);
+    t("CT-2 fresh install: 'sent' accepted, one source CHECK, 'fax' rejected", [await ins(fresh, "sent", "s"), await ins(fresh, "fax", "f"), Number((await fresh.query(`SELECT count(*) n FROM pg_constraint WHERE conrelid='chat.correspondence_ledger'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%(source = ANY%'`)).rows[0].n)], ["accepted", "rejected", 1]);
+    await fresh.end();
+  }
+
+  // CM-1 (live-DB risk, 2026-11-16): several app instances start at once and each runs the bootstrap against the
+  // OLD-DDL table. Measured on an earlier version of the migration: 90 of 120 such bootstraps died with 40P01
+  // (each held the due_idx ShareLock, then asked for ACCESS EXCLUSIVE). Every bootstrap must succeed, the rows must
+  // survive, and exactly one source CHECK (accepting 'sent') must remain.
+  {
+    const errs: string[] = [];
+    let survived = 0;
+    for (let round = 0; round < 4; round++) {
+      const seedC = await db(`ledger_conc${round}`);
+      await seedC.query(OLD_DDL);
+      await seedC.query(`INSERT INTO chat.correspondence_ledger (source, source_item_id, owner_email, identity_basis, content_hash, status)
+                         SELECT (ARRAY['email','teams','transcript'])[1 + g % 3], 'id-'||g, 'o', 'provider_id', 'h'||g, 'processed' FROM generate_series(1,300) g`);
+      const cs = await Promise.all(Array.from({ length: 8 }, async () => {
+        const c = new Client({ connectionString: `postgres://postgres@127.0.0.1:${PORT}/ledger_conc${round}` });
+        await c.connect();
+        return c;
+      }));
+      for (const r of await Promise.allSettled(cs.map((c) => c.query(LS.BOOTSTRAP_SQL)))) if (r.status === "rejected") errs.push(String((r.reason as { code?: string }).code));
+      const rows = Number((await seedC.query(`SELECT count(*) n FROM chat.correspondence_ledger`)).rows[0].n);
+      const checks = (await seedC.query(`SELECT pg_get_constraintdef(oid) d FROM pg_constraint WHERE conrelid='chat.correspondence_ledger'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%(source = ANY%'`)).rows;
+      if (rows === 300 && checks.length === 1 && String(checks[0].d).includes("'sent'")) survived++;
+      await Promise.all(cs.map((c) => c.end()));
+      await seedC.end();
+    }
+    t("CM-1 8 CONCURRENT bootstraps on the old-DDL table (x4 rounds): none fails (no deadlock), rows kept, one 'sent' CHECK", [errs, survived], [[], 4]);
+  }
+  // CM-2: once migrated, a bootstrap (every process start) takes no lock an open reader blocks -- the lock footprint
+  // of main's bootstrap (the due_idx ShareLock), not an ACCESS EXCLUSIVE that queues behind any open transaction.
+  {
+    const a = await db("ledger_steady");
+    await a.query(OLD_DDL);
+    await a.query(LS.BOOTSTRAP_SQL);
+    const reader = new Client({ connectionString: `postgres://postgres@127.0.0.1:${PORT}/ledger_steady` });
+    await reader.connect();
+    await reader.query("BEGIN");
+    await reader.query("SELECT 1 FROM chat.correspondence_ledger LIMIT 1");
+    await a.query("SET lock_timeout = '500ms'");
+    t("CM-2 an already-migrated bootstrap is not blocked by an open reader", await a.query(LS.BOOTSTRAP_SQL).then(() => "ok", (e: { code?: string }) => `blocked ${e.code}`), "ok");
+    await reader.query("ROLLBACK");
+    await reader.end();
+    await a.end();
+  }
+  // CM-3: the MIGRATION behind a long open transaction gives up after its 5s lock cap (55P03) instead of queueing an
+  // ACCESS EXCLUSIVE request that every later ledger query would wait behind; once that transaction ends, it succeeds.
+  {
+    const a = await db("ledger_capped");
+    await a.query(OLD_DDL);
+    const holder = new Client({ connectionString: `postgres://postgres@127.0.0.1:${PORT}/ledger_capped` });
+    await holder.connect();
+    await holder.query("BEGIN");
+    await holder.query("SELECT 1 FROM chat.correspondence_ledger LIMIT 1");
+    const t0 = Date.now();
+    // Raced against 15s so a missing cap reports "hung" instead of hanging the suite (the holder never lets go first).
+    const first = await Promise.race([
+      a.query(LS.BOOTSTRAP_SQL).then(() => "ok", (e: { code?: string }) => String(e.code)),
+      new Promise<string>((r) => setTimeout(() => r("hung"), 15_000)),
+    ]);
+    const waited = Date.now() - t0;
+    await holder.query("ROLLBACK");
+    await holder.end();
+    if (first === "hung") await new Promise((r) => setTimeout(r, 500)); // let the released bootstrap finish
+    const second = await a.query(LS.BOOTSTRAP_SQL).then(() => "ok", (e: { code?: string }) => String(e.code));
+    const sentOk = await a.query(`INSERT INTO chat.correspondence_ledger (source, source_item_id, owner_email, identity_basis, content_hash) VALUES ('sent','s','o','provider_id','h')`).then(() => "accepted", () => "rejected");
+    t("CM-3 migration behind an open transaction: fails 55P03 within the 5s cap, then succeeds once it ends", [first, waited >= 4000 && waited < 9000, second, sentOk], ["55P03", true, "ok", "accepted"]);
+    await a.end();
+  }
+
+  // JSONB stores object keys in its own order: compare content canonically (keys sorted, recursively).
+  const canon = (v: unknown): unknown => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon((v as Record<string, unknown>)[k])])) : v);
+  const content = (n: string) => canon({ kind: "teams" as const, chatId: "chat-1", chatName: `SYNTH chat ${n}`, messageId: n, at: "2026-11-11T10:00:00.000Z", sender: { id: "u1", name: "Synth Sender", isApp: false }, fromOwner: false, text: `SYNTH body ${n}`, webUrl: null }) as never;
+  const canonRow = (r: { rows: Record<string, unknown>[] }) => (r.rows[0] ? { ...r.rows[0], content: canon(r.rows[0].content) } : r.rows[0]) as Record<string, any>;
+  const crow = async (id: string, source = "teams") => canonRow(await pool.query(`SELECT content, content_purged_at IS NOT NULL purged, status, content_hash h, updated_at::text u FROM chat.correspondence_ledger WHERE source=$1 AND source_item_id=$2`, [source, id]));
+  t("CC-1 a new item's content is stored with it", [await L.observe(O, [{ ...item("k1:m1"), content: content("1") }]), (await crow("k1:m1")).content], [{ inserted: 1, changed: 0, unchanged: 0 }, content("1")]);
+  // CC-2: rows stored before content existed (content NULL) are filled by a re-read with the SAME hash, and nothing
+  // else on the row moves (status, hash, updated_at).
+  await L.observe(O, [item("k1:m2")]);
+  const k2row = await crow("k1:m2");
+  t("CC-2 unchanged hash + NULL content -> filled, counted contentFilled, row otherwise untouched", [await L.observe(O, [{ ...item("k1:m2"), content: content("2") }]), (await crow("k1:m2")).content, (await crow("k1:m2")).status, (await crow("k1:m2")).u === k2row.u], [{ inserted: 0, changed: 0, unchanged: 1, contentFilled: 1 }, content("2"), "pending", true]);
+  t("CC-3 an unchanged re-read never overwrites stored content", [await L.observe(O, [{ ...item("k1:m2"), content: content("other") }]), (await crow("k1:m2")).content], [{ inserted: 0, changed: 0, unchanged: 1 }, content("2")]);
+  t("CC-4 a hash change writes the new content", [await L.observe(O, [{ ...item("k1:m2", "h2"), content: content("2b") }]), (await crow("k1:m2")).content], [{ inserted: 0, changed: 1, unchanged: 0 }, content("2b")]);
+  t("CC-5 a hash change with NO content keeps the stored content", [await L.observe(O, [item("k1:m2", "h3")]), (await crow("k1:m2")).content], [{ inserted: 0, changed: 1, unchanged: 0 }, content("2b")]);
+
+  // CS: Sent Items are store-only -- inserted processed, never pending again, never claimed even if forced pending.
+  const sentItem = (id: string, hash = "s1"): SourceItem => ({ ...item(id, hash, "sent"), storeOnly: true, content: { kind: "sent", subject: "SYNTH", from: { name: null, address: "owner@work.example" }, to: ["pat@partner.example"], cc: [], receivedAt: null, conversationId: "conv-1", internetMessageId: null, bodyText: "SYNTH sent body", isForward: false, sentAt: "2026-11-11T10:00:00.000Z" } });
+  t("CS-1 a sent item is inserted 'processed' with its content", [await L.observe(O, [sentItem("mb:S1")]), (await crow("mb:S1", "sent")).status, (await crow("mb:S1", "sent")).content?.kind], [{ inserted: 1, changed: 0, unchanged: 0 }, "processed", "sent"]);
+  t("CS-2 an edited sent item keeps status 'processed' (never reset to pending)", [await L.observe(O, [sentItem("mb:S1", "s2")]), (await crow("mb:S1", "sent")).status], [{ inserted: 0, changed: 1, unchanged: 0 }, "processed"]);
+  await pool.query(`UPDATE chat.correspondence_ledger SET status='pending', next_attempt_at = now() - interval '1 s' WHERE source='sent'`); // forced, to prove the claim guard itself
+  t("CS-3 a sent row is never claimed or due, even if it were pending and its source were asked for", [(await L.claimDue(O, ["sent", "teams", "email"], 500, 5)).filter((c) => c.source === "sent").length, await L.hasDue(O, ["sent"], 5)], [0, false]);
+  await pool.query(`UPDATE chat.correspondence_ledger SET status='processed' WHERE source='sent'`);
+
+  // CT: Fireflies transcripts -- storeContent writes content only; meeting triage keeps owning hash + status.
+  const tc = { kind: "transcript" as const, title: "SYNTH meeting", meetingAt: "2026-11-11T15:00:00.000Z", sentences: [{ speaker: "Synth A", text: "SYNTH line", start: 1, end: 2 }], summary: { overview: "SYNTH overview", extended_sections: [{ title: "Decisions", content: "SYNTH" }] } };
+  const tcC = canon(tc);
+  const tItem = (c = tc): SourceItem => ({ ...item("MEET-1", "ff-1", "transcript"), identityBasis: "meeting_id", threadId: null, storeOnly: true, content: c });
+  t("CT-3 a new transcript row is inserted 'processed' with sentences + full summary", [await L.storeContent(O, [tItem()]), (await crow("MEET-1", "transcript")).status, (await crow("MEET-1", "transcript")).content], [{ inserted: 1, updated: 0 }, "processed", tcC]);
+  // meeting triage then observes the SAME row with ITS hash and no content: exactly today's triage behaviour (pending)
+  t("CT-4 meeting triage's own observe still reopens the row for triage and keeps the stored content", [await L.observe(O, [{ ...item("MEET-1", "triage-h", "transcript"), identityBasis: "meeting_id" }]), (await crow("MEET-1", "transcript")).status, (await crow("MEET-1", "transcript")).content], [{ inserted: 0, changed: 1, unchanged: 0 }, "pending", tcC]);
+  const tc2 = { ...tc, summary: { overview: "SYNTH overview v2" } };
+  t("CT-5 a re-stored transcript updates content ONLY (triage's hash + status untouched)", [await L.storeContent(O, [tItem(tc2)]), (await crow("MEET-1", "transcript")).h, (await crow("MEET-1", "transcript")).status, (await crow("MEET-1", "transcript")).content], [{ inserted: 0, updated: 1 }, "triage-h", "pending", canon(tc2)]);
+
+  // CP: purge -- content older than the retention (by item time) -> NULL, row kept, never refilled.
+  await pool.query(`UPDATE chat.correspondence_ledger SET item_at = now() - interval '100 days' WHERE source_item_id IN ('k1:m1','MEET-1')`);
+  t("CP-1 retention is the argument: 365 days purges nothing here", await L.purgeContent(365), 0);
+  t("CP-2 a 90-day purge clears exactly the old rows' content and keeps the rows", [await L.purgeContent(90), (await crow("k1:m1")).content, (await crow("k1:m1")).purged, (await crow("MEET-1", "transcript")).content, await count("k1:m1")], [2, null, true, null, 1]);
+  t("CP-3 recent content is untouched", (await crow("k1:m2")).content, content("2b"));
+  t("CP-4 a purged row is never refilled: not by an unchanged re-read, not by a hash change, not by storeContent", [
+    (await L.observe(O, [{ ...item("k1:m1"), content: content("1") }])).contentFilled ?? 0,
+    (await L.observe(O, [{ ...item("k1:m1", "hX"), content: content("1x") }]), (await crow("k1:m1")).content),
+    (await L.storeContent(O, [tItem()]), (await crow("MEET-1", "transcript")).content),
+  ], [0, null, null]);
+  t("CP-5 a second purge finds nothing to do", await L.purgeContent(90), 0);
 
   await pool.end();
 } catch (e) {

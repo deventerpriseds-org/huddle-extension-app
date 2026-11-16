@@ -21,8 +21,17 @@ import {
 } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { parseTeamsLog, teamsParseNote } from "../src/features/huddle/lib/external-feeds/teams-log";
 import {
+  CORRESPONDENCE_SOURCES,
+  STORE_ONLY_SOURCES,
   combineOutcomes,
+  emailContent,
   emailSourceItem,
+  firefliesTranscriptItem,
+  sentSourceItems,
+  transcriptContent,
+  type EmailContent,
+  type SentContent,
+  type TeamsContent,
   errorCategory,
   ledgerKey,
   stableHash,
@@ -39,7 +48,7 @@ import {
   type SourceItem,
   type TeamsMessage,
 } from "../src/features/huddle/lib/correspondence/source-item";
-import { inDailyWindow, ledgerEmailItems, runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
+import { contentPurgeDue, inDailyWindow, ledgerEmailItems, runContentPurge, runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
 
 let fail = 0;
 let pass = 0;
@@ -104,6 +113,8 @@ t("AC-6.1 correspondence switches all OFF by default", noTeams.correspondence, {
   emailBell: false,
   ownerAliases: [],
   ownerNames: [],
+  // Stored-content retention (owner brief 2026-11-16): a seeded default, changeable in the config.
+  contentRetentionDays: 90,
 });
 t("AC-6.1 only a literal true turns a switch on", parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { ingest: "yes", bell: 1 } }))!.correspondence.ingest, false);
 const perm = (c: Record<string, unknown>) => {
@@ -266,7 +277,7 @@ t("combineOutcomes: needs_context wins; result ids merge", [
 
 console.log("F. THE PASS against the dummy fixtures, in-memory ledger twin (AC-6.1, 6.3, 7.1, 2.x, 3.x)");
 // The twin mirrors ledger.server.ts; scripts/correspondence-ledger-sql.test.ts proves the real SQL.
-type Row = { owner: string; hash: string; status: LedgerStatus; attempts: number; v: number; missing: string | null; cat: string | null; result: Record<string, string[]>; writes: number; source: CorrespondenceSource; id: string; leased?: boolean; notBefore?: number };
+type Row = { content?: unknown; storeOnly?: boolean; owner: string; hash: string; status: LedgerStatus; attempts: number; v: number; missing: string | null; cat: string | null; result: Record<string, string[]>; writes: number; source: CorrespondenceSource; id: string; leased?: boolean; notBefore?: number };
 const makeTwin = () => {
   const rows = new Map<string, Row>();
   const cursors = new Map<string, SourceCursor>();
@@ -275,18 +286,24 @@ const makeTwin = () => {
   const ledger: LedgerStore = {
     async observe(owner, items) {
       calls.push("observe");
-      const out = { inserted: 0, changed: 0, unchanged: 0 };
+      const out: { inserted: number; changed: number; unchanged: number; contentFilled?: number } = { inserted: 0, changed: 0, unchanged: 0 };
+      let filled = 0;
       for (const i of items) {
         const k = ledgerKey(i);
         const r = rows.get(k);
         if (!r) {
-          rows.set(k, { owner, hash: i.contentHash, status: "pending", attempts: 0, v: 0, missing: null, cat: null, result: {}, writes: 1, source: i.source, id: i.sourceItemId });
+          // 2026-11-16: content stored; a store-only item (sent) is inserted processed.
+          rows.set(k, { content: i.content ?? null, storeOnly: i.storeOnly === true, owner, hash: i.contentHash, status: i.storeOnly ? "processed" : "pending", attempts: 0, v: 0, missing: null, cat: null, result: {}, writes: 1, source: i.source, id: i.sourceItemId });
           out.inserted++;
         } else if (r.hash !== i.contentHash) {
-          Object.assign(r, { hash: i.contentHash, status: "pending", attempts: 0, v: r.v + 1, missing: null, writes: r.writes + 1, leased: false, notBefore: 0 });
+          Object.assign(r, { content: i.content ?? r.content, hash: i.contentHash, status: i.storeOnly ? r.status : "pending", attempts: 0, v: r.v + 1, missing: null, writes: r.writes + 1, leased: false, notBefore: 0 });
           out.changed++;
-        } else out.unchanged++;
+        } else {
+          if (r.content == null && i.content) (r.content = i.content), filled++;
+          out.unchanged++;
+        }
       }
+      if (filled) out.contentFilled = filled;
       return out;
     },
     async reopenNeedsContext(owner, source) {
@@ -295,14 +312,14 @@ const makeTwin = () => {
       return n;
     },
     async hasDue(owner, sources, max) {
-      return [...rows.values()].some((r) => r.owner === owner && sources.includes(r.source) && (r.status === "pending" || r.status === "failed_retryable") && r.attempts < max && !r.leased && (r.notBefore ?? 0) <= clock);
+      return [...rows.values()].some((r) => r.owner === owner && sources.includes(r.source) && r.source !== "sent" && (r.status === "pending" || r.status === "failed_retryable") && r.attempts < max && !r.leased && (r.notBefore ?? 0) <= clock);
     },
     async claimDue(owner, sources, limit, max) {
       calls.push("claim");
       const out: ClaimedItem[] = [];
       for (const r of rows.values()) {
         if (out.length >= limit) break;
-        if (r.owner !== owner || !sources.includes(r.source) || !(r.status === "pending" || r.status === "failed_retryable") || r.attempts >= max) continue;
+        if (r.owner !== owner || !sources.includes(r.source) || r.source === "sent" || !(r.status === "pending" || r.status === "failed_retryable") || r.attempts >= max) continue;
         if (r.leased || (r.notBefore ?? 0) > clock) continue; // lease / retry backoff, as the SQL does
         r.attempts++;
         r.v++;
@@ -346,7 +363,8 @@ const makeTwin = () => {
 };
 const logs: string[] = [];
 const files = { teamsText: teamsFixture, teamsEtag: '"{t},1"', emailEtag: '"{e},1"', email: emailFixture };
-const reads = { teams: 0, email: 0 };
+const reads = { teams: 0, email: 0, sent: 0 };
+const sentFiles = { etag: '"{s},1"', json: JSON.parse(readFileSync(join(FIX, "sent.sample.json"), "utf8")) };
 const deps = (tw: ReturnType<typeof makeTwin>, processors: ItemProcessor[] = []): PassDeps => ({
   ledger: tw.ledger,
   cursor: tw.cursor,
@@ -360,6 +378,11 @@ const deps = (tw: ReturnType<typeof makeTwin>, processors: ItemProcessor[] = [])
     reads.email++;
     const vv = validateEmailSnapshot(files.email, c, Date.parse("2026-11-12T00:00:00Z"));
     return vv.ok ? { ok: true, etag: files.emailEtag, path: c.email.path, records: vv.snapshot.records } : { ok: false, reason: `rejected:${vv.reason}` };
+  },
+  async readSent(c) {
+    reads.sent++;
+    const vv = validateSentSnapshot(sentFiles.json, c, Date.parse("2026-11-12T00:00:00Z"));
+    return vv.ok ? { ok: true, etag: sentFiles.etag, path: c.sent.path, records: vv.snapshot.records } : { ok: false, reason: `rejected:${vv.reason}` };
   },
   processors,
   now: tw.now,
@@ -789,6 +812,119 @@ t("AC-7.2 no src/ module references the fixture directory", (() => {
   walk(join(ROOT, "src"));
   return hits;
 })(), []);
+
+console.log("H. STORED CONTENT (owner decision 2026-11-16): email / teams / sent / transcript, store-only, purge, logs");
+{
+  const recsH = (validateEmailSnapshot(emailFixture, cfg, NOW) as { snapshot: { records: Record<string, unknown>[] } }).snapshot.records;
+  const r1 = recsH.find((r) => r.id === "AAMk-sample-1")!;
+  const m1 = mapFeedMessage(r1, cfg.mailbox);
+  const it1 = emailSourceItem(r1, m1, { path: "/p", etag: "e" }, cfg.mailbox)!;
+  const c1 = it1.content as EmailContent;
+  t("HC-1 email content: subject, from {name,address}, times, ids, isForward", [c1.kind, c1.subject, c1.from, c1.receivedAt, c1.conversationId, c1.internetMessageId, c1.isForward, c1.to, c1.cc], [
+    "email", "HUDDLE-PA-SBX- Can you review the draft by Monday?", { name: "Pat Example", address: "colleague@partner.example" }, "2026-11-10T11:00:00Z", "conv-sample-1", "<sample-1@partner.example>", false, [], [],
+  ]);
+  t("HC-2 email bodyText is EXACTLY the app's existing visible text (mapFeedMessage -> htmlToText), no second HTML path", [c1.bodyText === m1.bodyText, c1.bodyText], [true, "Can you review the draft by Monday? CANARY-7f3a"]);
+  const fw = emailContent({ id: "x", subject: "FW: SYNTH", toRecipients: "a@x.example; b@x.example", ccRecipients: [{ emailAddress: { address: "c@x.example" } }], hasAttachments: true }, mapFeedMessage({ id: "x", subject: "FW: SYNTH", toRecipients: "a@x.example; b@x.example", ccRecipients: [{ emailAddress: { address: "c@x.example" } }] }, cfg.mailbox));
+  t("HC-3 forward flag, to/cc in both recipient shapes, hasAttachments only when present", [fw.isForward, fw.to, fw.cc, fw.hasAttachments, "hasAttachments" in c1], [true, ["a@x.example", "b@x.example"], ["c@x.example"], true, false]);
+  const tm = parseTeamsLog(teamsFixture, cfg).messages.find((m) => m.messageId === "3001")!;
+  const tc = teamsSourceItem(tm, { path: "/t" }).content as TeamsContent;
+  t("HC-4 teams content: chat, message, sender, owner flag, the SAME text the parser derived", [tc.kind, tc.chatId === tm.chatId, tc.messageId, tc.sender.id === tm.senderId, tc.sender.isApp, tc.fromOwner === tm.fromOwner, tc.text === tm.text, "webUrl" in tc, "chatName" in tc], ["teams", true, "3001", true, false, true, true, true, true]);
+
+  // Sent Items
+  const svH = validateSentSnapshot(sentFiles.json, cfg, NOW) as { snapshot: { records: Record<string, unknown>[] } };
+  const si = sentSourceItems(svH.snapshot.records, cfg, { path: "/automation/email/sent.json", etag: "s" });
+  t("HS-1 sent items: eligibility is EXACTLY mapSentRecords (same kept/skipped)", [si.items.map((i) => i.threadId), si.skipped], [mapSentRecords(svH.snapshot.records, cfg).sent.map((s) => s.conversationId), mapSentRecords(svH.snapshot.records, cfg).skipped]);
+  t("HS-2 sent items are source 'sent', store-only, keyed (sent, mailbox:outlook id)", si.items.map((i) => [i.source, i.storeOnly, i.sourceItemId]), [["sent", true, "owner@work.example:AAMk-sent-1"], ["sent", true, "owner@work.example:AAMk-sent-2"]]);
+  const sc = si.items[0].content as SentContent;
+  t("HS-3 sent content = email shape + sentAt; recipients parsed", [sc.kind, sc.sentAt, sc.to, sc.conversationId, si.items[0].at], ["sent", "2026-11-10T15:00:00.000Z", ["colleague@partner.example"], "conv-sample-1", "2026-11-10T15:00:00.000Z"]);
+  t("HS-4 'sent' is a source and the ONLY store-only source", [CORRESPONDENCE_SOURCES.includes("sent"), STORE_ONLY_SOURCES], [true, ["sent"]]);
+
+  // The pass with Sent Items on, bell switched on: sent rows stored processed, never handed to a processor, and the
+  // email/teams processing is exactly what it was without Sent Items (7 items processed, AC-6.3 test above).
+  files.teamsText = teamsFixture;
+  files.teamsEtag = '"{t},1"';
+  files.email = emailFixture;
+  files.emailEtag = '"{e},1"';
+  const sentOn = (over: Record<string, unknown> = {}) => parseFeedsConfig(JSON.stringify({ ...withTeams, sent: {}, correspondence: { ingest: true, ...over } }))!;
+  const tw = makeTwin();
+  const bell = spyProc("bell", () => ({ status: "processed", resultIds: { bell: ["b"] } }));
+  reads.sent = 0;
+  const r = await runIngestPass(sentOn({ bell: true }), deps(tw, [bell]));
+  const sentRows = [...tw.rows.values()].filter((x) => x.source === "sent");
+  t("HS-5 pass with sent enabled: 2 sent rows stored 'processed' with content, reported per source", [r.sources.sent, sentRows.map((x) => x.status), sentRows.every((x) => (x.content as SentContent)?.kind === "sent")], [{ status: "ok", new: 2, changed: 0, unchanged: 0, skipped: 2 }, ["processed", "processed"], true]);
+  t("HS-6 no processor ever sees a sent item; email/teams processing unchanged (7 processed)", [bell.seen.some((id) => id.includes("sent")), bell.seen.length, r.processed], [false, 7, 7]);
+  t("HS-7 email + teams rows carry their content", [...tw.rows.values()].filter((x) => x.source !== "sent").every((x) => (x.content as { kind?: string })?.kind === x.source), true);
+  tw.tick(11 * 60_000);
+  const r2 = await runIngestPass(sentOn({ bell: true }), deps(tw, [bell]));
+  t("HS-8 unchanged Sent Items file -> 'unchanged', no new rows", [r2.sources.sent?.status, sentRows.length, [...tw.rows.values()].filter((x) => x.source === "sent").length], ["unchanged", 2, 2]);
+  const twNo = makeTwin();
+  const dNo = deps(twNo);
+  delete (dNo as Partial<PassDeps>).readSent;
+  reads.sent = 0;
+  const rNo = await runIngestPass(sentOn(), dNo);
+  t("HS-9 a caller without readSent (or sent not configured) stores no sent rows and reports no sent source", [rNo.sources.sent, [...twNo.rows.values()].some((x) => x.source === "sent"), (await runIngestPass(onCfg(), deps(makeTwin()))).sources.sent, reads.sent], [undefined, false, undefined, 0]);
+
+  // Fill: rows recorded before content existed get their content on the next observe of the same item.
+  const twF = makeTwin();
+  await runIngestPass(onCfg(), deps(twF));
+  for (const x of twF.rows.values()) x.content = null;
+  twF.tick(11 * 60_000);
+  files.teamsEtag = '"{t},9"';
+  files.emailEtag = '"{e},9"';
+  await runIngestPass(onCfg(), deps(twF));
+  t("HF-1 unchanged hash + NULL content -> filled on the next read of a new file version (rows otherwise unchanged)", [[...twF.rows.values()].every((x) => x.content != null), [...twF.rows.values()].every((x) => x.status === "pending")], [true, true]);
+  files.teamsEtag = '"{t},1"';
+  files.emailEtag = '"{e},1"';
+
+  // Transcripts
+  const ff = { title: "SYNTH meeting", date: Date.parse("2026-11-11T15:00:00Z"), participants: ["a@x.example"], meeting_attendees: [{ displayName: "Synth A", email: "a@x.example" }], sentences: [{ speaker_name: "Synth A", text: "SYNTH line", start_time: "65.2", end_time: 70 }], summary: { overview: "SYNTH", action_items: "SYNTH: do it", keywords: ["k"], extended_sections: [{ title: "Decisions", content: "SYNTH" }] } };
+  const trc = transcriptContent(ff, "2026-11-11T15:00:00.000Z");
+  t("HT-1 transcript content: raw sentences AND every summary field (incl. extended_sections), participants, attendees", [trc.sentences, trc.summary, trc.participants, trc.attendees, trc.meetingAt], [[{ speaker: "Synth A", text: "SYNTH line", start: "65.2", end: 70 }], ff.summary, ["a@x.example"], [{ name: "Synth A", email: "a@x.example" }], "2026-11-11T15:00:00.000Z"]);
+  const ti = firefliesTranscriptItem("MEET-1", trc);
+  t("HT-2 transcript item: (transcript, meeting_id), store-only, hash moves with the summary", [ti.source, ti.sourceItemId, ti.identityBasis, ti.storeOnly, ti.contentHash === firefliesTranscriptItem("MEET-1", transcriptContent(ff, trc.meetingAt)).contentHash, ti.contentHash === firefliesTranscriptItem("MEET-1", transcriptContent({ ...ff, summary: { overview: "x" } }, trc.meetingAt)).contentHash], ["transcript", "MEET-1", "meeting_id", true, true, false]);
+  t("HT-3 no summary / no sentences -> null summary, empty sentences (never throws)", [transcriptContent({}, null).summary, transcriptContent({}, null).sentences], [null, []]);
+
+  // Purge
+  const H = 3600_000;
+  t("HP-1 purge due: never run, then once per 24h", [contentPurgeDue(null, 0), contentPurgeDue(0, 23 * H), contentPurgeDue(0, 24 * H)], [true, false, true]);
+  const calls: number[] = [];
+  let last: number | null = null;
+  let clockP = Date.parse("2026-11-16T12:00:00Z");
+  const plog: string[] = [];
+  const pd = (store: { purgeContent(d: number): Promise<number> }) => ({ store, lastRunMs: last, now: () => clockP, markRun: (ms: number) => (last = ms), log: (l: string) => plog.push(l) });
+  const okStore = { purgeContent: async (d: number) => (calls.push(d), 3) };
+  const a = await runContentPurge(30, pd(okStore));
+  clockP += H;
+  const b = await runContentPurge(30, pd(okStore));
+  clockP += 24 * H;
+  const c = await runContentPurge(30, pd(okStore));
+  t("HP-2 the configured retention is passed through; at most one purge per day", [a, b, c, calls], [3, null, 3, [30, 30]]);
+  clockP += 25 * H;
+  const bad = await runContentPurge(90, pd({ purgeContent: async () => { throw new Error("SYNTH CANARY-7f3a owner@work.example Bearer abc"); } }));
+  clockP += H;
+  const after = await runContentPurge(90, pd(okStore));
+  t("HP-3 a failing purge never throws, logs a CATEGORY only, and waits a day (no retry every minute)", [bad, after, plog.filter((l) => /CANARY|Bearer|@/.test(l)), plog.at(-1)], [null, null, [], "[correspondence] content purge failed processor_error"]);
+  const rd = (v: unknown) => parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { contentRetentionDays: v } }))!.correspondence.contentRetentionDays;
+  t("HP-4 contentRetentionDays: a valid number is kept, junk falls back to 90, bounded to 10 years", [rd(30), rd(0), rd("x"), rd(99999), rd(undefined)], [30, 90, 90, 3650, 90]);
+
+  // Logs: no content ever reaches a log line (AC-3.8 canary), with every source on and a processor that fails with
+  // free text.
+  const canarySent = { ...sentFiles.json, snapshot: { value: sentFiles.json.snapshot.value.map((x: Record<string, unknown>) => ({ ...x, body: "SYNTH CANARY-7f3a sent body", toRecipients: "pat@partner.example" })) } };
+  const savedSent = sentFiles.json;
+  sentFiles.json = canarySent;
+  sentFiles.etag = '"{s},canary"';
+  logs.length = 0;
+  const twC = makeTwin();
+  const boom = spyProc("bell", () => {
+    throw new Error("SYNTH CANARY-7f3a Bearer abc owner@work.example");
+  });
+  await runIngestPass(sentOn({ bell: true }), deps(twC, [boom]));
+  t("HL-1 the canary IS stored (content reaches Azure)", [...twC.rows.values()].some((x) => JSON.stringify(x.content ?? "").includes("CANARY-7f3a")), true);
+  t("HL-2 pass log: no canary, subject, address, chat name, id, body or token -- with content stored", logs.filter((l) => /CANARY|Bearer|chat-|1001|Pat|HUDDLE|AAMk|@|SYNTH/.test(l)), []);
+  t("HL-3 pass log still carries the per-source counts, sent included", logs.some((l) => /sent=ok new=2/.test(l)), true);
+  sentFiles.json = savedSent;
+  sentFiles.etag = '"{s},1"';
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
