@@ -101,10 +101,10 @@ import {
   setMyJobEnabledFn,
 } from "../lib/identity/scheduling-config.functions";
 import type { JobCadence } from "../lib/identity/scheduling-config.server";
-import { autoStandupLabel } from "../lib/identity/auto-job-label";
+import { Switch } from "@/components/ui/switch";
+import { cadenceLine } from "../lib/identity/auto-job-label";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
@@ -283,19 +283,35 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
               Review + retro
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuCheckboxItem
-              checked={autoStandupOn}
+            {/* A real on/off switch (the app's own Switch, as in Settings), on a plain menu row so it lines up
+                with "Daily stand-up" above -- a CheckboxItem indents its text by pl-8 for a tick that read as
+                neither a toggle nor aligned (owner, 2026-11-16). The whole row toggles; the Switch is display-only
+                so one click never fires twice. */}
+            <DropdownMenuItem
               disabled={!meetingCaller || standupCadence === undefined || standupSaving}
-              onCheckedChange={(v) => void toggleAutoStandup(v === true)}
-              onSelect={(e) => e.preventDefault()}
+              onSelect={(e) => {
+                e.preventDefault();
+                void toggleAutoStandup(!autoStandupOn);
+              }}
               data-testid="auto-standup-toggle"
               data-state-on={autoStandupOn ? "true" : "false"}
+              role="menuitemcheckbox"
+              aria-checked={autoStandupOn}
+              className="justify-between"
             >
-              <span className="flex-1">{autoStandupLabel(standupCadence)}</span>
-              <span className="ml-2 text-[11px] text-muted-foreground">
-                {standupCadence === undefined ? "…" : autoStandupOn ? "On" : "Off"}
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span>Automatic stand-up</span>
+                {standupCadence && (
+                  <span className="text-xs text-muted-foreground">{cadenceLine(standupCadence)}</span>
+                )}
               </span>
-            </DropdownMenuCheckboxItem>
+              <Switch
+                checked={autoStandupOn}
+                tabIndex={-1}
+                aria-hidden="true"
+                className="pointer-events-none"
+              />
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => startMeeting("virtual-meeting", { members: [] })}>
               <Plus size={14} className="mr-1.5" /> New blank meeting

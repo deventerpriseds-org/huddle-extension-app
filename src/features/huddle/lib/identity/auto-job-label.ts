@@ -15,6 +15,14 @@ export function cadenceSummary(c: JobCadence): string {
   return `${days} ${hours}`.trim();
 }
 
+/** The Meeting menu's second line under "Automatic stand-up": "Daily at 8:00" / "Mon, Thu at 8:00, 13:00".
+ *  Two deliberate lines replace the one long label that wrapped mid-phrase in the w-64 menu (UAT run
+ *  43796721000 screenshot, 2026-11-16). */
+export function cadenceLine(c: JobCadence): string {
+  const s = cadenceSummary(c).replace(/^(daily|[A-Z][a-z]{2}(?:, [A-Z][a-z]{2})*) /, "$1 at ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export function autoStandupLabel(c: JobCadence | undefined): string {
   return c ? `Automatic stand-up (${cadenceSummary(c)})` : "Automatic stand-up";
 }
