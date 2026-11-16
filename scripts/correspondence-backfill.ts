@@ -87,6 +87,41 @@ for (const v of await versions(cfg.email.path)) {
   await store("email", items);
 }
 
+// DIAGNOSTIC (dry run only; COUNTS ONLY, public repo): could the unreadable lines of older Teams versions hold
+// messages the newest version lacks? Rejoins physical lines until a JSON object parses, then compares
+// chat+message ids against the newest version. Prints no ids, names or text.
+const diag = !apply && process.env.BACKFILL_TEAMS_DIAG !== "0";
+const teamsKeys = (text: string) => {
+  const keys = new Set<string>();
+  let buf = "", records = 0, synth = { t: 0, f: 0, missing: 0 };
+  for (const raw of text.split(/\n/)) {
+    buf = buf ? `${buf}\n${raw}` : raw;
+    if (!buf.trim()) { buf = ""; continue; }
+    let o: Record<string, unknown> | null = null;
+    try { o = JSON.parse(buf); } catch { if (buf.length < 2_000_000) continue; }
+    buf = "";
+    if (!o || typeof o !== "object") continue;
+    records++;
+    if (o.synthetic === true) synth.t++; else if (o.synthetic === false) synth.f++; else synth.missing++;
+    const chat = String((o as { chatId?: unknown }).chatId ?? "");
+    const msgs = Array.isArray((o as { messages?: unknown }).messages) ? ((o as { messages: unknown[] }).messages) : [o];
+    for (const m of msgs) { const id = String((m as { id?: unknown })?.id ?? ""); if (id) keys.add(`${chat}|${id}`); }
+  }
+  return { keys, records, synth };
+};
+if (diag && cfg.teams.enabled) {
+  const vs = await versions(cfg.teams.path);
+  const newest = teamsKeys(vs[vs.length - 1].text);
+  const extra = new Set<string>();
+  for (const v of vs) {
+    const r = teamsKeys(v.text);
+    let only = 0;
+    for (const k of r.keys) if (!newest.keys.has(k)) { only++; extra.add(k); }
+    console.log(`teams diag ${v.at}: rejoined records ${r.records} | synthetic t/f/missing ${r.synth.t}/${r.synth.f}/${r.synth.missing} | message ids ${r.keys.size} | not in newest ${only}`);
+  }
+  console.log(`teams diag total: newest ids ${newest.keys.size} | ids only in older versions ${extra.size}`);
+}
+
 if (cfg.teams.enabled) {
   for (const v of await versions(cfg.teams.path)) {
     totals.teams.versions++;
