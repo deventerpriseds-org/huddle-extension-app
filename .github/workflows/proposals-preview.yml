@@ -7,6 +7,11 @@ name: Task proposals preview (owner's OneDrive only)
 #             proposals feature is unmerged and switched off; this previews its output on real data.
 #             THIS REPO'S LOGS ARE PUBLIC: the job prints counts and the file path only. Inputs carry no
 #             address, id or content.
+#             2026-11-16: steps reply/action read Huddle's Azure store (chat.correspondence_ledger) by default
+#             (source=ledger, window since Monday 2026-11-09 unless `since` is set), leaving out what the owner
+#             already resolved and Teams group/meeting chats he is not part of; source=files keeps the OneDrive
+#             files path. With the ledger the job logs in to Azure and opens a temporary DB firewall rule for this
+#             runner only (removed at the end), as correspondence-backfill.yml does. Counts only in this log.
 # SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 # EVIDENCE:   .claude/actions.md ACT:correspondence-checklist.
 
@@ -26,9 +31,15 @@ on:
         required: false
         default: "60"
       since:
-        description: "Open-vs-replied report start, ISO UTC (e.g. 2026-11-09T05:00:00Z = Monday 00:00 ET). Blank = the days window."
+        description: "Report start, ISO UTC (e.g. 2026-11-09T05:00:00Z = Monday 00:00 ET). Blank = Monday 2026-11-09 for source=ledger; the days window for source=files."
         required: false
         default: ""
+      source:
+        description: "steps reply/action only: ledger = read Huddle's Azure store (chat.correspondence_ledger, default); files = read the OneDrive feed files (as before, for comparison)"
+        required: false
+        type: choice
+        options: [ledger, files]
+        default: ledger
       email:
         description: "Also email the HTML report to the owner (mailbox from the private feed config)"
         required: false
@@ -60,6 +71,10 @@ jobs:
   preview:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # 2026-11-16: the reply/action steps read the Azure ledger unless source=files; only then does this job log in to
+      # Azure and open a temporary DB firewall rule for this runner (removed at the end), exactly as the back-fill does.
+      READS_LEDGER: ${{ (inputs.step == 'reply' || inputs.step == 'action') && inputs.source != 'files' && !inputs.probe && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -70,6 +85,88 @@ jobs:
           cache: npm
       - uses: oven-sh/setup-bun@v2
       - run: npm ci --no-audit --no-fund
+      - name: Azure login
+        if: ${{ env.READS_LEDGER == '1' }}
+        uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Resolve connection string (mirrors deploy-swa)
+        if: ${{ env.READS_LEDGER == '1' }}
+        env:
+          FULL_URL: ${{ secrets.AZURE_PG_URL }}
+          PG_PW_1: ${{ secrets.AZURE_ADMIN_PW }}
+          PG_PW_2: ${{ secrets.AZURE_PG_PASSWORD }}
+          PG_PW_3: ${{ secrets.AZURE_POSTGRES_PASSWORD }}
+          PG_PW_4: ${{ secrets.AZURE_PG_ADMIN_PASSWORD }}
+          PG_PW_5: ${{ secrets.PG_ADMIN_PASSWORD }}
+          PG_PW_6: ${{ secrets.POSTGRES_PASSWORD }}
+          # Pinned to the canonical Huddle DB (see deploy-swa.yml). Secret overrides if set.
+          PG_SERVER_OVERRIDE: ${{ secrets.AZURE_PG_SERVER || 'eds-postgresql' }}
+          PG_DB_OVERRIDE: ${{ secrets.AZURE_PG_DB || 'RAG_AI_Agents' }}
+        run: |
+          set -euo pipefail
+          if [ -n "${FULL_URL}" ]; then
+            echo "::add-mask::${FULL_URL}"
+            echo "AZURE_PG_URL_RESOLVED=${FULL_URL}" >> "$GITHUB_ENV"
+            # Parse host/rg for the firewall step even when the full URL is provided.
+            HOST=$(python3 -c 'import sys,urllib.parse as u;print(u.urlparse(sys.argv[1]).hostname or "")' "$FULL_URL")
+            SRV=$(echo "$HOST" | cut -d. -f1)
+            RG=$(az postgres flexible-server list -o json | python3 -c 'import sys,json;xs=json.load(sys.stdin);s=sys.argv[1];print(next((x["resourceGroup"] for x in xs if x.get("name")==s), ""))' "$SRV")
+            echo "PG_RG=$RG" >> "$GITHUB_ENV"; echo "PG_SRV=$SRV" >> "$GITHUB_ENV"
+            echo "Using AZURE_PG_URL secret as-is (server=$SRV rg=$RG)."
+            exit 0
+          fi
+          echo "AZURE_PG_URL empty — assembling from parts via az discovery."
+          SERVERS=$(az postgres flexible-server list -o json)
+          read -r SRV RG HOST ADMIN < <(python3 - "$SERVERS" "${PG_SERVER_OVERRIDE:-}" <<'PY'
+          import sys, json
+          servers = json.loads(sys.argv[1] or "[]")
+          override = sys.argv[2]
+          if not servers:
+              sys.stderr.write("No Azure PostgreSQL flexible server found.\n"); sys.exit(3)
+          s = next((x for x in servers if x.get("name") == override), servers[0]) if override else servers[0]
+          print(s["name"], s["resourceGroup"], s["fullyQualifiedDomainName"], s.get("administratorLogin", "pgadmin"))
+          PY
+          )
+          if [ -n "${PG_DB_OVERRIDE:-}" ]; then DB="$PG_DB_OVERRIDE"; else
+            DBS=$(az postgres flexible-server db list -g "$RG" -s "$SRV" -o json 2>/dev/null || echo '[]')
+            DB=$(python3 -c 'import sys,json; sysdb={"azure_maintenance","azure_sys"}; xs=[d["name"] for d in json.loads(sys.argv[1]) if d.get("name") not in sysdb and d.get("name")!="postgres"]; print(xs[0] if xs else "postgres")' "$DBS")
+          fi
+          PW=""
+          for c in "$PG_PW_1" "$PG_PW_2" "$PG_PW_3" "$PG_PW_4" "$PG_PW_5" "$PG_PW_6"; do
+            if [ -n "$c" ]; then PW="$c"; break; fi
+          done
+          if [ -z "$PW" ]; then echo "::error::No Postgres admin-password secret set."; exit 1; fi
+          echo "::add-mask::$PW"
+          EADMIN=$(python3 -c 'import sys,urllib.parse as u; print(u.quote(sys.argv[1], safe=""))' "$ADMIN")
+          EPW=$(python3 -c 'import sys,urllib.parse as u; print(u.quote(sys.argv[1], safe=""))' "$PW")
+          URL="postgresql://${EADMIN}:${EPW}@${HOST}:5432/${DB}?sslmode=require"
+          echo "::add-mask::$URL"
+          echo "AZURE_PG_URL_RESOLVED=${URL}" >> "$GITHUB_ENV"
+          echo "PG_RG=$RG" >> "$GITHUB_ENV"; echo "PG_SRV=$SRV" >> "$GITHUB_ENV"
+          echo "Assembled AZURE_PG_URL for $SRV/$DB (rg=$RG)."
+
+      - name: Allow this runner through the DB firewall
+        if: ${{ env.READS_LEDGER == '1' }}
+        run: |
+          set -euo pipefail
+          IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          echo "Runner IP: $IP"
+          RULE="ghquery-${IP//./-}"
+          echo "FW_RULE=$RULE" >> "$GITHUB_ENV"
+          # Some az CLI builds on the runner reject --rule-name here; don't hard-fail on it — the
+          # target server already admits the runner (a broad existing rule), so continue regardless.
+          az postgres flexible-server firewall-rule create -g "$PG_RG" -s "$PG_SRV" \
+            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
+            && echo "Opened firewall rule $RULE for $IP." \
+            || echo "firewall-rule create skipped (relying on existing server rules)."
+          sleep 8
+
       - name: Build the preview (counts only in this log)
         env:
           TENANT: ${{ secrets.AZURE_TENANT_ID }}
@@ -86,6 +183,7 @@ jobs:
           PREVIEW_PROBE: ${{ inputs.probe && '1' || '0' }}
           PREVIEW_STEP: ${{ inputs.step }}
           PREVIEW_AS_OF: ${{ inputs.as_of }}
+          PREVIEW_SOURCE: ${{ inputs.source }}
           FIREFLIES_API_KEY: ${{ inputs.probe && secrets.FIREFLIES_API_KEY || '' }}
         run: |
           TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
@@ -94,6 +192,11 @@ jobs:
             | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
           if [ -z "$TOKEN" ]; then echo "::error::could not get an app-only Graph token"; exit 1; fi
           echo "::add-mask::$TOKEN"
-          if [ "$PREVIEW_STEP" = "reply" ] || [ "$PREVIEW_STEP" = "action" ]; then TOKEN="$TOKEN" bun scripts/reply-scan-preview.ts; exit $?; fi
+          if [ "$PREVIEW_STEP" = "reply" ] || [ "$PREVIEW_STEP" = "action" ]; then TOKEN="$TOKEN" AZURE_PG_URL="${AZURE_PG_URL_RESOLVED:-}" bun scripts/reply-scan-preview.ts; exit $?; fi
           if [ "$PREVIEW_PROBE" = "1" ]; then TOKEN="$TOKEN" bun scripts/correspondence-probes.ts; exit $?; fi
           TOKEN="$TOKEN" bun scripts/proposals-preview.ts
+      - name: Remove the runner firewall rule
+        if: always() && env.READS_LEDGER == '1' && env.FW_RULE != ''
+        run: |
+          az postgres flexible-server firewall-rule delete -g "$PG_RG" -s "$PG_SRV" \
+            --rule-name "$FW_RULE" --yes --only-show-errors >/dev/null 2>&1 && echo "Removed $FW_RULE." || echo "Cleanup skipped."
