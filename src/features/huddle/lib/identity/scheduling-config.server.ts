@@ -52,6 +52,48 @@ export interface JobCadence {
    *  mean ACTIVE HOURS, not fire times). Omitted = fire once at the top of each listed hour, as every
    *  job did before. Added 2026-10-15 for new-email alerts — owner: "hourly isn't good enough". */
   everyMinutes?: number;
+  /** false = the SCHEDULER never fires this job for this user (its next run still advances, so turning
+   *  it back on resumes at the next listed hour). Omitted/true = on, which is every job's behaviour
+   *  before this field existed. Manual runs (e.g. Meetings → Daily stand-up) do not read it. Added
+   *  2026-11-16 for the Meetings-menu "Automatic stand-up" toggle — owner: "toggle off the automatic
+   *  stand-ups from the meetings menu where I can always toggle or kick one off manually". */
+  enabled?: boolean;
+}
+
+/** Key-order-insensitive cadence equality (JSONB hands keys back in its own order). */
+function sameCadence(a: JobCadence, b: JobCadence): boolean {
+  const canon = (c: JobCadence) =>
+    JSON.stringify(Object.keys(c).sort().map((k) => [k, (c as unknown as Record<string, unknown>)[k]]));
+  return canon(a) === canon(b);
+}
+
+/** Whether the scheduler may fire a job with this cadence. Only an explicit `false` turns it off. */
+export function isJobEnabled(cadence: JobCadence | null | undefined): boolean {
+  return cadence?.enabled !== false;
+}
+
+/**
+ * The overrides object after switching one job on or off — pure, so it is tested offline. Builds on the
+ * user's existing override (or the shipped default), so the hours/days they set are kept. Switching ON
+ * drops the flag rather than storing `enabled: true`, and drops the override entirely when what is left
+ * is exactly the shipped default — so on-again leaves the row as it was before the toggle was used.
+ */
+export function withJobEnabled(
+  overrides: Partial<Record<JobTypeKey, JobCadence>>,
+  key: JobTypeKey,
+  enabled: boolean,
+  defaults: Record<JobTypeKey, JobCadence> = SCHEDULING_DEFAULTS,
+): Partial<Record<JobTypeKey, JobCadence>> {
+  const { enabled: _prev, ...rest } = overrides[key] ?? defaults[key];
+  const next = { ...overrides };
+  if (!enabled) {
+    next[key] = { ...rest, enabled: false };
+  } else if (sameCadence(rest, defaults[key])) {
+    delete next[key];
+  } else {
+    next[key] = rest;
+  }
+  return next;
 }
 
 export type JobTypeKey =
@@ -231,6 +273,16 @@ export async function setSchedulingConfig(
     [email, JSON.stringify(overrides), userId],
   );
   return { overrides };
+}
+
+/**
+ * Switch one job's automatic runs on or off for this user, keeping every other override. Read-modify-
+ * write on the server (not a whole object sent from the browser), so flipping the toggle can never
+ * overwrite a cadence another screen just saved with a stale copy.
+ */
+export async function setJobEnabled(email: string, key: JobTypeKey, enabled: boolean): Promise<SchedulingConfig> {
+  const current = await getSchedulingConfig(email);
+  return setSchedulingConfig(email, withJobEnabled(current.overrides, key, enabled));
 }
 
 /**

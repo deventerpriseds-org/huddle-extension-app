@@ -32,9 +32,13 @@ const CadenceInput = z.object({
   daysOfWeek: z.array(z.number().int().min(0).max(6)).optional(),
   // Without this the validator would STRIP it on every save and silently revert a minute job to hourly.
   everyMinutes: z.number().int().min(1).max(60).optional(),
+  // Same reason: without it, ANY Settings → Scheduling save would strip `enabled: false` and silently
+  // switch the automatic stand-up (or any job turned off) back on.
+  enabled: z.boolean().optional(),
 });
 
-const OverridesInput = z.record(z.enum(JOB_TYPE_KEYS), CadenceInput.optional());
+/** Exported for scripts/standup-toggle.test.ts (proves `enabled` survives a Settings save). */
+export const OverridesInput = z.record(z.enum(JOB_TYPE_KEYS), CadenceInput.optional());
 
 export const getMySchedulingConfigFn = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) => z.object({ caller: Caller }).parse(raw))
@@ -58,6 +62,26 @@ export const setMySchedulingConfigFn = createServerFn({ method: "POST" })
     try {
       const { setSchedulingConfig } = await import("./scheduling-config.server");
       return { config: await setSchedulingConfig(email, data.overrides) };
+    } catch (e) {
+      return { config: null, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+/**
+ * Switch one recurring job's AUTOMATIC runs on or off for the signed-in user (Meetings menu →
+ * "Automatic stand-up"). Scoped exactly like the two fns above: the row written is the caller's own.
+ * Returns the saved config so the menu shows the stored state, not an optimistic guess.
+ */
+export const setMyJobEnabledFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, job: z.enum(JOB_TYPE_KEYS), enabled: z.boolean() }).parse(raw),
+  )
+  .handler(async ({ data }): Promise<{ config: SchedulingConfig | null; error?: string }> => {
+    const email = await callerEmail(data.caller);
+    if (!email) return { config: null, error: "sign-in required" };
+    try {
+      const { setJobEnabled } = await import("./scheduling-config.server");
+      return { config: await setJobEnabled(email, data.job, data.enabled) };
     } catch (e) {
       return { config: null, error: e instanceof Error ? e.message : String(e) };
     }

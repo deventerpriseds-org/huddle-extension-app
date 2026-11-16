@@ -231,6 +231,11 @@ export function SchedulingPanel() {
                 )}
               </div>
               <p className="mt-0.5 text-[11px] text-muted-foreground">{JOB_LABELS[key].hint}</p>
+              {cadence.enabled === false && (
+                <p className="mt-0.5 text-[11px] font-medium text-muted-foreground" data-testid={`job-off-${key}`}>
+                  Automatic runs are switched off{key === "standup" ? " (Meeting menu → Automatic stand-up)" : ""}.
+                </p>
+              )}
               <div className="mt-2 flex flex-wrap items-center gap-1">
                 {DAY_LABELS.map((label, i) => (
                   <button
