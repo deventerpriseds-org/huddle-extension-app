@@ -309,10 +309,15 @@ CREATE TABLE IF NOT EXISTS chat.correspondence_cursor (owner_email TEXT NOT NULL
     await holder.query("BEGIN");
     await holder.query("SELECT 1 FROM chat.correspondence_ledger LIMIT 1");
     const t0 = Date.now();
-    const first = await a.query(LS.BOOTSTRAP_SQL).then(() => "ok", (e: { code?: string }) => String(e.code));
+    // Raced against 15s so a missing cap reports "hung" instead of hanging the suite (the holder never lets go first).
+    const first = await Promise.race([
+      a.query(LS.BOOTSTRAP_SQL).then(() => "ok", (e: { code?: string }) => String(e.code)),
+      new Promise<string>((r) => setTimeout(() => r("hung"), 15_000)),
+    ]);
     const waited = Date.now() - t0;
     await holder.query("ROLLBACK");
     await holder.end();
+    if (first === "hung") await new Promise((r) => setTimeout(r, 500)); // let the released bootstrap finish
     const second = await a.query(LS.BOOTSTRAP_SQL).then(() => "ok", (e: { code?: string }) => String(e.code));
     const sentOk = await a.query(`INSERT INTO chat.correspondence_ledger (source, source_item_id, owner_email, identity_basis, content_hash) VALUES ('sent','s','o','provider_id','h')`).then(() => "accepted", () => "rejected");
     t("CM-3 migration behind an open transaction: fails 55P03 within the 5s cap, then succeeds once it ends", [first, waited >= 4000 && waited < 9000, second, sentOk], ["55P03", true, "ok", "accepted"]);
