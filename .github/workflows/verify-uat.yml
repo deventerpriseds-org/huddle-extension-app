@@ -1,16 +1,24 @@
 name: Verify UAT (live, real browser)
 
 # Generic GHA-runner Playwright harness (eds-claude-skills' verify-work skill, "GHA-verify
-# variant" / gha-playwright-uat pointer skill). run-uat.mjs is app-agnostic; huddle-checks.mjs
-# is the only app-specific piece — currently covers panel collapse, avatar-image regression
-# (ACT-huddle-2), and the standup-ceremony timing the user has reported as broken.
+# variant" / gha-playwright-uat pointer skill). run-uat.mjs is app-agnostic; the checks module
+# is the app-specific piece. The DEFAULT module, huddle-checks.mjs, covers panel collapse and the
+# avatar-image regression (ACT-huddle-2) and starts no meeting and sends no message.
 # Replaces the deleted verify-panel-collapse.yml (superseded by this generic pair).
+#
+# THE STAND-UP CEREMONY + VOICE-BARGE CHECK IS OPT-IN (2026-11-16): it starts a REAL stand-up in the
+# owner's account and speaks barges into it, so it is NOT in the default run. Four default runs on
+# 2026-11-15 produced four real stand-ups and a real artifact. Run it only when the ceremony/voice path
+# is what is being verified, by setting
+#   checks_file = .claude/skills/test-agent-serverfn/scripts/ceremony-voice-checks.mjs
+# Its task/artifact-creating lines are Test- prefixed; clean up what a run leaves (cleanup-board skill).
+# Guarded by scripts/uat-suite-safety.test.ts.
 
 on:
   workflow_dispatch:
     inputs:
       checks_file:
-        description: "Path to the checks module to run (default: full huddle-checks suite)"
+        description: "Checks module to run. Default = huddle-checks.mjs (no meeting, no messages). The stand-up ceremony + voice barges are OPT-IN: .claude/skills/test-agent-serverfn/scripts/ceremony-voice-checks.mjs (starts a REAL stand-up in the owner's account)."
         required: false
         default: ".claude/skills/test-agent-serverfn/scripts/huddle-checks.mjs"
       viewport_w:
