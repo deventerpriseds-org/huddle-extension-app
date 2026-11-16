@@ -384,4 +384,10 @@ describe("F2 wiring in huddle.functions.ts (source assertions)", () => {
     const fn = between("async function createSuggestedTaskFromTool", "async function createBatchTasksFromTool");
     expect(fn).toContain("task_id: (r.tasks ?? [])[0].id");
   });
+  test("a same-turn duplicate create returns the first create's task id (hand-off retry can still propose)", () => {
+    const fn = between("async function createSuggestedTaskFromTool", "async function createBatchTasksFromTool");
+    expect(fn).toContain("if ((r.tasks ?? [])[0]?.id) createdTaskIdByTitle.set(titleKey, (r.tasks ?? [])[0].id);");
+    expect(fn).toContain("const sameTurnId = createdTaskIdByTitle.get(titleKey);");
+    expect(fn).toContain("...(sameTurnId ? { task_id: sameTurnId } : {}),");
+  });
 });

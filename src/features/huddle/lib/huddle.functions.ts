@@ -2007,6 +2007,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // re-run of the same turn) can't create duplicate board cards for one intent. See
   // createSuggestedTaskFromTool below, which claims a title here before writing.
   const createdTaskTitles = new Set<string>(resume?.createdTaskTitles ?? []);
+  // The canonical journey id of each task created THIS turn, keyed like createdTaskTitles. A same-turn
+  // duplicate create returns it, so a hand-off retry that re-creates "its" task can still propose on it
+  // instead of being left id-less (verify loop 3, C3: the retry then re-created under a new title).
+  const createdTaskIdByTitle = new Map<string, string>();
 
   // Task creates SENT to journey this turn, recorded before the await (tasks/create-task-core.ts
   // DispatchedCreate). Round-trips in the resume state like createdTaskTitles. A timed-out attempt's
@@ -3175,7 +3179,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           "already created this turn — skipped duplicate",
           true,
         );
-        return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
+        const sameTurnId = createdTaskIdByTitle.get(titleKey);
+        return {
+          ok: true,
+          deduped: true,
+          task: { title: title.slice(0, 160) },
+          ...(sameTurnId ? { task_id: sameTurnId } : {}),
+        };
       }
       // Cross-turn dedup: skip if an open task with this title already exists on the board.
       const existing = await openTitlesForCreate("create_huddle_task");
@@ -3304,6 +3314,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               `“${task.title}” → Huddle board + journey${outcomeNote ? ` — ${outcomeNote}` : ""}${assignNote}`,
               true,
             );
+            if ((r.tasks ?? [])[0]?.id) createdTaskIdByTitle.set(titleKey, (r.tasks ?? [])[0].id);
             return {
               ok: true,
               task,
