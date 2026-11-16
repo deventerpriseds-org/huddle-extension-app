@@ -48,3 +48,17 @@ Public repo: synthetic ids and text only. No message bodies are logged by any ch
   as "nobody mentioned" and can hide. It gains the flag only when an applied back-fill rewrites its content (live
   ingest does not refresh unchanged-hash rows -- verifier claim 3). The stricter alternative (treat any row with
   `mentionedUserIds` but no `unresolvedMention` as can't-tell) would show every #257-era row until back-fill.
+
+### Finding 2 (MEDIUM) -- a non-array stored mention field threw and aborted the report: FIXED
+
+- `chatInvolvement` checks `Array.isArray(m.mentionedUserIds)` BEFORE `.some`; a string / number / object field is
+  "no mention data" -> `cant_tell_no_mention_data` -> SHOWS.
+- `chatInvolvement` is now a never-throwing wrapper around `chatInvolvementOf`: anything unexpected returns
+  `{hide:false, reason:"cant_tell_malformed"}` (new reason, counted in `plan.teams.cantTell`).
+- `teamsChatsFromLedger` builds each chat in its own try/catch (`chatFacts`); a chat whose facts throw is returned by
+  `malformedChatFacts` (typeof-guarded, cannot throw), which SHOWS it with `cant_tell_malformed`, every message OTHER
+  unless explicitly `fromOwner: true`, owner-mentioned unknown. The other chats are unaffected. Its `ownerMentioned`
+  line also guards with `Array.isArray`.
+- Tests: VF2-1 (string / object / number field), VF2-2 (a null message -> malformed, shows), VF2-3 (three chats, one
+  with a string field and one whose text throws on String(): all three come back, the bad ones show, the good
+  uninvolved one is still hidden). Suite 48 -> 51 passed, 0 failed. tsc rc=0.

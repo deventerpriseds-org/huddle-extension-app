@@ -249,5 +249,38 @@ t(
 t("VF1-8 the content hash is unchanged by unresolvedMention (nothing re-processes)", teamsSourceItem(pe, { path: "/t" }).contentHash === teamsSourceItem({ ...pe, unresolvedMention: undefined, mentionedUserIds: undefined }, { path: "/t" }).contentHash, true);
 t("VF1-9 stored content carries unresolvedMention", teamsContent(pe).unresolvedMention, true);
 
+// ── Finding 2: a malformed stored mention field (string / object) must not throw; it shows, and one bad row never
+//    aborts the report.
+const bad = (v: unknown) => ({ ...(g1[0].content as TeamsContent), mentionedUserIds: v as string[] });
+const safeInv = (ms: TeamsContent[]) => {
+  try {
+    return chatInvolvement(CHAT_G, ms).reason;
+  } catch (e) {
+    return `THREW ${(e as Error).name}`;
+  }
+};
+t("VF2-1 mentionedUserIds stored as a string or an object -> no throw, can't tell -> SHOWS", [safeInv([bad(OWNER)]), safeInv([bad({ 0: "x" })]), safeInv([bad(7)])], ["cant_tell_no_mention_data", "cant_tell_no_mention_data", "cant_tell_no_mention_data"]);
+t("VF2-2 anything that would throw inside the rule -> cant_tell_malformed, shows", [safeInv([null as unknown as TeamsContent]), chatInvolvement(CHAT_G, [null as unknown as TeamsContent]).hide], ["cant_tell_malformed", false]);
+const CHAT_B = "19:group03@thread.v2";
+const throwingText = { toString: () => { throw new Error("synthetic"); } } as unknown as string;
+const mixedRows: LedgerReportRow[] = [
+  ...g1,
+  tmsg(CHAT_B, "b1", "2026-11-12T10:00:00Z", { mentionedUserIds: "not-an-array" as unknown as string[] }),
+  tmsg("19:group04@thread.v2", "c1", "2026-11-12T11:00:00Z", { text: throwingText }),
+];
+const safeChats = (() => {
+  try {
+    return teamsChatsFromLedger(mixedRows);
+  } catch (e) {
+    return `THREW ${(e as Error).name}`;
+  }
+})();
+const mixedPlan = typeof safeChats === "string" ? null : planLedgerReport({ emailFacts: [], teams: safeChats, meetings: [], signals: [], sinceMs: SINCE });
+t(
+  "VF2-3 one bad row never aborts the report: every chat comes back; the bad ones SHOW, the good uninvolved one is still hidden",
+  typeof safeChats === "string" ? safeChats : [safeChats.map((c) => [c.chatId, c.involvement.reason]).sort(), mixedPlan!.teams.hiddenUninvolved.map((c) => c.chatId), mixedPlan!.teams.scan.length],
+  [[[CHAT_G, "uninvolved"], [CHAT_B, "cant_tell_no_mention_data"], ["19:group04@thread.v2", "cant_tell_malformed"]].sort(), [CHAT_G], 2],
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
