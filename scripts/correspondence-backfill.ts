@@ -32,7 +32,7 @@
 import { ledgerEmailItems } from "../src/features/huddle/lib/correspondence/ingest-pass";
 import { firefliesTranscriptItem, planForwardRefill, sentSourceItems, teamsSourceItem, transcriptContent } from "../src/features/huddle/lib/correspondence/source-item";
 import type { ObserveResult, SourceItem, StoredForwardFlags } from "../src/features/huddle/lib/correspondence/source-item";
-import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
+import { feedRecordBody, htmlToText, parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { parseTeamsLog } from "../src/features/huddle/lib/external-feeds/teams-log";
 
 const token = process.env.TOKEN ?? "";
@@ -89,6 +89,8 @@ const totals: Record<Src, ReturnType<typeof zero>> = { email: zero(), teams: zer
 const seen = new Set<string>();
 // Every email / Sent Items item read, oldest version first, for the forwarded-part refill plan below.
 const mailItems: SourceItem[] = [];
+// The newest raw inbox record per ledger key -- only to COUNT why a forward has no readable forwarded part.
+const rawById = new Map<string, Record<string, unknown>>();
 const store = async (source: Exclude<Src, "transcript">, items: SourceItem[]) => {
   if (source === "email" || source === "sent") mailItems.push(...items);
   const fresh = items.filter((it) => {
@@ -131,6 +133,7 @@ for (const v of await versions(cfg.email.path)) {
   totals.email.versions++;
   const records = snapshotRecords(v.text);
   const { items } = ledgerEmailItems(records, cfg, { path: cfg.email.path, etag: `version:${v.id}` });
+  for (const r of records) if (typeof r.id === "string" && r.id) rawById.set(`email\u0000${cfg.mailbox}:${r.id.trim()}`, r);
   console.log(`email version ${v.at}: records ${records.length} | items ${items.length}`);
   await store("email", items);
 }
@@ -199,6 +202,26 @@ if (cfg.sent.enabled) {
         `stored without forwarded part ${plan.storedMissing} | would gain it ${plan.wouldGain} | still missing ${plan.stillMissing} | ` +
         `purged ${plan.purged}${apply ? ` | content re-written ${refilled}, failed ${refillFailed}` : " | DRY RUN: nothing written"}`,
     );
+    // Why the rest have no forwarded part -- SHAPE counts only (no text): an attachment-only forward, an empty body,
+    // or a body whose header we cannot read.
+    const gained = new Set(plan.refill.map((it) => `${it.source}\u0000${it.sourceItemId}`));
+    const why: Record<string, number> = {};
+    for (const s of flags) {
+      const k = `${s.source}\u0000${s.sourceItemId}`;
+      if (s.hasForwarded || s.purged || gained.has(k)) continue;
+      const r = rawById.get(k);
+      const { raw, isHtml } = r ? feedRecordBody(r) : { raw: "", isHtml: false };
+      const reason = !r
+        ? s.source === "sent" ? "sent_item" : "not_in_any_version"
+        : !raw.trim() ? "empty_body"
+        : /id=["']?(?:divRplyFwdMsg|appendonsend)/i.test(raw) ? "outlook_marker_unread"
+        : /<blockquote\b/i.test(raw) ? "blockquote_unread"
+        : /^\s*(?:From|De|Von)\s*:/im.test(isHtml ? htmlToText(raw) : raw) ? "header_unread"
+        : r.hasAttachments === true ? "no_header_has_attachments"
+        : "no_header";
+      why[reason] = (why[reason] ?? 0) + 1;
+    }
+    console.log(`forwards still missing by shape: ${JSON.stringify(why)}`);
   }
 }
 
