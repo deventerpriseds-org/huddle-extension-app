@@ -69,20 +69,87 @@ const ASK =
 /** A meeting invite from a person always wants an answer (accept/decline), "?" or not. */
 const INVITE_SUBJECT = /^\s*(invitation|updated invitation|meeting request)\b|\binvite\b/i;
 
+// Red-team F9 (2026-11-12): the reply-header block in the languages Outlook / Gmail write it in. A "From"
+// line only counts when a "Sent/Date" line OF THE SAME LANGUAGE follows within 4 lines (the original rule),
+// so a body line that merely starts with "De:" is never cut on its own, and an English "From: Marketing"
+// followed by a "Data: ..." line is not a header block (verifier loop 3, N4). English is main's exact rule;
+// other languages allow a space before the colon (French "De :").
+const HDR_PAIRS: [from: RegExp, sent: RegExp][] = [
+  [/^\s*From:\s/i, /^\s*(Sent|Date):\s/i], // en -- main's exact rule
+  [/^\s*De\s*:\s/i, /^\s*(Envoyé|Date d'envoi|Date)\s*:\s/i], // fr
+  [/^\s*De\s*:\s/i, /^\s*(Enviado|Fecha)\s*:\s/i], // es
+  [/^\s*De\s*:\s/i, /^\s*(Enviada|Enviado|Data)\s*:\s/i], // pt
+  [/^\s*Von\s*:\s/i, /^\s*(Gesendet|Datum)\s*:\s/i], // de
+  [/^\s*Van\s*:\s/i, /^\s*(Verzonden|Datum)\s*:\s/i], // nl
+  [/^\s*Da\s*:\s/i, /^\s*(Inviato|Data)\s*:\s/i], // it
+  [/^\s*Od\s*:\s/i, /^\s*(Wysłano|Data)\s*:\s/i], // pl
+  [/^\s*Från\s*:\s/i, /^\s*(Skickat|Datum)\s*:\s/i], // sv
+  [/^\s*Fra\s*:\s/i, /^\s*Sendt\s*:\s/i], // da / no
+  [/^\s*Lähettäjä\s*:\s/i, /^\s*Lähetetty\s*:\s/i], // fi
+  [/^\s*Feladó\s*:\s/i, /^\s*Elküldve\s*:\s/i], // hu
+  [/^\s*От\s*:\s/i, /^\s*Отправлено\s*:\s/i], // ru
+  [/^\s*Kimden\s*:\s/i, /^\s*Tarih\s*:\s/i], // tr
+];
+// "On <date> <person> wrote:" -- main's exact English rule -- and its translations, each opener tied to ITS
+// OWN language's verb (verifier loop 3, N2/N7/N8: "Am I right about what legal wrote:", "Den lighting: the
+// electrician wrote:", "El Paso ... wrote the following:" are English sentences). A translated attribution
+// always carries its date, so a digit is required too. DE/NL/SV put the name after the verb.
+const ATTRIBUTIONS: RegExp[] = [
+  /^\s*On .+wrote:\s*$/i, // en -- main's exact rule
+  /^\s*Le\s.*\d.*\sa écrit\s*:\s*$/i, // fr
+  /^\s*Am\s.*\d.*\sschrieb\b[^:]{0,120}:\s*$/i, // de
+  /^\s*El\s.*\d.*\sescribió\s*:\s*$/i, // es
+  /^\s*Il\s.*\d.*\sha scritto\s*:\s*$/i, // it
+  /^\s*Op\s.*\d.*\sschreef\b[^:]{0,120}:\s*$/i, // nl
+  /^\s*Em\s.*\d.*\sescreveu\s*:\s*$/i, // pt
+  /^\s*Den\s.*\d.*\sskrev\b[^:]{0,120}:\s*$/i, // sv
+];
+const isAttribution = (l: string) => ATTRIBUTIONS.some((re) => re.test(l));
+
+// A real attribution's date: a weekday or month name (English, plus the abbreviations Outlook / Gmail write in
+// the languages above, 3+ letters so no English 2-letter word counts), a 1-2 digit day, and a year or a time.
+const DATE_NAME =
+  /(?<!\p{L})(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december|lun|mer|jeu|ven|sam|dim|janv|févr|fév|mars|avr|mai|juin|juil|août|déc|mié|jue|vie|sáb|dom|ene|abr|ago|dic|gio|gen|mag|giu|lug|ott|seg|ter|qua|qui|sex|fev|set|out|dez|mån|tis|ons|tor|fre|lör|sön|maj|okt|mrt|mei|mär)\.?(?!\p{L})/iu;
+const DAY_NUMBER = /(?<!\d)\d{1,2}(?!\d)/;
+const YEAR_OR_TIME = /(?<!\d)(?:19|20)\d{2}(?!\d)|(?<!\d)\d{1,2}:\d{2}(?!\d)/;
+const YEAR = /(?<!\d)(?:19|20)\d{2}(?!\d)/;
+const CLOCK = /(?<!\d)\d{1,2}:\d{2}(?!\d)/;
+const EMAIL = /[^\s<>()@]+@[^\s<>()@]+\.[a-z]{2,}/i;
+/** Pure: is `first` + `next` a Gmail attribution hard-wrapped over two lines? The joined line must match an
+ *  attribution rule AND have the shape of one: the date (a weekday or month name, a day number, a year or a
+ *  time) on the first line, and an email address or a capitalised name right before the verb. A bare digit is
+ *  not enough: "On 3 occasions the client" / "complained, and today she wrote:" is English content that main
+ *  keeps (verifier loop 4, X1/X2). */
+export function isWrappedAttribution(first: string, next: string): boolean {
+  const joined = `${first.trimEnd()} ${next.trim()}`;
+  if (!isAttribution(joined)) return false;
+  if (!(DATE_NAME.test(first) && DAY_NUMBER.test(first) && YEAR_OR_TIME.test(first))) return false;
+  if (EMAIL.test(joined)) return true;
+  // No address: a real client still writes the FULL stamp -- a year AND a clock time ("On Mon, Nov 10, 2025 at
+  // 9:14 AM Dana Kim" / "wrote:"). A year alone or a time alone is ordinary English often enough to cut a real ask:
+  // "On the 12 open items from 2024 we may still owe ... Dana" / "wrote:" (verifier loop 5, X3-X6 -- `may`, `out`,
+  // `set` are also foreign month names in DATE_NAME, so the name test cannot carry this on its own).
+  if (!(YEAR.test(first) && CLOCK.test(first))) return false;
+  const before = /(\S+)\s+wrote:\s*$/i.exec(joined);
+  return !!before && /^\p{Lu}[\p{L}'’.-]*$/u.test(before[1]) && before[1] !== "I";
+}
+
 /** Only the sender's NEW text: drop quoted history ("> " lines and everything from an
  *  "On … wrote:" / "-----Original Message-----" / Outlook "From:…Sent:" header down), so an old
- *  question in the thread does not make a "thanks!" reply look like an ask (verifier loop 1). */
+ *  question in the thread does not make a "thanks!" reply look like an ask (verifier loop 1).
+ *  Red-team F9: also the non-English header blocks above, and a Gmail attribution wrapped over two
+ *  lines ("On Mon, … <jane@…>" / "wrote:"). */
 export function newTextOnly(body: string): string {
   const lines = body.replace(/\r/g, "").split("\n");
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (/^\s*On .+wrote:\s*$/i.test(l) || /^-{2,}\s*Original Message\s*-{2,}/i.test(l)) break;
-    if (
-      /^\s*From:\s/i.test(l) &&
-      lines.slice(i + 1, i + 5).some((n) => /^\s*(Sent|Date):\s/i.test(n))
-    )
-      break;
+    if (isAttribution(l) || /^-{2,}\s*(Original Message|Message d'origine|Ursprüngliche Nachricht|Mensaje original|Messaggio originale|Oorspronkelijk bericht)\s*-{2,}/i.test(l)) break;
+    // NO two-line ("On ..." / "wrote:") join here: owner 2026-11-14 -- Iris's live email alerts "are already good, this
+    // doesn't need to impact it". The join (red-team F9) was a fourth live change he did not approve, so a wrapped
+    // attribution is treated exactly as on main. `isWrappedAttribution` stays exported and tested (redteam D2) but has
+    // NO caller in src/ today; it is available to the correspondence redesign if it needs one (verifier loop 6 nit).
+    if (HDR_PAIRS.some(([from, sent]) => from.test(l) && lines.slice(i + 1, i + 5).some((n) => sent.test(n)))) break;
     if (/^\s*>/.test(l)) continue;
     out.push(l);
   }

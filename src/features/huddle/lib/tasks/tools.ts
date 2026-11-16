@@ -103,6 +103,32 @@ export const CHECKLIST_TOOL = {
 export const CHECKLIST_SYSTEM_HINT =
   "When the user EXPLICITLY asks for a checklist (\"give me a checklist of…\", \"make a checklist for…\", \"what do I need to track for X as a checklist\"), call `build_checklist` with `match` keywords describing the set (e.g. financial -> [\"financ\",\"pay\",\"transfer\",\"bill\",\"card\",\"amex\",\"klarna\",\"hsa\",\"budget\"]). The app sweeps ALL their open tasks itself, so nothing is missed -- do NOT hand-pick ids for a category-shaped ask, and do not pre-filter with schedule_and_priorities first — the app renders it as real tick-boxes wired to their board. An ordinary question about tasks (\"what are the tasks related to my kids\", \"what's on my plate\") is NOT a checklist request: answer it in prose. When you do render a checklist, keep your own message SHORT — one line of context at most — because the checklist itself is the answer; do not also list the tasks in text.";
 
+/** Task proposals (2026-11-12, AC-correspondence-checklist section 5): the SAME widget, a second row kind. The
+ *  `proposals` parameter is OFFERED to the model only while HUDDLE_ONEDRIVE_FEEDS.correspondence.proposals is on
+ *  (verifier loop 9, claim 4: with the flag off, the schema every agent sees must be byte-identical to main's). */
+export const CHECKLIST_PROPOSALS_PROPERTY = {
+  type: "boolean",
+  description:
+    "Set true ONLY when the user asks to see their PROPOSED tasks -- to-dos found in their email, Teams chats or meetings that are waiting for them to approve, edit, mark done or dismiss (e.g. 'show my proposed tasks'). Ignores match/task_ids. These are suggestions, NOT tasks on their board.",
+} as const;
+
+/** The SECOND backend's build_checklist schema (Lovable / ai-sdk zod), gated exactly like `checklistTool`: main's
+ *  `{ title, task_ids }` unless proposals are switched on (verifier loop 10, claim 4 -- loop 9's gate covered only the
+ *  OpenAI path). `z` is passed in so this module needs no zod import. */
+export function lovableChecklistSchema(z: typeof import("zod").z, proposalsOn: boolean) {
+  const base = { title: z.string(), task_ids: z.array(z.string()) };
+  return proposalsOn ? z.object({ ...base, proposals: z.boolean().optional() }) : z.object(base);
+}
+
+/** The build_checklist tool as the model should see it: main's schema, plus `proposals` only when switched on. */
+export function checklistTool(proposalsOn: boolean): typeof CHECKLIST_TOOL {
+  if (!proposalsOn) return CHECKLIST_TOOL;
+  return {
+    ...CHECKLIST_TOOL,
+    parameters: { ...CHECKLIST_TOOL.parameters, properties: { ...CHECKLIST_TOOL.parameters.properties, proposals: CHECKLIST_PROPOSALS_PROPERTY } },
+  } as typeof CHECKLIST_TOOL;
+}
+
 /**
  * Execute a `build_checklist` call. Returns a JSON string for the model AND the structured payload the
  * client renders. Ids are resolved against the user's own mirror rows, which is what scopes the widget
@@ -117,6 +143,18 @@ export async function dispatchBuildChecklist(
       error: "no_caller_identity",
       message: "A checklist needs the signed-in user's email; none was provided this turn.",
     });
+  }
+  // Proposals mode: the same widget, proposal rows from the server-side proposal store (AC-5.15).
+  if (args.proposals === true) {
+    try {
+      const { proposalChecklistForUser } = await import("../proposals/proposals.server");
+      const out = await proposalChecklistForUser(userEmail);
+      console.info(`[checklist] proposals mode ${JSON.parse(out).error ?? "rendered"}`);
+      return out;
+    } catch {
+      console.info("[checklist] SKIPPED reason=proposals_exception");
+      return JSON.stringify({ error: "checklist_failed", message: "Could not load the proposed tasks." });
+    }
   }
   const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : "Checklist";
   const rawIds = Array.isArray(args.task_ids) ? args.task_ids : [];

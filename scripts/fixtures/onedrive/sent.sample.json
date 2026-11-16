@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "feed_type": "sent_snapshot",
+  "source": "power-automate-outlook",
+  "mailbox": "owner@work.example",
+  "source_login": "login@work.example",
+  "synthetic": true,
+  "published_utc": "2026-11-11T23:00:00Z",
+  "window_start_utc": "2026-11-07T23:00:00Z",
+  "complete": true,
+  "snapshot": {
+    "value": [
+      {
+        "id": "AAMk-sent-1",
+        "conversationId": "conv-sample-1",
+        "sentDateTime": "2026-11-10T15:00:00Z",
+        "subject": "HUDDLE-PA-SBX- RE: Can you review the draft by Monday?",
+        "toRecipients": [{ "emailAddress": { "address": "colleague@partner.example" } }]
+      },
+      {
+        "id": "AAMk-sent-2",
+        "conversationId": "conv-sample-2",
+        "sentDateTime": "2026-11-10T10:00:00Z",
+        "subject": "HUDDLE-PA-SBX- an earlier message in the newsletter thread"
+      },
+      {
+        "id": "AAMk-sent-3",
+        "sentDateTime": "2026-11-10T16:00:00Z",
+        "subject": "HUDDLE-PA-SBX- record with no conversationId"
+      },
+      {
+        "id": "AAMk-sent-4",
+        "conversationId": "conv-sample-3",
+        "receivedDateTime": "2026-11-10T17:00:00Z",
+        "subject": "Real-looking subject without the synthetic prefix"
+      }
+    ]
+  }
+}

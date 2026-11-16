@@ -226,7 +226,9 @@ async function firefliesQuery(meetingId: string, summaryFields: string) {
 /** Fetch transcript + summary. Asks for the custom-template output (summary.extended_sections) first;
  *  if the API rejects that field it re-asks without it, so a schema difference costs the CUSTOM sections
  *  only (the email then says the standard summary was used) -- never the whole meeting. */
-async function fetchTranscript(meetingId: string): Promise<{ transcript: FirefliesTranscript; customFieldAvailable: boolean }> {
+// Exported (2026-11-12) so task proposals (lib/proposals/proposals.server.ts) can READ a finished meeting's
+// summary. Behaviour unchanged; nothing in the minutes flow calls it differently.
+export async function fetchTranscript(meetingId: string): Promise<{ transcript: FirefliesTranscript; customFieldAvailable: boolean }> {
   let result = await firefliesQuery(meetingId, SUMMARY_BASE + " extended_sections { title content }");
   let customFieldAvailable = true;
   if (result.errors?.length && result.errors.some((e) => /extended_sections|SummarySection|Cannot query field/i.test(e.message ?? ""))) {

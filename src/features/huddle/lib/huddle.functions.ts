@@ -5,6 +5,7 @@ import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
 import { joinOpenerAndBlock } from "./chat-format";
 import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
+import { sanitizeChecklistPayload } from "./proposals/proposals";
 // The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
 // and the reply DTOs are shared with the client bundle.
@@ -299,6 +300,15 @@ const Input = z.object({
     .optional(),
   // A tab-switch button attached to the TARGET agent's reply (the priority check: "Open Priorities").
   // Attached from the payload, like emailReplyRef, so it is there whatever the model does.
+  // A CODE-BUILT checklist attached to the TARGET agent's reply, like navLink: the evening task-proposal
+  // posting (lib/proposals, AC-correspondence-checklist 5.16) carries every open proposal here so the
+  // widget is there whatever the model writes. Re-validated by sanitizeChecklistPayload at attach time.
+  checklist: z
+    .object({
+      title: z.string().max(120),
+      rows: z.array(z.record(z.string(), z.unknown())).max(500),
+    })
+    .optional(),
   navLink: z
     .object({
       view: z.enum(["priorities", "schedule", "board", "artifacts"]),
@@ -3873,8 +3883,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           emailTools.push(SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL);
         }
 
-        const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
+        const { PRIORITIZE_TOOL, checklistTool, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
           await import("./tasks/tools");
+        // build_checklist offers `proposals` only while task proposals are switched on (verifier loop 9, claim 4).
+        const proposalsOn = await import("./proposals/proposals.server")
+          .then((m) => m.proposalsConfig() !== null)
+          .catch(() => false);
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
         const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
@@ -3917,7 +3931,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           CANCEL_REMINDER_TOOL,
           MOVE_REMINDER_TOOL,
           PRIORITIZE_TOOL,
-          CHECKLIST_TOOL,
+          checklistTool(proposalsOn),
           // The two in-chat journey widgets. Ungated, exactly like CHECKLIST_TOOL above: whichever
           // agent is answering is the one the user asked, so gating these to a single agent would
           // make the widget reachable only by talking to that agent.
@@ -6266,14 +6280,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // tools array: CHECKLIST_SYSTEM_HINT is appended to BOTH backends' instructions, so omitting
         // it here told this backend to call a tool it was never offered.
         {
-          const { dispatchBuildChecklist } = await import("./tasks/tools");
+          const { dispatchBuildChecklist, lovableChecklistSchema } = await import("./tasks/tools");
+          const lovableProposalsOn = await import("./proposals/proposals.server")
+            .then((m) => m.proposalsConfig() !== null)
+            .catch(() => false);
           lovableTools.build_checklist = tool({
             description:
               "Render an INTERACTIVE CHECKLIST of the user's existing tasks in the chat (tick-boxes plus a per-row Doing/Backlog/parking-lot control). ONLY when the user EXPLICITLY asks for a checklist — an ordinary 'what are my tasks' question wants a prose answer from schedule_and_priorities instead. Call schedule_and_priorities first and pass ITS task ids; never invent one.",
-            inputSchema: z.object({
-              title: z.string(),
-              task_ids: z.array(z.string()),
-            }),
+            // Same gate as the OpenAI tool: `proposals` is offered only while task proposals are switched on.
+            inputSchema: lovableChecklistSchema(z, lovableProposalsOn),
             execute: async (args) => {
               // Same per-turn ledger claim as the OpenAI path: in a group turn two responders would
               // otherwise each render their own widget over the same tasks.
@@ -7141,19 +7156,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const parsed = JSON.parse(checklistToolUse.detail as string) as { checklist?: unknown };
         const c = parsed.checklist as ChecklistPayload | undefined;
         if (c && typeof c.title === "string" && Array.isArray(c.rows) && c.rows.length) {
-          replyChecklist = {
-            title: c.title,
-            rows: c.rows
-              .filter((row) => row && typeof row.taskId === "string" && typeof row.title === "string")
-              .map((row) => ({
-                taskId: row.taskId,
-                title: row.title,
-                status: typeof row.status === "string" ? row.status : "BACKLOG",
-                tags: Array.isArray(row.tags) ? row.tags.filter((t): t is string => typeof t === "string") : [],
-              })),
-            ...(typeof c.more === "number" && c.more > 0 ? { more: c.more } : {}),
-          };
-          if (!replyChecklist.rows.length) replyChecklist = undefined;
+          // Field-by-field, as before, now in ONE pure function shared with the payload path below: a row
+          // with no `kind` maps exactly as it always did; a proposal row (kind "proposal", prop- id) keeps
+          // its display detail (AC-correspondence-checklist 5.1/5.2). No rows left -> no widget.
+          replyChecklist = sanitizeChecklistPayload(c) as ChecklistPayload | undefined;
         } else {
           console.warn("[checklist] build_checklist returned an unexpected shape; no widget rendered");
         }
@@ -7217,7 +7223,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       confirmAsk: replyConfirmAsk,
       overrideAsk: replyOverrideAsk,
       emailReply: replyEmailReply,
-      checklist: replyChecklist,
+      // A payload-carried checklist (the evening task proposals, AC-5.16) rides on the TARGET agent's reply
+      // exactly like navLink, so it is there whatever the model writes; its own tool call wins if it made one.
+      checklist:
+        replyChecklist ??
+        (nextId === data.targetAgentId ? (sanitizeChecklistPayload(data.checklist) as ChecklistPayload | undefined) : undefined),
       priorities: replyPriorities,
       schedule: replySchedule,
       navLink: data.navLink && nextId === data.targetAgentId ? data.navLink : undefined,
@@ -7456,6 +7466,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   // front of the owner. Owner, 2026-10-16: "There is no scenario or excuse for priority message not being
   // produced". The target agent's reply gets the button wherever it was built (normal, hardReply); if the
   // model produced nothing at all (timeout, empty completion), a short deterministic reply carries it.
+  // A turn whose payload carries a checklist (the evening task proposals) ends with that checklist under
+  // the target agent's reply even when the model produced nothing (timeout, empty completion).
+  const ensureChecklistDelivered = () => {
+    const c = sanitizeChecklistPayload(data.checklist) as ChecklistPayload | undefined;
+    const target = data.targetAgentId;
+    if (!c || !target) return;
+    const i = replies.findIndex((r) => r.agentId === target);
+    if (i >= 0) {
+      if (!replies[i].checklist) replies[i] = { ...replies[i], checklist: c };
+      return;
+    }
+    replies.push({ agentId: target, text: "Hello Sir, here is what's waiting for your review.", checklist: c });
+  };
+
   const ensureNavLinkDelivered = () => {
     const link = data.navLink;
     const target = data.targetAgentId;
@@ -7750,6 +7774,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     ensureNotSilentOnRealWork();
     ensureAppendBlockDelivered();
     ensureNavLinkDelivered();
+    ensureChecklistDelivered();
     await ensureProduceOfferDelivered();
     try {
       await turnStore.saveTurnChunk(turnId, presentedReplies(), null, true, finalResult());
@@ -7763,6 +7788,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   ensureNotSilentOnRealWork();
   ensureAppendBlockDelivered();
   ensureNavLinkDelivered();
+  ensureChecklistDelivered();
   await ensureProduceOfferDelivered();
   persistResearchedMemory();
   return finalResult();

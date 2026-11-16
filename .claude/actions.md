@@ -1,3 +1,92 @@
+- [x] Verifier loop 11 (claude_verify-correspondence-proposals-11 @ 40ea8726) = FIX FIRST, speed only: the tag-span
+      rewrite rebuilt the prefixed body per element -> ~950 KB Outlook body 10-12 s on Node (bun hid it). Fixed: built
+      once (`prefixed`). Node: 950 KB 142-177 ms, 217 KB report 81-157 ms. New suite
+      scripts/html-visible-node-timing.test.mts (run with node --experimental-strip-types). All text checks held.
+- [x] 2026-11-15: live HUDDLE_ONEDRIVE_FEEDS has NO `teams` / `sent` keys (onedrive-feed-flags dry run: keys
+      correspondence, driveUser, enabled, mailbox, maxBytes, notBeforeUtc, ownerLogins, sourceLogin, synthetic) -- so
+      collection would skip Teams + Sent. Teams parser now takes the owner from each line's ownerUserId when no ids are
+      configured (TO-1..3), so the Teams id never enters the config. scripts/correspondence-backfill.ts added (every
+      saved OneDrive version, oldest first, same mappers + pgLedger.observe; dry run unless BACKFILL_APPLY=1).
+- [ ] Owner 2026-11-15: "This data should be in azure not a branch ... Push everything there and make sure it's used
+      going forward. The files should be for loads only. The teams file should be scheduled to load everyday at 6pm"
+      + "Make a mechanized rule ... reminding about it each turn until determined to skip or go". DONE so far: Teams
+      daily window (correspondence.teamsLoadAt, default "18:00" ET, reads 18:00-midnight so a late flow write is caught;
+      a never-loaded file loads at once for the back-fill; tests TL-1..9); .claude/parked.md started; the reminder hook
+      is being built in eds-claude-skills (claude_parked-work-reminder). NEXT: loop 11 verdict -> merge -> tables in
+      Azure -> back-fill from OneDrive versions -> flags via a MERGING config workflow (the existing one overwrites).
+- [ ] Owner 2026-11-15: "this report should be running against the table that has everything since Monday. If it
+      hasn't been signaled to be ignored or added as a task etc it should still be showing up". FACT (azure-pg-query,
+      2026-11-15 22:4x): chat.correspondence_ledger and chat.task_proposals DO NOT EXIST in prod (only
+      chat.external_feed_state) -- nothing has been collected, ingest was never switched on. P-7 probe lists OneDrive
+      version history per feed file (timestamps + counts only) to see whether a back-fill since Monday is possible.
+- [x] Fragment-cause fix BUILT (owner-approved 2026-11-15; AC branch claude_ac-html-tag-span-rewrite @ 94f0a867):
+      visibleHtml rewrites ONLY tags whose source holds a `>` before their end, at parse5's exact startTag/endTag
+      span, to `<name _ [id]>` / `</name _>`. Loop-5 exact 83/88 again (the 8 fragment rows match Chromium); all
+      loop 6-10 Chromium probes 0 drops / 0 flips against Chromium (font-size:0 row unchanged); main's line structure
+      kept (Q2-A); real id only (Q1-A); `a < b > c` out of scope (Q3-A). Also fixes main's missed reply-header cut
+      when a `>`-attribute precedes the id (AC-7). Verifier next (loop 11).
+- [ ] 2026-11-15: the live work-email file now holds 17 records (127 on 2026-11-14; counts-only probe run, Teams file
+      unchanged 166 lines). Not a code change. Tuning continues on the Nov 14 file via OneDrive version history
+      (PREVIEW_AS_OF in reply-scan-preview.ts; workflow input as_of). Owner asked whether the Power Automate email
+      flow changed (we do not touch his flows). Product impact: the ledger ingest must run more often than the file
+      is replaced -- note for switch-on.
+- [ ] Owner review of steps 2+3 (2026-11-15, screenshots): personal messages expecting acknowledgement need a REPLY
+      even with no task (Keith's attachment, Amy's shares/first day, Patricia's list+deck, Harshitha intro, Thad mention);
+      already-replied rows were shown as "nothing open"; Zito Quality Month forward still unread; "Meeting invites,
+      time keeping, verification codes can be toggled off in settings". BUILT (preview): reply rule + "answered by your
+      reply" section + per-row category with default-hidden meeting_invite/timekeeping/verification_code (collapsed,
+      never dropped; PREVIEW_HIDE_CATEGORIES). Settings screen toggle folded into AC-report-links-checklist.
+- [x] Verifier loop 10 (claude_verify-correspondence-proposals-10 @ 4e23d5aa) = FIX FIRST. Fixed: (1d-new) a cut
+      span holding a `>` (a comment) leaves `<!---->`, not a space, so main's tag rule still stops there after a raw
+      visible `<`; (1e) depth limit min(2000, 5e7/tokens) + template content inherits its template's depth (hostile
+      810 KB shapes 3.3 s -> 7-21 ms; Outlook 970 KB / Gmail 600-deep still parse); (4) the SECOND backend's (Lovable)
+      build_checklist schema gated like the OpenAI one (lovableChecklistSchema; checklist-tool C7/C8). Loop-6..10
+      probes: 0 drops, 0 flips against Chromium except the deliberate font-size:0 row.
+- [ ] Owner APPROVED 2026-11-15 (both "as long as it's reversible"):
+      (1) FIX THE CAUSE of the `b">` fragments (main's tag rule ends a tag at the first `>` inside a quoted attribute):
+          rewrite each tag at parse5's own startTag/endTag source span instead of guessing with a regex. A 4th LIVE
+          change to Iris's email text (owner thumbs-up given). Tier 1: AC subagent -> build -> verifier. Owner's catch:
+          lowering the test to 75 accepted the fragments instead of fixing them.
+      (2) Report email links into Iris's EXISTING proposals checklist, plus a "Wrong" link per row (feeds tuning).
+          Depends on proposals being stored = flag on, which needs the loop-7 before-switch-on hardening. AC first.
+- [x] Verifier loop 9 (claude_verify-correspondence-proposals-9 @ f669c0b5) = FIX FIRST. Fixed: (1d) quote-aware
+      tag regex REMOVED -- tags end exactly as on main (`=`-then-quote shapes dropped words); (1e) parse5 bounded by what
+      it BUILDS (tree depth 2000 + elements 4/tag+2000, tree-adapter abort -> main's text), was a regex estimate beaten
+      by stray end tags / re-opened formatting; (4) build_checklist `proposals` param offered only when proposals are on
+      (checklistTool(), schema identical to main when off); preview-only: forwards prefer divRplyFwdMsg over
+      appendonsend, CRLF, "[EXTERNAL] FW:"; report web link no longer printed in public logs.
+- [x] Verifier loop 8 (artifact @ 4857ac27; agent killed by a container restart mid-pass) found 1d: the quote-aware tag
+      regex swallowed visible text after an apostrophe in an unquoted attribute (live screen, flags off), and 1e: parse5
+      roughly quadratic on 20k+ nested blocks. FIXED: quote opens a run only right after `=` (tokenizer rule); visibleHtml
+      skips the parser above an estimated nesting of 2000 (keep-more = main). Loop-8 probes re-run: quote 8/8 same as
+      main+Chromium, 63-shape set only the 2 font-size:0 rows it classed deliberate; loop-7 39/39, loop-6 8/8 identical.
+- [x] Verifier loop 7 (46ff73f8) = FIX FIRST on claim 1 (malformed HTML still flipped Iris's live ask decision in 11/39
+      shapes). Fixed: html-visible.ts now only LOCATES hidden text with parse5 and cuts those text/comment spans out of
+      the ORIGINAL html; every tag stays where the email wrote it, so main's conversion runs unchanged (39/39 + 8/8
+      verifier shapes identical to main, 0 flips). Before-switch-on findings (prompt injection via forged OWNER
+      lines, others' promises as owner to-dos, rules only in prompt) recorded for the judge work.
+- [ ] Owner 2026-11-14: "tuning one thing at a time... the ai to find all needing a reply first". First real run of
+      the all-in-one judge (run 43551469840) gave needs_reply 0 / action_for_owner 10 / automated 43 of 94 -> suspect.
+      TUNING STEP 1: scripts/reply-scan-preview.ts asks ONE question per unsettled conversation (needs a reply from the
+      owner? verbatim ask, AI reason, recall-first). Report lists every YES and every NO with the AI's reason for the
+      owner to mark wrong ones. Next steps only after he signs off step 1.
+      OWNER REVIEW (2026-11-14 14:xx, screenshots): no YES disputed; six NO rows circled as needing ACTION, not a reply
+      (two manager "Fw: ... Due" forwards, Keeper account setup, a requested attachment, a CC'd hours notice, an intro).
+      "Next ask for all that include me directly, find which of those have an open item. Next ask for all that address
+      me indirectly with an action." Root cause of the two forwards: the text path cuts at Outlook's forward header, so
+      the AI saw only the signature. BUILT: lib/correspondence/forwarded.ts (forward read separately; Iris's live path
+      pinned unchanged, scripts/forwarded.test.ts 16/0) + scripts/action-scan-steps.ts (STEP 2 on-To open item, STEP 3
+      CC/list action; report action-scan-<stamp>.html with a printed web link). His 4th step was cut off ("Next ask for").
+      RUN 1 (43612968787): step 2 open 49/76, step 3 action 1/4, forwards read only 1 -> held; fallback for forwards
+      whose header is plain "From:/Sent:" text added (F11b) + counts-only forward diagnostics; re-run before sending.
+      RUN 2 (43613632327): Fw subjects 5, Outlook marker 3, forwarded text read 3 (was 1); step 2 open 51/76 (quote not
+      found 1), step 3 action 1/4. Link sent to owner for review. 2 of 5 forwards still unread (no marker, header shape
+      unknown -- cannot inspect content in public logs; owner's review will show if the Zito pair is still blind).
+- [x] Redesign parts merged into claude_task-proposals (2026-11-14): part A AI conversation judge
+      (needs-you.ts, email-only report; docs/qc-evidence/IMPL-needs-you-redesign.md, 14/14 mutations FIRED) + part B
+      meeting triage (meeting-triage.ts, Mine/For someone/Skip, chat.task_proposals untriaged/delegated states;
+      docs/qc-evidence/IMPL-meeting-triage.md). All suites green on the merge. NOT live; flags conversations /
+      meetingTriage OFF. Verifier loop 7 + real-mail report next.
 # Action Tracker — huddle-extension-app
 - [x] parked.md (2026-11-15): owner go recorded for correspondence-branch, correspondence-collection, report-links-checklist, parked-work-reminder; verify-loop-work-slug-alias still open.
 - [x] .claude/parked.md on main (2026-11-15): the parked-work list lives on the default branch, which the reminder hook reads first.

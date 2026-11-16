@@ -1,6 +1,12 @@
 # Project Memory — huddle-extension-app
 
 ## Correspondence + proposals (ACT:correspondence-checklist) -- 2026-11-13, NOT live, branch claude_task-proposals
+- TUNING ORDER (owner 2026-11-14): one question at a time. Step 1 = needs a reply (reply-scan, reviewed: no YES
+  disputed; six NO rows need ACTION not a reply). Step 2 = on To -> open item (reply or do-it). Step 3 = CC/list ->
+  action for him. Step 4 = cut off in his message ("Next ask for"). Run: proposals-preview.yml step=reply|action.
+  Forwards: the text path cuts at the forward header (right for Iris, which must not change), so the judge reads the
+  forwarded email separately via lib/correspondence/forwarded.ts. Always give him the OneDrive web link (logged as
+  "OPEN THE REPORT:").
 - Owner decisions: ETL route A (OneDrive files -> Huddle ingest -> Azure PG chat.correspondence_ledger; no new
   endpoint) + a file-staleness alert (built, flag correspondence.staleAlerts, default OFF, bell kind 'feed').
 - Real files (read via graph-permission-check, counts only -- public repo, never print content):
@@ -4011,6 +4017,12 @@ here as fact three times before being checked.)
   sent.json exists but sentDateTime null on 29/29; emails.json last written Nov 11 14:02 UTC. Verifier loop 3 = FIX
   FIRST; D1-D5/M1/M2 fixed (aa0d6ade), D6 in progress, loop 4 verifier next. Preview + open-vs-replied report go to
   the owner's OneDrive only (proposals-preview.yml) -- never print item text in this public repo's logs.
+- 2026-11-14 correspondence redesign (branch claude_task-proposals, NOT live): "needs you" is decided by an AI
+  conversation JUDGE (lib/correspondence/needs-you.ts) -- code computes facts only (thread, OWNER/OTHER speakers,
+  To/CC position, calendar/bulk header stamps, settled-by-owner-reply), the model (EXTRACT_MODEL gpt-5.6-luna) judges
+  meaning; its ask quote must be verbatim in the latest OTHER message. Owner rejected keyword capture. Report is
+  EMAIL ONLY. Meeting action items only via the triage ping (Mine / For someone / Skip). Iris's live alert screen
+  (inbound-email.ts) is pinned unchanged.
   UPDATE 2026-11-13 ~23:00 UTC: loop-4 repair pass DONE at claude_task-proposals 03cabacc (12 items; implementer
   reports all suites green, 33 mutations FIRED) -- CLAIMED, NOT yet independently verified. Verifier LOOP 5 running
   (report -> branch claude_verify-correspondence-proposals-5, docs/qc-evidence/VERIFY-correspondence-proposals-5.md).
