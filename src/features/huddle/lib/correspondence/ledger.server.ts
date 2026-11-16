@@ -56,7 +56,7 @@ function getPool(): Pool {
 export const LEDGER_LEASE_SECONDS = 300;
 
 
-const BOOTSTRAP_SQL = `
+export const BOOTSTRAP_SQL = `
 CREATE SCHEMA IF NOT EXISTS chat;
 CREATE TABLE IF NOT EXISTS chat.correspondence_ledger (
   source              TEXT NOT NULL CHECK (source IN ('email','teams','transcript','sent')),
