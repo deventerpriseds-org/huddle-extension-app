@@ -115,6 +115,15 @@ try {
   t("a processed item is not claimable", !!(await claim("c2:m1")), false);
   t("AC-3.5 an unchanged re-read of a PROCESSED item keeps it processed (no reprocessing)", [await L.observe(O, [item("c2:m1")]), (await row("c2:m1")).status], [{ inserted: 0, changed: 0, unchanged: 1 }, "processed"]);
 
+  // Actions view (2026-11-16, AC-I-9): a stored result_ids.action verdict survives (re)processing; the owner_correction
+  // column exists and is nullable.
+  await L.observe(O, [item("c9:m1")]);
+  await pool.query(`UPDATE chat.correspondence_ledger SET result_ids = result_ids || jsonb_build_object('action', '{"v":1,"key":"k|1","status":"open"}'::jsonb) WHERE source_item_id='c9:m1'`);
+  const c9 = await claim("c9:m1");
+  t("AI-9 markProcessed keeps result_ids.action and writes the processor's ids", [c9 ? await L.markProcessed(c9, { bell: ["b9"] }) : "no-claim", (await row("c9:m1")).r], [true, { bell: ["b9"], action: { v: 1, key: "k|1", status: "open" } }]);
+  t("AI-9b a row with no verdict gets exactly the processor's ids", (await row("c2:m1")).r, { bell: ["b1"] });
+  t("AI-9c owner_correction column present", cols.includes("owner_correction") || (await pool.query(`SELECT 1 FROM information_schema.columns WHERE table_schema='chat' AND table_name='correspondence_ledger' AND column_name='owner_correction'`)).rowCount === 1, true);
+
   // AC-3.4 edited content: SAME row back to pending, stale claim cannot mark it
   await L.observe(O, [item("c3:m1")]);
   const c3 = (await claim("c3:m1"))!;

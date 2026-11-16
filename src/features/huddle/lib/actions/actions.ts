@@ -358,9 +358,14 @@ export function bellTargetsFor(refs: readonly { source: string; sourceItemId: st
   return { emailGraphIds: [...emailGraphIds], chatIds: [...chatIds] };
 }
 
-/** Pure: a Teams ledger source_item_id is "<chatId>:<messageId>" (source-item.ts teamsSourceItem); the chat id is
- *  everything before the LAST colon (chat ids themselves contain colons, message ids never do). */
+/** Pure: a Teams ledger source_item_id is `encodeURIComponent(chatId) + ":" + encodeURIComponent(messageId)`
+ *  (source-item.ts teamsSourceItemId), so the ONE raw colon separates them; the chat id is decoded back. */
 export function chatIdOfTeamsItem(sourceItemId: string): string | null {
-  const i = sourceItemId.lastIndexOf(":");
-  return i > 0 ? sourceItemId.slice(0, i) : null;
+  const i = sourceItemId.indexOf(":");
+  if (i <= 0) return null;
+  try {
+    return decodeURIComponent(sourceItemId.slice(0, i));
+  } catch {
+    return null;
+  }
 }
