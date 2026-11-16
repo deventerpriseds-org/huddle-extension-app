@@ -158,3 +158,19 @@ instead of `null`, which puts `bell.ts:50` in "configured" mode and the owner's 
   not widen. Either way it only changes which items are stored; nothing announces.
 
 ### (d) merge -- see claim 4.
+
+## Radius challenge
+- **Inside the radius but not named: `sent=true` and `staleAlerts=true` are NOT collection-only.** Both act on live
+  owner-facing surfaces with `ingest` irrelevant: sent settles owed work emails (Iris's list shrinks), staleAlerts can post a
+  bell row, an Iris chat message and an email. Both are owner-decided designs; the switch-on note should say so.
+- `teams-log.ts`'s `htmlToText` call (Teams text) is on the ingest path; covered by claim 1's text/speed results.
+
+## Not run
+- Live golden path / browser UAT: not run (sandbox cannot reach the SWA). Bell "What counts" is owed a verify-uat.yml run.
+- The back-fill script was not executed (Graph + prod PG); claim 5(c) is code reading.
+
+## Verdict
+PASS: claims 0, 1, 3, 4, 5 (5 with notes) | FAIL: 0 | UI-UNVERIFIED: 1 (claim 2 bell "What counts")
+**Verdict: MERGE-PENDING-UAT** -- and the branch is already merged (PR #251, 132c2fc0; src = 4d0019a0). NOT YET
+UAT-VERIFIED until a browser run sees the bell list. Non-blocking fix: add `scheduled` to the pass's quiet-log regex
+(`ingest-pass.ts`, ~1,080 counts-only lines a day otherwise).
