@@ -63,6 +63,13 @@ export interface TeamsContent {
   fromOwner: boolean | null;
   text: string;
   webUrl: string | null;
+  /** 2026-11-16: mentioned USER ids (lower-cased). Present when the source message carried Graph's `mentions` array
+   *  (empty = nobody); ABSENT = unknown (rows stored before this field existed). */
+  mentionedUserIds?: string[];
+  /** 2026-11-16: the line's `ownerUserId` (lower-cased), when the line carried it. */
+  ownerUserId?: string;
+  /** 2026-11-16: is the owner among mentionedUserIds (present only when both are known). */
+  mentionsOwner?: boolean;
 }
 
 export interface TranscriptContent {
@@ -96,6 +103,12 @@ export interface TeamsMessage {
   text: string;
   chatName?: string;
   webUrl?: string;
+  /** Mentioned user ids (lower-cased); present only when the message carried a `mentions` array. */
+  mentionedUserIds?: string[];
+  /** The line's `ownerUserId` (lower-cased), when present. */
+  ownerUserId?: string;
+  /** Owner among the mentioned users (present only when the mention list and an owner id are both known). */
+  mentionsOwner?: boolean;
 }
 
 export interface SourceItem {
@@ -174,6 +187,9 @@ export function teamsContent(m: TeamsMessage): TeamsContent {
     fromOwner: m.fromOwner,
     text: m.text,
     webUrl: m.webUrl ?? null,
+    ...(m.mentionedUserIds ? { mentionedUserIds: [...m.mentionedUserIds] } : {}),
+    ...(m.ownerUserId ? { ownerUserId: m.ownerUserId } : {}),
+    ...(typeof m.mentionsOwner === "boolean" ? { mentionsOwner: m.mentionsOwner } : {}),
   };
 }
 

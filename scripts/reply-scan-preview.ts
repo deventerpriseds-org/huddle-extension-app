@@ -22,6 +22,18 @@ import {
 } from "../src/features/huddle/lib/correspondence/needs-you";
 import { latestSentByConversation, mapFeedMessage, mapSentRecords, parseFeedsConfig, validateEmailSnapshot, validateSentSnapshot } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { EXTRACT_MODEL } from "../src/features/huddle/lib/proposals/proposals.server";
+import {
+  REPORT_SINCE_DEFAULT,
+  emailMessagesFromLedger,
+  forwardsFromLedger,
+  meetingItemsFromLedger,
+  messageLookup,
+  planLedgerReport,
+  resolutionSignals,
+  sentFromLedger,
+  teamsChatsFromLedger,
+} from "../src/features/huddle/lib/correspondence/report-from-ledger";
+import type { LedgerScanPart } from "./action-scan-steps";
 
 const token = process.env.TOKEN ?? "";
 const cfg = parseFeedsConfig(process.env.HUDDLE_ONEDRIVE_FEEDS);
@@ -31,7 +43,19 @@ if (!token || !cfg) {
 }
 const days = Number(process.env.PREVIEW_DAYS ?? 7) || 7;
 const maxCalls = Number(process.env.PREVIEW_MAX_SOURCES ?? 200) || 200;
-const sinceMs = process.env.PREVIEW_SINCE ? Date.parse(process.env.PREVIEW_SINCE) : Date.now() - days * 86_400_000;
+// 2026-11-16 (owner: "this report should be running against the table that has everything since Monday"): the
+// DEFAULT source is the Azure ledger (chat.correspondence_ledger), window since Monday 2026-11-09 unless `since` is
+// given. PREVIEW_SOURCE=files keeps the OneDrive-files path (rolling `days` window, as_of versions) for comparison.
+const source: "ledger" | "files" = String(process.env.PREVIEW_SOURCE ?? "").trim().toLowerCase() === "files" ? "files" : "ledger";
+const sinceMs = process.env.PREVIEW_SINCE
+  ? Date.parse(process.env.PREVIEW_SINCE)
+  : source === "ledger"
+    ? Date.parse(REPORT_SINCE_DEFAULT)
+    : Date.now() - days * 86_400_000;
+if (!Number.isFinite(sinceMs)) {
+  console.log("reply-scan: since is not a readable ISO time");
+  process.exit(1);
+}
 const drive = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.driveUser)}/drive/root:`;
 const enc = (p: string) => p.split("/").map((s) => encodeURIComponent(s)).join("/");
 // PREVIEW_AS_OF (ISO): read each file AS IT WAS at that time, from OneDrive's version history, so tuning can re-run on
@@ -63,29 +87,59 @@ const parse = (t: string): unknown => {
   }
 };
 
-// ── Load (the same validators and mappers the product uses; an incomplete file is read for this preview only).
-const e = await read(cfg.email.path);
-const eJson = parse(e.text);
-let ev = eJson !== undefined ? validateEmailSnapshot(eJson, cfg) : null;
-if (ev && !ev.ok && ev.reason === "incomplete" && eJson && typeof eJson === "object") ev = validateEmailSnapshot({ ...(eJson as Record<string, unknown>), complete: true }, cfg);
-const s = await read("/automation/email/sent.json");
-const sJson = parse(s.text);
-const sv = sJson !== undefined ? validateSentSnapshot(sJson, cfg) : null;
-const sentMapped = sv?.ok ? mapSentRecords(sv.snapshot.records, cfg) : { sent: [], skipped: 0 };
-console.log(`email: HTTP ${e.status} ${ev?.ok ? "valid" : `rejected ${ev && !ev.ok ? ev.reason : "-"}`} | sent usable ${sentMapped.sent.length}`);
-const ctx: NeedsYouContext = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), latestSent: latestSentByConversation(sentMapped.sent), sentKnown: sentMapped.sent.length > 0 };
-const msgs = ev?.ok ? ev.snapshot.records.map((r) => mapFeedMessage(r, cfg.mailbox)) : [];
 const newest = (f: ConversationFacts) => Math.max(...f.messages.map((m) => Date.parse(String(m.at ?? ""))).filter(Number.isFinite), -Infinity);
-const facts = [...groupEmailConversations(cfg.mailbox, msgs)]
-  .map(([k, ms]) => conversationFacts(k, ms, ctx))
-  .filter((f) => newest(f) >= sinceMs)
-  .sort((a, b) => newest(b) - newest(a));
+let facts: ConversationFacts[];
+let ctx: NeedsYouContext;
+let rawRecords: Record<string, unknown>[] = [];
+let ledgerPart: LedgerScanPart | undefined;
+if (source === "files") {
+  // ── Load (the same validators and mappers the product uses; an incomplete file is read for this preview only).
+  const e = await read(cfg.email.path);
+  const eJson = parse(e.text);
+  let ev = eJson !== undefined ? validateEmailSnapshot(eJson, cfg) : null;
+  if (ev && !ev.ok && ev.reason === "incomplete" && eJson && typeof eJson === "object") ev = validateEmailSnapshot({ ...(eJson as Record<string, unknown>), complete: true }, cfg);
+  const s = await read("/automation/email/sent.json");
+  const sJson = parse(s.text);
+  const sv = sJson !== undefined ? validateSentSnapshot(sJson, cfg) : null;
+  const sentMapped = sv?.ok ? mapSentRecords(sv.snapshot.records, cfg) : { sent: [], skipped: 0 };
+  console.log(`source files | email: HTTP ${e.status} ${ev?.ok ? "valid" : `rejected ${ev && !ev.ok ? ev.reason : "-"}`} | sent usable ${sentMapped.sent.length}`);
+  ctx = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), latestSent: latestSentByConversation(sentMapped.sent), sentKnown: sentMapped.sent.length > 0 };
+  const msgs = ev?.ok ? ev.snapshot.records.map((r) => mapFeedMessage(r, cfg.mailbox)) : [];
+  facts = [...groupEmailConversations(cfg.mailbox, msgs)]
+    .map(([k, ms]) => conversationFacts(k, ms, ctx))
+    .filter((f) => newest(f) >= sinceMs)
+    .sort((a, b) => newest(b) - newest(a));
+  rawRecords = ev?.ok ? (ev.snapshot.records as Record<string, unknown>[]) : [];
+} else {
+  // ── Load from the Azure ledger (chat.correspondence_ledger content), then window -> uninvolved chats -> resolved.
+  const { loadLedgerReportData } = await import("../src/features/huddle/lib/correspondence/report-from-ledger.server");
+  const data = await loadLedgerReportData(cfg.ownerLogins);
+  const bySource = (k: string) => data.rows.filter((r) => r.source === k).length;
+  const sent = sentFromLedger(data.rows);
+  ctx = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), latestSent: latestSentByConversation(sent), sentKnown: sent.length > 0 };
+  const msgs = emailMessagesFromLedger(data.rows);
+  const allFacts = [...groupEmailConversations(cfg.mailbox, msgs)].map(([k, ms]) => conversationFacts(k, ms, ctx));
+  const chats = teamsChatsFromLedger(data.rows, cfg.teams.ownerSenderIds);
+  const meetings = meetingItemsFromLedger(data.rows, data.proposals);
+  const signals = resolutionSignals(data.proposals, data.bell, messageLookup(data.rows, cfg.mailbox), cfg.mailbox);
+  const plan = planLedgerReport({ emailFacts: allFacts, teams: chats, meetings, signals, sinceMs });
+  const fw = forwardsFromLedger(data.rows);
+  facts = [...plan.email.scan].sort((a, b) => newest(b) - newest(a));
+  ledgerPart = { plan, forwards: fw.forwards, forwardsMissing: fw.missing, forwardsTotal: fw.isForward, unavailable: data.unavailable };
+  // Counts only (public log).
+  console.log(
+    `source ledger since ${new Date(sinceMs).toISOString().slice(0, 10)} | stored rows email ${bySource("email")} teams ${bySource("teams")} sent ${bySource("sent")} transcript ${bySource("transcript")} | ` +
+      `signals: decided proposals ${data.proposals.length}, dismissed bell rows ${data.bell.length}, usable ${signals.length}${data.notCreated.length ? `, not created yet ${data.notCreated.join("+")}` : ""}${data.unavailable.length ? `, UNAVAILABLE ${data.unavailable.join("+")}` : ""} | ` +
+      `email conversations ${allFacts.length}: in window ${plan.email.scan.length + plan.email.resolved.length}, resolved by you ${plan.email.resolved.length}, before window ${plan.email.outOfWindow} | ` +
+      `teams chats ${chats.length}: hidden not-involved ${plan.teams.hiddenUninvolved.length}, resolved by you ${plan.teams.resolved.length}, shown can't-tell ${plan.teams.cantTell}, to scan ${plan.teams.scan.length}, before window ${plan.teams.outOfWindow} | ` +
+      `meetings ${meetings.length}: in window ${plan.meetings.inWindow.length} | forwards ${fw.isForward}, forwarded part not stored ${fw.missing}`,
+  );
+}
 
 // ── Steps 2 + 3 (PREVIEW_STEP=action) run instead of step 1 and exit there.
 if (process.env.PREVIEW_STEP === "action") {
-  const rawRecords = ev?.ok ? (ev.snapshot.records as Record<string, unknown>[]) : [];
   const { runActionScan } = await import("./action-scan-steps");
-  await runActionScan({ facts, rawRecords, cfg, ctx, token, drive, enc, sinceMs, maxCalls, newest });
+  await runActionScan({ facts, rawRecords, cfg, ctx, token, drive, enc, sinceMs, maxCalls, newest, ledger: ledgerPart });
   process.exit(process.exitCode ?? 0);
 }
 
