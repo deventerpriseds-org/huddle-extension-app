@@ -1,0 +1,802 @@
+// WHAT:       The Actions page: since Monday, the email, Teams and meeting items that need the owner and are not yet
+//             resolved, in four sections, with All / Email / Teams / Meetings filters, "What shows" settings, and per
+//             row Draft reply (email) / Open in Teams (Teams), Add as task, Edit, Done, Dismiss and Wrong?.
+// WHY:        Owner-approved design 2026-11-16 (actions-proto), AC docs/qc-evidence/AC-actions-view-modules.md B-D, G.
+//             Built from the app's own parts so it reads as part of the product (ship-ui-that-belongs):
+//             WidgetPage + CollapsibleSection (the Priorities / Schedule frame), the ViewSwitcher pill group for the
+//             filter, the bell's labelled "Dismiss" button anatomy for desktop row buttons and its "What counts"
+//             anatomy for What shows, ProposalChecklistItem's "Proposed" menu chip + inline edit input on phones,
+//             and Iris's email-reply card anatomy for the suggested reply. Tokens only.
+//             Row writes go through the EXISTING actOnProposalFn (from:"actions"), never a new endpoint (AC-C-1).
+// SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+// EVIDENCE:   docs/qc-evidence/BUILD-actions-view.md; .claude/skills/test-agent-serverfn/scripts/actions-view-checks.mjs.
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  CalendarClock,
+  Check,
+  CheckCheck,
+  ChevronDown,
+  Copy,
+  ExternalLink,
+  Flag,
+  Loader2,
+  Mail,
+  MessageSquare,
+  Pencil,
+  Plus,
+  RotateCcw,
+  UserRound,
+  Users,
+  X,
+} from "lucide-react";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { CollapsibleSection, WidgetPage } from "./JourneyWidgets";
+import { useHuddleStore } from "../store";
+import { getActionsFn, correctActionFn, setActionsSettingsFn } from "../lib/actions/actions.functions";
+import { actOnProposalFn } from "../lib/proposals/proposals.functions";
+import { saveEmailReplyDraftFn } from "../lib/email/email-replies.functions";
+import { ACTION_SECTION_LABEL, ACTION_SECTION_ORDER, type ActionSection } from "../lib/correspondence/action-classify";
+import {
+  CORRECTION_LABEL,
+  CORRECTION_REASONS,
+  CORRECTION_TEXT_MAX,
+  HIDEABLE_CATEGORIES,
+  HIDEABLE_CATEGORY_LABEL,
+  type ActionRow,
+  type ActionSource,
+  type ActionsSettings,
+  type CorrectionReason,
+} from "../lib/actions/actions";
+
+type Caller = { entra_object_id?: string; entra_email?: string } | undefined;
+type Page = Awaited<ReturnType<typeof getActionsFn>>;
+type OkPage = Extract<Page, { status: "ok" }>;
+type Filter = "all" | ActionSource;
+
+const IRIS_DM = "dm-iris-chase";
+const LISTED = new Set(["proposed", "untriaged"]);
+const STATE_LABEL: Record<string, string> = { approved: "Added to board", completed: "Done", dismissed: "Dismissed", delegated: "For someone", corrected: "Sent to Iris" };
+const SOURCE_ICON: Record<ActionSource, typeof Mail> = { email: Mail, teams: MessageSquare, meeting: CalendarClock };
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "email", label: "Email" },
+  { id: "teams", label: "Teams" },
+  { id: "meeting", label: "Meetings" },
+];
+/** The bell's labelled-button anatomy (AttentionBell "Dismiss"), for desktop row buttons. */
+const ROW_BTN =
+  "inline-flex shrink-0 items-center gap-1 rounded-md border border-hairline px-1.5 py-0.5 text-[11px] text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50";
+
+function useCaller(): Caller {
+  const { user } = useAuth();
+  return useMemo(() => (user ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username } : undefined), [user]);
+}
+
+function when(iso: string | null, tz: string): string {
+  const t = Date.parse(String(iso ?? ""));
+  if (!Number.isFinite(t)) return "";
+  try {
+    const d = new Date(t);
+    const day = (x: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(x);
+    const time = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hourCycle: "h23" }).format(d);
+    if (day(d) === day(new Date())) return `Today ${time}`;
+    return `${new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(d)} ${time}`;
+  } catch {
+    return "";
+  }
+}
+
+function sinceLabel(iso: string, tz: string, short: boolean): string {
+  try {
+    return short
+      ? `Since ${new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(new Date(iso))}`
+      : `Since Monday, ${new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short", day: "numeric" }).format(new Date(iso))}`;
+  } catch {
+    return "Since Monday";
+  }
+}
+
+type RowLocal = { state?: string; title?: string; busy?: boolean; draftSaved?: string | null };
+
+export function ActionsView() {
+  const caller = useCaller();
+  const [page, setPage] = useState<Page | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [showSettings, setShowSettings] = useState(false);
+  const [local, setLocal] = useState<Record<string, RowLocal>>({});
+
+  const load = useCallback(async () => {
+    if (!caller) {
+      setPage({ status: "signed_out" });
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      setPage(await getActionsFn({ data: { caller } }));
+      setLocal({});
+    } catch {
+      setPage({ status: "error", error: "Couldn't load your actions." });
+    } finally {
+      setLoading(false);
+    }
+  }, [caller]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const ok = page?.status === "ok" ? (page as OkPage) : null;
+  const tz = ok?.settings.timeZone ?? "America/New_York";
+  const patch = (id: string, p: RowLocal) => setLocal((m) => ({ ...m, [id]: { ...m[id], ...p } }));
+
+  // Rows still open (a row the owner just acted on stays, marked, until the next load; it no longer counts).
+  const openRows = useMemo(() => (ok ? ok.rows.filter((r) => LISTED.has(local[r.id]?.state ?? r.state)) : []), [ok, local]);
+  const counts = useMemo(() => {
+    const c: Record<Filter, number> = { all: 0, email: 0, teams: 0, meeting: 0 };
+    for (const r of openRows) {
+      c.all++;
+      c[r.source]++;
+    }
+    return c;
+  }, [openRows]);
+  const visible = ok ? ok.rows.filter((r) => (filter === "all" || r.source === filter) && ok.settings.sources[r.source]) : [];
+
+  async function saveSettings(next: ActionsSettings) {
+    if (!ok || !caller) return;
+    const prev = ok.settings;
+    setPage({ ...ok, settings: next });
+    const r = await setActionsSettingsFn({ data: { caller, settings: next as unknown as Record<string, unknown> } }).catch(() => null);
+    if (!r?.ok) {
+      setPage({ ...ok, settings: prev }); // AC-D-7: a failed save rolls back
+      toast.error(r?.error ?? "Couldn't save that setting.");
+      return;
+    }
+    void load(); // hidden categories / sources re-select from the stored verdicts (no model call)
+  }
+
+  return (
+    <WidgetPage
+      title="Actions"
+      subtitle={
+        ok ? (
+          <>
+            {/* `app-hidden`, never Tailwind's `hidden`: an extension's injected `.hidden` rule once collided with it. */}
+            <span className="md:app-hidden">{sinceLabel(ok.sinceIso, tz, true)}</span>
+            <span className="app-hidden md:inline">{sinceLabel(ok.sinceIso, tz, false)}</span>
+          </>
+        ) : null
+      }
+    >
+      {ok && (
+        <div className="flex items-center gap-2 border-b border-hairline bg-surface px-3 py-2 sm:px-6">
+          {/* The ViewSwitcher inline pill anatomy; scrolls sideways inside itself on a phone (AC-G-2). */}
+          <div className="min-w-0 overflow-x-auto">
+            <div className="inline-flex rounded-lg border border-hairline bg-surface p-0.5" role="group" aria-label="Show">
+              {FILTERS.filter((f) => f.id === "all" || ok.settings.sources[f.id as ActionSource]).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setFilter(f.id)}
+                  aria-pressed={filter === f.id}
+                  data-testid={`actions-filter-${f.id}`}
+                  className={cn(
+                    "whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium transition",
+                    filter === f.id ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {f.label} <span className="tabular-nums">{counts[f.id]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowSettings((v) => !v)}
+            aria-expanded={showSettings}
+            data-testid="actions-what-shows"
+            className="ml-auto inline-flex min-h-9 shrink-0 items-center whitespace-nowrap text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            {showSettings ? "Done" : `What shows${ok.hidden.total ? ` · ${ok.hidden.total} hidden` : ""}`}
+          </button>
+        </div>
+      )}
+      {ok && showSettings && <WhatShows settings={ok.settings} hidden={ok.hidden} meetingOthersHidden={ok.meetingOthersHidden} onChange={saveSettings} />}
+
+      {loading && !page ? (
+        <div className="flex items-center gap-2 px-3 py-4 text-[12px] text-muted-foreground sm:px-6">
+          <Loader2 size={13} className="animate-spin" aria-hidden /> Loading your actions…
+        </div>
+      ) : !page || page.status === "error" ? (
+        <div className="px-3 py-4 text-[12px] sm:px-6" data-testid="actions-error">
+          <p className="text-destructive">Couldn’t load your actions{page && "error" in page && page.error ? ` — ${page.error}` : "."}</p>
+          <button type="button" onClick={() => void load()} className={cn(ROW_BTN, "mt-2")}>
+            <RotateCcw size={11} aria-hidden /> Retry
+          </button>
+        </div>
+      ) : page.status === "signed_out" ? (
+        <p className="px-3 py-4 text-[12px] text-muted-foreground sm:px-6">Sign in to see what needs you.</p>
+      ) : page.status === "off" ? (
+        <p className="px-3 py-4 text-[12px] text-muted-foreground sm:px-6" data-testid="actions-off">
+          Actions isn’t switched on yet: Huddle isn’t storing your email and Teams for this account.
+        </p>
+      ) : (
+        <ActionsBody
+          page={ok!}
+          visible={visible}
+          openCount={openRows.length}
+          local={local}
+          patch={patch}
+          caller={caller}
+          tz={tz}
+          reload={load}
+        />
+      )}
+    </WidgetPage>
+  );
+}
+
+function ActionsBody({
+  page,
+  visible,
+  openCount,
+  local,
+  patch,
+  caller,
+  tz,
+  reload,
+}: {
+  page: OkPage;
+  visible: ActionRow[];
+  openCount: number;
+  local: Record<string, RowLocal>;
+  patch: (id: string, p: RowLocal) => void;
+  caller: Caller;
+  tz: string;
+  reload: () => Promise<void>;
+}) {
+  const bySection = (s: ActionSection) => visible.filter((r) => r.section === s);
+  const notChecked = page.notChecked ? (
+    <p className="px-3 pb-3 pt-1 text-[11px] text-muted-foreground sm:px-6" data-testid="actions-not-checked">
+      {page.notChecked} not checked yet{page.classifyOn ? "" : " (sorting is switched off in What shows)"}.
+    </p>
+  ) : null;
+  // AC-B-7: never "caught up" when nothing was ever sorted.
+  if (!page.rows.length && page.neverClassified) {
+    return (
+      <div className="px-3 py-4 text-[12px] text-muted-foreground sm:px-6" data-testid="actions-not-sorted">
+        {page.classifyOn
+          ? "Huddle hasn’t sorted your mail and chats yet. New items are checked every few minutes."
+          : "Sorting is switched off, so nothing has been checked. Turn it on in What shows."}
+        {notChecked}
+      </div>
+    );
+  }
+  return (
+    <div className="pb-4">
+      {openCount === 0 && (
+        <p className="px-3 py-4 text-[12px] text-muted-foreground sm:px-6" data-testid="actions-caught-up">
+          You’re all caught up.
+        </p>
+      )}
+      {ACTION_SECTION_ORDER.map((s) => {
+        const rows = bySection(s);
+        const open = rows.filter((r) => LISTED.has(local[r.id]?.state ?? r.state)).length;
+        return (
+          <div key={s}>
+            {rows.length > 0 && (
+              <CollapsibleSection id={`actions-${s}`} label={ACTION_SECTION_LABEL[s]} count={open}>
+                <ul className="divide-y divide-hairline" data-testid={`actions-section-${s}`}>
+                  {rows.map((r) => (
+                    <ActionRowItem key={r.id} row={r} local={local[r.id] ?? {}} patch={patch} caller={caller} tz={tz} />
+                  ))}
+                </ul>
+              </CollapsibleSection>
+            )}
+            {s === "needs_reply" && page.answered.length > 0 && (
+              <CollapsibleSection id="actions-answered" label="Answered by your reply" count={page.answered.length} defaultOpen={false}>
+                <ul className="divide-y divide-hairline" data-testid="actions-answered">
+                  {page.answered.map((r) => (
+                    <li key={r.itemKey} className="flex items-start gap-2 px-3 py-2 sm:px-6">
+                      <Check size={14} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] text-muted-foreground" title={r.title}>
+                          {r.title}
+                        </p>
+                        <p className="truncate text-[11px] text-muted-foreground">{[r.who, r.sourceLabel, when(r.at, tz)].filter(Boolean).join(" · ")}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </CollapsibleSection>
+            )}
+          </div>
+        );
+      })}
+      {page.corrected.length > 0 && (
+        <CollapsibleSection id="actions-corrected" label="Sent back as wrong" count={page.corrected.length} defaultOpen={false}>
+          <ul className="divide-y divide-hairline" data-testid="actions-corrected">
+            {page.corrected.map((r) => (
+              <li key={r.id} className="flex items-center gap-2 px-3 py-2 sm:px-6">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] text-muted-foreground" title={r.title}>
+                    {r.title}
+                  </p>
+                  <p className="truncate text-[11px] text-muted-foreground">{[r.who, r.sourceLabel].filter(Boolean).join(" · ")}</p>
+                </div>
+                <button
+                  type="button"
+                  className={cn(ROW_BTN, "min-h-11 md:min-h-0")}
+                  disabled={!caller?.entra_email}
+                  onClick={async () => {
+                    const res = await correctActionFn({ data: { caller, proposalId: r.id, undo: true, listSender: r.listSender } }).catch(() => null);
+                    if (!res?.ok) toast.error(res?.error ?? "Couldn't undo that.");
+                    else void reload();
+                  }}
+                >
+                  <RotateCcw size={11} aria-hidden /> Undo
+                </button>
+              </li>
+            ))}
+          </ul>
+        </CollapsibleSection>
+      )}
+      {notChecked}
+    </div>
+  );
+}
+
+function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; local: RowLocal; patch: (id: string, p: RowLocal) => void; caller: Caller; tz: string }) {
+  const signedOut = !caller?.entra_email;
+  const state = local.state ?? row.state;
+  const title = local.title ?? row.title;
+  const busy = !!local.busy;
+  const open = state === "proposed";
+  const triaging = state === "untriaged";
+  const [editing, setEditing] = useState(false);
+  const [naming, setNaming] = useState(false);
+  const [draft, setDraft] = useState(title);
+  const [panel, setPanel] = useState<null | "wrong" | "reply">(null);
+  const Icon = SOURCE_ICON[row.source];
+
+  async function act(action: "approve" | "complete" | "dismiss" | "edit" | "triage", extra: { title?: string; choice?: "mine" | "someone" | "skip"; name?: string } = {}) {
+    if (busy) return; // one write in flight per row
+    const before = { state, title };
+    const optimistic: RowLocal =
+      action === "edit"
+        ? { title: extra.title }
+        : action === "triage"
+          ? { state: extra.choice === "mine" ? "proposed" : extra.choice === "someone" ? "delegated" : "dismissed" }
+          : { state: action === "approve" ? "approved" : action === "complete" ? "completed" : "dismissed" };
+    patch(row.id, { ...optimistic, busy: true });
+    try {
+      const r = await actOnProposalFn({ data: { caller, id: row.id, action, from: "actions", ...extra } });
+      if (r.row) patch(row.id, { state: r.row.state, title: r.row.title, busy: false });
+      if (!r.ok) {
+        if (!r.row) patch(row.id, { ...before, busy: false });
+        toast.error(r.error || "Couldn't update that.");
+        return;
+      }
+      if (!r.row) patch(row.id, { busy: false });
+      if (r.alreadyOnBoard || r.note) toast(r.note ?? "It was already on your board.");
+    } catch (err) {
+      patch(row.id, { ...before, busy: false }); // AC-C-7: back to exactly the prior state
+      toast.error(err instanceof Error ? err.message : "Couldn't update that.");
+    }
+  }
+
+  function saveEdit() {
+    const t = draft.trim();
+    setEditing(false);
+    if (!t || t === title) return;
+    void act("edit", { title: t.slice(0, 200) });
+  }
+  function saveName() {
+    const n = draft.trim();
+    setNaming(false);
+    if (!n) return;
+    void act("triage", { choice: "someone", name: n.slice(0, 80) });
+  }
+
+  function askIris(text: string) {
+    const st = useHuddleStore.getState();
+    st.setActive(IRIS_DM);
+    st.setView("huddle");
+    st.setDraftPrefill(text);
+  }
+  const subject = row.replyAsk?.subject ? ` ("${row.replyAsk.subject}")` : "";
+  const redo = () => askIris(`For the reply to ${row.replyAsk?.who ?? row.who}${subject}, change it to: `);
+  const askDraft = () => askIris(`Draft a reply to ${row.replyAsk?.who ?? row.who}${subject}: `);
+
+  async function draftReply() {
+    const rep = row.reply;
+    if (!rep) return askDraft(); // OQ-12: no reply row -> ask Iris through the existing reply path
+    if (!rep.draftable) return setPanel((p) => (p === "reply" ? null : "reply"));
+    patch(row.id, { busy: true });
+    try {
+      const r = await saveEmailReplyDraftFn({ data: { caller, emailId: rep.emailReplyId } });
+      patch(row.id, { busy: false, ...(r.ok ? { draftSaved: r.webLink ?? "" } : {}) });
+      if (r.ok) toast.success("Draft saved in your Outlook Drafts — send it from there");
+      else toast.error(r.error ?? "Couldn't save the draft.");
+    } catch {
+      patch(row.id, { busy: false });
+      toast.error("Couldn't save the draft.");
+    }
+  }
+
+  const closedLabel = STATE_LABEL[state] ?? state;
+  const meta = [row.who, row.sourceLabel, when(row.at, tz), row.assignee ? `For ${row.assignee}` : ""].filter(Boolean).join(" · ");
+  const draftSaved = local.draftSaved !== undefined || row.reply?.status === "drafted";
+  const canAct = (open || triaging) && !busy && !signedOut;
+  const teamsLink = row.source === "teams" ? row.teamsLink : null;
+
+  const menuItems = (
+    <>
+      {row.source === "email" && (
+        <DropdownMenuItem onClick={() => void draftReply()}>
+          <Mail size={12} className="mr-2" /> Draft reply
+        </DropdownMenuItem>
+      )}
+      {teamsLink && (
+        <DropdownMenuItem asChild>
+          <a href={teamsLink} target="_blank" rel="noopener noreferrer">
+            <ExternalLink size={12} className="mr-2" /> Open in Teams
+          </a>
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem onClick={() => void act("approve")}>
+        <Plus size={12} className="mr-2" /> Add as task
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onClick={() => {
+          setDraft(title);
+          setEditing(true);
+        }}
+      >
+        <Pencil size={12} className="mr-2" /> Edit
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => void act("complete")}>
+        <CheckCheck size={12} className="mr-2" /> Done
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => void act("dismiss")}>
+        <X size={12} className="mr-2" /> Dismiss
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => setPanel("wrong")}>
+        <Flag size={12} className="mr-2" /> Wrong?
+      </DropdownMenuItem>
+    </>
+  );
+  const triageItems = (
+    <>
+      <DropdownMenuItem onClick={() => void act("triage", { choice: "mine" })}>
+        <UserRound size={12} className="mr-2" /> Mine
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onClick={() => {
+          setDraft("");
+          setNaming(true);
+        }}
+      >
+        <Users size={12} className="mr-2" /> For someone
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => void act("triage", { choice: "skip" })}>
+        <X size={12} className="mr-2" /> Skip
+      </DropdownMenuItem>
+    </>
+  );
+
+  return (
+    <li className="px-3 py-2.5 sm:px-6" data-testid="actions-row" data-source={row.source}>
+      <div className="flex items-start gap-2">
+        <Icon size={14} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="min-w-0 flex-1">
+          {editing || naming ? (
+            <input
+              autoFocus
+              aria-label={naming ? `Who is "${title}" for?` : "Edit this item"}
+              placeholder={naming ? "Who is it for?" : undefined}
+              value={draft}
+              maxLength={naming ? 80 : 200}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={naming ? saveName : saveEdit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (naming ? saveName : saveEdit)();
+                if (e.key === "Escape") {
+                  setEditing(false);
+                  setNaming(false);
+                }
+              }}
+              className="w-full rounded border border-hairline bg-background px-1.5 py-0.5 text-[13px]"
+            />
+          ) : (
+            <p className={cn("truncate text-[13px] font-medium leading-snug", open || triaging ? "text-foreground" : "text-muted-foreground line-through")} title={title}>
+              {title}
+            </p>
+          )}
+          {editing ? (
+            <p className="text-[10px] text-muted-foreground">Enter saves · Esc cancels</p>
+          ) : (
+            <p className="truncate text-[11px] text-muted-foreground" title={meta}>
+              {open || triaging ? meta : closedLabel}
+              {draftSaved && (open || triaging) ? " · Draft saved" : ""}
+            </p>
+          )}
+          {(open || triaging) && row.reasonLine && (
+            <p className="mt-0.5 line-clamp-2 text-[12px] text-foreground/80">
+              {row.reasonLine}
+              {row.quote ? <span className="text-muted-foreground"> “{row.quote}”</span> : null}
+            </p>
+          )}
+          {/* Desktop: labelled buttons (a full page has room). Phone: the menu chip below. */}
+          {(open || triaging) && (
+            <div className="app-hidden mt-1.5 flex-wrap items-center gap-1.5 md:flex" data-testid="actions-row-buttons">
+              {triaging ? (
+                <>
+                  <span className="text-[11px] text-muted-foreground">To sort</span>
+                  <button type="button" className={ROW_BTN} disabled={!canAct} onClick={() => void act("triage", { choice: "mine" })}>
+                    <UserRound size={11} aria-hidden /> Mine
+                  </button>
+                  <button type="button" className={ROW_BTN} disabled={!canAct} onClick={() => (setDraft(""), setNaming(true))}>
+                    <Users size={11} aria-hidden /> For someone
+                  </button>
+                  <button type="button" className={ROW_BTN} disabled={!canAct} onClick={() => void act("triage", { choice: "skip" })}>
+                    <X size={11} aria-hidden /> Skip
+                  </button>
+                </>
+              ) : (
+                <>
+                  {row.source === "email" && (
+                    <button type="button" className={ROW_BTN} disabled={busy || signedOut} onClick={() => void draftReply()} data-testid="actions-draft-reply">
+                      <Mail size={11} aria-hidden /> Draft reply
+                    </button>
+                  )}
+                  {teamsLink && (
+                    <a href={teamsLink} target="_blank" rel="noopener noreferrer" className={ROW_BTN} data-testid="actions-open-teams">
+                      <ExternalLink size={11} aria-hidden /> Open in Teams
+                    </a>
+                  )}
+                  <button type="button" className={ROW_BTN} disabled={!canAct} onClick={() => void act("approve")}>
+                    <Plus size={11} aria-hidden /> Add as task
+                  </button>
+                  <button type="button" className={ROW_BTN} disabled={!canAct} onClick={() => (setDraft(title), setEditing(true))}>
+                    <Pencil size={11} aria-hidden /> Edit
+                  </button>
+                  <button type="button" className={ROW_BTN} disabled={!canAct} onClick={() => void act("complete")}>
+                    <CheckCheck size={11} aria-hidden /> Done
+                  </button>
+                  <button type="button" className={ROW_BTN} disabled={!canAct} onClick={() => void act("dismiss")}>
+                    <X size={11} aria-hidden /> Dismiss
+                  </button>
+                  <button type="button" className={ROW_BTN} disabled={!canAct} aria-expanded={panel === "wrong"} onClick={() => setPanel((p) => (p === "wrong" ? null : "wrong"))}>
+                    <Flag size={11} aria-hidden /> Wrong?
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+        {/* Phone: ProposalChecklistItem's "Proposed" menu chip, the same items (AC-G-1). */}
+        <div className="md:app-hidden">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild disabled={!canAct}>
+              <button
+                type="button"
+                aria-label={`Actions for "${title}"`}
+                className="-my-1 inline-flex min-h-11 shrink-0 items-center gap-0.5 rounded-md border border-dashed border-hairline bg-muted px-2 py-1 text-[10px] text-muted-foreground transition hover:bg-secondary disabled:opacity-50"
+              >
+                {busy ? <Loader2 size={11} className="animate-spin" /> : <span>{open ? "Proposed" : triaging ? "To sort" : closedLabel}</span>}
+                <ChevronDown size={9} className="opacity-60" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              {triaging ? triageItems : menuItems}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+      {panel === "reply" && row.reply && <SuggestedReply row={row} onRedo={redo} />}
+      {panel === "wrong" && (
+        <WrongPanel
+          row={row}
+          caller={caller}
+          onClose={() => setPanel(null)}
+          onSent={() => {
+            patch(row.id, { state: "corrected" });
+            setPanel(null);
+          }}
+          onUndone={() => patch(row.id, { state: row.state })}
+        />
+      )}
+    </li>
+  );
+}
+
+/** Work-mailbox email: Iris's suggested reply, Copy / Open in Outlook / Redo (owner chose copy-and-paste). The
+ *  anatomy of Iris's own email-reply card (HuddleView EmailReplyRow). */
+function SuggestedReply({ row, onRedo }: { row: ActionRow; onRedo: () => void }) {
+  const text = row.reply?.proposedReply?.trim() ?? "";
+  return (
+    <div className="ml-6 mt-2 rounded-lg border border-hairline p-2" data-testid="actions-suggested-reply">
+      {text ? (
+        <>
+          <p className="text-[11px] font-semibold text-muted-foreground">Iris’s suggested reply</p>
+          <blockquote className="mt-1 max-h-60 overflow-y-auto whitespace-pre-wrap border-l-2 pl-3 text-[13px] leading-relaxed text-foreground">{text}</blockquote>
+        </>
+      ) : (
+        <p className="text-[12px] text-muted-foreground">Iris hasn’t suggested a reply yet.</p>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {text && (
+          <button
+            type="button"
+            className={cn(ROW_BTN, "min-h-11 md:min-h-0")}
+            onClick={() =>
+              navigator.clipboard
+                ?.writeText(text)
+                .then(() => toast.success("Reply copied — paste it into your work Outlook"))
+                .catch(() => toast.error("Couldn't copy — select the text above instead."))
+            }
+          >
+            <Copy size={11} aria-hidden /> Copy reply
+          </button>
+        )}
+        {text && (
+          <a href="https://outlook.office.com/mail/" target="_blank" rel="noopener noreferrer" className={cn(ROW_BTN, "min-h-11 md:min-h-0")} title="Opens Outlook; find the email by its subject">
+            <ExternalLink size={11} aria-hidden /> Open in Outlook
+          </a>
+        )}
+        <button type="button" className={cn(ROW_BTN, "min-h-11 md:min-h-0")} onClick={onRedo}>
+          <Pencil size={11} aria-hidden /> Redo with Iris
+        </button>
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted-foreground">Work mailbox: Huddle can’t save drafts there, so copy the reply and paste it into the email. Nothing is ever sent.</p>
+    </div>
+  );
+}
+
+function WrongPanel({ row, caller, onClose, onSent, onUndone }: { row: ActionRow; caller: Caller; onClose: () => void; onSent: () => void; onUndone: () => void }) {
+  const [reason, setReason] = useState<CorrectionReason | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const reasons = CORRECTION_REASONS.filter((r) => r !== "stop_list" || row.fromList);
+  async function send() {
+    if (!reason || busy) return;
+    setBusy(true);
+    const r = await correctActionFn({ data: { caller, proposalId: row.id, reason, text: text.trim() || undefined, itemKey: row.itemKey, listSender: reason === "stop_list" ? row.listSender : null } }).catch(() => null);
+    setBusy(false);
+    if (!r?.ok) {
+      toast.error(r?.error ?? "Couldn't send that.");
+      return;
+    }
+    onSent();
+    toast("Sent back to Iris. It leaves your list.", {
+      action: {
+        label: "Undo",
+        onClick: () =>
+          void correctActionFn({ data: { caller, proposalId: row.id, undo: true, listSender: row.listSender } }).then((u) => (u.ok ? onUndone() : toast.error(u.error ?? "Couldn't undo that."))),
+      },
+    });
+  }
+  return (
+    <div className="ml-6 mt-2 rounded-lg border border-hairline p-2" data-testid="actions-wrong-panel">
+      <div className="flex items-center justify-between">
+        <p className="text-[12px] font-medium text-foreground">What is wrong with this one?</p>
+        <button type="button" onClick={onClose} aria-label="Close" className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted">
+          <X size={13} />
+        </button>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {reasons.map((r) => (
+          <button
+            key={r}
+            type="button"
+            aria-pressed={reason === r}
+            onClick={() => setReason(r)}
+            className={cn(
+              "min-h-9 rounded-full border px-2.5 py-1 text-[11px] transition",
+              reason === r ? "border-primary bg-primary text-primary-foreground" : "border-hairline text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            {CORRECTION_LABEL[r]}
+          </button>
+        ))}
+      </div>
+      <textarea
+        value={text}
+        maxLength={CORRECTION_TEXT_MAX}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Optional: tell Iris why"
+        rows={2}
+        className="mt-2 w-full resize-none rounded border border-hairline bg-background px-2 py-1 text-[13px]"
+      />
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <p className="text-[11px] text-muted-foreground">The row leaves the list, and the reason goes back to the step that sorts your mail.</p>
+        <button type="button" disabled={!reason || busy} onClick={() => void send()} className={cn(ROW_BTN, "min-h-11 font-semibold text-foreground md:min-h-8")}>
+          {busy ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} aria-hidden />} Send
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** "What shows": the bell's "What counts" anatomy (a header row + checkbox labels). Server-stored (AC-D-7). */
+function WhatShows({
+  settings,
+  hidden,
+  meetingOthersHidden,
+  onChange,
+}: {
+  settings: ActionsSettings;
+  hidden: OkPage["hidden"];
+  meetingOthersHidden: number;
+  onChange: (s: ActionsSettings) => void;
+}) {
+  const label = "flex min-h-8 items-center gap-2 text-xs";
+  const head = "pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground";
+  const toggleCat = (c: (typeof HIDEABLE_CATEGORIES)[number]) =>
+    onChange({ ...settings, hideCategories: settings.hideCategories.includes(c) ? settings.hideCategories.filter((x) => x !== c) : [...settings.hideCategories, c] });
+  return (
+    <div className="space-y-1.5 border-b border-hairline bg-surface px-3 py-2 sm:px-6" data-testid="actions-settings">
+      <p className={head}>Hide these kinds of mail</p>
+      {HIDEABLE_CATEGORIES.map((c) => (
+        <label key={c} className={label}>
+          <input type="checkbox" checked={settings.hideCategories.includes(c)} onChange={() => toggleCat(c)} />
+          {HIDEABLE_CATEGORY_LABEL[c]}
+          {hidden.categories[c] ? <span className="text-muted-foreground">({hidden.categories[c]} hidden)</span> : null}
+        </label>
+      ))}
+      <p className={head}>Teams</p>
+      <label className={label}>
+        <input type="checkbox" checked={settings.hideUninvolvedChats} onChange={() => onChange({ ...settings, hideUninvolvedChats: !settings.hideUninvolvedChats })} data-testid="actions-hide-uninvolved" />
+        <span>
+          Hide group and meeting chats I never wrote in
+          <span className="block text-[11px] text-muted-foreground">Unless someone @mentioned you.{hidden.uninvolved ? ` ${hidden.uninvolved} hidden.` : ""}</span>
+        </span>
+      </label>
+      <p className={head}>Sources</p>
+      {(["email", "teams", "meeting"] as const).map((s) => (
+        <label key={s} className={label}>
+          <input type="checkbox" checked={settings.sources[s]} onChange={() => onChange({ ...settings, sources: { ...settings.sources, [s]: !settings.sources[s] } })} />
+          {s === "email" ? "Email" : s === "teams" ? "Teams" : "Meeting notes"}
+          {s === "meeting" && meetingOthersHidden ? <span className="text-muted-foreground">(only yours or unassigned; {meetingOthersHidden} for others not shown)</span> : null}
+        </label>
+      ))}
+      {settings.hiddenSenders.length > 0 && (
+        <>
+          <p className={head}>Lists you stopped flagging</p>
+          {settings.hiddenSenders.map((s) => (
+            <label key={s} className={label}>
+              <input type="checkbox" checked onChange={() => onChange({ ...settings, hiddenSenders: settings.hiddenSenders.filter((x) => x !== s) })} />
+              <span className="truncate">{s}</span>
+            </label>
+          ))}
+        </>
+      )}
+      <p className={head}>Sorting</p>
+      <label className={label}>
+        <input type="checkbox" checked={settings.classify !== false} onChange={() => onChange({ ...settings, classify: settings.classify === false })} />
+        Sort new mail and chats with AI
+      </label>
+      <label className={label}>
+        Daily limit
+        <input
+          type="number"
+          min={0}
+          max={2000}
+          defaultValue={settings.dailyCap}
+          onBlur={(e) => {
+            const n = Math.floor(Number(e.target.value));
+            if (Number.isFinite(n) && n !== settings.dailyCap) onChange({ ...settings, dailyCap: Math.max(0, Math.min(2000, n)) });
+          }}
+          className="w-20 rounded border border-hairline bg-background px-1.5 py-0.5 text-xs tabular-nums"
+        />
+        <span className="text-muted-foreground">AI checks a day</span>
+      </label>
+    </div>
+  );
+}

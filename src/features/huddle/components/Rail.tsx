@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { MessageSquare, LayoutGrid, FolderOpen, Compass, Settings, ListChecks, CalendarDays } from "lucide-react";
+import { MessageSquare, LayoutGrid, FolderOpen, Compass, Settings } from "lucide-react";
 import { RailAppsButton } from "./AppsLauncher";
+import { RailModulesButton } from "./ModulesLauncher";
 import { cn } from "@/lib/utils";
 import { useHuddleStore, type View } from "../store";
 import { SettingsSheet } from "./SettingsSheet";
@@ -20,8 +21,7 @@ import { SettingsSheet } from "./SettingsSheet";
 const items: { id: string; label: string; icon: typeof MessageSquare; view: View; neverActive?: boolean }[] = [
   { id: "huddle", label: "Huddles", icon: MessageSquare, view: "huddle" },
   { id: "board", label: "Board", icon: LayoutGrid, view: "board" },
-  { id: "priorities", label: "Priorities", icon: ListChecks, view: "priorities" },
-  { id: "schedule", label: "Schedule", icon: CalendarDays, view: "schedule" },
+  // Priorities and Schedule moved into the labelled Modules button below (owner design 1A, 2026-11-16).
   { id: "artifacts", label: "Artifacts", icon: FolderOpen, view: "artifacts" },
   { id: "memory", label: "Memory", icon: Compass, view: "huddle", neverActive: true },
 ];
@@ -69,9 +69,13 @@ export function Rail() {
             </div>
           );
         })}
-        {/* Tool apps (Polish, then Sidecar and Prompto) live behind ONE labelled Apps button. */}
+        {/* Views you look at (Priorities, Schedule, Actions) live behind ONE labelled Modules button; tool apps
+            (Polish, then Sidecar and Prompto) behind ONE labelled Apps button. */}
         <span aria-hidden className="my-1.5 h-px w-6 bg-primary-foreground/20" />
-        <RailAppsButton />
+        <div className="flex flex-col items-center gap-1">
+          <RailModulesButton />
+          <RailAppsButton />
+        </div>
       </div>
       <div className="flex flex-col items-center gap-2">
         <button
