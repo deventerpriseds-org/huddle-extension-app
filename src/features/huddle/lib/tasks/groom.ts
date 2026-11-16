@@ -6,7 +6,7 @@
 // the normal sync into Huddle's mirror. Gated to Terry (scrum master) at the call site.
 
 import { AGENTS, type AgentId } from "../../data/agents";
-import { REMINDER_TAG, alarmFits, isAgentWork, isCoursework } from "./workability";
+import { MY_TASK_TAG, REMINDER_TAG, alarmFits, isAgentWork, isCoursework } from "./workability";
 
 export const GROOM_BACKLOG_TOOL = {
   type: "function",
@@ -173,7 +173,7 @@ export function groomOwner(current: string | null | undefined, batchPick: string
  * tasks got reminder-only check-ins — the agent kicking the work down the road.
  */
 export function groomTags(llmTags: string[], currentTags: string[], title: string): string[] {
-  const keep = currentTags.filter((t) => t === "parking-lot" || t === "blocked");
+  const keep = currentTags.filter((t) => t === "parking-lot" || t === "blocked" || t === MY_TASK_TAG);
   const fresh = llmTags.filter((t) => t !== REMINDER_TAG);
   const out = Array.from(new Set([...fresh, ...keep])).slice(0, 5);
   return alarmFits(title) ? Array.from(new Set([...out.slice(0, 4), REMINDER_TAG])) : out;
@@ -240,8 +240,18 @@ export async function dispatchGroomBacklog(
     // something already waiting on one. It becomes eligible again the moment the reminder fires.
     const { taskIdsInReminderWindow } = await import("./turns.server");
     const inWindow = await taskIdsInReminderWindow(email);
-    const tasks = (await getTasksForUser(email, category)).filter(
-      (t) => !(t.tags ?? []).includes("parking-lot") && !inWindow.has(t.id),
+    const allOpen = await getTasksForUser(email, category);
+    // MY TASK: the owner tapped "Not an AI task" — it is theirs, so grooming never re-assigns it (same
+    // opt-out shape as parking-lot). Its title is kept as an EXAMPLE for the model below, which is how the
+    // button tunes future assignment without any per-task code.
+    const myTaskTitles = allOpen
+      .filter((t) => (t.tags ?? []).includes(MY_TASK_TAG))
+      .map((t) => String(t.title ?? "").slice(0, 80))
+      .filter(Boolean)
+      .slice(0, 20);
+    const tasks = allOpen.filter(
+      (t) =>
+        !(t.tags ?? []).includes("parking-lot") && !(t.tags ?? []).includes(MY_TASK_TAG) && !inWindow.has(t.id),
     );
     const _readMs = Date.now() - _tRead0;
     if (!tasks.length) {
@@ -282,6 +292,11 @@ AGENTS (id — name, role: domains):
 ${rosterForPrompt()}
 
 Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority","rank":<int>,"reason":"<=8 words"}]}. assigned_agent MUST be one of the agent ids above, or "none" per ASSIGNMENT FIT. Include every task id exactly once.`;
+    // Tuning from the owner's "Not an AI task" taps: titles they kept for themselves. Additive only.
+    const myTaskExamples = myTaskTitles.length
+      ? `\n\nOWNER'S OWN TASKS — the owner marked these "not an AI task"; they do them personally. Treat a task ` +
+        `that is the same KIND of thing as "none":\n${myTaskTitles.map((t) => `- ${t}`).join("\n")}`
+      : "";
 
     // Classification is output-token bound (one JSON object per task), so a single call over the whole
     // slice serializes ~1k tokens and takes ~13s. Split into small chunks classified CONCURRENTLY so
@@ -313,7 +328,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
             temperature: 0.2,
             response_format: { type: "json_object" },
             messages: [
-              { role: "system", content: system },
+              { role: "system", content: system + myTaskExamples },
               { role: "user", content: `Tasks:\n${taskLines}` },
             ],
           }),

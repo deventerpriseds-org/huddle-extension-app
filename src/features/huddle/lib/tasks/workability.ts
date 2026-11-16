@@ -96,6 +96,13 @@ export function isAgentWork(title: string | null | undefined): boolean {
  */
 export const REMINDER_TAG = "reminder";
 
+/**
+ * The owner's "Not an AI task" button tag (confirm-ask row, 2026-11-17): the task is the owner's own, so it
+ * comes off its agent, goes to Backlog, and grooming never hands it back to an agent. Grooming also reads the
+ * titles tagged with it as examples of what the owner keeps for themselves, to tune future assignment.
+ */
+export const MY_TASK_TAG = "my-task";
+
 // Category / tag signals that lean personal (the user acts) when no verb decides it.
 const PERSONAL_CATEGORIES = new Set(["LIFE", "PERSONAL", "HEALTH"]);
 const PERSONAL_TAGS = new Set([

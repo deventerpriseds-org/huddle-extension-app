@@ -657,6 +657,46 @@ export const backlogTaskFromButtonFn = createServerFn({ method: "POST" })
     }
   });
 
+/**
+ * "Not an AI task" (owner, 2026-11-17: "a button like not ai task used to tune the tasks being assigned to an
+ * ai instead of leaving it for me and put it back in backlog"). One update_task, the same path as Backlog and
+ * Archive: status BACKLOG, the agent cleared (journey's update_task maps "" to null), and the `my-task` tag
+ * ADDED to the existing set (update_task replaces tags). Grooming skips my-task tasks and reads their titles
+ * as examples, which is the tuning; auto-work only takes assigned tasks, so it is out of the agent's queue.
+ */
+export function withMyTaskTag(existing: readonly string[], tag: string): string[] {
+  return existing.includes(tag) ? [...existing] : [...existing, tag];
+}
+
+export const notAiTaskFromButtonFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) =>
+    z.object({ caller: Caller, taskId: z.string().min(1) }).parse(raw),
+  )
+  .handler(async ({ data }): Promise<ButtonResult> => {
+    const email = await resolveCallerEmail(data.caller);
+    if (!email) return { ok: false, error: "Sign-in required." };
+    try {
+      const { getOwnedTaskForConfirmAsk } = await import("./tasks.server");
+      const task = await getOwnedTaskForConfirmAsk(data.taskId, email);
+      if (!task) return { ok: false, error: "Task not found." };
+      const { MY_TASK_TAG } = await import("./workability");
+      const existingTags = task.tags ?? [];
+      if (task.status === "BACKLOG" && existingTags.includes(MY_TASK_TAG) && !task.assigned_agent) {
+        return { ok: true, alreadyDone: true };
+      }
+      const { invokeJourneyTool } = await import("../journey/proxy.functions");
+      const r = await invokeJourneyTool({
+        toolName: "update_task",
+        args: { task_id: data.taskId, status: "BACKLOG", assigned_agent: "", tags: withMyTaskTag(existingTags, MY_TASK_TAG) },
+        caller: data.caller ?? {},
+        context: { source: "huddle" },
+      });
+      return { ok: r.ok, error: r.error ?? undefined };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
 export const parkTaskFromButtonFn = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) =>
     z.object({ caller: Caller, taskId: z.string().min(1) }).parse(raw),
