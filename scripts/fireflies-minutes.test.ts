@@ -448,7 +448,9 @@ const drain = async (n = 6) => {
   await tick();
   console.error = origErr;
   const m21 = db.meetings.get("m21");
-  t("J5 a failed transcript store does NOT fail the meeting: email sent, OneDrive saved, nothing left pending, no attempt used", [sent.length, uploads.length, m21?.pending_email, m21?.pending_onedrive, m21?.attempts], [1, 1, false, false, 0]);
+  // The lease and worker-pass fields matter: a store failure that escaped processMeeting would leave the email and
+  // OneDrive results recorded (the branches record them) but skip release(), so only these two catch it.
+  t("J5 a failed transcript store does NOT fail the meeting: email sent, OneDrive saved, nothing left pending, no attempt used, row released, pass not failed", [sent.length, uploads.length, m21?.pending_email, m21?.pending_onedrive, m21?.attempts, m21?.lease_until ?? null, errs.some((l) => l.includes("worker pass failed"))], [1, 1, false, false, 0, null, false]);
   t("J6 the failure is counted and logged as a CODE only (no transcript text, address or message)", [S.transcriptStoreFailures.count - failsBefore, errs.filter((l) => /CANARY|SYNTH|@/.test(l)), errs.some((l) => l.includes("transcript store failed transcript_store_failed"))], [1, [], true]);
 
   reset();
