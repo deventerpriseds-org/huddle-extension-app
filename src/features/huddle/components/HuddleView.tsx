@@ -97,7 +97,14 @@ import { streamItemSummary } from "../lib/stream-context";
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
 import { ViewSwitcher } from "./ViewSwitcher";
 import {
+  getMySchedulingConfigFn,
+  setMyJobEnabledFn,
+} from "../lib/identity/scheduling-config.functions";
+import type { JobCadence } from "../lib/identity/scheduling-config.server";
+import { autoStandupLabel } from "../lib/identity/auto-job-label";
+import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
@@ -140,6 +147,44 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
   function startVirtualMeeting(ceremonyType: CeremonyKind) {
     startMeeting("virtual-meeting", { ceremonyType });
   }
+
+  // "Automatic stand-up" on/off (owner 2026-11-16). The EFFECTIVE stand-up cadence (override or
+  // default) is read each time the menu opens, so the checkmark is the stored state. Turning it off
+  // only stops the SCHEDULED 8:00 digest (scheduler.server.ts honours `enabled:false`); "Daily stand-up"
+  // above is a manual start and keeps working either way.
+  const [standupCadence, setStandupCadence] = useState<JobCadence | undefined>(undefined);
+  const [standupSaving, setStandupSaving] = useState(false);
+  const meetingCaller = user
+    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+    : undefined;
+  async function loadStandupToggle() {
+    if (!meetingCaller) return;
+    try {
+      const res = await getMySchedulingConfigFn({ data: { caller: meetingCaller } });
+      setStandupCadence(res.config?.overrides?.standup ?? res.defaults.standup);
+    } catch {
+      /* leave the last known state; the item still works */
+    }
+  }
+  async function toggleAutoStandup(next: boolean) {
+    if (!meetingCaller || standupSaving) return;
+    setStandupSaving(true);
+    try {
+      const res = await setMyJobEnabledFn({ data: { caller: meetingCaller, job: "standup", enabled: next } });
+      if (res.error || !res.config) {
+        toast.error(`Couldn't change the automatic stand-up${res.error ? `: ${res.error}` : "."}`);
+        return;
+      }
+      const saved = res.config.overrides.standup;
+      setStandupCadence((c) => saved ?? (c ? { ...c, enabled: undefined } : c));
+      toast.success(next ? "Automatic stand-up is on." : "Automatic stand-up is off. You can still start one from this menu.");
+    } catch {
+      toast.error("Couldn't change the automatic stand-up.");
+    } finally {
+      setStandupSaving(false);
+    }
+  }
+  const autoStandupOn = standupCadence?.enabled !== false;
 
   // Open the most recent persisted ceremony run (e.g. an auto-run that fired while away).
   async function reviewLastCeremony() {
@@ -217,7 +262,7 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
 
         <AttentionBell />
 
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={(open) => { if (open) void loadStandupToggle(); }}>
           <DropdownMenuTrigger asChild>
             <button className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">
               <Video size={14} />
@@ -225,7 +270,7 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
               <ChevronDown size={12} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent align="end" className="w-64">
             <DropdownMenuLabel>Virtual meeting (agents)</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => startVirtualMeeting("standup")}>
@@ -237,6 +282,20 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
             <DropdownMenuItem onClick={() => startVirtualMeeting("review_retro")}>
               Review + retro
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={autoStandupOn}
+              disabled={!meetingCaller || standupCadence === undefined || standupSaving}
+              onCheckedChange={(v) => void toggleAutoStandup(v === true)}
+              onSelect={(e) => e.preventDefault()}
+              data-testid="auto-standup-toggle"
+              data-state-on={autoStandupOn ? "true" : "false"}
+            >
+              <span className="flex-1">{autoStandupLabel(standupCadence)}</span>
+              <span className="ml-2 text-[11px] text-muted-foreground">
+                {standupCadence === undefined ? "…" : autoStandupOn ? "On" : "Off"}
+              </span>
+            </DropdownMenuCheckboxItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => startMeeting("virtual-meeting", { members: [] })}>
               <Plus size={14} className="mr-1.5" /> New blank meeting

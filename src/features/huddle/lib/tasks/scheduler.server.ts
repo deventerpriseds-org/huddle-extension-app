@@ -16,6 +16,7 @@ import {
 } from "./tasks.server";
 import {
   resolveJobCadence,
+  isJobEnabled,
   DEFAULT_TZ,
   type JobCadence,
   type JobTypeKey,
@@ -346,6 +347,10 @@ export async function runDueScheduledJobs(): Promise<number> {
     } catch {
       /* if this fails the 90s hold retries the job later — idempotent slot id prevents a double run */
     }
+    // Switched off by the user (e.g. Meetings → "Automatic stand-up"): the next run was advanced above,
+    // so switching it back on resumes at the next listed hour; nothing fires now. Manual runs never
+    // pass through here, so they keep working either way.
+    if (!isJobEnabled(cadence)) continue;
     // Stable per-slot id (local hour bucket) so a retry within the same slot can't double-fire the job.
     const slotKey = new Intl.DateTimeFormat("en-CA", {
       timeZone: tz,

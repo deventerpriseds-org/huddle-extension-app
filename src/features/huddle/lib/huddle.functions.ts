@@ -3,6 +3,7 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
+import { agentBudgetMs, turnDeadlineMs } from "./turn-deadline";
 import { joinOpenerAndBlock } from "./chat-format";
 import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
 import { sanitizeChecklistPayload } from "./proposals/proposals";
@@ -753,8 +754,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // and stop THIS execution (a fresh runner execution continues the turn). Separate from — and below
   // — the synchronous path's 36s deadline so a chunk lands comfortably under the hosting ceiling.
   const CHUNK_BUDGET_MS = 30_000;
-  const TURN_DEADLINE_MS = 36_000;
-  const deadlineMs = chunked ? CHUNK_BUDGET_MS : TURN_DEADLINE_MS;
+  // Sync turns get 36s; a ceremony BARGE gets 25s so its answer always lands inside the client's 30s
+  // barge timer (MeetingBar.tsx). WHY + evidence: turn-deadline.ts header.
+  const deadlineMs = turnDeadlineMs({
+    chunked,
+    chunkBudgetMs: CHUNK_BUDGET_MS,
+    ceremonyBarge: !!data.ceremonyBarge,
+  });
   // Runaway guard: cap the number of continuation executions. `chunks` counts boundary saves (bumped
   // by saveTurnChunk, NOT the mid-chunk streaming writes), so this is the execution count so far.
   const MAX_CHUNKS = 6;
@@ -7342,7 +7348,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   // Per-agent hard timeout. After parallelization a group turn's wall-time is
   // primary + max(wave agent); OpenAI per-call latency is high-variance, so one stalled agent can
   // still drag a wave to the deadline. Bound each agent by the time REMAINING to `deadlineMs` (the
-  // 36s sync-path deadline OR the 30s per-chunk budget). NOTE: this races the response only; a
+  // 36s sync-path deadline, the 25s ceremony-barge deadline, OR the 30s per-chunk budget). NOTE: this races the response only; a
   // truly abandoned call's late tool side-effects aren't cancelled here (rare). In CHUNKED mode a
   // higher floor keeps a late-in-chunk agent from getting a near-zero bound that guarantees a
   // timeout-drop — the pre-wave budget gate re-queues agents there's no room for, so anything that
@@ -7357,7 +7363,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // (nearly) the whole hosting request instead of the shared chunk/turn slice. This is what lets a
     // slow high-effort (Sol) 1:1 reply finish instead of being cut; if it STILL overruns, the streamed
     // partial is already persisted and the durable turn continues in a fresh execution.
-    const budgetMs = data.scope === "one-to-one" ? 40_000 : deadlineMs;
+    const budgetMs = agentBudgetMs({ scope: data.scope, ceremonyBarge: !!data.ceremonyBarge, deadlineMs });
     const remaining = Math.max(floor, budgetMs - (Date.now() - turnStartMs));
     // Tied to the timeout below: when the deadline fires we don't just stop WAITING on the agent's
     // call, we actually tell it to stop. Without this, an "abandoned" attempt keeps running in the
