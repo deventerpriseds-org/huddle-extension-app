@@ -1,0 +1,43 @@
+{
+  "results": [
+    {
+      "name": "Meeting button is visible in the huddle header",
+      "pass": true
+    },
+    {
+      "name": "Automatic stand-up row is in the Meeting menu",
+      "pass": true
+    },
+    {
+      "name": "The row shows a real on/off switch",
+      "pass": true,
+      "detail": "switches=1"
+    },
+    {
+      "name": "Its label starts at the same left edge as 'Daily stand-up' (within 1px)",
+      "pass": true,
+      "detail": "daily=417 standup=417"
+    },
+    {
+      "name": "The 'Automatic stand-up' title sits on one line",
+      "pass": true,
+      "detail": "lines=1"
+    },
+    {
+      "name": "Switch position matches the saved setting",
+      "pass": true,
+      "detail": "saved=false switch=unchecked"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
