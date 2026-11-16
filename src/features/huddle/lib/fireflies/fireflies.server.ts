@@ -242,6 +242,62 @@ export async function fetchTranscript(meetingId: string): Promise<{ transcript: 
   return { transcript: result.data.transcript, customFieldAvailable };
 }
 
+/** 2026-11-16 (back-fill by date range): every Fireflies meeting in [fromIso, toIso], paged 50 at a time. Asks with
+ *  fromDate/toDate first; if the API refuses those arguments it pages everything and applies the window here
+ *  (lib/fireflies/fireflies-list.ts). Never logs ids or titles. Throws on HTTP / transport failure. */
+export async function listTranscriptsInRange(
+  fromIso: string,
+  toIso: string,
+): Promise<{ meetings: import("./fireflies-list").ListedMeeting[]; mode: "date_args" | "paged_all"; pages: number; noTime: number }> {
+  const L = await import("./fireflies-list");
+  const apiKey = env("FIREFLIES_API_KEY");
+  if (!apiKey) throw new Error("fireflies_api_key_not_configured");
+  const fromMs = Date.parse(fromIso);
+  const toMs = Date.parse(toIso);
+  const ask = async (query: string, variables: Record<string, unknown>) => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 15_000);
+    try {
+      const r = await fetch(FIREFLIES_GRAPHQL, {
+        method: "POST",
+        headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ query, variables }),
+        signal: ctl.signal,
+      });
+      if (!r.ok) throw new Error("fireflies_api_http_" + r.status);
+      return (await r.json()) as { data?: unknown; errors?: unknown[] };
+    } catch (e) {
+      if ((e as { name?: string })?.name === "AbortError") throw new Error("fireflies_api_timeout");
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  let mode: "date_args" | "paged_all" = "date_args";
+  const seen = new Map<string, import("./fireflies-list").ListedMeeting>();
+  let pages = 0;
+  for (let skip = 0; pages < L.FF_MAX_PAGES; skip += L.FF_PAGE) {
+    const j =
+      mode === "date_args"
+        ? await ask(L.LIST_BY_DATE_QUERY, { fromDate: new Date(fromMs).toISOString(), toDate: new Date(toMs).toISOString(), limit: L.FF_PAGE, skip })
+        : await ask(L.LIST_ALL_QUERY, { limit: L.FF_PAGE, skip });
+    if (mode === "date_args" && pages === 0 && L.dateArgsRefused(j.errors)) {
+      mode = "paged_all";
+      skip = -L.FF_PAGE;
+      continue;
+    }
+    if (Array.isArray(j.errors) && j.errors.length && !j.data) throw new Error("fireflies_list_errors");
+    pages++;
+    const page = L.parseListPage(j);
+    for (const m of page) if (L.inListWindow(m, fromMs, toMs)) seen.set(m.id, m);
+    if (page.length < L.FF_PAGE) break;
+    // Paging everything: Fireflies lists newest first, so a full page entirely older than the window ends it.
+    if (mode === "paged_all" && page.every((m) => m.atMs !== null && m.atMs < fromMs)) break;
+  }
+  const meetings = [...seen.values()];
+  return { meetings, mode, pages, noTime: meetings.filter((m) => m.atMs === null).length };
+}
+
 function onedriveMailbox(): string {
   return env("FIREFLIES_ONEDRIVE_MAILBOX") || emailFromOptions()[0] || "";
 }

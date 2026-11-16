@@ -57,7 +57,25 @@ Hide a Teams GROUP or MEETING chat only when the owner's Teams id is KNOWN, he w
 the chat (all stored messages, not just the window), and he is NEVER @mentioned in any stored message. 1:1 chats always
 show. Channels / unknown kinds show. Missing mention data or an unknown author/owner id = can't tell = SHOWS (fail
 open), counted in the summary line. Applied in `planLedgerReport` BEFORE any AI call.
-- [ ] Piece 2 -- Fireflies date-range search in the back-fill
+  - Committed + pushed: `57c55814`.
+  - Mutation proofs (scripts/mutate.sh, anchors from files, exit code read): ALL FIVE `FIRED (control EQUIVALENT)`,
+    exit 0 --
+    m1 pre-filter `if (c.involvement.hide)` -> `if (false)`: test "P-1 uninvolved..." failed;
+    m2 rule core `hide: true` -> `hide: false`: "U-1 group chat..." failed;
+    m3 fail-open on missing mention data removed: "U-6 a message with NO mention data..." failed;
+    m4 resolved exclusion `if (via)` -> `if (false)`: "R-1 added as a task..." failed;
+    m5 "newer message brings it back" (`coversUntilMs >= latestOtherMs`) removed: "R-2 ignored BEFORE..." failed.
+- [x] Piece 2 -- Fireflies date-range search in the back-fill (code + tests; dry run pending)
+  - `src/features/huddle/lib/fireflies/fireflies-list.ts` (pure: queries, page parse, window, fallback trigger, union,
+    per-day counts) + `fireflies.server.ts listTranscriptsInRange` (fromDate/toDate first; if the API refuses the
+    date arguments, pages everything 50 at a time and filters here; hard cap 40 pages).
+  - `scripts/correspondence-backfill.ts`: fetches known (chat.fireflies_meetings) UNION listed; logs mode, pages,
+    listed-by-day, union provenance counts, fetched-by-meeting-day. Same transcript-row path (storeContent).
+  - Teams REFILL (coordinator point 2): on apply only, after observe, `storeContent` re-writes CONTENT ONLY for each
+    Teams version's items (never status / hash / attempts / claims), so stored rows gain mention ids, owner id and
+    mentionsOwner. Chosen over a hash change because a hash change resets every Teams row to `pending` and would
+    re-run the processors (bell) on all 149 rows. Logged as "content refreshed".
+  - Tests: `bun scripts/fireflies-list.test.ts` 7 passed, 0 failed.
 - [ ] Finish -- suites, tsc, build, dry runs
 
 ## Findings that shaped the design
