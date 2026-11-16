@@ -109,6 +109,45 @@ const teamsKeys = (text: string) => {
   }
   return { keys, records, synth };
 };
+// DIAGNOSTIC (counts only): what KIND of conversation is each Teams chat, and is the owner involved?
+// Classifies by Graph id suffix (@unq.gbl.spaces = 1:1, @thread.v2 = group/meeting chat, @thread.tacv2 or
+// @thread.skype = team CHANNEL), by any chatType-like field on the line, and by owner participation
+// (owner sent >=1 message, or an @mention names the owner id). Prints counts and field NAMES only.
+if (diag && cfg.teams.enabled) {
+  const vs = await versions(cfg.teams.path);
+  const text = vs[vs.length - 1].text;
+  const kind = (id: string) => /@unq\.gbl\.spaces$/i.test(id) ? "one_on_one" : /@thread\.v2$/i.test(id) ? "group_or_meeting_chat" : /@thread\.(tacv2|skype)$/i.test(id) ? "CHANNEL" : "other";
+  const chats = new Map<string, { kind: string; type: string; ownerSent: boolean; ownerMentioned: boolean; msgs: number }>();
+  const lineKeys = new Set<string>(); const msgKeys = new Set<string>();
+  for (const raw of text.split(/\n/)) {
+    let o: Record<string, unknown>; try { o = JSON.parse(raw); } catch { continue; }
+    if (!o || o.synthetic !== false) continue;
+    Object.keys(o).forEach((k) => lineKeys.add(k));
+    const id = String(o.chatId ?? o.chat_id ?? "");
+    const owner = String(o.ownerUserId ?? "").toLowerCase();
+    const type = String(o.chatType ?? o.chat_type ?? (o as { chat?: { chatType?: unknown } }).chat?.chatType ?? "absent");
+    const c = chats.get(id) ?? { kind: kind(id), type, ownerSent: false, ownerMentioned: false, msgs: 0 };
+    for (const m of (Array.isArray(o.messages) ? o.messages : []) as Record<string, unknown>[]) {
+      Object.keys(m).forEach((k) => msgKeys.add(k));
+      if (String(m.messageType ?? "message") !== "message") continue;
+      c.msgs++;
+      const from = m.from as { user?: { id?: unknown } } | undefined;
+      const sid = String(from?.user?.id ?? (m.sender as { id?: unknown })?.id ?? m.sender ?? "").toLowerCase();
+      if (owner && sid === owner) c.ownerSent = true;
+      const ments = Array.isArray(m.mentions) ? (m.mentions as { mentioned?: { user?: { id?: unknown } } }[]) : [];
+      if (owner && ments.some((x) => String(x?.mentioned?.user?.id ?? "").toLowerCase() === owner)) c.ownerMentioned = true;
+    }
+    chats.set(id, c);
+  }
+  const tally: Record<string, number> = {};
+  for (const c of chats.values()) {
+    const k = `${c.kind}/type=${c.type}/${c.ownerSent ? "owner_sent" : c.ownerMentioned ? "owner_mentioned_only" : "owner_not_active"}`;
+    tally[k] = (tally[k] ?? 0) + 1;
+  }
+  console.log(`teams kinds: chats ${chats.size} | ${Object.entries(tally).sort().map(([k, v]) => `${k}=${v}`).join(" ")}`);
+  console.log(`teams kinds: messages in chats where owner not active ${[...chats.values()].filter((c) => !c.ownerSent && !c.ownerMentioned).reduce((n, c) => n + c.msgs, 0)}`);
+  console.log(`teams field names: line [${[...lineKeys].sort().join(",")}] message [${[...msgKeys].sort().join(",")}]`);
+}
 if (diag && cfg.teams.enabled) {
   const vs = await versions(cfg.teams.path);
   const newest = teamsKeys(vs[vs.length - 1].text);
