@@ -215,5 +215,39 @@ t("TP-2 stored Teams content carries the new fields; the content hash is unchang
 const viaParser = teamsChatsFromLedger(parsed.messages.map((m) => ({ source: "teams" as const, sourceItemId: m.messageId, threadId: m.chatId, at: m.at, content: teamsContent(m) })));
 t("TP-3 end to end: parsed line -> stored content -> the chat shows because the owner was @mentioned", viaParser[0].involvement.reason, "owner_mentioned");
 
+// ── Verifier report-from-ledger-1, finding 1: a mention that names no comparable user (@Everyone, tag, app, team,
+//    channel) MAY address the owner -> the chat SHOWS (fail open). Synthetic ids only.
+const pmsg = (id: string, o: Record<string, unknown>) => ({ id, createdDateTime: "2026-11-10T14:00:00Z", from: { user: { id: "other-guid", displayName: "Pat Example" } }, body: { contentType: "html", content: "Please send the synthetic numbers" }, ...o });
+const parseOne = (o: Record<string, unknown>) => parseTeamsLog(line([pmsg("1", o)]), cfg).messages[0];
+const everyone = { body: { contentType: "html", content: '<at id="0">Everyone</at> please send the synthetic numbers by Friday' }, mentions: [{ id: 0, mentionText: "Everyone", mentioned: { conversation: { id: CHAT_G, displayName: "Everyone", conversationIdentityType: "chat" } } }] };
+const pe = parseOne(everyone);
+t("VF1-1 parser: @Everyone (conversation mention) -> no user ids, unresolvedMention true", [pe.mentionedUserIds, pe.unresolvedMention], [[], true]);
+t(
+  "VF1-2 parser: tag / application / team / channel mentions -> unresolvedMention true",
+  [{ tag: { id: "tag-1", displayName: "Leads" } }, { application: { id: "app-1" } }, { team: { id: "team-1" } }, { channel: { id: "chan-1" } }].map((mentioned) => parseOne({ mentions: [{ id: 0, mentioned }] }).unresolvedMention),
+  [true, true, true, true],
+);
+t(
+  "VF1-3 parser: a resolved user mention whose <at> id matches, and an empty list with no <at>, -> unresolvedMention false",
+  [parseOne({ body: { contentType: "html", content: '<at id="0">Pat</at> ok?' }, mentions: [{ id: 0, mentioned: { user: { id: "user-guid-0002" } } }] }).unresolvedMention, parseOne({ mentions: [] }).unresolvedMention],
+  [false, false],
+);
+t("VF1-4 parser: body <at> tag with no matching user mention -> unresolvedMention true", [parseOne({ body: { contentType: "html", content: '<at id="0">Someone</at> ok?' }, mentions: [] }).unresolvedMention, parseOne({ body: { contentType: "html", content: '<at id="3">Someone</at> ok?' }, mentions: [{ id: 0, mentioned: { user: { id: "user-guid-0002" } } }] }).unresolvedMention], [true, true]);
+const evChats = teamsChatsFromLedger([pe].map((m) => ({ source: "teams" as const, sourceItemId: m.messageId, threadId: m.chatId, at: m.at, content: teamsContent(m) })));
+const evPlan = planLedgerReport({ emailFacts: [], teams: evChats, meetings: [], signals: [], sinceMs: SINCE });
+t(
+  "VF1-5 end to end: an @Everyone ask in a group chat the owner never wrote in is SCANNED, not hidden; ownerMentioned unknown",
+  [evPlan.teams.hiddenUninvolved.length, evPlan.teams.scan.length, evChats[0].involvement.reason, evChats[0].ownerMentioned, evPlan.teams.cantTell],
+  [0, 1, "owner_maybe_mentioned", null, 1],
+);
+t("VF1-6 stored unresolvedMention true -> shows; stored false with [] -> still hidden (rule unchanged)", [chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), unresolvedMention: true }]).reason, chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), unresolvedMention: false }]).reason], ["owner_maybe_mentioned", "uninvolved"]);
+t(
+  "VF1-7 legacy row (no flag): an <at> tag left in the stored text with no stored user mention -> shows; without one -> unchanged (hidden)",
+  [chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), text: "hi <at>Everyone</at> please" }]).reason, chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent) }]).reason],
+  ["owner_maybe_mentioned", "uninvolved"],
+);
+t("VF1-8 the content hash is unchanged by unresolvedMention (nothing re-processes)", teamsSourceItem(pe, { path: "/t" }).contentHash === teamsSourceItem({ ...pe, unresolvedMention: undefined, mentionedUserIds: undefined }, { path: "/t" }).contentHash, true);
+t("VF1-9 stored content carries unresolvedMention", teamsContent(pe).unresolvedMention, true);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
