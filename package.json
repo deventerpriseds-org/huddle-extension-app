@@ -82,6 +82,7 @@
     "test:id-token-expiry": "bun scripts/id-token-expiry.test.ts",
     "test:handoff-lane-a": "bun test scripts/handoff-lane-a.test.ts",
     "test:handoff-lane-b": "bun test scripts/handoff-lane-b.test.ts",
+    "test:board-claims": "bun test scripts/board-claims-f6.test.ts",
     "test:shared-pool": "bun scripts/shared-pool.test.ts",
     "test:fireflies-minutes": "bun scripts/fireflies-minutes.test.ts",
     "test:fireflies-queue-sql": "bun scripts/fireflies-queue-sql.test.ts"

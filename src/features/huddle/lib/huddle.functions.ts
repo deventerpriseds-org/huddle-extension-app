@@ -48,6 +48,8 @@ import {
   HANDOFF_CONFIRM_UNAVAILABLE,
   type FollowupMode,
 } from "./handoff-followup";
+// Pure (no server imports) -- F6 board-claim honesty, layered on the same turn presenter as the Nexus guard below.
+import { presentBoardClaims } from "./tasks/board-claims";
 // Pure (no server imports) -- the Nexus write tool's reply-honesty guard, run in reply assembly.
 import {
   presentNexusWriteTurn,
@@ -2375,7 +2377,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // where a reply leaves the server -- the 1:1 stream, each chunk save, the final result, the prior shown to
   // later agents, memory -- goes through this, so a turn with a failed/unknown write shows ONLY the
   // code-built status (every reply, every chunk) and a clean write always shows the code-built saved list.
-  const presentedReplies = (list: Reply[] = replies): Reply[] => presentNexusWriteTurn(list, turnNexusWriteUses) as Reply[];
+  // F6: a reply may not claim a board change (marked done / moved / added / started) that the agent's own
+  // performed toolUses this turn do not back; read from the turn-level `toolUses`, so earlier chunks count too.
+  const presentedReplies = (list: Reply[] = replies): Reply[] =>
+    presentBoardClaims(presentNexusWriteTurn(list, turnNexusWriteUses) as Reply[], toolUses);
 
   // Lightweight handoff contract for the ad-hoc mention-chain: when an agent @mentions a teammate
   // (the "mention IS the handoff"), we re-queue that teammate — but today they receive no structured

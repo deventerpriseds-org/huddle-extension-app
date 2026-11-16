@@ -81,3 +81,92 @@ export function isPerformedWork(u: ToolUseLike): boolean {
 export function agentPerformedWork(toolUses: readonly ToolUseLike[], agentId: string): boolean {
   return toolUses.some((u) => u.agentId === agentId && isPerformedWork(u));
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// F6 presenter: an agent never claims a board action it did not perform (AC-handoff-confirm-flow.md F6, S-B rows).
+// Observed 2026-10-29: Ezra said "I marked 'Order Nike Pegasus Premium' done" with no write (the task had been DONE
+// since 09-01), and "I'm proceeding with the research" while the task sat in BACKLOG. Applied inside the existing
+// turn presenter (presentedReplies), so every exit point — stream, chunk save, final result, the prior shown to the
+// next agent, memory — sees the same corrected text. Pure and idempotent: replacement lines never match a claim.
+
+const SENTENCE_SPLIT = /((?<=[.!?])\s+|\n+)/;
+// Offers, plans, questions and capability statements are not claims (S-B5..S-B7).
+const NOT_A_CLAIM_RE =
+  /\b(?:I'll|I’ll|I will|I can|I could|I'd|I’d|want me to|shall I|should I|let me|going to|once you|if you)\b|\?\s*$/i;
+// Non-board objects (S-B8..S-B10): email read state, notes, "noted".
+const OFF_BOARD_RE = /\bas (?:read|unread)\b|\bemails?\b|\binbox\b|\bnotes?\b|\bnoted\b/i;
+// A quoted request echoed back ("You asked me to "mark it done"") is not a claim (S-B13).
+const QUOTED_RE = /["“][^"”]*\b(?:mark|move|add|archive)\w*\b[^"”]*["”]/i;
+const BOARD_WORD_RE = /\b(?:done|complete(?:d)?|review|up next|backlog|doing|board|task|card|archived?|deleted)\b/i;
+const STATUS_CLAIM_RE =
+  /(?:^|\b(?:I|I've|I’ve|I have|I just|just)\s+)(?:marked|moved|set|put|archived|deleted|removed|closed|completed)\b/i;
+const CREATE_CLAIM_RE = /(?:^|\b(?:I|I've|I’ve|I have|I just|just)\s+)(?:added|created)\b/i;
+const STARTED_CLAIM_RE =
+  /\b(?:I'm|I’m|I am)\s+(?:now\s+)?(?:proceeding|starting on|working on it|getting started)\b|\bI(?:'ve|’ve| have)\s+started\b/i;
+
+export const BOARD_CLAIM_LINES = {
+  notChanged: "Nothing was changed on the board for that.",
+  deferred: "That change was passed to the task's owner; the board isn't updated yet.",
+  notAdded: "Nothing was added to the board for that.",
+  alreadyThere: "That's already on your board.",
+  suggestionOnly: "That's a suggested card only; it isn't on your board yet.",
+  notStarted: "Nothing has started on that yet.",
+} as const;
+
+type ClaimKind = "status" | "create" | "started";
+
+function claimKind(sentence: string): ClaimKind | null {
+  const s = sentence.trim().replace(/^(?:done|ok(?:ay)?|sure|great)\s*[—–\-:,!.]\s*/i, "");
+  if (!s || NOT_A_CLAIM_RE.test(s) || OFF_BOARD_RE.test(s) || QUOTED_RE.test(s)) return null;
+  if (STARTED_CLAIM_RE.test(s)) return "started";
+  if (CREATE_CLAIM_RE.test(s) && BOARD_WORD_RE.test(s)) return "create";
+  if (STATUS_CLAIM_RE.test(s) && (BOARD_WORD_RE.test(s) || /^(?:archived|deleted)\b/i.test(s))) return "status";
+  return null;
+}
+
+/** The code-built line that replaces an unbacked claim, or null when the agent's own toolUses back it. */
+export function boardClaimCorrection(kind: ClaimKind, agentUses: readonly ToolUseLike[]): string | null {
+  if (kind === "status") {
+    if (agentUses.some(isPerformedTaskChange)) return null;
+    return agentUses.some(isDeferredStatusChange) ? BOARD_CLAIM_LINES.deferred : BOARD_CLAIM_LINES.notChanged;
+  }
+  if (kind === "create") {
+    if (agentUses.some(isPerformedCreate)) return null;
+    if (agentUses.some(isSkippedDuplicateCreate)) return BOARD_CLAIM_LINES.alreadyThere;
+    if (agentUses.some(isSuggestionOnlyCreate)) return BOARD_CLAIM_LINES.suggestionOnly;
+    return BOARD_CLAIM_LINES.notAdded;
+  }
+  if (agentUses.some(isPerformedWork) || agentUses.some(isPerformedTaskChange)) return null;
+  return BOARD_CLAIM_LINES.notStarted;
+}
+
+/** F6: replace each sentence claiming an unperformed board action with a code-built line. Pure, idempotent. */
+export function presentBoardClaims<R extends { agentId: string; text: string }>(
+  replies: readonly R[],
+  toolUses: readonly ToolUseLike[],
+): R[] {
+  return replies.map((r) => {
+    const src = String(r.text ?? "");
+    const agentUses = toolUses.filter((u) => u.agentId === r.agentId);
+    const parts = src.split(SENTENCE_SPLIT);
+    const used = new Set<string>();
+    let changed = false;
+    const out: string[] = [];
+    for (let i = 0; i < parts.length; i += 2) {
+      const sentence = parts[i] ?? "";
+      const sep = parts[i + 1] ?? "";
+      const kind = claimKind(sentence);
+      const fix = kind ? boardClaimCorrection(kind, agentUses) : null;
+      if (!fix) {
+        out.push(sentence + sep);
+        continue;
+      }
+      changed = true;
+      if (!used.has(fix)) {
+        used.add(fix);
+        out.push(fix + sep);
+      }
+    }
+    return changed ? { ...r, text: out.join("").trim() } : r;
+  });
+}
