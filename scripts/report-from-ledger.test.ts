@@ -14,6 +14,7 @@ import {
   emailMessagesFromLedger,
   forwardsFromLedger,
   inReportWindow,
+  normTeamsId,
   meetingItemsFromLedger,
   messageLookup,
   planLedgerReport,
@@ -264,6 +265,32 @@ t(
   ["owner_maybe_mentioned", "owner_maybe_mentioned", "owner_maybe_mentioned", "owner_maybe_mentioned", "owner_maybe_mentioned"],
 );
 t("VF4-4 a stored list of real, non-owner user ids is still 'nobody we care about' -> hidden (rule unchanged)", chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), mentionedUserIds: ["user-guid-0002"] }]).reason, "uninvolved");
+
+// ── Finding 5: chatInvolvement and teamsChatsFromLedger use ONE owner-id normaliser (trim + lower-case), so the
+//    involvement verdict and the facts handed to the model (who is OWNER, settled, ownerMentioned) always agree.
+t("VF5-1 normTeamsId: trim + lower-case; non-string -> ''", [normTeamsId("  OWNER-Guid-0001 "), normTeamsId(null), normTeamsId(9), normTeamsId(undefined)], [OWNER, "", "", ""]);
+const f5 = (rows: LedgerReportRow[], cfgIds: string[] = []) => {
+  const c = teamsChatsFromLedger(rows, cfgIds)[0];
+  return [c.involvement.reason, c.messages.map((m) => m.speaker), c.settled, c.ownerMentioned];
+};
+const askThenOwner = (o1: Partial<TeamsContent>, o2: Partial<TeamsContent>) => [tmsg(CHAT_G, "q", "2026-11-10T10:00:00Z", o1), tmsg(CHAT_G, "a", "2026-11-10T11:00:00Z", { fromOwner: null, ...o2 })];
+t(
+  "VF5-2 stored ownerUserId upper-case (non-parser writer): the owner's reply is OWNER and the chat is settled, matching owner_sent",
+  f5(askThenOwner({ ownerUserId: OWNER.toUpperCase() }, { ownerUserId: OWNER.toUpperCase(), sender: { id: OWNER, name: "Owner", isApp: false } })),
+  ["owner_sent", ["OTHER", "OWNER"], true, false],
+);
+t(
+  "VF5-3 configured id with surrounding whitespace (no line id): same verdict and same speakers",
+  f5(askThenOwner({ ownerUserId: undefined }, { ownerUserId: undefined, sender: { id: OWNER, name: "Owner", isApp: false } }), [`  ${OWNER.toUpperCase()} `]),
+  ["owner_sent", ["OTHER", "OWNER"], true, false],
+);
+t(
+  "VF5-4 sender id and mention id with whitespace / upper-case (non-parser writer) -> OWNER / owner mentioned, at both sites",
+  [f5(askThenOwner({}, { sender: { id: ` ${OWNER.toUpperCase()} `, name: "Owner", isApp: false } }))[1], f5([tmsg(CHAT_G, "m", "2026-11-10T10:00:00Z", { mentionedUserIds: [` ${OWNER.toUpperCase()}`] })])],
+  [["OTHER", "OWNER"], ["owner_mentioned", ["OTHER"], false, true]],
+);
+t("VF5-5 stored mentionsOwner=true alone: the facts say ownerMentioned=true, matching the owner_mentioned verdict", f5([tmsg(CHAT_G, "m", "2026-11-10T10:00:00Z", { mentionsOwner: true })])[3], true);
+t("VF5-6 a null entry in a stored mention list is handled by the normal path (no fallback), and shows", f5([tmsg(CHAT_G, "m", "2026-11-10T10:00:00Z", { mentionedUserIds: [null as unknown as string] })]), ["owner_maybe_mentioned", ["OTHER"], false, null]);
 
 // ── Finding 2: a malformed stored mention field (string / object) must not throw; it shows, and one bad row never
 //    aborts the report.

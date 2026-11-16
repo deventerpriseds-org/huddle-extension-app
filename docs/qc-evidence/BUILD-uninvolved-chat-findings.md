@@ -72,3 +72,15 @@ Public repo: synthetic ids and text only. No message bodies are logged by any ch
   an entry that is not a non-empty string ("", whitespace, null, a number). A list of real non-owner ids still hides.
 - Tests: VF4-1 (parser, six shapes), VF4-2 (parser -> stored -> rule shows), VF4-3 (five stored shapes show),
   VF4-4 (real non-owner ids still hidden). Suite 51 -> 55 passed, 0 failed.
+
+### Finding 5 (LOW) -- the two owner-id sites normalised differently: FIXED
+
+- New exported `normTeamsId` (trim + lower-case; non-string -> "" and never matches), `teamsOwnerIds(messages, cfg)`
+  and `isOwnerMessage(m, ownerIds)`, plus a private `mentionsOwnerId`. `chatInvolvement` and the per-chat facts in
+  `teamsChatsFromLedger` now both use them: owner set, sender comparison and mention comparison are identical.
+- Consistency side effect (deliberate): the facts' `ownerMentioned` now also counts a stored `mentionsOwner: true`,
+  exactly as the verdict already did (TP-1b), so verdict `owner_mentioned` and fact `ownerMentioned=false` can no
+  longer disagree.
+- Tests: VF5-1 (normaliser), VF5-2 (stored ownerUserId upper-case: reply labelled OWNER, settled=true), VF5-3
+  (configured id with whitespace), VF5-4 (sender / mention ids with whitespace + case), VF5-5 (mentionsOwner alone),
+  VF5-6 (a null stored mention entry goes through the normal path, shows). Suite 55 -> 61 passed, 0 failed. tsc rc=0.
