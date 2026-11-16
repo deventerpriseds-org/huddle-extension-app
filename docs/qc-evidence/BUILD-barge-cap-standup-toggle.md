@@ -19,8 +19,8 @@ Branch `claude_barge-cap-standup-toggle`, cut from origin/main `c1ea08ef`. Not m
 
 - [x] Read the DIAG evidence and the code paths (below).
 - [x] Piece 1: barge cap — commit `a673b972`
-- [ ] Piece 2: stand-up toggle
-- [ ] Suites / tsc / build
+- [x] Piece 2: stand-up toggle — commit `66043785` (+ tsc type fix)
+- [x] Suites / tsc / build
 
 ## Fact finding
 
@@ -97,3 +97,59 @@ follow-up "after we wrap", but a timed-out sync barge is not re-queued and no wo
 Edge: the 25s is measured from `turnStartMs`, which includes pre-agent work (routing, memory);
 `runBounded` keeps a 2s floor, so a turn whose pre-agent work took >23s could still run to ~25s+2s.
 Still inside the client's 30s.
+
+## Piece 2 — "Automatic stand-up" toggle (commit 66043785)
+
+**Extends the existing scheduling config, no new store.** `JobCadence.enabled?: boolean` in
+`identity.scheduling_config.overrides` (omitted = on = today's behaviour for every user and job).
+- `scheduling-config.server.ts`: `isJobEnabled()`, pure `withJobEnabled()` (keeps the user's hours/days;
+  switching ON drops the flag and removes the override if what is left equals the default), and
+  `setJobEnabled(email, key, enabled)` (server-side read-modify-write).
+- `scheduling-config.functions.ts`: `setMyJobEnabledFn({caller, job, enabled})`, caller-scoped exactly
+  like `getMySchedulingConfigFn`/`setMySchedulingConfigFn`. `CadenceInput` now accepts `enabled`, so a
+  Settings → Scheduling save no longer strips it (without this, any Settings save would switch the
+  stand-up back on). `OverridesInput` exported for the test.
+- `scheduler.server.ts` `runDueScheduledJobs`: after advancing next_run_at, `if (!isJobEnabled(cadence))
+  continue;` — the job is not fired and not counted. Generic: any job turned off is honoured.
+- `HuddleView.tsx` Meeting menu: checkbox item "Automatic stand-up (daily 8:00)" + On/Off, loaded from
+  `getMySchedulingConfigFn` each time the menu opens; disabled until loaded. Menu width w-56 -> w-64 so the
+  label fits. "Daily stand-up" (manual start) unchanged.
+- `SchedulingPanel.tsx`: one extra muted line when a job is switched off.
+- `auto-job-label.ts` (new): the label text from the effective cadence.
+
+**Test.** `bun test scripts/standup-toggle.test.ts` (`npm run test:standup-toggle`): 10 pass, 0 fail.
+Fake pg pool + mocked job store; the real `scheduling-config.server.ts` SQL paths and the real
+`runDueScheduledJobs` run.
+
+| mutation | named test | verdict | exit |
+|---|---|---|---|
+| delete the scheduler skip guard | T3 | FIRED (control EQUIVALENT) | 0 |
+| `isJobEnabled` always true | T3 | FIRED (control EQUIVALENT) | 0 |
+| drop `enabled` from the Settings validator | T7 | FIRED (control EQUIVALENT) | 0 |
+
+**Known limits (not changed):**
+- Fail-open: if the config read fails, `resolveJobCadence` returns the default (on), so a DB blip
+  can let one 8:00 digest through. Same as every other cadence today.
+- Settings → Scheduling "reset to default" on the stand-up row clears the override, which switches it
+  back on.
+- journey's own `ceremony_occurrences` stand-up reminder (12:00 ET, `auto_run=false`, no LLM) and
+  journey's digest content pull (`run-standup` with `deliver:false`) do not read this flag.
+
+## Suites / tsc / build (branch 66043785 + type fix)
+
+| check | result |
+|---|---|
+| `npx tsc --noEmit` | rc=0 |
+| `npm run build` | rc=0 |
+| barge-deadline | 13 passed, 0 failed |
+| standup-toggle | 10 pass, 0 fail |
+| scheduler-one-user | 7 passed, 0 failed |
+| priority-check | 47 passed, 0 failed |
+| schedule-brief-dedupe | 21 passed, 0 failed |
+| inbound-email | 72 passed, 0 failed |
+| confirm-reask-rotation | ALL PASS |
+| meeting-triage-server | 7 passed, 0 failed |
+| barge-route | 10 passed, 0 failed |
+| cross-app-turn-gate | 92 passed, 0 failed |
+| router-winners | 39 passed, 0 failed |
+| fireflies-minutes | 72 PASS / 3 FAIL (G3, G5, G8) — **identical on origin/main c1ea08ef** (git archive copy) |
