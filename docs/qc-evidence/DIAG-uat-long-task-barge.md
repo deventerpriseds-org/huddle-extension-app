@@ -96,3 +96,97 @@ nondeterministic:
 - **`build_checklist` proposals param:** gated by `proposalsConfig() !== null`. Proposals are OFF, so
   the schema offered is the same as before 132c2fc. `build_checklist` was never called in any of the 3
   runs.
+
+## Finding 4 — history: the same failure first appeared on Nov 8, 8 days before 132c2fc (azure-pg-query run 43782658638)
+
+Every past occurrence of this exact long-task barge in `chat.ceremony_transcript`, with offsets from
+the barge row:
+
+| when (UTC) | path | barge_route | outcome |
+|---|---|---|---|
+| 11-08 13:49, 13:54, 14:28, 14:43 | `propose_task_intent` @6-9s | @8.6-11.8s | fast answer (4/4) |
+| 11-08 15:51 | no tool | @6.2s | fast answer |
+| **11-08 15:53** | tavily x3 **FAIL** @8.9s, then `create_artifact` @**34.1s** | **none** | **same failure as today** |
+| 11-16 00:07 | tavily x2 FAIL @12.7s, then `delegate_to_specialist` @23.3s | @26.8s | pass (3.2s margin) |
+| 11-16 00:18 | tavily FAIL @8.9s, then `create_artifact` @**31.8s** | **none** | fail |
+| 11-16 00:32 | tavily x3 FAIL @9.1s, `search_memory` @14.2s, then nothing persisted | **none** | fail |
+
+(The 08-03 rows predate the `barge_route`/`tool_start` telemetry and are left out of the table.)
+
+Tavily status in ceremony telemetry:
+- Last successful `tavily_web_search`: **08-05 14:28**.
+- First 432 in the last 21 days: **11-08 15:53**. Every Tavily call since has failed: 11-08 n=3,
+  11-16 n=6, ok=true n=0.
+- Exact error: `Tavily API error 432: {"detail":{"error":"This request exceeds your plan's set usage
+  limit. Please upgrade your plan or contact support@tavily.com"}}`
+- `KEYWORD_TOOL_FORCING` is off, so the search is the model's own choice, not a forced call
+  (`huddle.functions.ts:2846`).
+
+Not pinned down: why the model stopped answering with `propose_task_intent` between 14:43 and 15:51 on
+11-08. None of the five deploys in that window (8d65387, c6d71e3, ca5c02e, 820df67, f317ad0) touches
+`propose_task_intent`, tavily, `create_artifact`, `delegate_to_specialist` or `bargeDirective`
+(checked with `git show … | grep`). It may be model variance or a board/config state change. This
+does not affect the root cause below: once the model reaches for search, the outcome is a race.
+
+Baseline correction: "Run 96 (11-12, c56eb9f) all passed" ran `CHECKS_FILE=attention-bell-checks.mjs`
+(10/10 checks, job 131371386764). It did not run the stand-up barge, so it is not a baseline here.
+
+Side effect worth cleaning (not done; report-only): FAIL 00:18 (`create_artifact` ok) and 11-08 15:53
+each saved a real artifact from a UAT run, and PASS 00:07 started a real delegated worker turn
+(`worker-orc…` / `integrate-…`). None of these are `Test-` prefixed, because the UAT phrase has no
+`Test-` prefix.
+
+## Conclusion — root cause
+
+**The UAT finding is real: the user sees silence. It is a latency race with two parts, both
+evidenced above. Neither part is in 132c2fc.**
+
+1. **Trigger (external): the Tavily key is over its plan's usage limit** (HTTP 432 on every call since
+   at least 11-08 15:53). A research-shaped barge reaches for web search, gets 432 in ~0.1s, and the
+   model then improvises. Some of those improvisations are slow. Writing the whole brief inline as
+   `create_artifact` arguments takes ~32-34s. Search plus memory, then more work, also misses the
+   cutoff.
+2. **Defect (our code): the client gives up on a barge at 30s, before the server's own 36s deadline,
+   and the give-up is silent.**
+   - `MeetingBar.tsx:1056-1058` races the answer against 30_000ms.
+   - `huddle.functions.ts:756` gives the sync turn `TURN_DEADLINE_MS = 36_000`.
+   - On the client timeout, `MeetingBar.tsx:1155-1169` resumes the speaker with no answer, no
+     `barge_route` row and no fallback ack.
+   - So any barge that takes 30-36s is computed and then discarded. The server's own "deferred to keep
+     the turn under the deadline" fallback (runBounded, ~7370) can never reach the user either, because
+     it fires at 36s.
+
+The harness's 45s wait is not the limit. The app stops listening at 30s, so `reply=""` is exactly what
+a live user would get: a barge that is never answered.
+
+Why it is intermittent: the model picks a different branch after the 432 on each run. `delegate`
+finishes in ~27s and passes. `create_artifact` takes ~32s and fails. Even the pass had only 3.2s of
+margin.
+
+### Fix (described, NOT applied)
+
+- **Ops, removes the trigger:** restore Tavily (upgrade the plan or rotate to a key with quota). This
+  check only. Huddle's `tavilySearch` reads the app's own key, so confirm which key the SWA uses before
+  swapping it.
+- **Code, removes the defect** (all in the barge path, reversible):
+  1. Make the server answer first: give `ceremonyBarge` turns a deadline below the client race (for
+     example 25s budget in `runBounded` when `data.ceremonyBarge`). Alternatively raise the client race
+     above 36s (for example 40s). Then the server's own deferral reply is what the user hears, never
+     silence.
+  2. On the client timeout branch, voice the same `bargeFallbackAck()` the empty-reply backstop already
+     uses (MeetingBar 1113-1136), so a barge can never end in silence.
+  3. In a barge, a long research or produce ask should hand off (`delegate_to_specialist` /
+     `propose_task_intent`), not produce inline. Consider not offering `create_artifact` on
+     `ceremonyBarge` turns, or tightening `bargeDirective`. Also return a 432 as terminal ("web search
+     unavailable: do not retry, hand off") so the model stops firing 2-3 parallel retries
+     (125152d2, 07b7a72b).
+  - Per huddle CLAUDE.md, changes 1 and 3 alter existing barge behaviour, so they need the owner's
+    thumbs-up row before building. Change 2 is additive.
+
+### The single check that would settle what remains
+
+What did the server return for FAIL 00:32 after `search_memory` at +14s: its 36s deferral, a late
+answer, or an error? Telemetry stops there. Re-run the same barge text through the
+`test-agent-serverfn` harness, with `ceremonyBarge:true` and `journey:{enabled:false}`, and time the
+raw server reply. That covers both the latency and the reply content, with no browser and no board
+write.
