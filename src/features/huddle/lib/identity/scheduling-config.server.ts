@@ -68,7 +68,7 @@ function sameCadence(a: JobCadence, b: JobCadence): boolean {
 }
 
 /** Whether the scheduler may fire a job with this cadence. Only an explicit `false` turns it off. */
-export function isJobEnabled(cadence: JobCadence | null | undefined): boolean {
+export function isJobEnabled(cadence: Partial<JobCadence> | null | undefined): boolean {
   return cadence?.enabled !== false;
 }
 
