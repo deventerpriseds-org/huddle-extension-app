@@ -89,6 +89,20 @@ function sender(m: Record<string, unknown>): { id: string; name: string; isApp: 
   return { id: str(pick(o, "id", "userId")).toLowerCase(), name: str(pick(o, "displayName", "name")), isApp: o.isApp === true };
 }
 
+/** Pure: Graph `mentions` -> the mentioned USER ids, lower-cased, de-duplicated (conversation / tag / app mentions
+ *  name no user and are skipped). */
+function mentionUserIds(ms: unknown[]): string[] {
+  const out = new Set<string>();
+  for (const x of ms) {
+    const o = (x && typeof x === "object" ? x : {}) as Record<string, unknown>;
+    const mt = (o.mentioned && typeof o.mentioned === "object" ? o.mentioned : {}) as Record<string, unknown>;
+    const user = mt.user && typeof mt.user === "object" ? (mt.user as Record<string, unknown>) : null;
+    const id = user ? str(user.id).toLowerCase() : "";
+    if (id) out.add(id);
+  }
+  return [...out];
+}
+
 function bodyText(m: Record<string, unknown>): string {
   const b = m.body;
   // Red-team F17: a plain-text body gets the SAME URL rule as the HTML path (a link's "?" is a query
@@ -234,6 +248,12 @@ export function parseTeamsLog(
         continue;
       }
       const who = sender(m);
+      // 2026-11-16 (report from the ledger): the owner-involvement rule (correspondence/report-from-ledger.ts
+      // UNINVOLVED_CHAT_RULE) needs to know whether the owner was @mentioned. Graph's `mentions` array is kept as the
+      // mentioned USER ids only (lower-cased; conversation/tag mentions carry no user). Present only when the message
+      // carries the array (an empty array = "no one mentioned"; absent = "unknown").
+      const mentionedUserIds = Array.isArray(m.mentions) ? mentionUserIds(m.mentions) : undefined;
+      const lineOwnerId = str(rec.ownerUserId).toLowerCase();
       const key = `${chatId}\u0000${messageId}`;
       if (byKey.has(key)) {
         out.duplicates++;
@@ -252,6 +272,10 @@ export function parseTeamsLog(
         text: textOut,
         ...(chatName ? { chatName } : {}),
         ...(str(m.webUrl) ? { webUrl: str(m.webUrl) } : {}),
+        ...(mentionedUserIds ? { mentionedUserIds } : {}),
+        // Whether the owner is among the mentioned: known only when both the mention list and an owner id are.
+        ...(mentionedUserIds && lineOwners.size ? { mentionsOwner: mentionedUserIds.some((id) => lineOwners.has(id)) } : {}),
+        ...(lineOwnerId ? { ownerUserId: lineOwnerId } : {}),
       });
     }
   }
