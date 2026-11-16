@@ -19,17 +19,21 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch holding scripts/proposals-preview.ts"
+        description: "Branch holding scripts/proposals-preview.ts (main unless you are previewing a working branch)"
         required: true
-        default: "claude_task-proposals"
+        # 2026-11-16: was "claude_task-proposals", an old branch that no longer carries the current scripts.
+        default: "main"
       days:
         description: "How many days back to read"
         required: false
         default: "7"
       max_sources:
-        description: "Cap on the number of messages sent to the model"
+        description: "Cap on model calls (steps reply/action) or on messages sent to the model (full preview). Over the cap, items are left unchecked and counted 'over the cap'."
         required: false
-        default: "60"
+        # 2026-11-16: was 60, which left items unchecked -- a real since-Monday action run needed 137 model calls
+        # (docs/qc-evidence/BUILD-report-from-ledger.md). 250 covers that with headroom; each call is one small model
+        # request, so the cap bounds cost rather than tuning anything.
+        default: "250"
       since:
         description: "Report start, ISO UTC (e.g. 2026-11-09T05:00:00Z = Monday 00:00 ET). Blank = Monday 2026-11-09 for source=ledger; the days window for source=files."
         required: false
