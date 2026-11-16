@@ -150,3 +150,121 @@ failure. That is the `ProposalChecklistItem` contract.
 | AC-D-8 | Given a Source toggle is OFF, then that source's rows, and its filter pill, are hidden. The other sources' counts are unchanged. | happy | DOM |
 | AC-D-9 | Given the uninvolved-chat switch, then its behaviour is defined by section E-U and the spelling table, including that turning it OFF does not delete anything and that a stored OFF survives a reload. | Tier 1 | See E-U |
 | AC-D-10 | Given the settings panel, then it uses the bell "What counts" anatomy (header row plus checkbox labels), and "Done" closes it. | regression-of-pattern | Visual compare |
+
+## Owner answers that settle section 0 and the open questions (2026-11-16, all final)
+
+X-1, X-2: approved (1A). **X-3: approved** -- Priorities and Schedule also leave the desktop header pills; the pills
+read Huddle, Board, Files, Modules. **X-4: approved** -- the chat checklist says "Add as task" / "Done" too. **X-5:
+approved** -- the phone top bar shows the view's name on EVERY view. **X-6: approved** -- Done / Dismiss in Actions also
+settles the bell's row for the same item (only when acted on from Actions). **X-7: approved** -- classification runs on
+the existing heartbeat for ledger rows, behind a per-owner setting that defaults ON for the owner only, with a daily
+cost cap setting. X-8, X-9: approved by the design. AC-M-13 therefore reads: the header pills are exactly Huddle,
+Board, Files, Modules.
+
+Storage (OQ-2, OQ-11): NO new table. The verdict lives in `chat.correspondence_ledger.result_ids.action` of the
+thread's latest message row; Wrong? is a nullable `owner_correction JSONB` on `chat.task_proposals` and
+`chat.correspondence_ledger`; "What shows" is a nullable `actions_settings JSONB` on the existing
+`chat.attention_settings` (the bell's per-owner settings row). Every Actions item is backed by a `chat.task_proposals`
+row (meeting items already are), so the existing `actOnProposalFn` handles every row button.
+
+OQ-11 ("Stop flagging this list"): scope = the sender address of the latest OTHER message of a CC / list email; stored
+in `actions_settings.hiddenSenders`, listed in What shows with a switch to turn each back on. OQ-12 (no reply-ledger
+row): Draft reply opens Iris's 1:1 with a prefilled ask to draft it (the existing reply path; she answers with
+`propose_email_reply`). Nothing is sent automatically.
+
+## E. What counts as "needs you" (Tier 1)
+
+Definitions. *Thread*: an email conversation (needs-you `emailConversationKey`) or a Teams chat (`teams:<chatId>`).
+*Classification key*: thread key + the ledger id of the thread's latest message. *Window start*: the latest Monday
+00:00 in the owner's zone (default America/New_York), a setting. *Admitted*: a verdict that passed `admitActionVerdict`.
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-E-1 | Given the source tree, then there is ONE in-app classifier module (`lib/correspondence/action-classify.ts`) holding the email (on To / CC-or-list) and Teams instructions and the answer schema, and `scripts/action-scan-steps.ts` imports them instead of holding its own copies. Its header names it canonical; `needs-you.ts` names it as the successor for the heartbeat. | extend-not-duplicate | grep: the instruction strings exist in exactly one file |
+| AC-E-2 | Given a model answer with `open_item: true` and a `quote` found word for word (after whitespace and typographic-quote folding) in an OTHER message of the thread (email: the latest OTHER message or its forwarded part; Teams: any OTHER message), then the verdict is admitted `open`. | happy (Tier 1) | unit test |
+| AC-E-3 | Given `open_item: true` and a quote that is NOT found word for word, or is null, or shorter than 8 characters, then the item is NOT shown and is counted as "not checked yet". | Tier 1 guard | unit test + mutation |
+| AC-E-4 | Given `open_item: false`, then the verdict is `none` and the thread is not shown. Given the owner already replied after the latest OTHER message and nothing is still owed, then it is counted in "Answered by your reply", never in a section. | happy | unit test |
+| AC-E-5 | Given a malformed answer (not an object, `kind` or `category` outside the enum, `open_item` not boolean), then the verdict is `not_checked` (never `open`). Given the model call throws, then nothing is stored for that key and the thread is retried on a later heartbeat. | error (Tier 1) | unit test |
+| AC-E-6 | Given an admitted email verdict with kind `reply` or `both` -> "Needs your reply"; kind `action` with the owner on To (direct / group / unknown) -> "To-do for you"; kind `action` with the owner only CC'd or via a list -> "FYI with an action". Teams: `reply`/`both` -> "Needs your reply", `action` -> "To-do for you". Untriaged or Mine meeting action items -> "From meetings". | happy | unit test of `actionSectionFor` |
+| AC-E-7 | Given a thread whose classification key already has a stored verdict, then no model call is made for it. Given a new message arrives (new latest id), then it is classified again. | cost | unit test: call count |
+| AC-E-8 | Given the per-owner classify setting is OFF, or the day's model calls reached the daily cap, then no model call is made; unclassified threads are counted "not checked yet", never shown as open and never dropped silently. | cost / honesty | unit test |
+| AC-E-9 | Given now in the owner's zone, then the window start is the most recent Monday 00:00 at or before now (on a Monday it is that same day's 00:00). | edge | unit test incl. a Monday and a Sunday |
+| AC-E-10 | Given an admitted open verdict, then exactly one `chat.task_proposals` row backs it (created or attached through the EXISTING `proposeFromSource` path with the quote as evidence), and re-running the step creates no second row. A to-do already open on the board backs nothing and the item counts as resolved. | Tier 1 / dedup | unit test against the in-memory store |
+| AC-E-11 | Given a thread resolved by the existing RESOLUTION rule (a decided proposal or a dismissed bell row covering its latest OTHER message), then it is not classified and not shown. | regression | unit test |
+| AC-E-12 | Given a store-only `sent` row, then it is never classified. | regression | unit test |
+| AC-E-13 | Given an item's backing proposal is in a decided state (approved / completed / dismissed / delegated), then the item is not listed. | happy | unit test |
+| AC-E-14 | Given an owner correction (Wrong?) on an item whose classification key is unchanged, then the item is not listed; after Undo it is listed again in the same section; after a newer message arrives it is judged again. | Tier 1 (reversible) | unit test + mutation |
+
+## E-U. Uninvolved-chat filter (Tier 1) -- ONE rule, `chatInvolvement` in `report-from-ledger.ts`
+
+Rule: a Teams **group, meeting or channel** chat is hidden when the owner's id is known, he wrote nothing in ANY stored
+message of the chat, and no stored message @mentions him. 1:1 chats always show. Missing owner id or missing mention
+data on any message -> show (fail OPEN). Applied before any AI call when the switch is ON. Default ON.
+
+Spelling table (chat id shapes from Graph; mention shapes from Graph `chatMessageMention.mentioned`; the at-sign is
+written `(at)` here only):
+
+| # | Input | Expected | Source |
+|---|---|---|---|
+| S-1 | id `19:a_b(at)unq.gbl.spaces`, nobody wrote as owner | show (one_on_one) | Graph 1:1 chat id shape |
+| S-2 | id `19:abc(at)thread.v2`, owner known, never wrote, mention arrays all present and empty | HIDE | group chat |
+| S-3 | id `19:meeting_xyz(at)thread.v2`, same facts as S-2 | HIDE | meeting chat |
+| S-4 | id `19:abc(at)thread.tacv2`, same facts | HIDE (channel treated like a group, owner 2026-11-16) | channel |
+| S-5 | id `19:ABC(at)THREAD.V2` (upper case) | same as S-2 | ids compared case-insensitively |
+| S-6 | S-2 but one message `fromOwner: true` | show (owner_sent) | |
+| S-7 | S-2 but a message's sender id equals the owner id in different case | show (owner_sent) | |
+| S-8 | S-2 but a message mentions the owner's user id | show (owner_mentioned) | |
+| S-9 | S-2 but the only mention is a conversation / team / tag mention (no `user`) | HIDE (not the owner) | `mentionUserIds` skips them |
+| S-10 | S-2 but one message has no `mentionedUserIds` field | show (cant_tell_no_mention_data) | fail open |
+| S-11 | S-2 but no owner id configured and none on any line | show (cant_tell_owner_unknown) | fail open |
+| S-12 | S-2 but one message `fromOwner: null` | show (cant_tell_owner_unknown) | fail open |
+| S-13 | id with no known suffix (`19:abc(at)foo`) | show (not covered) | |
+| S-14 | the owner wrote only in a message OLDER than the window | show (any stored message counts) | owner: "any stored message" |
+| S-15 | switch OFF, chat is S-2 | show, and it is classified like any other chat | AC-D-9 |
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-EU-1 | Given every row S-1..S-15, then the rule (with the switch applied by the plan) returns the expected hide/show. | Tier 1 | unit test, one assertion per row; mutation on the channel clause and a fail-open clause |
+| AC-EU-2 | Given the switch ON, then hidden chats never reach the model and are counted in "N hidden" (What shows). | cost / honesty | unit test: call count 0 for S-2 |
+| AC-EU-3 | Given the rule is used by the report (`scripts/action-scan-steps.ts`) and by Actions, then both call the same function; there is no second copy. | extend | grep |
+
+## F. Auth and scope
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-F-1 | Given no caller email, then the Actions read returns `signedOut` and no rows; every write control is disabled. | auth | unit + DOM |
+| AC-F-2 | Given caller A, then the read returns only rows in A's owner scope (`callerOwners`), and Wrong? / Undo / settings writes are owner-scoped in their SQL WHERE. | auth (Tier 1) | code read of every query |
+| AC-F-3 | Given Open in Teams, then the href passes `safeLink` (https only, no space, quote or angle bracket). | security | unit test |
+| AC-F-4 | Given any log line written by the new code, then it carries counts and reason names only -- no title, quote, subject, sender, chat name or id. | privacy (public repo) | code read |
+
+## G. Phone (390px)
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-G-1 | Given 390x844, then each row ends in the existing "Proposed" menu chip (ProposalChecklistItem anatomy, min-h-11) whose menu holds Draft reply (email) / Open in Teams (Teams), Add as task, Edit, Done, Dismiss, Wrong?. No row of labelled buttons is rendered. | happy | screenshot + DOM |
+| AC-G-2 | Given 390px, then the source filter scrolls sideways inside its own pill group; nothing scrolls the page horizontally. | edge | `scrollWidth <= clientWidth` |
+| AC-G-3 | Given 390px and view actions / priorities / schedule / board / files, then the top bar shows "Actions" / "Priorities" / "Schedule" / "Board" / "Files"; on the huddle view it shows the huddle's name as before. | happy | DOM text |
+
+## H. Performance and cost
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-H-1 | Given the Actions read, then it makes no model call (it reads stored verdicts only). | cost | code read |
+| AC-H-2 | Given the heartbeat, then the classify step runs at most once per 10 minutes per process, inside the ingest hook, never throws, and logs counts only. | perf | code read + unit test of the throttle |
+| AC-H-3 | Given the daily cap N (setting, default 150), then at most N model calls are made per owner per day (owner-zone day). | cost | unit test |
+
+## I. Regressions
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-I-1 | Priorities opened from Modules renders the same `PrioritiesView` (same WidgetPage, same rows) as before. | regression | UAT screenshot |
+| AC-I-2 | Schedule opened from Modules renders the same `ScheduleView`. Agent "Open Priorities" / "Open Schedule" nav links still switch the view. | regression | UAT + code read (NAV_VIEWS unchanged) |
+| AC-I-3 | The Apps launcher still lists Polish, Sidecar, Prompto; Polish opens full width. | regression | UAT |
+| AC-I-4 | The bell's count, list, Dismiss and "What counts" behave as before when nothing is done in Actions. | regression | attention.test.ts green |
+| AC-I-5 | The chat checklist proposal rows keep every behaviour (optimistic write, rollback, triage) with only the labels "Approve" -> "Add as task" and "Mark done" -> "Done" changed. | regression | diff read |
+| AC-I-6 | Iris's email-reply card (Save to Drafts / Copy reply / Edit first / No reply needed) is unchanged. | regression | diff: HuddleView EmailReplyRow untouched |
+| AC-I-7 | The open-items report (`proposals-preview.yml` step=action) keeps working: same instructions, same schema, now imported. | regression | typecheck of the script |
+| AC-I-8 | Done / Dismiss from Actions settles the bell row for the same email message or Teams chat (X-6); Done / Dismiss from the chat checklist does not. | reconciliation | code read + unit test of the target mapping |
+| AC-I-9 | `markProcessed` keeps a stored `result_ids.action` verdict when the item is (re)processed. | regression (Tier 1) | SQL test |
+
+**Count: sections A-D 60 ACs (part 1-2) + E 14 + E-U 3 (+15 spelling rows) + F 4 + G 3 + H 3 + I 9 = 96 ACs.**
