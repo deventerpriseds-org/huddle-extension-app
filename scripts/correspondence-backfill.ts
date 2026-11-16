@@ -146,6 +146,23 @@ if (diag && cfg.teams.enabled) {
   }
   console.log(`teams kinds: chats ${chats.size} | ${Object.entries(tally).sort().map(([k, v]) => `${k}=${v}`).join(" ")}`);
   console.log(`teams kinds: messages in chats where owner not active ${[...chats.values()].filter((c) => !c.ownerSent && !c.ownerMentioned).reduce((n, c) => n + c.msgs, 0)}`);
+  // Mention-match sanity (counts + id SHAPES only): does the owner id format match mention ids at all?
+  {
+    let mentionObjs = 0, ownerHits = 0; const shapes = new Set<string>(); let ownerShape = "";
+    const shape = (v: string) => v.replace(/[0-9a-f]/gi, "x").replace(/x{4,}/g, (m) => `x${m.length}`).slice(0, 40);
+    for (const raw of text.split(/\n/)) {
+      let o: Record<string, unknown>; try { o = JSON.parse(raw); } catch { continue; }
+      if (!o || o.synthetic !== false) continue;
+      const owner = String(o.ownerUserId ?? "").toLowerCase(); if (owner) ownerShape = shape(owner);
+      for (const m of (Array.isArray(o.messages) ? o.messages : []) as Record<string, unknown>[]) {
+        for (const x of (Array.isArray(m.mentions) ? m.mentions : []) as { mentioned?: { user?: { id?: unknown } } }[]) {
+          mentionObjs++; const id = String(x?.mentioned?.user?.id ?? "").toLowerCase(); if (id) shapes.add(shape(id));
+          if (owner && id === owner) ownerHits++;
+        }
+      }
+    }
+    console.log(`teams mentions: objects ${mentionObjs} | of the owner ${ownerHits} | owner id shape ${ownerShape} | mention id shapes ${[...shapes].join(",")}`);
+  }
   console.log(`teams field names: line [${[...lineKeys].sort().join(",")}] message [${[...msgKeys].sort().join(",")}]`);
 }
 if (diag && cfg.teams.enabled) {
