@@ -193,6 +193,9 @@ function chatInvolvementOf(chatId: string, messages: readonly TeamsContent[], co
  *  in the stored text (only an escaped `&lt;at&gt;` survives the HTML-to-text step) with no stored user mention. */
 export function maybeMentionsOwner(m: TeamsContent): boolean {
   if (m.unresolvedMention === true) return true;
+  // Finding 4: a stored mention entry that is not a non-empty string (empty id, null, a number) names someone we
+  // cannot compare -> unknown -> the chat shows. (The parser no longer writes such entries; older writers might.)
+  if (Array.isArray(m.mentionedUserIds) && m.mentionedUserIds.some((id) => typeof id !== "string" || !id.trim())) return true;
   if (m.unresolvedMention === false) return false;
   const users = Array.isArray(m.mentionedUserIds) ? m.mentionedUserIds.length : 0;
   return users === 0 && /<at\b/i.test(typeof m.text === "string" ? m.text : "");

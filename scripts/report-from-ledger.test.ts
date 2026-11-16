@@ -249,6 +249,22 @@ t(
 t("VF1-8 the content hash is unchanged by unresolvedMention (nothing re-processes)", teamsSourceItem(pe, { path: "/t" }).contentHash === teamsSourceItem({ ...pe, unresolvedMention: undefined, mentionedUserIds: undefined }, { path: "/t" }).contentHash, true);
 t("VF1-9 stored content carries unresolvedMention", teamsContent(pe).unresolvedMention, true);
 
+// ── Finding 4: a mention with an empty / non-string user id, a null mention entry, or a tag mention is UNKNOWN
+//    (someone was mentioned, we cannot tell who) -> the chat shows. Parser side and stored side.
+t(
+  "VF4-1 parser: user id empty / whitespace / numeric, a null entry, an entry with no `mentioned`, a tag -> unresolvedMention true",
+  [[{ id: 0, mentioned: { user: { id: "" } } }], [{ id: 0, mentioned: { user: { id: "   " } } }], [{ id: 0, mentioned: { user: { id: 9 } } }], [null], [{ id: 0 }], [{ id: 0, mentioned: { tag: { id: "tag-1" } } }]].map((mentions) => parseOne({ mentions }).unresolvedMention),
+  [true, true, true, true, true, true],
+);
+const p4 = parseOne({ mentions: [null] });
+t("VF4-2 parser -> ledger end to end: a null mention entry in a group chat the owner never wrote in -> SHOWS", chatInvolvement(CHAT_G, [teamsContent(p4)]).reason, "owner_maybe_mentioned");
+t(
+  "VF4-3 stored (older writer, no flag): an empty-string / whitespace / null / numeric entry in mentionedUserIds -> SHOWS",
+  [[""], ["  "], [null], [7], ["user-guid-0002", ""]].map((ids) => chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), mentionedUserIds: ids as string[] }]).reason),
+  ["owner_maybe_mentioned", "owner_maybe_mentioned", "owner_maybe_mentioned", "owner_maybe_mentioned", "owner_maybe_mentioned"],
+);
+t("VF4-4 a stored list of real, non-owner user ids is still 'nobody we care about' -> hidden (rule unchanged)", chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), mentionedUserIds: ["user-guid-0002"] }]).reason, "uninvolved");
+
 // ── Finding 2: a malformed stored mention field (string / object) must not throw; it shows, and one bad row never
 //    aborts the report.
 const bad = (v: unknown) => ({ ...(g1[0].content as TeamsContent), mentionedUserIds: v as string[] });

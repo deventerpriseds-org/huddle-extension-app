@@ -62,3 +62,13 @@ Public repo: synthetic ids and text only. No message bodies are logged by any ch
 - Tests: VF2-1 (string / object / number field), VF2-2 (a null message -> malformed, shows), VF2-3 (three chats, one
   with a string field and one whose text throws on String(): all three come back, the bad ones show, the good
   uninvolved one is still hidden). Suite 48 -> 51 passed, 0 failed. tsc rc=0.
+
+### Finding 4 (LOW) -- empty user id, null mention entry, tag mention stored as "nobody mentioned": FIXED
+
+- Parser side: done by finding 1's `mentionFacts` -- a user id that is empty, whitespace or not a string, a null /
+  non-object entry, an entry with no `mentioned`, and a tag mention all set `unresolvedMention: true` (they are no
+  longer silently dropped into `[]`).
+- Stored side (rows from an older or other writer): `maybeMentionsOwner` returns true when `mentionedUserIds` holds
+  an entry that is not a non-empty string ("", whitespace, null, a number). A list of real non-owner ids still hides.
+- Tests: VF4-1 (parser, six shapes), VF4-2 (parser -> stored -> rule shows), VF4-3 (five stored shapes show),
+  VF4-4 (real non-owner ids still hidden). Suite 51 -> 55 passed, 0 failed.
