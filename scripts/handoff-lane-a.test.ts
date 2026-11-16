@@ -20,6 +20,7 @@ import {
   buildHandoffConfirmRetry,
   handoffRetryOutcome,
   needsHandoffConfirmRetry,
+  HANDOFF_TASK_AND_BUTTONS,
   proposedThisTurn,
   HANDOFF_CONFIRM_UNAVAILABLE,
 } from "../src/features/huddle/lib/handoff-followup.ts";
@@ -149,11 +150,11 @@ describe("F1 hand-off suppression (laneHandoffSuppression)", () => {
     expect(agentPerformedWork([use(A, "tavily_web_search", "“x” · 5 results")], A)).toBe(false);
   });
   test("AC-F1-2: an explicit now = suppressed even with no tool use", () => {
-    expect(laneHandoffSuppression({ text: "build me a budget spreadsheet. Do it now", addressedId: A, toolUses: [] })).toBe("now");
+    expect(laneHandoffSuppression({ text: "build me a budget spreadsheet. Do it now", addressedId: A, toolUses: [], enabled: true })).toBe("now");
   });
   test("AC-F1-5: no work, not now -> hand-off stands", () => {
-    expect(laneHandoffSuppression({ text: "build a monthly household budget spreadsheet", addressedId: A, toolUses: [] })).toBe(null);
-    expect(laneHandoffSuppression({ text: "not now, but build the budget spreadsheet", addressedId: A, toolUses: [] })).toBe(null);
+    expect(laneHandoffSuppression({ text: "build a monthly household budget spreadsheet", addressedId: A, toolUses: [], enabled: true })).toBe(null);
+    expect(laneHandoffSuppression({ text: "not now, but build the budget spreadsheet", addressedId: A, toolUses: [], enabled: true })).toBe(null);
   });
 });
 
@@ -289,6 +290,14 @@ describe("F2 directive (AC-F2-1/F2-2/F2-5)", () => {
     fromName: "Tess",
     ask: "build a monthly household budget spreadsheet",
     mode: "confirm",
+    taskAndButtons: true,
+  });
+  test("row 2 held back (owner 2026-11-17): the switch is OFF, so the live wording ships and nothing retries", () => {
+    expect(HANDOFF_TASK_AND_BUTTONS).toBe(false);
+    const live = buildFollowupDirective({ ownerName: "Finn Reid", ownerId: "finn-reid", fromName: "Tess", ask: "budget", mode: "confirm" });
+    expect(live).toContain("ask them to confirm before you act");
+    expect(live).not.toContain("create_huddle_task");
+    expect(needsHandoffConfirmRetry({ handoff: { mode: "confirm", fromName: "Tess", ownerId: "finn-reid", ask: "budget" }, internal: true, agentId: "finn-reid", outcomeKind: "reply", toolUses: [] })).toBe(false);
   });
   test("F2-5: hand-off framing kept (passed/tapped, YOUR OWN channel, no at-sign)", () => {
     expect(d).toMatch(/passed|tapped/);
@@ -329,18 +338,18 @@ describe("F2-4 retry decision (never a silent, button-less hand-off)", () => {
     expect(proposedThisTurn([], B)).toBe(false);
   });
   test("retry when a confirm hand-off reply has no proposal", () => {
-    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "reply", toolUses: [] })).toBe(true);
-    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "hardReply", toolUses: [] })).toBe(true);
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "reply", toolUses: [], enabled: true })).toBe(true);
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "hardReply", toolUses: [], enabled: true })).toBe(true);
   });
   test("no retry when the proposal is there", () => {
-    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "reply", toolUses: [propose()] })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "reply", toolUses: [propose()], enabled: true })).toBe(false);
   });
   test("no retry outside a confirm hand-off (ordinary turns, now mode, non-internal, another agent, a timed-out skip)", () => {
-    expect(needsHandoffConfirmRetry({ handoff: undefined, internal: true, agentId: B, outcomeKind: "reply", toolUses: [] })).toBe(false);
-    expect(needsHandoffConfirmRetry({ handoff: { ...H, mode: "now" }, internal: true, agentId: B, outcomeKind: "reply", toolUses: [] })).toBe(false);
-    expect(needsHandoffConfirmRetry({ handoff: H, internal: false, agentId: B, outcomeKind: "reply", toolUses: [] })).toBe(false);
-    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: "tess-sutton", outcomeKind: "reply", toolUses: [] })).toBe(false);
-    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "skip", toolUses: [] })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: undefined, internal: true, agentId: B, outcomeKind: "reply", toolUses: [], enabled: true })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: { ...H, mode: "now" }, internal: true, agentId: B, outcomeKind: "reply", toolUses: [], enabled: true })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: false, agentId: B, outcomeKind: "reply", toolUses: [], enabled: true })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: "tess-sutton", outcomeKind: "reply", toolUses: [], enabled: true })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: H, internal: true, agentId: B, outcomeKind: "skip", toolUses: [], enabled: true })).toBe(false);
   });
   test("outcome: keep the first reply, flag only when the retry also missed", () => {
     expect(handoffRetryOutcome({ kind: "reply" }, { kind: "reply", proposed: true })).toEqual({ useOutcomeOf: "first", flagMissing: false });

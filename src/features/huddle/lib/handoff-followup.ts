@@ -32,10 +32,20 @@ export interface FollowupDirectiveInput {
   mode: FollowupMode;
   /** What the addressed agent already told the user this turn (#131 answer-first). Optional. */
   addressedReply?: string;
+  /** Overrides HANDOFF_TASK_AND_BUTTONS (tests exercise both sides of the switch). */
+  taskAndButtons?: boolean;
 }
 
 /** The longest slice of the addressed agent's reply quoted to the owner (keeps the directive small). */
 export const ADDRESSED_REPLY_MAX = 400;
+
+/**
+ * F2 switch: a hand-off creates a real task and shows Confirm buttons, with one in-turn retry. OFF — the owner
+ * held row 2 back on 2026-11-17 ("Go on all 1-9 besides number 2 ... not sure the problem behind it"). While
+ * off, a confirm-mode hand-off keeps the live wording (offer to take it over, ask to confirm) and is never
+ * retried. Turning it on is this one line.
+ */
+export const HANDOFF_TASK_AND_BUTTONS = false;
 
 function alreadySaidClause(fromName: string, addressedReply: string | undefined): string {
   const said = String(addressedReply ?? "").replace(/\s+/g, " ").trim().slice(0, ADDRESSED_REPLY_MAX);
@@ -53,6 +63,7 @@ function alreadySaidClause(fromName: string, addressedReply: string | undefined)
  */
 export function buildFollowupDirective(input: FollowupDirectiveInput): string {
   const { ownerName, fromName, ask, mode } = input;
+  const taskAndButtons = input.taskAndButtons ?? HANDOFF_TASK_AND_BUTTONS;
   const framing =
     `You are ${ownerName}. ${fromName} just tapped you and passed something your way: the user, ` +
     `in their separate 1:1 with ${fromName}, asked — "${ask}". You are now replying in YOUR OWN ` +
@@ -65,6 +76,15 @@ export function buildFollowupDirective(input: FollowupDirectiveInput): string {
       ` The user asked for this NOW — that is their go-ahead, so do NOT ask them to confirm first. Do the ` +
       `work in THIS turn with your own tools, then send ONE brief, warm message: greet the user, say ` +
       `${fromName} passed this to you, and say what you just did or set in motion.`
+    );
+  }
+  if (!taskAndButtons) {
+    // Today's live wording (origin/main), kept while the F2 switch is off.
+    return (
+      framing +
+      ` Send ONE brief, warm opening message: greet the user, say ${fromName} passed this to you and briefly ` +
+      `why (reference the ask in your own words), and offer to take it from here — ask them to confirm before ` +
+      `you act. Do not perform the work yet.`
     );
   }
   // F2 (AC-F2-1/F2-2/F2-5): the hand-off carries a REAL task and the Confirm buttons. The buttons render
@@ -119,7 +139,9 @@ export function needsHandoffConfirmRetry(o: {
   agentId: string;
   outcomeKind: "skip" | "hardReply" | "reply";
   toolUses: readonly ToolUseLike[];
+  enabled?: boolean;
 }): boolean {
+  if (!(o.enabled ?? HANDOFF_TASK_AND_BUTTONS)) return false;
   if (!o.handoff || o.handoff.mode !== "confirm" || !o.internal) return false;
   if (o.agentId !== o.handoff.ownerId) return false;
   if (o.outcomeKind === "skip") return false;
