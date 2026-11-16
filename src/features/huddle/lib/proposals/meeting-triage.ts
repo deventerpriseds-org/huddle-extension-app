@@ -43,7 +43,28 @@ const HEADING = /^\s*(?:\*\*[^*]+\*\*:?|#{1,6}\s+.+|[^.!?]{1,60}:)\s*$/u;
 
 export interface SplitResult {
   items: string[];
+  /** 2026-11-16 (Actions view): the heading line each item sat under (Fireflies groups items under the assignee's
+   *  name, e.g. "**Name**"), aligned with `items`; null when no heading came before it. Text only, never a lookup. */
+  headings: (string | null)[];
   dropped: { heading: number; duplicate: number; overCap: number };
+}
+
+/** Pure: a heading line -> its plain text ("**Pat Doe**:" / "## Pat Doe" / "Pat Doe:" -> "Pat Doe"). */
+export function headingText(line: string): string {
+  return line.replace(/^\s*#{1,6}\s+/, "").replace(/\*\*/g, "").replace(/:\s*$/, "").trim().slice(0, 80);
+}
+
+/** Pure (Actions view, coordinator 2026-11-16: "filter to ones assigned to the owner or unassigned by default"):
+ *  is this meeting item the owner's or nobody's? No heading = unassigned = shown. A heading names the owner when it
+ *  equals one of his names, or its first word equals one's first word (case-insensitive). */
+export function meetingItemIsOwnersOrUnassigned(heading: string | null, ownerNames: readonly string[]): boolean {
+  if (!heading) return true;
+  const h = heading.trim().toLowerCase();
+  if (!h || /^(unassigned|everyone|all|team|action items?)$/.test(h)) return true;
+  return ownerNames.some((n) => {
+    const full = n.trim().toLowerCase();
+    return !!full && (h === full || h.split(/\s+/)[0] === full.split(/\s+/)[0]);
+  });
 }
 
 /** Pure: Fireflies `action_items` (a string, or a list of strings) -> one item per line, bullet and trailing
@@ -51,7 +72,8 @@ export interface SplitResult {
  *  Blank lines are skipped silently; a heading-only line, a duplicate (same title key) and anything past the
  *  cap are dropped and counted. Never guesses an owner (P-4: the text has none). */
 export function splitActionItems(raw: unknown): SplitResult {
-  const out: SplitResult = { items: [], dropped: { heading: 0, duplicate: 0, overCap: 0 } };
+  const out: SplitResult = { items: [], headings: [], dropped: { heading: 0, duplicate: 0, overCap: 0 } };
+  let heading: string | null = null;
   const lines: string[] =
     typeof raw === "string" ? raw.split(/\r?\n|\r/) : Array.isArray(raw) ? raw.flatMap((x) => (typeof x === "string" ? x.split(/\r?\n|\r/) : [])) : [];
   const seen = new Set<string>();
@@ -59,6 +81,7 @@ export function splitActionItems(raw: unknown): SplitResult {
     if (!line.trim()) continue;
     if (HEADING.test(line) && !BULLET.test(line)) {
       out.dropped.heading++;
+      heading = headingText(line) || null;
       continue;
     }
     let t = canonicalSpan(sanitizeTitle(line)).replace(BULLET, "");
@@ -77,6 +100,7 @@ export function splitActionItems(raw: unknown): SplitResult {
     }
     seen.add(key);
     out.items.push(t);
+    out.headings.push(heading);
   }
   return out;
 }

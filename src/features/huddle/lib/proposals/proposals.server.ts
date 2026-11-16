@@ -55,7 +55,7 @@ export function proposalsConfig(): (OneDriveFeedsConfig & { owner: string }) | n
 }
 
 /** Every email that is the owner (identity scope + configured logins), lower-cased. */
-async function scopeOf(email: string, extra: string[] = []): Promise<string[]> {
+export async function scopeOf(email: string, extra: string[] = []): Promise<string[]> {
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { emails } = await resolveScopeByEmail(email).catch(() => ({ emails: [] as string[] }));
   return [...new Set([email, ...emails, ...extra].map((e) => e.trim().toLowerCase()).filter(Boolean))];
@@ -107,7 +107,9 @@ function openTitlesFor(owner: string) {
   };
 }
 
-async function deps(owner: string) {
+/** The proposal pipeline's deps (store, extraction model, the owner's open titles, zone). Exported for the Actions
+ *  classify step, which backs its items through the SAME proposeFromSource. */
+export async function deps(owner: string) {
   const { pgProposalStore } = await import("./proposals-store.server");
   const { DEFAULT_TZ } = await import("../identity/scheduling-config.server");
   return { store: pgProposalStore, extract, openTitles: openTitlesFor(owner), tz: DEFAULT_TZ };
@@ -270,7 +272,7 @@ export async function getMeetingActionQueue(ownerEmail: string): Promise<Meeting
 }
 
 /** The caller's owner scope, or null when signed out. Ownership is enforced by every store query. */
-async function callerOwners(caller: { entra_object_id?: string; entra_email?: string } | undefined): Promise<string[] | null> {
+export async function callerOwners(caller: { entra_object_id?: string; entra_email?: string } | undefined): Promise<string[] | null> {
   if (!caller?.entra_email) return null;
   const { resolveTaskEmail } = await import("../journey/identity");
   const email = (await resolveTaskEmail(caller).catch(() => undefined)) ?? caller.entra_email;
@@ -291,16 +293,27 @@ export async function actOnProposal(
   action: "approve" | "complete" | "dismiss" | "edit" | "triage",
   title?: string,
   triage?: { choice: TriageChoice; name?: string },
+  opts: { from?: "actions" } = {},
 ): Promise<ActionResult> {
-  const cfg = proposalsConfig();
+  // The Actions view (2026-11-16) backs its rows with proposals under its OWN switch (the correspondence ingest +
+  // the per-owner classify setting), so a row acted on from Actions does not need correspondence.proposals.
+  const fromActions = opts.from === "actions";
+  const cfg = proposalsConfig() ?? (fromActions ? (await import("../actions/actions.server")).actionsConfig() : null);
   if (!cfg) return { ok: false, error: "Task proposals are not switched on." };
-  if (action === "triage" && !meetingTriageOn(cfg)) return { ok: false, error: "Meeting triage is not switched on." };
+  if (action === "triage" && !fromActions && !meetingTriageOn(cfg)) return { ok: false, error: "Meeting triage is not switched on." };
   const owners = await callerOwners(caller);
   if (!owners) return { ok: false, error: "Sign-in required." };
   const { pgProposalStore: store } = await import("./proposals-store.server");
   if (action === "triage") return triageProposal(owners, id, triage?.choice as TriageChoice, triage?.name, store);
-  if (action === "complete") return decideProposal(owners, id, "completed", store);
-  if (action === "dismiss") return decideProposal(owners, id, "dismissed", store);
+  if (action === "complete" || action === "dismiss") {
+    const r = await decideProposal(owners, id, action === "complete" ? "completed" : "dismissed", store);
+    // X-6 (owner-approved): Done / Dismiss in ACTIONS also settles the bell's row for the same item. The chat
+    // checklist path (no `from`) is unchanged. Best-effort: the decision already stands.
+    if (fromActions && r.ok && !r.alreadyDone) {
+      await (await import("../actions/actions.server")).settleBellForProposal(owners, r.row.sources).catch(() => 0);
+    }
+    return r;
+  }
   if (action === "edit") return editProposal(owners, id, title ?? "", store);
   return approveProposal(owners, id, {
     store,

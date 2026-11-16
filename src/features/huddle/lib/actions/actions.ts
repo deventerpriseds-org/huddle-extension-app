@@ -351,7 +351,7 @@ export function bellTargetsFor(refs: readonly { source: string; sourceItemId: st
   for (const r of refs) {
     if (r.source === "email" && r.sourceItemId && !r.sourceItemId.includes(":conv:") && !r.sourceItemId.includes(":msg:")) emailGraphIds.add(`feed:${r.sourceItemId}`);
     if (r.source === "teams" && r.sourceItemId) {
-      const chat = r.sourceItemId.split("\u0000")[0].split(":").length > 1 ? chatIdOfTeamsItem(r.sourceItemId) : null;
+      const chat = chatIdOfTeamsItem(r.sourceItemId);
       if (chat) chatIds.add(chat);
     }
   }

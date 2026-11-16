@@ -15,9 +15,17 @@
 //
 // THIS REPO IS PUBLIC: no names, ids, addresses or content here. Nothing in this module logs.
 
-import { FEED_ID_PREFIX, type FeedInboundMessage, type SentMessage } from "../external-feeds/onedrive-feed";
+import { FEED_ID_PREFIX, latestSentByConversation, type FeedInboundMessage, type OneDriveFeedsConfig, type SentMessage } from "../external-feeds/onedrive-feed";
 import { forwardedText } from "./forwarded";
-import { emailConversationKey, type ConversationFacts } from "./needs-you";
+import {
+  conversationFacts,
+  effectiveOwnerNames,
+  emailConversationKey,
+  groupEmailConversations,
+  ownerAddressSet,
+  type ConversationFacts,
+  type NeedsYouContext,
+} from "./needs-you";
 import type { CorrespondenceContent, CorrespondenceSource, EmailContent, SentContent, TeamsContent, TranscriptContent } from "./source-item";
 import { actionItemsOf, splitActionItems } from "../proposals/meeting-triage";
 import { titleKey } from "../proposals/proposals";
@@ -359,6 +367,8 @@ export interface MeetingItems {
   meetingAt: string | null;
   newestMs: number;
   open: string[];
+  /** The heading (assignee name, as Fireflies wrote it) each open item sat under; aligned with `open`. */
+  openHeadings: (string | null)[];
   resolved: { item: string; state: string }[];
 }
 
@@ -373,15 +383,19 @@ export function meetingItemsFromLedger(rows: readonly LedgerReportRow[], proposa
   for (const r of rows) {
     if (r.source !== "transcript" || r.content?.kind !== "transcript") continue;
     const c = r.content as TranscriptContent;
-    const items = splitActionItems(actionItemsOf(c.summary as { action_items?: unknown } | null)).items;
+    const split = splitActionItems(actionItemsOf(c.summary as { action_items?: unknown } | null));
     const open: string[] = [];
+    const openHeadings: (string | null)[] = [];
     const resolved: { item: string; state: string }[] = [];
-    for (const item of items) {
+    split.items.forEach((item, i) => {
       const st = decided.get(`${r.sourceItemId}\u0000${titleKey(item)}`);
       if (st) resolved.push({ item, state: st });
-      else open.push(item);
-    }
-    out.push({ meetingId: r.sourceItemId, title: c.title, meetingAt: c.meetingAt ?? r.at, newestMs: ms(c.meetingAt ?? r.at), open, resolved });
+      else {
+        open.push(item);
+        openHeadings.push(split.headings[i] ?? null);
+      }
+    });
+    out.push({ meetingId: r.sourceItemId, title: c.title, meetingAt: c.meetingAt ?? r.at, newestMs: ms(c.meetingAt ?? r.at), open, openHeadings, resolved });
   }
   return out.sort((a, b) => (b.newestMs || 0) - (a.newestMs || 0));
 }
@@ -449,4 +463,33 @@ export function planLedgerReport(a: {
     else plan.meetings.outOfWindow++;
   }
   return plan;
+}
+
+// ── ASSEMBLY: stored rows -> facts -> the plan (shared by the report script and the Actions view) ────
+
+export interface AssembledLedgerPlan {
+  ctx: NeedsYouContext;
+  plan: LedgerReportPlan;
+  /** Forwarded part of stored "Fw:" emails, by feed id. */
+  forwards: Map<string, string>;
+  forwardsMissing: number;
+  forwardsTotal: number;
+  signals: ResolutionSignal[];
+}
+
+/** Pure: everything the report script built by hand from loadLedgerReportData's rows, in one place, so the report
+ *  and the Actions view (lib/actions) cannot drift. */
+export function assembleLedgerPlan(
+  data: { rows: readonly LedgerReportRow[]; proposals: readonly ProposalSignalRow[]; bell: readonly BellSignalRow[] },
+  cfg: Pick<OneDriveFeedsConfig, "mailbox" | "ownerLogins" | "correspondence" | "teams">,
+  sinceMs: number,
+): AssembledLedgerPlan {
+  const sent = sentFromLedger(data.rows);
+  const ctx: NeedsYouContext = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), latestSent: latestSentByConversation(sent), sentKnown: sent.length > 0 };
+  const emailFacts = [...groupEmailConversations(cfg.mailbox, emailMessagesFromLedger(data.rows))].map(([k, msgs]) => conversationFacts(k, msgs, ctx));
+  const teams = teamsChatsFromLedger(data.rows, cfg.teams.ownerSenderIds);
+  const meetings = meetingItemsFromLedger(data.rows, data.proposals);
+  const signals = resolutionSignals(data.proposals, data.bell, messageLookup(data.rows, cfg.mailbox), cfg.mailbox);
+  const fw = forwardsFromLedger(data.rows);
+  return { ctx, plan: planLedgerReport({ emailFacts, teams, meetings, signals, sinceMs }), forwards: fw.forwards, forwardsMissing: fw.missing, forwardsTotal: fw.isForward, signals };
 }

@@ -226,7 +226,7 @@ export function admitActionVerdict(raw: unknown, haystack: string, a: { key: str
   if (typeof o.open_item !== "boolean") return base;
   if (!ACTION_KINDS.includes(o.kind as ActionKind)) return base;
   if (!ACTION_CATEGORIES.includes(o.category as ActionCategory)) return base;
-  const conf = o.confidence === "high" || o.confidence === "medium" || o.confidence === "low" ? o.confidence : null;
+  const conf: ActionVerdict["confidence"] = o.confidence === "high" || o.confidence === "medium" || o.confidence === "low" ? o.confidence : null;
   const common = { ...base, kind: o.kind as ActionKind, category: o.category as ActionCategory, confidence: conf, todo: str(o.todo, 200), due: str(o.due, 120), quote: str(o.quote, 600), reason: str(o.reason) };
   if (o.open_item === false) {
     const { notCheckedReason: _n, ...rest } = common;
