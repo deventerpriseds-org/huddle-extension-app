@@ -124,8 +124,11 @@ export function classifyTaskMode(task: {
   // No decisive verb → lean on the task's own category/tags.
   if (PERSONAL_CATEGORIES.has(cat) || tags.some((t) => PERSONAL_TAGS.has(t))) return "assist";
 
-  // Default: an assigned task with no personal signal is knowledge-work the agent can produce.
-  return "produce";
+  // Default when no verb or signal decides it: ASSIST (owner decision A, 2026-11-04/16 "Go on 1-9"). The old
+  // default, produce, turned errands like "Obtain official transcript" into an invented "acquisition brief";
+  // assist does the legwork the agent CAN finish and names the user's own step. Research/drafting tasks are
+  // unaffected — PRODUCE_VERBS above still sends them to produce.
+  return "assist";
 }
 
 // A short hint appended to the confirm-intent directive so the agent proposes the RIGHT kind of assumed

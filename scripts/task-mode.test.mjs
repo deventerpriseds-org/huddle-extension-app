@@ -60,7 +60,11 @@ t("Research … -> produce", mode("Research Agentforce by Salesforce") === "prod
 t("Reply to … -> assist", mode("Reply to DBA email") === "assist");
 t("Reply to … stays assist (not a place)", mode("Reply to the pastor") === "assist");
 t("LIFE category -> assist", mode("Ambiguous thing", { category: "LIFE" }) === "assist");
-t("no signal -> produce", mode("Ambiguous thing") === "produce");
+// Owner decision A (2026-11-16 "Go on 1-9"): when nothing decides it, lean ASSIST, never an invented deliverable.
+t("no signal -> assist (owner decision A)", mode("Ambiguous thing") === "assist");
+t("errand with no listed verb -> assist: Obtain official transcript", mode("Obtain official transcript") === "assist");
+t("errand with no listed verb -> assist: Get a haircut", mode("Get a haircut") === "assist");
+t("research still produces under the new default", mode("Research AI-assisted SDLC practices") === "produce");
 
 console.log("\n--- every hint forbids a reminder as a substitute for the work ---");
 for (const m of ["produce", "assist", "remind"]) {
