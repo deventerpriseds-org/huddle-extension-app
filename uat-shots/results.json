@@ -1,0 +1,113 @@
+{
+  "results": [
+    {
+      "name": "Sidebar visible by default on desktop",
+      "pass": true
+    },
+    {
+      "name": "Sidebar collapses (removed from DOM) after clicking collapse",
+      "pass": true
+    },
+    {
+      "name": "Main content reflows wider when Sidebar collapses",
+      "pass": true,
+      "detail": "before=368 after=624"
+    },
+    {
+      "name": "Sidebar re-expands via Rail's H button",
+      "pass": true
+    },
+    {
+      "name": "ContextPanel visible by default with a collapse button",
+      "pass": true
+    },
+    {
+      "name": "ContextPanel collapses to the slim edge-tab",
+      "pass": true
+    },
+    {
+      "name": "ContextPanel re-expands via the edge-tab",
+      "pass": true
+    },
+    {
+      "name": "Meeting button visible after selecting a real huddle",
+      "pass": true,
+      "detail": "selected a real group huddle first"
+    },
+    {
+      "name": "Standup ceremony room opens with a Start button",
+      "pass": true
+    },
+    {
+      "name": "First standup reply appears within 15s (the user's expected/fixed latency)",
+      "pass": true,
+      "detail": "first real transcript turn observed after 557ms"
+    },
+    {
+      "name": "Fake mic installed (getUserMedia stub ready for voice barge)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Typed 'mhm' noise barge is IGNORED (no agent reply)",
+      "pass": true,
+      "detail": "answer rows added=0 (>0 ⇒ an agent wrongly answered the noise)"
+    },
+    {
+      "name": "Ceremony barge mic unmuted and listening before voice barges",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Voice barge (1-hail) HEARD through the mic and answered",
+      "pass": true,
+      "detail": "reply=\"Sam 00:11 Yes sir?\""
+    },
+    {
+      "name": "Hail 'Hey Sam' gets a short ready-ack, not a lane update",
+      "pass": true,
+      "detail": "hailReply=\"Sam 00:11 Yes sir?\""
+    },
+    {
+      "name": "Voice barge (2-park) HEARD through the mic and answered",
+      "pass": true,
+      "detail": "reply=\"Sam 00:28 Both investor-pitch cards — “Prepare investor pitch” and “Lock investor pitch” — are already marked done and tagged parking-lot, so no change was need\""
+    },
+    {
+      "name": "Park ack NAMES the investor pitch (not a generic 'got it')",
+      "pass": true,
+      "detail": "parkReply=\"Sam 00:28 Both investor-pitch cards — “Prepare investor pitch” and “Lock investor pitch” — are already marked done and tagged parking-lot, so no change was need\""
+    },
+    {
+      "name": "Voice barge (3-quick) HEARD through the mic and answered",
+      "pass": true,
+      "detail": "reply=\"Terry 00:40 There are 0 blockers on the board right now.\""
+    },
+    {
+      "name": "Voice barge (4-long-task) HEARD through the mic and answered",
+      "pass": true,
+      "detail": "reply=\"Terry 01:17 I’ve put the competitor premium-pricing brief into research using the premium-mask scope, under-$1,500 ceiling, ownership costs, and independent fee\""
+    },
+    {
+      "name": "Standup ceremony reaches completion (Run again shown)",
+      "pass": true,
+      "detail": "completed after 360194ms total, 45 turns rendered"
+    },
+    {
+      "name": "No avatar image 404s (ACT-huddle-2 regression guard)",
+      "pass": true,
+      "detail": "all avatar images loaded"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
