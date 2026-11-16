@@ -57,8 +57,53 @@ Hide a Teams GROUP or MEETING chat only when the owner's Teams id is KNOWN, he w
 the chat (all stored messages, not just the window), and he is NEVER @mentioned in any stored message. 1:1 chats always
 show. Channels / unknown kinds show. Missing mention data or an unknown author/owner id = can't tell = SHOWS (fail
 open), counted in the summary line. Applied in `planLedgerReport` BEFORE any AI call.
-- [ ] Piece 2 -- Fireflies date-range search in the back-fill
-- [ ] Finish -- suites, tsc, build, dry runs
+  - Committed + pushed: `57c55814`.
+  - Mutation proofs (scripts/mutate.sh, anchors from files, exit code read): ALL FIVE `FIRED (control EQUIVALENT)`,
+    exit 0 --
+    m1 pre-filter `if (c.involvement.hide)` -> `if (false)`: test "P-1 uninvolved..." failed;
+    m2 rule core `hide: true` -> `hide: false`: "U-1 group chat..." failed;
+    m3 fail-open on missing mention data removed: "U-6 a message with NO mention data..." failed;
+    m4 resolved exclusion `if (via)` -> `if (false)`: "R-1 added as a task..." failed;
+    m5 "newer message brings it back" (`coversUntilMs >= latestOtherMs`) removed: "R-2 ignored BEFORE..." failed.
+- [x] Piece 2 -- Fireflies date-range search in the back-fill (code + tests; dry run pending)
+  - `src/features/huddle/lib/fireflies/fireflies-list.ts` (pure: queries, page parse, window, fallback trigger, union,
+    per-day counts) + `fireflies.server.ts listTranscriptsInRange` (fromDate/toDate first; if the API refuses the
+    date arguments, pages everything 50 at a time and filters here; hard cap 40 pages).
+  - `scripts/correspondence-backfill.ts`: fetches known (chat.fireflies_meetings) UNION listed; logs mode, pages,
+    listed-by-day, union provenance counts, fetched-by-meeting-day. Same transcript-row path (storeContent).
+  - Teams REFILL (coordinator point 2): on apply only, after observe, `storeContent` re-writes CONTENT ONLY for each
+    Teams version's items (never status / hash / attempts / claims), so stored rows gain mention ids, owner id and
+    mentionsOwner. Chosen over a hash change because a hash change resets every Teams row to `pending` and would
+    re-run the processors (bell) on all 149 rows. Logged as "content refreshed".
+  - Tests: `bun scripts/fireflies-list.test.ts` 7 passed, 0 failed.
+- [x] Finish -- suites, tsc, build, dry runs
+
+## Finish (2026-11-16, branch head f734b157 for the runs)
+
+Suites: report-from-ledger 39/0, fireflies-list 7/0, correspondence-ingest 186/0, correspondence-ledger-sql 76/0,
+forwarded 22/0, meeting-triage 69/0, needs-you 77/0, redteam-correspondence 77/0, task-proposals 199/0,
+onedrive-feed 61 all passed, fireflies-minutes 72 passed / 3 failed (G3, G5, G8 -- the SAME three fail with
+origin/main's fireflies.server.ts swapped in: pre-existing, not touched). `npx tsc --noEmit` exit 0. `npm run build`
+exit 0.
+
+Back-fill DRY RUN (run 43796977508, apply=false, success):
+- transcript list: mode `date_args` (Fireflies accepted fromDate/toDate), 1 page, 15 meetings listed in the window.
+- meetings by ET day: 2026-11-09 1, 2026-11-10 6, 2026-11-11 5, 2026-11-12 3 (listed = fetched, fetch failed 0).
+- union: known 14, listed 15, to fetch 15 -- known only 0, listed only 1 (the 2026-11-09 one), both 14.
+- email unique 138, teams unique 149, sent unique 36 (match the stored counts); nothing written.
+
+Preview DRY RUN (run 43796990712, step=action, source=ledger, email=false, max_sources=200, success; file written to
+the owner's OneDrive Huddle Preview folder, no email):
+- stored rows: email 138, teams 149, sent 36, transcript 14. Signals: dismissed bell rows 32 (all usable),
+  task proposals: tables NOT CREATED on the live DB (ground truth: to_regclass null for chat.task_proposals and
+  chat.task_proposal_refs, azure-pg-query run 43797806975, metadata only) -- the run labelled it UNAVAILABLE; the
+  loader now says "not created yet" (commit after f734b157).
+- email: 128 conversations in window, 4 resolved by you (dismissed in the bell), 124 scanned; step 2 open 43 of 105
+  (2 answered by reply), step 3 action 2 of 3, 36 hidden by category settings, 14 owner-only, 0 AI failures.
+- Teams: 27 chats, 0 hidden as not-involved, 9 shown as can't-tell (their stored content predates the mention
+  fields -- expected until the back-fill runs with apply), 24 checked + 3 hidden by settings, 12 open.
+- From meetings: 14 meetings, 197 open action items (Fireflies' list for everyone in the meeting), 0 triaged.
+- Over the cap: 0. Model calls 137.
 
 ## Findings that shaped the design
 

@@ -18,6 +18,8 @@ export interface LedgerReportData {
   /** A signal store that could not be read (its table absent or the query failed): NOTHING is excluded on its
    *  account, and the caller says so in the report. */
   unavailable: ("task_proposals" | "bell")[];
+  /** A signal store whose tables do not exist yet (never used): no signals from it, which is not a failure. */
+  notCreated: "task_proposals"[];
 }
 
 /** Read every stored row (content not purged) for these owner logins. Transcripts from the minutes flow may be stored
@@ -41,7 +43,18 @@ export async function loadLedgerReportData(ownerLogins: readonly string[]): Prom
   }));
   const unavailable: LedgerReportData["unavailable"] = [];
   let proposals: ProposalSignalRow[] = [];
+  const notCreated: LedgerReportData["notCreated"] = [];
   try {
+    // Measured 2026-11-16: the proposals tables do not exist on the live DB yet (the feature has never run), which
+    // is "no signals", not a read failure. Checked first so the report says the true thing.
+    const ex = await pool.query<{ ok: boolean }>(
+      `SELECT (to_regclass('chat.task_proposals') IS NOT NULL AND to_regclass('chat.task_proposal_refs') IS NOT NULL) AS ok`,
+    );
+    if (!ex.rows[0]?.ok) notCreated.push("task_proposals");
+  } catch {
+    /* fall through: the read below reports unavailable */
+  }
+  if (!notCreated.includes("task_proposals")) try {
     const p = await pool.query<{ source: string; source_item_id: string; norm_title: string; state: string; decided_at: Date | null }>(
       `SELECT rf.source, rf.source_item_id, rf.norm_title, p.state, COALESCE(p.decided_at, p.updated_at) AS decided_at
          FROM chat.task_proposal_refs rf JOIN chat.task_proposals p ON p.id = rf.proposal_id
@@ -63,5 +76,5 @@ export async function loadLedgerReportData(ownerLogins: readonly string[]): Prom
   } catch {
     unavailable.push("bell");
   }
-  return { rows, proposals, bell, unavailable };
+  return { rows, proposals, bell, unavailable, notCreated };
 }

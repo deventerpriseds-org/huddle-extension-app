@@ -13,6 +13,10 @@
 //             file every run (email 127 -> 61 -> 17 records; P-7 probe), so only OneDrive's version history still holds
 //             the earlier messages. THIS REPO IS PUBLIC: the log prints COUNTS and version times only -- never an id,
 //             subject, address, body, chat name or transcript text.
+//             2026-11-16 (report from the ledger): (a) the Fireflies pass also LISTS meetings by date range from the
+//             Fireflies API (fireflies.server listTranscriptsInRange) and fetches the union with chat.fireflies_meetings;
+//             (b) on apply, each Teams version's items have their stored CONTENT re-written (storeContent, content only)
+//             so rows stored earlier gain mention ids / owner id / mentionsOwner. Dry run writes nothing either way.
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   .claude/actions.md 2026-11-15; correspondence-probes.ts P-7; docs/qc-evidence/BUILD-correspondence-content.md.
 // Env: TOKEN (app-only Graph), HUDDLE_ONEDRIVE_FEEDS, AZURE_PG_URL, BACKFILL_SINCE (ISO, default Monday 2026-11-09 00:00 ET),
@@ -73,7 +77,7 @@ function snapshotRecords(text: string): Record<string, unknown>[] {
 
 const { pgLedger } = await import("../src/features/huddle/lib/correspondence/ledger.server");
 type Src = "email" | "teams" | "sent" | "transcript";
-const zero = () => ({ versions: 0, items: 0, unique: 0, inserted: 0, contentFilled: 0, changed: 0, unchanged: 0, updated: 0, failed: 0 });
+const zero = () => ({ versions: 0, items: 0, unique: 0, inserted: 0, contentFilled: 0, changed: 0, unchanged: 0, updated: 0, failed: 0, refreshed: 0 });
 const totals: Record<Src, ReturnType<typeof zero>> = { email: zero(), teams: zero(), sent: zero(), transcript: zero() };
 const seen = new Set<string>();
 const store = async (source: Exclude<Src, "transcript">, items: SourceItem[]) => {
@@ -96,6 +100,20 @@ const store = async (source: Exclude<Src, "transcript">, items: SourceItem[]) =>
     totals[source].contentFilled += r.contentFilled ?? 0;
   } catch {
     totals[source].failed += items.length;
+    return;
+  }
+  // 2026-11-16 (coordinator input, report from the ledger): Teams content gained mention ids / the line owner id /
+  // mentionsOwner. The content hash deliberately does NOT include them (nothing re-processes), so observe leaves an
+  // already-stored row's content as it was. storeContent re-writes CONTENT ONLY on the rows observe just made sure
+  // exist -- never status, hash, attempts or claims -- so stored Teams rows gain the new fields. Versions run oldest
+  // first, so the newest copy of each message is what stays.
+  if (source === "teams") {
+    try {
+      const s = await pgLedger.storeContent(owner, items);
+      totals.teams.refreshed += s.updated;
+    } catch {
+      totals.teams.failed += items.length;
+    }
   }
 };
 
@@ -132,39 +150,55 @@ if (cfg.sent.enabled) {
   }
 } else console.log("sent: not configured (sent entry absent or off) -- skipped");
 
-// Fireflies (2026-11-16): every meeting the minutes flow knows. fireflies.server has NO "list transcripts" call
-// (only fetchTranscript by id), so chat.fireflies_meetings is the meeting list. One meeting at a time.
+// Fireflies: every meeting the minutes flow knows (chat.fireflies_meetings, the webhook's record) UNION every meeting
+// the Fireflies API lists in [BACKFILL_SINCE, now] (2026-11-16: the webhook record starts 2026-11-10, so a meeting it
+// never saw was never stored). One meeting at a time, through the same transcript-row path. Counts and dates only.
 if (String(process.env.FIREFLIES_API_KEY ?? "").trim()) {
   const { getSharedPool } = await import("../src/features/huddle/lib/db/shared-pool.server");
-  const { fetchTranscript } = await import("../src/features/huddle/lib/fireflies/fireflies.server");
+  const { fetchTranscript, listTranscriptsInRange } = await import("../src/features/huddle/lib/fireflies/fireflies.server");
   const { meetingDateMs } = await import("../src/features/huddle/lib/fireflies/minutes");
-  let ids: { meeting_id: string; owner_email: string }[] = [];
+  const { dayCounts, unionMeetings } = await import("../src/features/huddle/lib/fireflies/fireflies-list");
+  let known: { meeting_id: string; owner_email: string }[] = [];
   try {
-    ids = (await getSharedPool().query(`SELECT meeting_id, owner_email FROM chat.fireflies_meetings ORDER BY created_at`)).rows;
+    known = (await getSharedPool().query(`SELECT meeting_id, owner_email FROM chat.fireflies_meetings ORDER BY created_at`)).rows;
   } catch {
     console.log("transcript: could not read chat.fireflies_meetings");
   }
+  let listed: Awaited<ReturnType<typeof listTranscriptsInRange>>["meetings"] = [];
+  try {
+    const l = await listTranscriptsInRange(since, new Date().toISOString());
+    listed = l.meetings;
+    console.log(`transcript list: mode ${l.mode} | pages ${l.pages} | listed in window ${l.meetings.length} (no time ${l.noTime}) | by day ${JSON.stringify(dayCounts(l.meetings.map((m) => m.atMs)))}`);
+  } catch (e) {
+    console.log(`transcript list: FAILED (${e instanceof Error && /^[a-z0-9_:.-]{1,60}$/.test(e.message) ? e.message : "error"}) -- known meetings only`);
+  }
+  const ids = unionMeetings(known, listed, owner);
+  const from = (k: string) => ids.filter((x) => x.from === k).length;
+  console.log(`transcript union: known ${known.length} | listed ${listed.length} | to fetch ${ids.length} (known only ${from("known")}, listed only ${from("listed")}, both ${from("both")})`);
   totals.transcript.versions = ids.length;
+  const fetchedMs: (number | null)[] = [];
   for (const m of ids) {
     try {
-      const { transcript } = await fetchTranscript(m.meeting_id);
+      const { transcript } = await fetchTranscript(m.id);
       const ms = meetingDateMs(transcript as Parameters<typeof meetingDateMs>[0]);
-      const item = firefliesTranscriptItem(m.meeting_id, transcriptContent(transcript, ms != null ? new Date(ms).toISOString() : null));
+      fetchedMs.push(ms);
+      const item = firefliesTranscriptItem(m.id, transcriptContent(transcript, ms != null ? new Date(ms).toISOString() : null));
       totals.transcript.items++;
       totals.transcript.unique++;
       if (!apply) continue;
-      const r = await pgLedger.storeContent(m.owner_email || owner, [item]);
+      const r = await pgLedger.storeContent(m.owner || owner, [item]);
       totals.transcript.inserted += r.inserted;
       totals.transcript.updated += r.updated;
     } catch {
       totals.transcript.failed++;
     }
   }
+  console.log(`transcript fetched by meeting day (ET): ${JSON.stringify(dayCounts(fetchedMs))} | fetch failed ${totals.transcript.failed}`);
 } else console.log("transcript: FIREFLIES_API_KEY not set -- Fireflies pass skipped");
 
 const line = (s: Src) => {
   const x = totals[s];
-  return `${s} ${s === "transcript" ? "meetings" : "versions"} ${x.versions}, items ${x.items}, unique ${x.unique}, inserted ${x.inserted}, content filled ${x.contentFilled}${s === "transcript" ? `, content updated ${x.updated}` : `, changed ${x.changed}, unchanged ${x.unchanged}`}, failed ${x.failed}`;
+  return `${s} ${s === "transcript" ? "meetings" : "versions"} ${x.versions}, items ${x.items}, unique ${x.unique}, inserted ${x.inserted}, content filled ${x.contentFilled}${s === "transcript" ? `, content updated ${x.updated}` : `, changed ${x.changed}, unchanged ${x.unchanged}`}${s === "teams" ? `, content refreshed ${x.refreshed}` : ""}, failed ${x.failed}`;
 };
 console.log(`backfill ${apply ? "APPLIED" : "DRY RUN"} since ${since}: ${(["email", "teams", "sent", "transcript"] as const).map(line).join(" | ")}`);
 process.exit(0);
