@@ -104,6 +104,8 @@ t("AC-6.1 correspondence switches all OFF by default", noTeams.correspondence, {
   emailBell: false,
   ownerAliases: [],
   ownerNames: [],
+  // Stored-content retention (owner brief 2026-11-16): a seeded default, changeable in the config.
+  contentRetentionDays: 90,
 });
 t("AC-6.1 only a literal true turns a switch on", parseFeedsConfig(JSON.stringify({ ...baseJson, correspondence: { ingest: "yes", bell: 1 } }))!.correspondence.ingest, false);
 const perm = (c: Record<string, unknown>) => {

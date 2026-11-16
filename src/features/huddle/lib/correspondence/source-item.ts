@@ -8,14 +8,76 @@
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   scripts/correspondence-ingest.test.ts; docs/qc-evidence/IMPL-correspondence-ingest.md.
 //
-// THIS REPO IS PUBLIC: no addresses, tenant/drive ids or names here. Bodies live only in memory for the
-// length of one pass; the ledger stores ids, hashes, statuses and error CATEGORIES only.
+// THIS REPO IS PUBLIC: no addresses, tenant/drive ids or names here.
+//
+// 2026-11-16 (owner decision, verbatim: "A (recommended): store message content in Azure, including Sent Items as a
+// fourth kind next to email, Teams and transcripts."): an item now CARRIES its content (`content`, the shapes
+// below) and the ledger STORES it in chat.correspondence_ledger.content (JSONB), so Azure is the system of record
+// and the OneDrive files are for loads only. LOGS STILL NEVER CARRY CONTENT: no body, subject, address, name, chat
+// name, transcript text or token is ever logged -- counts, statuses and error categories only (AC-3.8).
+// Sent Items (`sent`) and Fireflies transcripts stored by the minutes flow are STORE-ONLY: never judged, never
+// proposed, never on the bell (STORE_ONLY_SOURCES; the ledger inserts them `processed` and never claims `sent`).
+// EVIDENCE (2026-11-16): docs/qc-evidence/BUILD-correspondence-content.md.
 
 import type { InboundMessage } from "../email/inbound-email";
-import { FEED_ID_PREFIX } from "../external-feeds/onedrive-feed";
+import { FEED_ID_PREFIX, mapFeedMessage, mapSentRecords, type FeedInboundMessage, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
+import { FORWARD_SUBJECT } from "./forwarded";
+import { parseRecipients } from "./needs-you";
 
-export type CorrespondenceSource = "email" | "teams" | "transcript";
-export const CORRESPONDENCE_SOURCES: readonly CorrespondenceSource[] = ["email", "teams", "transcript"];
+export type CorrespondenceSource = "email" | "teams" | "transcript" | "sent";
+export const CORRESPONDENCE_SOURCES: readonly CorrespondenceSource[] = ["email", "teams", "transcript", "sent"];
+/** Sources that are STORED only (system of record), never processed by the bell / proposals / judge. */
+export const STORE_ONLY_SOURCES: readonly CorrespondenceSource[] = ["sent"];
+
+// ---------------------------------------------------------------------------------------------------------
+// Stored content shapes (chat.correspondence_ledger.content). One per source; `kind` names it.
+
+export interface EmailContent {
+  kind: "email";
+  subject: string | null;
+  from: { name: string | null; address: string | null };
+  to: string[];
+  cc: string[];
+  receivedAt: string | null;
+  conversationId: string | null;
+  internetMessageId: string | null;
+  /** The SAME visible text the app derives (mapFeedMessage -> htmlToText for an HTML body). */
+  bodyText: string | null;
+  isForward: boolean;
+  /** Present only when the record carries `hasAttachments`. */
+  hasAttachments?: boolean;
+}
+
+export interface SentContent extends Omit<EmailContent, "kind"> {
+  kind: "sent";
+  sentAt: string;
+}
+
+export interface TeamsContent {
+  kind: "teams";
+  chatId: string;
+  chatName: string | null;
+  messageId: string;
+  at: string;
+  sender: { id: string; name: string; isApp: boolean };
+  fromOwner: boolean | null;
+  text: string;
+  webUrl: string | null;
+}
+
+export interface TranscriptContent {
+  kind: "transcript";
+  title: string | null;
+  meetingAt: string | null;
+  /** Present when Fireflies returned them. */
+  participants?: string[];
+  attendees?: { name: string | null; email: string | null }[];
+  sentences: { speaker: string; text: string; start: number | string | null; end: number | string | null }[];
+  /** Every summary field fetched, including extended_sections when the API returned it. */
+  summary: Record<string, unknown> | null;
+}
+
+export type CorrespondenceContent = EmailContent | SentContent | TeamsContent | TranscriptContent;
 
 /** How an item's identity was established (AC-2.3: a fallback identity is recorded, never hidden). */
 export type IdentityBasis = "provider_id" | "drive_item_etag" | "meeting_id";
@@ -50,9 +112,13 @@ export interface SourceItem {
   driveItemId: string | null;
   fileEtag: string | null;
   internetMessageId: string | null;
-  /** In-memory payload for processors. NEVER persisted by the ledger, never logged. */
+  /** In-memory payload for processors (never logged). */
   email?: InboundMessage;
   teams?: TeamsMessage;
+  /** STORED by the ledger in chat.correspondence_ledger.content (owner decision 2026-11-16). Never logged. */
+  content?: CorrespondenceContent;
+  /** true => stored only: inserted `processed`, never reset to pending, never claimed (STORE_ONLY_SOURCES). */
+  storeOnly?: boolean;
 }
 
 /**
@@ -92,10 +158,148 @@ export function teamsSourceItem(m: TeamsMessage, file: { path: string; itemId?: 
     fileEtag: file.etag ?? null,
     internetMessageId: null,
     teams: m,
+    content: teamsContent(m),
+  };
+}
+
+/** Pure: the stored shape of one Teams message (already mapped out of the Power Automate shape). */
+export function teamsContent(m: TeamsMessage): TeamsContent {
+  return {
+    kind: "teams",
+    chatId: m.chatId,
+    chatName: m.chatName ?? null,
+    messageId: m.messageId,
+    at: m.at,
+    sender: { id: m.senderId, name: m.senderName, isApp: m.senderIsApp },
+    fromOwner: m.fromOwner,
+    text: m.text,
+    webUrl: m.webUrl ?? null,
   };
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+
+/**
+ * Pure: the stored shape of one Outlook record (inbox or Sent Items). `mapped` is the EXISTING mapper's output
+ * (mapFeedMessage), so bodyText is the same visible text the app already derives -- no second HTML path. Recipients
+ * go through the existing needs-you parseRecipients (both the feed's `;` string and Graph's array shape).
+ */
+export function emailContent(rec: Record<string, unknown>, mapped: InboundMessage): EmailContent {
+  const m = mapped as FeedInboundMessage;
+  const to = parseRecipients(m.toRecipients ?? rec.toRecipients).addresses;
+  const cc = parseRecipients(m.ccRecipients ?? rec.ccRecipients).addresses;
+  return {
+    kind: "email",
+    subject: mapped.subject ?? null,
+    from: { name: mapped.fromName ?? null, address: mapped.fromAddress ?? null },
+    to,
+    cc,
+    receivedAt: mapped.receivedDateTime ?? null,
+    conversationId: mapped.conversationId ?? null,
+    internetMessageId: str(rec.internetMessageId) || null,
+    bodyText: mapped.bodyText ?? mapped.bodyPreview ?? null,
+    isForward: FORWARD_SUBJECT.test(String(mapped.subject ?? "")),
+    ...(typeof rec.hasAttachments === "boolean" ? { hasAttachments: rec.hasAttachments } : {}),
+  };
+}
+
+/**
+ * Pure: Sent Items records -> STORE-ONLY SourceItems (source 'sent'). Eligibility is EXACTLY the existing
+ * mapSentRecords rule (conversationId required, sentDateTime/receivedDateTime must parse, synthetic prefix after
+ * reply/forward markers while synthetic) -- each record is passed through it, never re-implemented. Identity is
+ * (sent, "<mailbox>:<outlook id>"), the same shape as the inbox. A record the rule drops, or one with no id, is
+ * counted skipped.
+ */
+export function sentSourceItems(
+  records: Record<string, unknown>[],
+  cfg: OneDriveFeedsConfig,
+  file: { path: string; itemId?: string | null; etag?: string | null },
+): { items: SourceItem[]; skipped: number } {
+  const items: SourceItem[] = [];
+  let skipped = 0;
+  const seen = new Set<string>();
+  for (const rec of records) {
+    const ok = mapSentRecords([rec], cfg).sent[0];
+    const originalId = str(rec.id);
+    if (!ok || !originalId) {
+      skipped++;
+      continue;
+    }
+    const sourceItemId = `${cfg.mailbox}:${originalId}`;
+    if (seen.has(sourceItemId)) {
+      skipped++;
+      continue;
+    }
+    seen.add(sourceItemId);
+    const mapped = mapFeedMessage(rec, cfg.mailbox);
+    const content: SentContent = { ...emailContent(rec, mapped), kind: "sent", sentAt: ok.sentAt };
+    items.push({
+      source: "sent",
+      sourceItemId,
+      identityBasis: "provider_id",
+      threadId: ok.conversationId,
+      at: ok.sentAt,
+      contentHash: stableHash([content.subject, content.bodyText, content.to.join(","), content.cc.join(","), ok.sentAt]),
+      drivePath: file.path,
+      driveItemId: file.itemId ?? null,
+      fileEtag: file.etag ?? null,
+      internetMessageId: content.internetMessageId,
+      content,
+      storeOnly: true,
+    });
+  }
+  return { items, skipped };
+}
+
+/** Pure: the stored shape of one Fireflies transcript (raw sentences AND every summary field fetched). */
+export function transcriptContent(t: {
+  title?: unknown;
+  date?: unknown;
+  dateString?: unknown;
+  participants?: unknown;
+  meeting_attendees?: unknown;
+  sentences?: unknown;
+  summary?: unknown;
+}, meetingAt: string | null): TranscriptContent {
+  const sentences = (Array.isArray(t.sentences) ? t.sentences : []).map((s) => {
+    const o = (s && typeof s === "object" ? s : {}) as Record<string, unknown>;
+    const n = (v: unknown) => (typeof v === "number" || typeof v === "string" ? v : null);
+    return { speaker: str(o.speaker_name), text: typeof o.text === "string" ? o.text : "", start: n(o.start_time), end: n(o.end_time) };
+  });
+  const out: TranscriptContent = {
+    kind: "transcript",
+    title: str(t.title) || null,
+    meetingAt,
+    sentences,
+    summary: t.summary && typeof t.summary === "object" && !Array.isArray(t.summary) ? { ...(t.summary as Record<string, unknown>) } : null,
+  };
+  if (Array.isArray(t.participants)) out.participants = t.participants.map((p) => str(p)).filter(Boolean);
+  if (Array.isArray(t.meeting_attendees)) {
+    out.attendees = t.meeting_attendees.map((a) => {
+      const o = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
+      return { name: str(o.displayName) || str(o.name) || null, email: str(o.email) || null };
+    });
+  }
+  return out;
+}
+
+/** Pure: a Fireflies meeting -> its STORE-ONLY ledger item (source 'transcript', identity = meeting_id). */
+export function firefliesTranscriptItem(meetingId: string, content: TranscriptContent): SourceItem {
+  return {
+    source: "transcript",
+    sourceItemId: meetingId,
+    identityBasis: "meeting_id",
+    threadId: null,
+    at: content.meetingAt,
+    contentHash: stableHash([JSON.stringify(content)]),
+    drivePath: null,
+    driveItemId: null,
+    fileEtag: null,
+    internetMessageId: null,
+    content,
+    storeOnly: true,
+  };
+}
 
 /**
  * Pure (AC-2.2/2.3): one ORIGINAL Outlook feed record + its already-mapped InboundMessage -> SourceItem.
@@ -142,6 +346,7 @@ export function emailSourceItem(
     fileEtag: file.etag ?? null,
     internetMessageId,
     email: mapped,
+    content: emailContent(rec, mapped),
   };
 }
 
@@ -165,6 +370,20 @@ export interface ObserveResult {
   inserted: number;
   changed: number;
   unchanged: number;
+  /** Unchanged rows whose stored content was NULL and is now filled (2026-11-16). Present only when > 0, so the
+   *  result of an observe that fills nothing is exactly the earlier three-field shape. */
+  contentFilled?: number;
+}
+
+/** Content-only storage (2026-11-16), separate from LedgerStore so the processing contract is unchanged. */
+export interface ContentStore {
+  /** Store-only upsert for items whose ledger row may ALSO be owned by a processor with its own hash (Fireflies
+   *  transcripts: meeting triage observes the same (transcript, meeting_id) row). Inserts a missing row as
+   *  `processed`; on an existing row it writes `content` ONLY -- never content_hash, status or the claim columns. */
+  storeContent(owner: string, items: SourceItem[]): Promise<{ inserted: number; updated: number }>;
+  /** Sets content to NULL (row kept, content_purged_at stamped) where the item's own time is older than
+   *  `retentionDays`. A purged row's content is never written again. Returns rows purged. */
+  purgeContent(retentionDays: number): Promise<number>;
 }
 
 export interface LedgerStore {

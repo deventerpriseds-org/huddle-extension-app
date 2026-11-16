@@ -72,6 +72,9 @@ export interface CorrespondenceConfig {
   /** AC-R6.7 / OQ-5: the owner's names (display name, first name) used to recognise him as the doer of a to-do
    *  or as the person named in a meeting-chat question. From config only, never from the model. */
   ownerNames: string[];
+  /** Stored-content retention (owner decision 2026-11-16, content stored in Azure): content older than this many
+   *  days, by the item's own time, is set to NULL once a day (row kept). Seeded default 90; change it in the config. */
+  contentRetentionDays: number;
 }
 
 /** The REAL file the owner's Teams flow writes (read from the drive 2026-11-13, graph-permission-check run
@@ -88,6 +91,8 @@ export const CORRESPONDENCE_MIN_INTERVAL_DEFAULT = 10;
 export const CORRESPONDENCE_TEAMS_LOAD_AT_DEFAULT = "18:00";
 /** Owner decision 2026-11-13: email/sent stale after N working hours; N defaults to 6. */
 export const CORRESPONDENCE_STALE_HOURS_DEFAULT = 6;
+/** Owner brief 2026-11-16: stored correspondence content is kept 90 days by default (config-centric seed). */
+export const CONTENT_RETENTION_DAYS_DEFAULT = 90;
 
 export interface OneDriveFeedsConfig {
   enabled: boolean;
@@ -261,6 +266,7 @@ function correspondenceFlags(v: unknown): CorrespondenceConfig {
       ),
     ],
     ownerNames: [...new Set((Array.isArray(o.ownerNames) ? o.ownerNames : []).map((x) => str(x)).filter((x) => x.length >= 2 && x.length <= 80))],
+    contentRetentionDays: n(o.contentRetentionDays, CONTENT_RETENTION_DAYS_DEFAULT, 3650),
   };
 }
 

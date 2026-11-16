@@ -465,6 +465,31 @@ async function emailBranch(
   return { status: "failed", error, final };
 }
 
+/** Transcript-content stores that failed in this process (a count only; never the text). */
+export const transcriptStoreFailures = { count: 0 };
+
+/** Store one fetched meeting's raw transcript + full summary in the correspondence ledger (store-only row; an
+ *  existing row's processing state is never touched -- ledger storeContent). Never throws. Returns whether it
+ *  stored. Exported for the back-fill, which stores meetings the same way. */
+export async function storeTranscriptContent(
+  owner: string,
+  meetingId: string,
+  t: FirefliesTranscript,
+  meetingMs: number | null,
+): Promise<boolean> {
+  try {
+    const { transcriptContent, firefliesTranscriptItem } = await import("../correspondence/source-item");
+    const { pgLedger } = await import("../correspondence/ledger.server");
+    const content = transcriptContent(t, meetingMs != null ? new Date(meetingMs).toISOString() : null);
+    await pgLedger.storeContent(owner, [firefliesTranscriptItem(meetingId, content)]);
+    return true;
+  } catch (e) {
+    transcriptStoreFailures.count++;
+    console.error("[fireflies] transcript store failed", errCode(e, "transcript_store_failed"));
+    return false;
+  }
+}
+
 /** Work one leased meeting: fetch it once, then email and OneDrive side by side. Never throws. */
 export async function processMeeting(
   row: import("./minutes-store.server").MeetingRow,
@@ -492,6 +517,12 @@ export async function processMeeting(
   await store
     .recordMeetingInfo(id, t.title ? String(t.title).slice(0, 300) : null, ms != null ? new Date(ms).toISOString() : null)
     .catch(() => {});
+  // 2026-11-16 (owner: "Make sure both the raw transcript and the summary are being loaded for fireflies"): the raw
+  // sentences AND every summary field just fetched are stored in Azure (chat.correspondence_ledger, source
+  // 'transcript'). Additive: a failure here is counted and logged as a CODE only, and never touches the email,
+  // the OneDrive save, or the queue row. Started here and awaited after both branches, so it adds nothing to the
+  // pass's send budget (D9).
+  const stored = storeTranscriptContent(row.owner_email, id, t, ms);
 
   const [emailR, driveR] = await Promise.allSettled([
     row.pending_email
@@ -506,6 +537,7 @@ export async function processMeeting(
       : Promise.resolve(undefined),
   ]);
 
+  await stored; // never throws
   const email: EmailOutcome | undefined =
     emailR.status === "fulfilled" ? emailR.value : { status: "failed", error: errCode(emailR.reason, "email_branch_failed"), final: false };
   let onedrive: { ok: boolean; path?: string; error?: string } | undefined;

@@ -12,7 +12,8 @@
 // plugs into processorsForPass. With no processor switched on, ingest only records items as `pending`.
 import { getFeedsConfig, readFeed, readTeamsLogFile, recordTeamsFeedStatus } from "../external-feeds/onedrive-feed.server";
 import { makeBellProcessor } from "./bell";
-import { runIngestPass, type EmailFileRead, type PassResult } from "./ingest-pass";
+import { runContentPurge, runIngestPass, type EmailFileRead, type PassResult } from "./ingest-pass";
+import { CONTENT_RETENTION_DAYS_DEFAULT } from "../external-feeds/onedrive-feed";
 import type { ItemProcessor } from "./source-item";
 
 /** Every processor that exists, built fresh per pass (the bell decides each chat once per pass). The pass
@@ -32,13 +33,34 @@ let running: Promise<PassResult | null> | null = null;
  *  across instances the ledger's claim/lease makes concurrent passes safe (AC-3.9). */
 export function runCorrespondenceIngest(): Promise<PassResult | null> {
   const cfg = getFeedsConfig();
-  const pass = runIngestOnly(cfg);
+  const pass = withContentPurge(cfg, runIngestOnly(cfg));
   // File-staleness alert (2026-11-13): rides this heartbeat hook, independent of `ingest`. Flag OFF => exactly
   // the previous behaviour (not even the import). ON => the returned promise also waits for the check (the
   // heartbeat awaits it at the end of the tick), which never throws.
   if (cfg?.correspondence.staleAlerts !== true) return pass;
   const stale = import("./feed-staleness.server").then((m) => m.runFeedStaleness(cfg)).catch(() => null);
   return Promise.all([pass, stale]).then(([r]) => r);
+}
+
+/** Stored-content purge (2026-11-16), at most once a day per process, alongside the pass. Runs only where content
+ *  can have been stored: the correspondence ingest is on, or Fireflies is configured (the minutes flow stores
+ *  transcripts). Otherwise zero work, exactly as before. Never throws; the pass result comes back unchanged. */
+let lastPurgeMs: number | null = null;
+function withContentPurge(cfg: ReturnType<typeof getFeedsConfig>, pass: Promise<PassResult | null>): Promise<PassResult | null> {
+  const storing = cfg?.correspondence.ingest === true || !!String(process.env.FIREFLIES_API_KEY ?? "").trim();
+  if (!storing || !process.env.AZURE_PG_URL) return pass;
+  const purge = import("./ledger.server")
+    .then(({ pgLedger }) =>
+      runContentPurge(cfg?.correspondence.contentRetentionDays ?? CONTENT_RETENTION_DAYS_DEFAULT, {
+        store: pgLedger,
+        lastRunMs: lastPurgeMs,
+        now: () => Date.now(),
+        markRun: (ms) => (lastPurgeMs = ms),
+        log: (l) => console.log(l),
+      }),
+    )
+    .catch(() => null);
+  return Promise.all([pass, purge]).then(([r]) => r);
 }
 
 function runIngestOnly(cfg: ReturnType<typeof getFeedsConfig>): Promise<PassResult | null> {
@@ -56,6 +78,11 @@ function runIngestOnly(cfg: ReturnType<typeof getFeedsConfig>): Promise<PassResu
         readEmail: async (c): Promise<EmailFileRead> => {
           const r = await readFeed(c, "email");
           return r.ok ? { ok: true, etag: r.etag ?? "", path: c.email.path, records: r.snapshot.records } : { ok: false, reason: r.reason };
+        },
+        // 2026-11-16: Sent Items stored in Azure (store-only) through the SAME reader reply settling uses.
+        readSent: async (c): Promise<EmailFileRead> => {
+          const r = await readFeed(c, "sent");
+          return r.ok ? { ok: true, etag: r.etag ?? "", path: c.sent.path, records: r.snapshot.records } : { ok: false, reason: r.reason };
         },
         processors: cfg.correspondence.bell || cfg.correspondence.proposals ? await processorsForPass() : [],
         now: () => Date.now(),

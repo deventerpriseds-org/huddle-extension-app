@@ -744,7 +744,8 @@ export interface ProposalRowInfo {
   triage?: boolean;
 }
 
-const SOURCE_LABEL: Record<CorrespondenceSource, string> = { email: "Email", teams: "Teams", transcript: "Meeting" };
+// `sent` (2026-11-16) is store-only and never the source of a proposal; the label exists only to keep the map total.
+const SOURCE_LABEL: Record<CorrespondenceSource, string> = { email: "Email", teams: "Teams", transcript: "Meeting", sent: "Sent email" };
 
 /** Pure: a row that came from meeting triage (its FIRST source is a meeting, or it is in a triage state). */
 export function isTriageRow(p: Pick<ProposalRow, "state" | "sources">): boolean {
