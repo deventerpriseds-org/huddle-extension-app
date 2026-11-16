@@ -133,6 +133,10 @@ if (cfg.teams.enabled) {
     const items = parsed.messages.map((m) => teamsSourceItem(m, { path: cfg.teams.path, etag: `version:${v.id}` }));
     // Reason NAMES and counts only (public repo): why a version's lines produced no messages.
     console.log(`teams version ${v.at}: lines ${parsed.lines} | messages ${items.length} | skipped ${JSON.stringify(parsed.skipped)}`);
+    // Coverage by ET day (counts + dates only): does this version reach back to Monday?
+    const byDay: Record<string, number> = {};
+    for (const m of parsed.messages) { const d = new Date(m.at).toLocaleDateString("en-CA", { timeZone: "America/New_York" }); byDay[d] = (byDay[d] ?? 0) + 1; }
+    console.log(`teams days ${v.at}: ${Object.keys(byDay).sort().map((d) => `${d}=${byDay[d]}`).join(" ")} | chats ${new Set(parsed.messages.map((m) => m.chatId)).size}`);
     await store("teams", items);
   }
 }
