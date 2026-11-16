@@ -42,6 +42,28 @@ Branch `claude_actions-view`, cut from `origin/main` 4abde5af (fetched 2026-11-1
    - Heartbeat: `withActionsClassify` after the ingest pass; once per 10 min per process; at most 6 calls per pass and
      no call started after 20 s; daily cap setting (default 150, owner zone day).
 
+7. UI: `ModulesLauncher.tsx` (rail button, header pill, phone sheet) built on the SHARED `LauncherList` that Apps now
+   also uses (AC-M-12); Priorities / Schedule left the rail, the header pills and the bottom bar; the bottom bar's
+   columns are derived from its entry list (`bottomGridClass`); phone top bar shows the view's name (`VIEW_TITLE`);
+   `ActionsView.tsx` uses WidgetPage + CollapsibleSection (now exported; `defaultOpen` added), the ViewSwitcher pill
+   anatomy for filters, the bell's labelled-button and What-counts anatomy, the checklist's "Proposed" menu chip on
+   phones and Iris's reply-card anatomy. Chat checklist labels: "Add as task" / "Done".
+8. Tests: `scripts/actions-view.test.ts` 62/62; ledger SQL (real PostgreSQL 16) 79/79 incl. AI-9 (verdict survives
+   markProcessed); touched suites green: task-proposals 199, task-proposals-sql 45, meeting-triage 69,
+   meeting-triage-sql 34, meeting-triage-server 7, attention (all), needs-you 77, correspondence-ingest 186,
+   onedrive-feed (0 FAIL), report-from-ledger 39, feed-staleness 98. fireflies-minutes G3/G5/G8 red as on main.
+   `npx tsc --noEmit` clean; `npm run build` exit 0.
+9. Mutation proofs (mutate.sh, every one `FIRED (control EQUIVALENT)`, exit 0, tree restored to HEAD):
+   m1 quote-verbatim admission (A-2), m2 8-char floor (A-4), m11 open_item false -> none (A-1), m3 channel clause
+   (S-4), m4 fail-open on missing mention data (S-10), m5 judged version never re-sent (E-3), m6 daily cap (E-4),
+   m9 uninvolved chats never become units when the switch is ON (E-1), m7 decided proposals not listed (F-1),
+   m8 correction hides only its own version (G-4), m10 markProcessed keeps result_ids.action (AI-9).
+10. Looked at it (local dev server, UAT identity, no DB): desktop rail with Modules + Apps and the Modules popover;
+    header pills Huddle / Board / Files / Modules; Actions page frame; 390px bottom bar = 5 equal 73px x 44px columns
+    (Huddle, Board, Modules, Files, Apps), Modules sheet in light and dark, no horizontal scroll, top bar "Actions".
+    NOT looked at: a POPULATED Actions list (rows, buttons, Wrong? panel, suggested reply) -- the local server has no
+    data. That needs `actions-view-checks.mjs` on the live app after deploy, plus the owner's eye.
+
 ### Expected AI calls per day
 One call per thread VERSION (a new message in the thread = a new version). The first day back-fills since Monday and
 hits the cap (150). After that: roughly the number of email conversations + Teams chats that get a new message from
