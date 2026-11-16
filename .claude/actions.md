@@ -1,3 +1,4 @@
+- [x] 2026-11-16 Meeting menu: "Automatic stand-up" is now a real Switch on a plain menu row aligned with "Daily stand-up" (owner: did not look like a toggle, not aligned); meeting-menu-checks.mjs UAT measures alignment + screenshots both themes.
 - [x] 2026-11-16 Loop 12 verifier (claude_verify-correspondence-proposals-12 @ 9d6c3889): PASS 6, FAIL 0, UI-UNVERIFIED 1; minor: "teams=scheduled | email=throttled" logged every minute before 6pm -> quiet-log check now includes scheduled (TL-10).
 - [x] Verifier loop 11 (claude_verify-correspondence-proposals-11 @ 40ea8726) = FIX FIRST, speed only: the tag-span
       rewrite rebuilt the prefixed body per element -> ~950 KB Outlook body 10-12 s on Node (bun hid it). Fixed: built
