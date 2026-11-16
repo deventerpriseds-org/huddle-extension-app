@@ -129,7 +129,7 @@ if (source === "files") {
   // Counts only (public log).
   console.log(
     `source ledger since ${new Date(sinceMs).toISOString().slice(0, 10)} | stored rows email ${bySource("email")} teams ${bySource("teams")} sent ${bySource("sent")} transcript ${bySource("transcript")} | ` +
-      `signals: decided proposals ${data.proposals.length}, dismissed bell rows ${data.bell.length}, usable ${signals.length}${data.unavailable.length ? `, UNAVAILABLE ${data.unavailable.join("+")}` : ""} | ` +
+      `signals: decided proposals ${data.proposals.length}, dismissed bell rows ${data.bell.length}, usable ${signals.length}${data.notCreated.length ? `, not created yet ${data.notCreated.join("+")}` : ""}${data.unavailable.length ? `, UNAVAILABLE ${data.unavailable.join("+")}` : ""} | ` +
       `email conversations ${allFacts.length}: in window ${plan.email.scan.length + plan.email.resolved.length}, resolved by you ${plan.email.resolved.length}, before window ${plan.email.outOfWindow} | ` +
       `teams chats ${chats.length}: hidden not-involved ${plan.teams.hiddenUninvolved.length}, resolved by you ${plan.teams.resolved.length}, shown can't-tell ${plan.teams.cantTell}, to scan ${plan.teams.scan.length}, before window ${plan.teams.outOfWindow} | ` +
       `meetings ${meetings.length}: in window ${plan.meetings.inWindow.length} | forwards ${fw.isForward}, forwarded part not stored ${fw.missing}`,
