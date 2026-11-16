@@ -3,6 +3,8 @@ name: Correspondence ledger back-fill (one time, from OneDrive file versions)
 # WHAT:       Runs scripts/correspondence-backfill.ts from a chosen ref: reads every saved OneDrive version of the
 #             email and Teams feed files and stores each message ONCE in Azure (chat.correspondence_ledger), through
 #             the same mappers and ledger code the live collection uses. Dry run unless apply=true.
+#             2026-11-16: WITH CONTENT (owner decision: content stored in Azure), plus Sent Items versions (store-only
+#             source 'sent') and a Fireflies pass (raw transcript + full summary per known meeting). Counts only.
 # WHY:        Owner 2026-11-15: "This data should be in azure ... Push everything there ... The files should be for
 #             loads only." The flows replace each file every run, so only OneDrive's version history still holds
 #             Monday onward. DB access mirrors azure-pg-query.yml: a temporary firewall rule for this runner only,
@@ -129,6 +131,9 @@ jobs:
           CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           HUDDLE_ONEDRIVE_FEEDS: ${{ secrets.HUDDLE_ONEDRIVE_FEEDS }}
+          # 2026-11-16: the Fireflies pass (raw transcript + full summary per meeting in chat.fireflies_meetings).
+          # Absent => that pass is skipped and the log says so.
+          FIREFLIES_API_KEY: ${{ secrets.FIREFLIES_API_KEY }}
           BACKFILL_SINCE: ${{ inputs.since }}
           BACKFILL_APPLY: ${{ inputs.apply && '1' || '0' }}
         run: |
