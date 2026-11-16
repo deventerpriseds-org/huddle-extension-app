@@ -106,3 +106,52 @@ Probe: `VERIFY-report-from-ledger-1.probe4.ts` (mocked fetch), 6 of 7 PASS.
   paged_all path could stop early. Only the date_args path is order-independent.
 - Log lines print mode, pages, counts and ET day keys. An error message is printed only when it matches
   `^[a-z0-9_:.-]{1,60}$` (the module's own codes); anything else prints as "error".
+
+### Claim 5 -- default source = ledger, since Monday, source=files still works: CONFIRMED (files path by reading only)
+
+- `REPORT_SINCE_DEFAULT = 2026-11-09T05:00:00Z`. Intl check: `Monday, 11/09/2026, 00:00` America/New_York.
+- `reply-scan-preview.ts:49`: the source is `files` only when PREVIEW_SOURCE trimmed and lower-cased equals
+  `files`. Anything else, blank included, gives `ledger`. `since` falls back to the default only for ledger; files
+  keeps the rolling days window.
+- Workflow: the `source` choice defaults to `ledger`, and is passed as PREVIEW_SOURCE. `READS_LEDGER` gates Azure
+  login, connection resolve, firewall open and close on step reply/action, `source != files` and `!probe`, which
+  matches the script's own rule.
+- Files path: the diff moves the pre-PR block verbatim under `if (source === "files")`. `action-scan-steps`
+  iterates `a.rawRecords` only when `ledger` is absent. tsc is clean. NOT executed live (needs Graph + OneDrive).
+- INFO (radius): ledger email rows carry no header facts (`headerNames: []`, no inferenceClassification), so any
+  header-based automated or list filters in the needs-you facts cannot fire on the ledger path. More mail reaches
+  the model than on the files path, which fails open.
+- Radius (workflow): `Resolve connection string` keeps deploy-swa's `next(..., servers[0])` fallback when the
+  pinned server is absent. That is the same drift risk CLAUDE.md documents, mitigated by the default pin. Low.
+
+### Claim 6 -- no content in log lines: CONFIRMED for every log line the PR adds
+
+Every added `console.log` was read in the diff (action-scan-steps, reply-scan-preview, correspondence-backfill,
+fireflies). Each prints counts, modes, page numbers, ET day keys, category names, or a gated error code. Teams model
+failures are swallowed with `failures++` and no message. `report-from-ledger.ts` and `.server.ts` never log.
+Residual (low): an uncaught pg error from the first `loadLedgerReportData` query, or the chatInvolvement throw from
+claim 1, prints a stack trace. That holds code, not content.
+
+## Mutation re-runs (scripts/mutate.sh, anchors from files via python, exit code read)
+
+| author's proof | anchor | result |
+|---|---|---|
+| m3 fail-open on missing mention data removed | line 168 `if (!messages.length || ... !Array.isArray(m.mentionedUserIds))) return ...` | exit 0, `FIRED (control EQUIVALENT)`, test U-6 |
+| m5 "newer message brings it back" removed | `s.coversUntilMs >= latestOtherMs && ` deleted | exit 0, `FIRED (control EQUIVALENT)`, test R-2 |
+
+First m3 attempt passed `FAIL U-6` as the pattern and got exit 4 UNDETERMINED (wrong pattern, nothing proven). The
+re-run with the test's name fired. The file was restored to HEAD both times.
+
+## Cases the suite misses (become tests)
+
+1. @Everyone / `mentioned.conversation` in a group chat. Today it HIDES. No test pins the intended verdict.
+2. A non-array truthy `mentionedUserIds` in stored content throws, so the report aborts.
+3. A mention with an empty user id, or a null mention entry, is stored as `[]` (known, nobody), not unknown.
+4. Whitespace or case drift between configured ids, `ownerUserId`, sender and mention ids, at both owner-set sites
+   (`chatInvolvement` and `teamsChatsFromLedger`).
+5. A Fireflies known id with whitespace, in the union.
+
+## Verdict
+
+claim 1 REFUTED (inputs: @Everyone conversation mention -> hidden; non-array mentionedUserIds -> throw);
+claims 2, 3, 4, 5, 6 CONFIRMED (3: live apply state NOT REACHED; 5: files path not executed live).
