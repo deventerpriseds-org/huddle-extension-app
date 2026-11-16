@@ -10,8 +10,12 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test:router": "bun scripts/router-winners.test.ts",
+    "test:barge-deadline": "bun scripts/barge-deadline.test.ts",
+    "test:standup-toggle": "bun test scripts/standup-toggle.test.ts",
+    "test:app-downloads": "bun scripts/app-downloads.test.ts",
     "test:priority-check": "bun scripts/priority-check.test.ts",
     "test:chat-format": "bun scripts/chat-format.test.ts",
+    "test:day-schedule": "bun scripts/day-schedule.test.ts",
     "test:blocked": "bun scripts/blocked-line.test.mjs",
     "test:standup-ranking": "bun scripts/standup-ranking.test.ts",
     "test:standup-deliver": "bun scripts/standup-deliver-mode.test.ts",
@@ -77,7 +81,10 @@
     "test:attention": "tsx scripts/attention.test.ts",
     "test:id-token-expiry": "bun scripts/id-token-expiry.test.ts",
     "test:handoff-lane-a": "bun test scripts/handoff-lane-a.test.ts",
-    "test:handoff-lane-b": "bun test scripts/handoff-lane-b.test.ts"
+    "test:handoff-lane-b": "bun test scripts/handoff-lane-b.test.ts",
+    "test:shared-pool": "bun scripts/shared-pool.test.ts",
+    "test:fireflies-minutes": "bun scripts/fireflies-minutes.test.ts",
+    "test:fireflies-queue-sql": "bun scripts/fireflies-queue-sql.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
@@ -127,6 +134,7 @@
     "input-otp": "^1.4.2",
     "jose": "^6.2.3",
     "lucide-react": "^0.575.0",
+    "parse5": "7.3.0",
     "pg": "^8.22.0",
     "pptxgenjs": "^4.0.1",
     "react": "^19.2.0",

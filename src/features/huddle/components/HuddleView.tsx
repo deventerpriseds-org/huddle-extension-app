@@ -69,7 +69,10 @@ import { loadOlderMessages } from "../lib/identity/workspace.functions";
 import { getToken } from "@/lib/entra-auth";
 import { isRenderableMessage, isWorkspaceHydrated } from "../store";
 import { shouldAppendReminder } from "../lib/identity/workspace-window";
+import { emailFocusTarget, focusStep, FOCUS_WAIT_MS, revealStartFor, type FocusState } from "../lib/attention/focus";
 import { getBoardTasks, updateBoardTask } from "../lib/tasks/board.functions";
+import { getProposalStatesFn } from "../lib/proposals/proposals.functions";
+import { ProposalChecklistItem } from "./ProposalChecklistItem";
 import { resilientEnqueue } from "../lib/resilient-enqueue";
 import { parseMentions } from "../lib/routing";
 import { useHuddleStore, useVisibleHuddles, useVisibleMessages, type CeremonyKind, type View } from "../store";
@@ -93,6 +96,13 @@ import { streamItemSummary } from "../lib/stream-context";
 
 import { AgentAvatar, UserAvatar } from "./AgentAvatar";
 import { ViewSwitcher } from "./ViewSwitcher";
+import {
+  getMySchedulingConfigFn,
+  setMyJobEnabledFn,
+} from "../lib/identity/scheduling-config.functions";
+import type { JobCadence } from "../lib/identity/scheduling-config.server";
+import { Switch } from "@/components/ui/switch";
+import { autoStandupLabel } from "../lib/identity/auto-job-label";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -137,6 +147,44 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
   function startVirtualMeeting(ceremonyType: CeremonyKind) {
     startMeeting("virtual-meeting", { ceremonyType });
   }
+
+  // "Automatic stand-up" on/off (owner 2026-11-16). The EFFECTIVE stand-up cadence (override or
+  // default) is read each time the menu opens, so the checkmark is the stored state. Turning it off
+  // only stops the SCHEDULED 8:00 digest (scheduler.server.ts honours `enabled:false`); "Daily stand-up"
+  // above is a manual start and keeps working either way.
+  const [standupCadence, setStandupCadence] = useState<JobCadence | undefined>(undefined);
+  const [standupSaving, setStandupSaving] = useState(false);
+  const meetingCaller = user
+    ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
+    : undefined;
+  async function loadStandupToggle() {
+    if (!meetingCaller) return;
+    try {
+      const res = await getMySchedulingConfigFn({ data: { caller: meetingCaller } });
+      setStandupCadence(res.config?.overrides?.standup ?? res.defaults.standup);
+    } catch {
+      /* leave the last known state; the item still works */
+    }
+  }
+  async function toggleAutoStandup(next: boolean) {
+    if (!meetingCaller || standupSaving) return;
+    setStandupSaving(true);
+    try {
+      const res = await setMyJobEnabledFn({ data: { caller: meetingCaller, job: "standup", enabled: next } });
+      if (res.error || !res.config) {
+        toast.error(`Couldn't change the automatic stand-up${res.error ? `: ${res.error}` : "."}`);
+        return;
+      }
+      const saved = res.config.overrides.standup;
+      setStandupCadence((c) => saved ?? (c ? { ...c, enabled: undefined } : c));
+      toast.success(next ? "Automatic stand-up is on." : "Automatic stand-up is off. You can still start one from this menu.");
+    } catch {
+      toast.error("Couldn't change the automatic stand-up.");
+    } finally {
+      setStandupSaving(false);
+    }
+  }
+  const autoStandupOn = standupCadence?.enabled !== false;
 
   // Open the most recent persisted ceremony run (e.g. an auto-run that fired while away).
   async function reviewLastCeremony() {
@@ -214,7 +262,7 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
 
         <AttentionBell />
 
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={(open) => { if (open) void loadStandupToggle(); }}>
           <DropdownMenuTrigger asChild>
             <button className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">
               <Video size={14} />
@@ -222,7 +270,7 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
               <ChevronDown size={12} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent align="end" className="w-64">
             <DropdownMenuLabel>Virtual meeting (agents)</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => startVirtualMeeting("standup")}>
@@ -233,6 +281,31 @@ function HuddleHeader({ huddle }: { huddle: Huddle }) {
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => startVirtualMeeting("review_retro")}>
               Review + retro
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {/* A real on/off switch (the app's own Switch, as in Settings), on a plain menu row so it lines up
+                with "Daily stand-up" above -- a CheckboxItem indents its text by pl-8 for a tick that read as
+                neither a toggle nor aligned (owner, 2026-11-16). The whole row toggles; the Switch is display-only
+                so one click never fires twice. */}
+            <DropdownMenuItem
+              disabled={!meetingCaller || standupCadence === undefined || standupSaving}
+              onSelect={(e) => {
+                e.preventDefault();
+                void toggleAutoStandup(!autoStandupOn);
+              }}
+              data-testid="auto-standup-toggle"
+              data-state-on={autoStandupOn ? "true" : "false"}
+              role="menuitemcheckbox"
+              aria-checked={autoStandupOn}
+              className="justify-between"
+            >
+              <span className="min-w-0 flex-1">{autoStandupLabel(standupCadence)}</span>
+              <Switch
+                checked={autoStandupOn}
+                tabIndex={-1}
+                aria-hidden="true"
+                className="pointer-events-none"
+              />
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => startMeeting("virtual-meeting", { members: [] })}>
@@ -399,6 +472,64 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
     if (el.scrollHeight <= el.clientHeight) revealOlder();
   }, [start, revealOlder, messages.length]);
 
+  // Jump to one email's reply card (bell tap / `?email=` deep link). Waits for history to load (at most
+  // FOCUS_WAIT_MS: a load that never completes must not leave the tap doing nothing -- seen in browser UAT
+  // run 43165525010); opens the window far enough up to render the card; scrolls it to the middle and
+  // highlights it. `focusState` is mirrored to data-focus-state so a browser check can read the outcome.
+  const focusRequest = useHuddleStore((s) => s.focusRequest);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [focusState, setFocusState] = useState<FocusState | null>(null);
+  // The wait timer is tied to ONE request (its nonce), so an expired earlier tap never cuts a new one short.
+  const [expiredNonce, setExpiredNonce] = useState<number | null>(null);
+  const focusWaitExpired = !!focusRequest && expiredNonce === focusRequest.nonce;
+  useEffect(() => {
+    if (!focusRequest || focusRequest.huddleId !== huddle.id) return;
+    const nonce = focusRequest.nonce;
+    const t = setTimeout(() => setExpiredNonce(nonce), FOCUS_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [focusRequest, huddle.id]);
+  useEffect(() => {
+    if (!focusRequest || focusRequest.huddleId !== huddle.id) return;
+    const target = emailFocusTarget(messages, focusRequest.emailId);
+    const step = focusStep({
+      found: !!target,
+      hydrated: isWorkspaceHydrated(),
+      waitExpired: focusWaitExpired,
+      aboveWindow: !!target && target.index < start,
+    });
+    setFocusState(step);
+    if (step === "waiting") return; // history still loading: the card may arrive with it
+    if (step === "not-found") {
+      useHuddleStore.getState().clearFocusRequest();
+      toast.message("That reply card is further back in this chat. Scroll up to find it.");
+      return;
+    }
+    follow.release(); // before revealing, so nothing pins the window back to the newest rows
+    if (step === "revealing") {
+      setPinnedStart(revealStartFor(target!.index, start));
+      return; // re-runs once the card is rendered
+    }
+    let raf = 0;
+    const land = (tries: number) => {
+      const el = scrollRef.current?.querySelector(`[data-msg-id="${CSS.escape(target!.id)}"]`);
+      if (!el) {
+        if (tries > 0) raf = requestAnimationFrame(() => land(tries - 1));
+        return;
+      }
+      el.scrollIntoView({ block: "center" });
+      setHighlightId(target!.id);
+      setFocusState("focused");
+      useHuddleStore.getState().clearFocusRequest();
+    };
+    land(10);
+    return () => cancelAnimationFrame(raf);
+  }, [focusRequest, huddle.id, messages, start, follow, focusWaitExpired]);
+  useEffect(() => {
+    if (!highlightId) return;
+    const t = setTimeout(() => setHighlightId(null), 3000);
+    return () => clearTimeout(t);
+  }, [highlightId]);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -427,6 +558,7 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
       ref={scrollRef}
       onScroll={onScroll}
       data-testid="transcript"
+      data-focus-state={focusState ?? undefined}
       className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6"
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
@@ -446,7 +578,12 @@ function Transcript({ messages, huddle }: { messages: HuddleMessage[]; huddle: H
         )}
 
         {shown.map((m) => (
-          <div key={m.id} data-msg-id={m.id}>
+          <div
+            key={m.id}
+            data-msg-id={m.id}
+            data-focused={highlightId === m.id ? "true" : undefined}
+            className={cn("rounded-xl transition-shadow", highlightId === m.id && "ring-2 ring-primary/60 ring-offset-2 ring-offset-background")}
+          >
             <MessageRow m={m} huddle={huddle} />
           </div>
         ))}
@@ -539,14 +676,41 @@ function ChecklistCard({ m }: { m: HuddleMessage }) {
   // (2) Then reconcile against server truth. `messages` is persisted but `checklistState` is NOT, so
   // after a reload the widget would otherwise show the status the row had when the message was
   // WRITTEN — hours stale, and indistinguishable from current. One read per mounted checklist.
-  const ids = useMemo(() => (payload?.rows ?? []).map((r) => r.taskId).join(","), [payload]);
+  // Proposal rows (AC-correspondence-checklist 5.6) reconcile from the PROPOSAL store, in ONE request for
+  // all of them (AC-5.24); task rows -- and any task an approved proposal became -- from getBoardTasks as
+  // before. A checklist with no proposal rows makes exactly the one board read it always made.
+  const ids = useMemo(
+    () => (payload?.rows ?? []).filter((r) => r.kind !== "proposal").map((r) => r.taskId).join(","),
+    [payload],
+  );
+  const propIds = useMemo(
+    () => (payload?.rows ?? []).filter((r) => r.kind === "proposal").map((r) => r.taskId).join(","),
+    [payload],
+  );
   useEffect(() => {
-    if (!ids || !caller?.entra_email) return;
+    if ((!ids && !propIds) || !caller?.entra_email) return;
     let cancelled = false;
-    const wanted = new Set(ids.split(","));
-    void getBoardTasks({ data: { caller } })
+    const wanted = new Set(ids ? ids.split(",") : []);
+    const proposalsRead = propIds
+      ? getProposalStatesFn({ data: { caller, ids: propIds.split(",") } })
+          .then((res) => {
+            if (cancelled) return;
+            const store = useHuddleStore.getState();
+            for (const r of res.rows) {
+              if (store.checklistState[r.id]?.busy) continue; // a tap in flight wins, as for task rows
+              if (r.taskId) {
+                wanted.add(r.taskId);
+                store.seedChecklistRows([{ taskId: r.taskId, status: "BACKLOG", tags: [] }]);
+              }
+              store.setChecklistRow(r.id, { status: r.state, title: r.title, linkedTaskId: r.taskId, ...(r.assignee !== undefined ? { assignee: r.assignee } : {}) });
+            }
+          })
+          .catch(() => {})
+      : Promise.resolve();
+    void proposalsRead
+      .then(() => (wanted.size ? getBoardTasks({ data: { caller } }) : null))
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || !res) return;
         const fresh = res.tasks
           .filter((t) => wanted.has(t.id))
           .map((t) => ({ taskId: t.id, status: (t.status ?? "BACKLOG").toUpperCase(), tags: t.tags ?? [] }));
@@ -558,7 +722,7 @@ function ChecklistCard({ m }: { m: HuddleMessage }) {
     return () => {
       cancelled = true;
     };
-  }, [ids, caller]);
+  }, [ids, propIds, caller]);
 
   if (!payload || !payload.rows?.length) return null;
 
@@ -569,9 +733,27 @@ function ChecklistCard({ m }: { m: HuddleMessage }) {
         <span className="min-w-0 truncate text-xs font-semibold text-foreground">{payload.title}</span>
       </div>
       <ul className="divide-y divide-hairline">
-        {payload.rows.map((row) => (
-          <ChecklistItem key={row.taskId} row={row} live={rowState[row.taskId]} caller={caller} />
-        ))}
+        {payload.rows.map((row) => {
+          if (row.kind !== "proposal") {
+            return <ChecklistItem key={row.taskId} row={row} live={rowState[row.taskId]} caller={caller} />;
+          }
+          // An approved proposal IS a task now (AC-5.9): render it as an ordinary task row keyed by the
+          // journey id, so done / Doing / Backlog / parking lot act on the real task immediately.
+          const p = rowState[row.taskId];
+          const linked = p?.status === "approved" ? (p.linkedTaskId ?? row.proposal?.linkedTaskId) : null;
+          if (linked) {
+            const lt = rowState[linked];
+            return (
+              <ChecklistItem
+                key={row.taskId}
+                row={{ taskId: linked, title: p?.title ?? row.title, status: lt?.status ?? "BACKLOG", tags: lt?.tags ?? [] }}
+                live={lt}
+                caller={caller}
+              />
+            );
+          }
+          return <ProposalChecklistItem key={row.taskId} row={row} live={p} caller={caller} />;
+        })}
       </ul>
       {payload.more ? (
         // LEGACY ONLY. New checklists are never truncated, so `more` is absent on anything rendered

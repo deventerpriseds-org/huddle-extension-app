@@ -101,6 +101,11 @@ export function createFollowState() {
     onScroll(m: ScrollMetrics) {
       following = isNearBottom(m);
     },
+    /** A jump to one specific message (bell / deep link): stop pinning to the newest so the opening
+     *  pin's late second pass cannot drag the reader away from it. Their next scroll decides again. */
+    release() {
+      following = false;
+    },
     /** After the message list changed: pin to the newest? A turn the user just started always pins. */
     shouldPin(isPending: boolean): boolean {
       if (isPending) following = true;

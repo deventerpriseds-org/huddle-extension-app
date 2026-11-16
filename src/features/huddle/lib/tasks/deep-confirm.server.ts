@@ -6,7 +6,8 @@
 // chosen shape — produce → a real produce task + async kick; quick → resume the ORIGINAL ask inline on a
 // chat-friendly tier. The original ask is stored here. One pending row per (user, huddle); best-effort
 // (any DB error → null, so the turn simply proceeds normally). No new secret; reuses AZURE_PG_URL.
-import { Pool } from "pg";
+import type { Pool } from "pg";
+import { getSharedPool } from "../db/shared-pool.server";
 import { isGreenLight } from "./green-light";
 import { verdictToApply, type RememberedVerdict } from "./verdict-memory";
 
@@ -15,7 +16,7 @@ function getPool(): Pool {
   if (_pool) return _pool;
   const url = process.env.AZURE_PG_URL;
   if (!url) throw new Error("AZURE_PG_URL not configured");
-  _pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: false }, max: 3, idleTimeoutMillis: 20_000, connectionTimeoutMillis: 10_000 });
+  _pool = getSharedPool();
   return _pool;
 }
 const BOOTSTRAP = `

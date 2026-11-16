@@ -51,6 +51,10 @@ mock.module("../src/features/huddle/lib/tasks/tasks.server.ts", () => ({
     return ALL.filter((r) => r.status !== "DONE" && (opts?.includeBlocked || r.status !== "BLOCKED"))
       .filter((r) => !category || String(r.category).toUpperCase() === category.toUpperCase());
   },
+  // The day view's task read (2026-11-10): same rows, filtered to the local day like the SQL does.
+  getScheduledTasksBetween: async (_email: string, startIso: string, endIso: string) =>
+    ALL.filter((r) => r.status !== "DONE" && r.status !== "BLOCKED" && r.start_time && r.start_time >= startIso && r.start_time < endIso)
+      .map((r) => ({ id: r.id, title: r.title, start_time: r.start_time, status: r.status, category: r.category })),
   getTaskBlockers: async () => new Map([["blocked-cert", { reason: "Waiting on employer reimbursement approval", agentId: "elle-rowan" }]]),
 }));
 mock.module("../src/features/huddle/lib/tasks/turns.server.ts", () => ({
@@ -62,8 +66,11 @@ const run = async (args: Record<string, unknown>, tz = "America/New_York") =>
   JSON.parse(await dispatchPrioritize("owner@example.com", args, tz)) as Record<string, any>;
 
 // ── B: schedule answers in ET, and complete ─────────────────────────────────────────────────────
+// Since 2026-11-10 the default 'scheduled' view answers ONE day (meetings + classes + tasks, see
+// day-schedule.test.ts). The every-day TASK list B1-B6 pin is still reachable with date:"all", and is
+// pinned here unchanged; B7-B8 pin the new default.
 {
-  const out = await run({ view: "scheduled" });
+  const out = await run({ view: "scheduled", date: "all" });
   const ids = new Set((out.ranked as any[]).map((r) => r.id));
   const todayShown = today.filter((x) => ids.has(x.id as string)).length;
   t("B1 every one of today's 6 scheduled items is returned (was 2 of 6)", todayShown === 6, `shown ${todayShown} of 6`);
@@ -76,9 +83,27 @@ const run = async (args: Record<string, unknown>, tz = "America/New_York") =>
 }
 {
   // A caller that genuinely asks for fewer still gets fewer -- and is TOLD the set was cut.
-  const out = await run({ view: "scheduled", limit: 3 });
+  const out = await run({ view: "scheduled", date: "all", limit: 3 });
   t("B5 an explicit limit is still honoured", out.count === 3, `count=${out.count}`);
   t("B6 a cut list says so (total + truncated)", out.total === 14 && out.truncated === true, `total=${out.total} truncated=${out.truncated}`);
+}
+
+{
+  // The default 'scheduled' view: ONE day. Today's tasks only -- never a later day's (the incident
+  // offered Wednesday's task as Tuesday's answer).
+  const out = await run({ view: "scheduled", date: "2026-11-04" });
+  const ids = (out.items as any[]).map((r) => r.id);
+  t("B7 the day view returns today's 6 tasks and no later-day task",
+    today.every((x) => ids.includes(x.id)) && !ids.some((id: string) => String(id).startsWith("later-")), JSON.stringify(ids));
+  t("B8 calendar not readable here, so the day is NOT claimed complete", out.complete === false, String(out.complete));
+  // D2 (verifier loop 1): a category must never bring back the tasks-only, every-day answer.
+  const cat = await run({ view: "scheduled", date: "2026-11-04", category: "NOPE" });
+  t("B9 a category keeps the one-day answer (items + complete flag, no every-day ranking)",
+    Array.isArray(cat.items) && typeof cat.complete === "boolean" && cat.category === "NOPE" && !(cat.ranked as any[] | undefined)?.length,
+    JSON.stringify({ items: cat.items, ranked: cat.ranked, complete: cat.complete }));
+  t("B10 the category narrows the day's TASKS", (cat.items as any[]).every((i) => i.kind !== "Task"), JSON.stringify(cat.items));
+  const work = await run({ view: "scheduled", date: "2026-11-04", category: "work" });
+  t("B11 a matching category keeps that day's tasks (6 WORK tasks)", (work.items as any[]).filter((i) => i.kind === "Task").length === 6, JSON.stringify(work.items));
 }
 
 // ── Ranking must NOT change (regression: priorities view, default limit) ────────────────────────

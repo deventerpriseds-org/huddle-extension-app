@@ -9,20 +9,15 @@
 // "researched" memory mode only. EVERYTHING here is best-effort and fails to a no-op — a DB/LLM error
 // never blocks or breaks a turn (the reply has already returned when the update runs).
 
-import { Pool } from "pg";
+import type { Pool } from "pg";
+import { getSharedPool } from "../db/shared-pool.server";
 
 let _pool: Pool | null = null;
 function getPool(): Pool {
   if (_pool) return _pool;
   const url = process.env.AZURE_PG_URL;
   if (!url) throw new Error("AZURE_PG_URL not configured");
-  _pool = new Pool({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
-    max: 3,
-    idleTimeoutMillis: 20_000,
-    connectionTimeoutMillis: 10_000,
-  });
+  _pool = getSharedPool();
   return _pool;
 }
 

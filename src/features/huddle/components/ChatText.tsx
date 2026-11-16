@@ -16,13 +16,13 @@ function Inlines({ parts }: { parts: Inline[] }) {
         if (p.t === "bold")
           return (
             <strong key={i} className="font-semibold">
-              {p.em ? <em className="italic">{p.v}</em> : p.v}
+              <Inlines parts={p.parts} />
             </strong>
           );
         if (p.t === "em")
           return (
             <em key={i} className="italic">
-              {p.v}
+              <Inlines parts={p.parts} />
             </em>
           );
         if (p.t === "code")

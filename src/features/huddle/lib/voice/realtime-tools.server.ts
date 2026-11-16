@@ -598,7 +598,7 @@ export async function executeRealtimeTool(
       // get_calendar_events is a calendar-framed ALIAS → the same combined-schedule executor, defaulting
       // to the day's scheduled view (a model-supplied view still wins).
       const a = name === "get_calendar_events" ? { view: "scheduled", ...args } : args;
-      return done(await dispatchPrioritize(email, a, ident.timeZone || ctx.timeZone || "UTC"));
+      return done(await dispatchPrioritize(email, a, ident.timeZone || ctx.timeZone || "UTC", { caller: ctx.caller }));
     }
     if (name === "schedule_reminder") {
       const { dispatchScheduleReminder } = await import("../tasks/reminders");

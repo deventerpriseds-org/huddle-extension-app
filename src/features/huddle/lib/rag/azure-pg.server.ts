@@ -7,7 +7,8 @@
 // the user triggers from Settings, so the UI can never falsely claim tables
 // exist when they don't.
 
-import { Pool, Client } from "pg";
+import { Client, type Pool } from "pg";
+import { getSharedPool } from "../db/shared-pool.server";
 import { embed, toPgVector, EMBED_DIM } from "./embed.server";
 import type {
   ChunkRow,
@@ -45,16 +46,7 @@ function getPool(): Pool {
   if (_pool) return _pool;
   const url = process.env.AZURE_PG_URL;
   if (!url) throw new RagStoreUnavailableError("AZURE_PG_URL not configured");
-  _pool = new Pool({
-    connectionString: url,
-    // Azure Postgres requires TLS. Node's default CA store lacks the DigiCert
-    // roots on some runtimes; skip cert verification to keep this portable.
-    // Encryption still applies — only the cert-chain check is skipped.
-    ssl: { rejectUnauthorized: false },
-    max: 3,
-    idleTimeoutMillis: 20_000,
-    connectionTimeoutMillis: 10_000,
-  });
+  _pool = getSharedPool();
   return _pool;
 }
 

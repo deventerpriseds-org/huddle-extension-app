@@ -4,13 +4,20 @@
 // WHY:        see onedrive-feed.ts. This file only does I/O; every decision is in the pure module.
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   .claude/actions.md ACT:trinnex-onedrive-feed.
+// 2026-11-12: the drive I/O (metadata -> eTag short-circuit -> size check -> download -> size check) moved
+//             into fetchDriveFile so the rolling Teams log (readTeamsLogFile) uses the SAME single download
+//             path, token, deadline and size cap (AC-1.2). readFeed's behaviour is unchanged; its ok result
+//             now also carries the eTag it served. AC: docs/ac/AC-correspondence-checklist.md section 1.
+// 2026-11-13: the metadata GET moved into driveItemMeta (fetchDriveFile still selects exactly id,eTag,size),
+//             shared with readFeedFileMeta (lastModifiedDateTime only) for the file-staleness alert.
 //
 // Contract with the flows (owner's Power Automate): the files are REPLACE-IN-PLACE snapshots refreshed on
 // source events. Huddle never cleans up, never writes, and never scans an unbounded log. A change is
 // detected by the drive item's eTag; an unchanged eTag reuses the stored last-good snapshot. A snapshot
 // that fails validation is recorded as the latest status but NEVER replaces the last good one.
 
-import { Pool } from "pg";
+import type { Pool } from "pg";
+import { getSharedPool } from "../db/shared-pool.server";
 import {
   coversWindow,
   eligibleFeedMessages,
@@ -20,11 +27,14 @@ import {
   parseFeedsConfig,
   validateAppointmentSnapshot,
   validateEmailSnapshot,
+  validateSentSnapshot,
   type FeedCalendarEvent,
   type OneDriveFeedsConfig,
   type ValidSnapshot,
 } from "./onedrive-feed";
 import type { InboundMessage } from "../email/inbound-email";
+import type { TeamsFileRead } from "./teams-log";
+import type { FeedMeta } from "../correspondence/feed-staleness";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 /** ONE deadline per file read (metadata + content together): a slow or hung drive must never hold up
@@ -39,13 +49,7 @@ function getPool(): Pool {
   if (_pool) return _pool;
   const url = process.env.AZURE_PG_URL;
   if (!url) throw new Error("AZURE_PG_URL not configured");
-  _pool = new Pool({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
-    max: 2,
-    idleTimeoutMillis: 20_000,
-    connectionTimeoutMillis: 10_000,
-  });
+  _pool = getSharedPool();
   return _pool;
 }
 
@@ -81,10 +85,10 @@ export function getFeedsConfig(): OneDriveFeedsConfig | null {
   return parseFeedsConfig(process.env.HUDDLE_ONEDRIVE_FEEDS);
 }
 
-type Kind = "email" | "appointments";
+type Kind = "email" | "appointments" | "sent";
 
 export type FeedRead =
-  | { ok: true; snapshot: ValidSnapshot<Record<string, unknown>>; changed: boolean }
+  | { ok: true; snapshot: ValidSnapshot<Record<string, unknown>>; changed: boolean; etag?: string }
   | { ok: false; reason: string; lastGood?: ValidSnapshot<Record<string, unknown>> };
 
 const drivePath = (cfg: OneDriveFeedsConfig, path: string) =>
@@ -93,17 +97,117 @@ const drivePath = (cfg: OneDriveFeedsConfig, path: string) =>
     .map((seg) => encodeURIComponent(seg))
     .join("/")}`;
 
+export type DriveFile =
+  | { kind: "unchanged"; etag: string }
+  | { kind: "text"; etag: string; itemId: string | null; text: string; tailSkippedBytes?: number }
+  | { kind: "fail"; reason: string; error?: string | null };
 
+/** The metadata GET of one drive item (the first step of every feed read), with ONE deadline, the existing app
+ *  token, and the caller's `$select`. Returns the response plus the deadline-bound fetch and auth header, so a
+ *  content download that follows shares the same deadline. GET only. Throws only on network/abort. */
+async function driveItemMeta(cfg: OneDriveFeedsConfig, path: string, select: string) {
+  const { getAppToken } = await import("../email/graph-email.server");
+  const deadline = AbortSignal.timeout(FEED_READ_DEADLINE_MS);
+  const timedFetch = (url: string, init: RequestInit) => fetch(url, { ...init, method: "GET", signal: deadline });
+  const auth = { Authorization: `Bearer ${await getAppToken()}` };
+  const meta = await timedFetch(`${drivePath(cfg, path)}?$select=${select}`, { headers: auth });
+  return { timedFetch, auth, meta };
+}
+
+/**
+ * Metadata only (no download): when the feed file last changed, for the file-staleness alert
+ * (lib/correspondence/feed-staleness.ts). 404 => missing; 403 => unreadable; any other failure (other HTTP
+ * error, network, timeout, no usable date) => transient. Called ONLY when correspondence.staleAlerts is true.
+ * Never throws; logs nothing.
+ */
+export async function readFeedFileMeta(cfg: OneDriveFeedsConfig, path: string): Promise<FeedMeta> {
+  try {
+    const { meta } = await driveItemMeta(cfg, path, "lastModifiedDateTime");
+    // Only 404 / 403 say something about the FILE. Every other failure (5xx, 429, 401 -- Huddle's own token --,
+    // timeout, network, a 200 without a usable date) is transient: it must not move the alert (verifier loop 4).
+    if (meta.status === 404) return { kind: "missing" };
+    if (meta.status === 403) return { kind: "unreadable" };
+    if (!meta.ok) return { kind: "transient" };
+    const item = (await meta.json()) as { lastModifiedDateTime?: unknown };
+    const ms = typeof item.lastModifiedDateTime === "string" ? Date.parse(item.lastModifiedDateTime) : NaN;
+    return Number.isFinite(ms) ? { kind: "ok", lastModifiedMs: ms } : { kind: "transient" };
+  } catch {
+    return { kind: "transient" };
+  }
+}
+
+/**
+ * THE one place Huddle downloads a feed file from the owner's drive (email, appointments, Teams log).
+ * GET only: Huddle never writes, renames, moves or deletes a feed file (AC-1.13, AC-2.6). `knownEtag`
+ * short-circuits an unchanged file before any download. Throws only on network/abort; callers map that.
+ */
+async function fetchDriveFile(
+  cfg: OneDriveFeedsConfig,
+  path: string,
+  knownEtag: string | null,
+  opts: { tailWhenTooLarge?: boolean } = {},
+): Promise<DriveFile> {
+  const { timedFetch, auth, meta } = await driveItemMeta(cfg, path, "id,eTag,size");
+  if (meta.status === 404) return { kind: "fail", reason: "missing" };
+  if (!meta.ok) return { kind: "fail", reason: "error", error: `drive item read failed (${meta.status})` };
+  const item = (await meta.json()) as { id?: string; eTag?: string; size?: number };
+  const etag = String(item.eTag ?? "");
+  if (etag && knownEtag === etag) return { kind: "unchanged", etag };
+  const itemId = typeof item.id === "string" ? item.id : null;
+  if (typeof item.size === "number" && item.size > cfg.maxBytes) {
+    if (!opts.tailWhenTooLarge) return { kind: "fail", reason: "rejected:too_large" };
+    // A rolling append-only log (the Teams JSONL) is read from its END: the last maxBytes bytes with an
+    // HTTP Range request. The first line of the tail is partial and the parser drops it; older lines are
+    // already in the processing ledger, so nothing is lost and nothing is re-emitted (AC-1.8, OQ-3).
+    const tail = await timedFetch(`${drivePath(cfg, path)}:/content`, { headers: { ...auth, Range: `bytes=-${cfg.maxBytes}` } });
+    if (!tail.ok) return { kind: "fail", reason: "error", error: `drive content read failed (${tail.status})` };
+    let text = await tail.text();
+    // A server that ignores Range returns the whole file (200): keep only the end, by the same rule.
+    if (text.length > cfg.maxBytes) text = text.slice(text.length - cfg.maxBytes);
+    return { kind: "text", etag, itemId, text, tailSkippedBytes: Math.max(1, item.size - cfg.maxBytes) };
+  }
+  const content = await timedFetch(`${drivePath(cfg, path)}:/content`, { headers: auth });
+  if (!content.ok) return { kind: "fail", reason: "error", error: `drive content read failed (${content.status})` };
+  const text = await content.text();
+  if (text.length > cfg.maxBytes) {
+    if (!opts.tailWhenTooLarge) return { kind: "fail", reason: "rejected:too_large" };
+    return { kind: "text", etag, itemId, text: text.slice(text.length - cfg.maxBytes), tailSkippedBytes: text.length - cfg.maxBytes };
+  }
+  return { kind: "text", etag, itemId, text };
+}
 
 /**
  * Read ONE feed file: eTag check -> download only when changed -> validate -> store as last good.
  * Never throws. On any failure the stored last-good snapshot (if any) rides back in `lastGood`, so a
  * caller can keep serving it while saying it is not current.
  */
+/** The chat.external_feed_state key of one feed file: kind + drive user + path (server config, never a payload). */
+export const feedStateKey = (cfg: OneDriveFeedsConfig, kind: Kind) => `${kind}:${cfg.driveUser}:${cfg[kind].path}`;
+
+/**
+ * What `readFeed` last recorded for one file (status + when it read), for the file-health alert's
+ * incomplete check. Database only: no Graph call, no download. null when never read, or on any error.
+ */
+export async function readFeedStatus(cfg: OneDriveFeedsConfig, kind: "email" | "sent"): Promise<{ status: string; checkedMs: number } | null> {
+  try {
+    await ensureBootstrapped();
+    const { rows } = await getPool().query(
+      `SELECT last_status, checked_at FROM chat.external_feed_state WHERE feed_key = $1`,
+      [feedStateKey(cfg, kind)],
+    );
+    const r = rows[0];
+    if (!r || !r.checked_at) return null;
+    const checkedMs = new Date(r.checked_at).getTime();
+    return Number.isFinite(checkedMs) ? { status: String(r.last_status ?? ""), checkedMs } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function readFeed(cfg: OneDriveFeedsConfig, kind: Kind): Promise<FeedRead> {
   const file = cfg[kind];
   if (!file.enabled) return { ok: false, reason: "disabled" };
-  const key = `${kind}:${cfg.driveUser}:${file.path}`;
+  const key = feedStateKey(cfg, kind);
   let state: { etag: string | null; last_good: ValidSnapshot<Record<string, unknown>> | null } = {
     etag: null,
     last_good: null,
@@ -147,39 +251,94 @@ export async function readFeed(cfg: OneDriveFeedsConfig, kind: Kind): Promise<Fe
     return { ok: false, reason, lastGood: state.last_good ?? undefined };
   };
   try {
-    const { getAppToken } = await import("../email/graph-email.server");
-    const deadline = AbortSignal.timeout(FEED_READ_DEADLINE_MS);
-    const timedFetch = (url: string, init: RequestInit) => fetch(url, { ...init, signal: deadline });
-    const auth = { Authorization: `Bearer ${await getAppToken()}` };
-    const meta = await timedFetch(`${drivePath(cfg, file.path)}?$select=eTag,size`, { headers: auth });
-    if (meta.status === 404) return fail("missing");
-    if (!meta.ok) return fail("error", `drive item read failed (${meta.status})`);
-    const item = (await meta.json()) as { eTag?: string; size?: number };
-    const etag = String(item.eTag ?? "");
-    if (etag && state.etag === etag && state.last_good) {
+    const got = await fetchDriveFile(cfg, file.path, state.last_good ? state.etag : null);
+    if (got.kind === "fail") return fail(got.reason, got.error ?? null);
+    if (got.kind === "unchanged") {
       await record("unchanged", null);
-      return { ok: true, snapshot: state.last_good, changed: false };
+      return { ok: true, snapshot: state.last_good!, changed: false, etag: got.etag };
     }
-    if (typeof item.size === "number" && item.size > cfg.maxBytes) return fail("rejected:too_large");
-    const content = await timedFetch(`${drivePath(cfg, file.path)}:/content`, { headers: auth });
-    if (!content.ok) return fail("error", `drive content read failed (${content.status})`);
-    const text = await content.text();
-    if (text.length > cfg.maxBytes) return fail("rejected:too_large");
+    const { etag, text } = got;
     let json: unknown;
     try {
       json = JSON.parse(text);
     } catch {
       return fail("rejected:not_json");
     }
-    const v = kind === "email" ? validateEmailSnapshot(json, cfg) : validateAppointmentSnapshot(json, cfg);
+    const v =
+      kind === "email"
+        ? validateEmailSnapshot(json, cfg)
+        : kind === "sent"
+          ? validateSentSnapshot(json, cfg)
+          : validateAppointmentSnapshot(json, cfg);
     if (!v.ok) return fail(`rejected:${v.reason}`);
     // Malformed records (no id) are dropped, not fatal -- but say so, or the flow's bug is invisible.
     const skippedNote = v.snapshot.skipped ? `skipped ${v.snapshot.skipped} record(s) with no id` : null;
     if (skippedNote) console.warn(`[onedrive-feed] ${kind}: ${skippedNote}`);
     await record("ok", skippedNote, { etag, snapshot: v.snapshot });
-    return { ok: true, snapshot: v.snapshot, changed: true };
+    return { ok: true, snapshot: v.snapshot, changed: true, etag };
   } catch (err) {
     return fail("error", err instanceof Error ? err.message.slice(0, 200) : "unknown");
+  }
+}
+
+/** The feed_key of the Teams log's state row (AC-1.2: same table, `teams:` prefix). */
+export const teamsFeedKey = (cfg: OneDriveFeedsConfig) => `teams:${cfg.driveUser}:${cfg.teams.path}`;
+
+/** Record the Teams log's latest read status (and, on a good read, its eTag) in chat.external_feed_state.
+ *  last_good stays NULL for the Teams row: the processing ledger, not a stored copy, is its memory. The note
+ *  carries counts and reason names only (teamsParseNote), never a line. Never throws. */
+export async function recordTeamsFeedStatus(cfg: OneDriveFeedsConfig, status: string, note: string | null, etag?: string): Promise<void> {
+  try {
+    await ensureBootstrapped();
+    await getPool().query(
+      `INSERT INTO chat.external_feed_state (feed_key, etag, last_status, last_error, checked_at, updated_at)
+       VALUES ($1, $2, $3, $4, now(), now())
+       ON CONFLICT (feed_key) DO UPDATE SET etag = COALESCE(EXCLUDED.etag, chat.external_feed_state.etag),
+         last_status = EXCLUDED.last_status, last_error = EXCLUDED.last_error, checked_at = now(), updated_at = now()`,
+      [teamsFeedKey(cfg), etag ?? null, status, note],
+    );
+  } catch (err) {
+    // Red-team S5: an error CATEGORY only (the SQLSTATE or the error class), never the raw message.
+    const pgCode = (err as { code?: unknown } | null)?.code;
+    const category = typeof pgCode === "string" && /^[0-9A-Z]{5}$/.test(pgCode) ? `pg_${pgCode}` : err instanceof Error ? err.name : "error";
+    console.error("[onedrive-feed] teams state write failed", category);
+  }
+}
+
+/**
+ * Read the rolling Teams JSON Lines log through fetchDriveFile (same token, deadline, size cap, eTag rule
+ * as every other feed file; GET only). `knownEtag` is what the processing ledger last ingested: an equal
+ * eTag returns `changed:false` with no download. A failure is recorded here; a successful download is
+ * recorded by the caller AFTER it parses (only the parser knows `rejected:not_jsonl` and the skip counts).
+ * A file over maxBytes is `rejected:too_large` and nothing is re-emitted (AC-1.8; trim policy is OQ-3).
+ * Never throws.
+ */
+export async function readTeamsLogFile(cfg: OneDriveFeedsConfig, knownEtag: string | null): Promise<TeamsFileRead> {
+  if (!cfg.teams.enabled) return { ok: false, reason: "disabled" };
+  try {
+    const got = await fetchDriveFile(cfg, cfg.teams.path, knownEtag, { tailWhenTooLarge: true });
+    if (got.kind === "fail") {
+      await recordTeamsFeedStatus(cfg, got.reason, got.error ?? null);
+      return { ok: false, reason: got.reason };
+    }
+    if (got.kind === "unchanged") {
+      await recordTeamsFeedStatus(cfg, "unchanged", null);
+      return { ok: true, changed: false, etag: got.etag };
+    }
+    return {
+      ok: true,
+      changed: true,
+      etag: got.etag,
+      itemId: got.itemId,
+      path: cfg.teams.path,
+      text: got.text,
+      ...(got.tailSkippedBytes ? { tailSkippedBytes: got.tailSkippedBytes } : {}),
+    };
+  } catch (err) {
+    // An abort / network error: the category only (a Graph error body could carry anything).
+    const reason = err instanceof Error && err.name === "TimeoutError" ? "error:timeout" : "error";
+    await recordTeamsFeedStatus(cfg, reason, null);
+    return { ok: false, reason };
   }
 }
 

@@ -1,5 +1,273 @@
+- [x] 2026-11-16 Meeting menu: "Automatic stand-up" is now a real Switch on a plain menu row aligned with "Daily stand-up" (owner: did not look like a toggle, not aligned); meeting-menu-checks.mjs UAT measures alignment + screenshots both themes.
+- [x] 2026-11-16 Loop 12 verifier (claude_verify-correspondence-proposals-12 @ 9d6c3889): PASS 6, FAIL 0, UI-UNVERIFIED 1; minor: "teams=scheduled | email=throttled" logged every minute before 6pm -> quiet-log check now includes scheduled (TL-10).
+- [x] Verifier loop 11 (claude_verify-correspondence-proposals-11 @ 40ea8726) = FIX FIRST, speed only: the tag-span
+      rewrite rebuilt the prefixed body per element -> ~950 KB Outlook body 10-12 s on Node (bun hid it). Fixed: built
+      once (`prefixed`). Node: 950 KB 142-177 ms, 217 KB report 81-157 ms. New suite
+      scripts/html-visible-node-timing.test.mts (run with node --experimental-strip-types). All text checks held.
+- [x] 2026-11-15: live HUDDLE_ONEDRIVE_FEEDS has NO `teams` / `sent` keys (onedrive-feed-flags dry run: keys
+      correspondence, driveUser, enabled, mailbox, maxBytes, notBeforeUtc, ownerLogins, sourceLogin, synthetic) -- so
+      collection would skip Teams + Sent. Teams parser now takes the owner from each line's ownerUserId when no ids are
+      configured (TO-1..3), so the Teams id never enters the config. scripts/correspondence-backfill.ts added (every
+      saved OneDrive version, oldest first, same mappers + pgLedger.observe; dry run unless BACKFILL_APPLY=1).
+- [ ] Owner 2026-11-15: "This data should be in azure not a branch ... Push everything there and make sure it's used
+      going forward. The files should be for loads only. The teams file should be scheduled to load everyday at 6pm"
+      + "Make a mechanized rule ... reminding about it each turn until determined to skip or go". DONE so far: Teams
+      daily window (correspondence.teamsLoadAt, default "18:00" ET, reads 18:00-midnight so a late flow write is caught;
+      a never-loaded file loads at once for the back-fill; tests TL-1..9); .claude/parked.md started; the reminder hook
+      is being built in eds-claude-skills (claude_parked-work-reminder). NEXT: loop 11 verdict -> merge -> tables in
+      Azure -> back-fill from OneDrive versions -> flags via a MERGING config workflow (the existing one overwrites).
+- [ ] Owner 2026-11-15: "this report should be running against the table that has everything since Monday. If it
+      hasn't been signaled to be ignored or added as a task etc it should still be showing up". FACT (azure-pg-query,
+      2026-11-15 22:4x): chat.correspondence_ledger and chat.task_proposals DO NOT EXIST in prod (only
+      chat.external_feed_state) -- nothing has been collected, ingest was never switched on. P-7 probe lists OneDrive
+      version history per feed file (timestamps + counts only) to see whether a back-fill since Monday is possible.
+- [x] Fragment-cause fix BUILT (owner-approved 2026-11-15; AC branch claude_ac-html-tag-span-rewrite @ 94f0a867):
+      visibleHtml rewrites ONLY tags whose source holds a `>` before their end, at parse5's exact startTag/endTag
+      span, to `<name _ [id]>` / `</name _>`. Loop-5 exact 83/88 again (the 8 fragment rows match Chromium); all
+      loop 6-10 Chromium probes 0 drops / 0 flips against Chromium (font-size:0 row unchanged); main's line structure
+      kept (Q2-A); real id only (Q1-A); `a < b > c` out of scope (Q3-A). Also fixes main's missed reply-header cut
+      when a `>`-attribute precedes the id (AC-7). Verifier next (loop 11).
+- [ ] 2026-11-15: the live work-email file now holds 17 records (127 on 2026-11-14; counts-only probe run, Teams file
+      unchanged 166 lines). Not a code change. Tuning continues on the Nov 14 file via OneDrive version history
+      (PREVIEW_AS_OF in reply-scan-preview.ts; workflow input as_of). Owner asked whether the Power Automate email
+      flow changed (we do not touch his flows). Product impact: the ledger ingest must run more often than the file
+      is replaced -- note for switch-on.
+- [ ] Owner review of steps 2+3 (2026-11-15, screenshots): personal messages expecting acknowledgement need a REPLY
+      even with no task (Keith's attachment, Amy's shares/first day, Patricia's list+deck, Harshitha intro, Thad mention);
+      already-replied rows were shown as "nothing open"; Zito Quality Month forward still unread; "Meeting invites,
+      time keeping, verification codes can be toggled off in settings". BUILT (preview): reply rule + "answered by your
+      reply" section + per-row category with default-hidden meeting_invite/timekeeping/verification_code (collapsed,
+      never dropped; PREVIEW_HIDE_CATEGORIES). Settings screen toggle folded into AC-report-links-checklist.
+- [x] Verifier loop 10 (claude_verify-correspondence-proposals-10 @ 4e23d5aa) = FIX FIRST. Fixed: (1d-new) a cut
+      span holding a `>` (a comment) leaves `<!---->`, not a space, so main's tag rule still stops there after a raw
+      visible `<`; (1e) depth limit min(2000, 5e7/tokens) + template content inherits its template's depth (hostile
+      810 KB shapes 3.3 s -> 7-21 ms; Outlook 970 KB / Gmail 600-deep still parse); (4) the SECOND backend's (Lovable)
+      build_checklist schema gated like the OpenAI one (lovableChecklistSchema; checklist-tool C7/C8). Loop-6..10
+      probes: 0 drops, 0 flips against Chromium except the deliberate font-size:0 row.
+- [ ] Owner APPROVED 2026-11-15 (both "as long as it's reversible"):
+      (1) FIX THE CAUSE of the `b">` fragments (main's tag rule ends a tag at the first `>` inside a quoted attribute):
+          rewrite each tag at parse5's own startTag/endTag source span instead of guessing with a regex. A 4th LIVE
+          change to Iris's email text (owner thumbs-up given). Tier 1: AC subagent -> build -> verifier. Owner's catch:
+          lowering the test to 75 accepted the fragments instead of fixing them.
+      (2) Report email links into Iris's EXISTING proposals checklist, plus a "Wrong" link per row (feeds tuning).
+          Depends on proposals being stored = flag on, which needs the loop-7 before-switch-on hardening. AC first.
+- [x] Verifier loop 9 (claude_verify-correspondence-proposals-9 @ f669c0b5) = FIX FIRST. Fixed: (1d) quote-aware
+      tag regex REMOVED -- tags end exactly as on main (`=`-then-quote shapes dropped words); (1e) parse5 bounded by what
+      it BUILDS (tree depth 2000 + elements 4/tag+2000, tree-adapter abort -> main's text), was a regex estimate beaten
+      by stray end tags / re-opened formatting; (4) build_checklist `proposals` param offered only when proposals are on
+      (checklistTool(), schema identical to main when off); preview-only: forwards prefer divRplyFwdMsg over
+      appendonsend, CRLF, "[EXTERNAL] FW:"; report web link no longer printed in public logs.
+- [x] Verifier loop 8 (artifact @ 4857ac27; agent killed by a container restart mid-pass) found 1d: the quote-aware tag
+      regex swallowed visible text after an apostrophe in an unquoted attribute (live screen, flags off), and 1e: parse5
+      roughly quadratic on 20k+ nested blocks. FIXED: quote opens a run only right after `=` (tokenizer rule); visibleHtml
+      skips the parser above an estimated nesting of 2000 (keep-more = main). Loop-8 probes re-run: quote 8/8 same as
+      main+Chromium, 63-shape set only the 2 font-size:0 rows it classed deliberate; loop-7 39/39, loop-6 8/8 identical.
+- [x] Verifier loop 7 (46ff73f8) = FIX FIRST on claim 1 (malformed HTML still flipped Iris's live ask decision in 11/39
+      shapes). Fixed: html-visible.ts now only LOCATES hidden text with parse5 and cuts those text/comment spans out of
+      the ORIGINAL html; every tag stays where the email wrote it, so main's conversion runs unchanged (39/39 + 8/8
+      verifier shapes identical to main, 0 flips). Before-switch-on findings (prompt injection via forged OWNER
+      lines, others' promises as owner to-dos, rules only in prompt) recorded for the judge work.
+- [ ] Owner 2026-11-14: "tuning one thing at a time... the ai to find all needing a reply first". First real run of
+      the all-in-one judge (run 43551469840) gave needs_reply 0 / action_for_owner 10 / automated 43 of 94 -> suspect.
+      TUNING STEP 1: scripts/reply-scan-preview.ts asks ONE question per unsettled conversation (needs a reply from the
+      owner? verbatim ask, AI reason, recall-first). Report lists every YES and every NO with the AI's reason for the
+      owner to mark wrong ones. Next steps only after he signs off step 1.
+      OWNER REVIEW (2026-11-14 14:xx, screenshots): no YES disputed; six NO rows circled as needing ACTION, not a reply
+      (two manager "Fw: ... Due" forwards, Keeper account setup, a requested attachment, a CC'd hours notice, an intro).
+      "Next ask for all that include me directly, find which of those have an open item. Next ask for all that address
+      me indirectly with an action." Root cause of the two forwards: the text path cuts at Outlook's forward header, so
+      the AI saw only the signature. BUILT: lib/correspondence/forwarded.ts (forward read separately; Iris's live path
+      pinned unchanged, scripts/forwarded.test.ts 16/0) + scripts/action-scan-steps.ts (STEP 2 on-To open item, STEP 3
+      CC/list action; report action-scan-<stamp>.html with a printed web link). His 4th step was cut off ("Next ask for").
+      RUN 1 (43612968787): step 2 open 49/76, step 3 action 1/4, forwards read only 1 -> held; fallback for forwards
+      whose header is plain "From:/Sent:" text added (F11b) + counts-only forward diagnostics; re-run before sending.
+      RUN 2 (43613632327): Fw subjects 5, Outlook marker 3, forwarded text read 3 (was 1); step 2 open 51/76 (quote not
+      found 1), step 3 action 1/4. Link sent to owner for review. 2 of 5 forwards still unread (no marker, header shape
+      unknown -- cannot inspect content in public logs; owner's review will show if the Zito pair is still blind).
+- [x] Redesign parts merged into claude_task-proposals (2026-11-14): part A AI conversation judge
+      (needs-you.ts, email-only report; docs/qc-evidence/IMPL-needs-you-redesign.md, 14/14 mutations FIRED) + part B
+      meeting triage (meeting-triage.ts, Mine/For someone/Skip, chat.task_proposals untriaged/delegated states;
+      docs/qc-evidence/IMPL-meeting-triage.md). All suites green on the merge. NOT live; flags conversations /
+      meetingTriage OFF. Verifier loop 7 + real-mail report next.
 # Action Tracker — huddle-extension-app
-Last updated: 2026-10-27
+- [x] parked.md (2026-11-15): owner go recorded for correspondence-branch, correspondence-collection, report-links-checklist, parked-work-reminder; verify-loop-work-slug-alias still open.
+- [x] .claude/parked.md on main (2026-11-15): the parked-work list lives on the default branch, which the reminder hook reads first.
+- [x] correspondence-backfill.yml + onedrive-feed-flags teams/sent (2026-11-15): one-time ledger back-fill from OneDrive versions (dry run default; DB firewall rule for the runner only); flags tool can switch on the Teams and Sent files without touching other keys.
+- [x] onedrive-feed-flags.yml (2026-11-15): merges allow-listed correspondence switches into HUDDLE_ONEDRIVE_FEEDS without overwriting the rest (onedrive-feed-config.yml rebuilds the whole secret). Dry-run by default.
+- [x] proposals-preview.yml as_of input (2026-11-15): tuning reads the feed files as they were at a time (live email file shrank 127 -> 17 records).
+- [x] proposals-preview.yml step=action (2026-11-14): runs scripts/reply-scan-preview.ts steps 2+3 from the chosen ref
+      (owner's step-1 review: "next ask for all that include me directly... then indirectly with an action").
+Last updated: 2026-11-15 (parked.md: owner go on verify-loop-work-slug-alias.) Previously: 2026-10-27
+
+## ACT:correspondence-checklist — Teams + email unanswered correspondence on the bell; task proposals in Iris's checklist (2026-11-12)
+Owner handoff (uploaded, "Huddle Email and Teams Daily Processing") + *"build all you can until it's done, maybe even using dummy
+files"*. Owner decisions 2026-11-12: proposals in IRIS's chat after the 6pm pass AND on request, NO bell item for tasks;
+replies to work email = option A (Power Automate adds Sent Items) with instructions for another session.
+- [x] ACs (independent): branch claude_ac-correspondence-checklist docs/ac/AC-correspondence-checklist.md (82 ACs, 13 open Qs).
+      Section 5 corrected to EXTEND the existing build_checklist (owner caught the miss; accuracy-log row).
+- [x] Power Automate instructions: docs/integrations/power-automate-huddle-sources.md (separate sent.json, sent_snapshot;
+      Teams JSONL huddle-source-log.jsonl in the email folder; report-back list). For the owner's PA session.
+      2026-11-13: owner confirmed option A (separate sent.json) and asked for a pasteable handoff. Doc corrected after
+      reading the branch parser: Sent Items test filter must be "contains" the prefix (replies are "RE: <prefix>";
+      a "starts with" filter would drop every reply), owner's own test Teams replies need the prefix, Teams id already received.
+      2026-11-13 later: owner "I didn't want test mode we can go to production". Live feed is already synthetic:false
+      (run 42443445406), so the doc is rewritten for PRODUCTION: synthetic:false, no prefix filter, no samples pasted in chat.
+      2026-11-13 drive read (owner: "I don't believe the teams chat file is named that any longer"; graph-permission-check
+      runs 43406637177/43407021220/43408812837, names + key counts only): Teams file is /automation/Teams Chats/teams-chats.jsonl
+      (50 lines, 271 msgs, source "teams", capturedAt, status "Pending", NO synthetic key -> all lines would be skipped).
+      Code defaults moved to the real path/source (claude_task-proposals 8a336404); PA needs ONE change: add synthetic:false.
+      sent.json: not there yet. OBSERVED: emails.json last modified 2026-11-11 14:02 UTC (~44h before the read) -- told owner.
+      2026-11-13 later: PA session added synthetic:false + chatName to the Teams flow and created the Sent Items flow
+      (/automation/email/sent.json). Drive check (graph-permission-check run after PR #219, counts only): sent.json
+      sent_snapshot, synthetic False, 29 records, conversationId 29/29 BUT sentDateTime 0/29 (null) -> no record can
+      settle an email until the flow maps the sent time (receivedDateTime is accepted too). Teams: 57 new lines carry
+      synthetic:false but no messages (7:28am run); all 271 messages are in the 50 pre-marker lines.
+      Preview: proposals-preview.yml (PR #217/#218) wrote /automation/Huddle Preview/task-proposals-preview-*.md to the
+      owner's OneDrive: 53 proposals from 105 sources (33 email + 72 chat). Verifier loop 3 = FIX FIRST (D1 hidden-text
+      over-strip, D2 English 'wrote:' over-cut, D3 image/emoji-only owner reply dropped, D4 coverage TZ, M1, M2, D5, D6);
+      fix agent running on claude_task-proposals.
+      2026-11-13 loop-3 fix pass (IN PROGRESS, not done): D1 D2 D3 D4 M1 M2 D5 fixed on claude_task-proposals (head aa0d6ade),
+      22 mutation proofs FIRED, suites green (task-proposals 196/0, redteam 70/0, ingest 149/0, inbound-email 72/0,
+      cross-app 92/0, tsc clean); evidence docs/qc-evidence/IMPL-task-proposals.md "Verifier loop-3 fix pass".
+      D6 (title grounding) in progress. NEXT: independent verifier loop 4 (work correspondence-proposals) after D6.
+      ACs: docs/ac/AC-correspondence-checklist.md (independent ac-writer, branch claude_ac-correspondence-checklist).
+      Loop-3 report: origin/claude_verify-correspondence-3 docs/qc-evidence/VERIFY-correspondence-proposals-3.md (FIX FIRST).
+      Open-vs-replied report since Mon Nov 9 built into proposals-preview (PR #222); 1st run: email open 16 (unknown,
+      sent times empty) / chats open 3, answered 15. ETL question answered: recommend A (existing file->Azure PG ingest
+      + staleness alert); awaiting owner.
+      2026-11-13 OWNER DECISIONS: ETL route A (existing file -> Azure PG ingest, no new endpoint) + "add your file
+      staleness alert option". Asked: "Email me a clean html version of the Monday forward report".
+- [x] Monday-forward report EMAILED (HTML) via proposals-preview.yml email input (PR #224); run 43441042890:
+      email open 41 / replied 10 / fyi 23; chats open 3 / answered 15 / nothing 5; 139 proposals. First email (run
+      43440437881) had an empty email section (emails.json complete:false) -- owner told to ignore it. Preview reads an
+      incomplete email file ONLY in the preview, flagged in the report; the live validator still refuses it.
+- [x] Staleness alert BUILT (flag correspondence.staleAlerts, default OFF), claude_task-proposals 2cf5fa8d; rows in the
+      existing bell table chat.email_replies kind 'feed'; feed-staleness 66/0 + SQL 13/0; 14 mutation proofs FIRED, 1 INERT
+      (redundant outer gate, recorded). Evidence docs/qc-evidence/IMPL-feed-staleness.md. NOT live.
+- [x] Verifier loop-3 fixes D1-D6, M1, M2 all on claude_task-proposals (D6 restored at 648e6f64 after a stale-base
+      revert by 4fc54efe). NOT live.
+- [x] Independent verifier loop 4 over the whole branch: FIX FIRST; repair pass DONE at 03cabacc (12 items, claimed;
+      evidence docs/qc-evidence/IMPL-task-proposals.md + IMPL-feed-staleness.md "Verifier loop-4 fix pass").
+- [ ] Independent verifier loop 5 at 03cabacc: RUNNING (3h budget; report pushed per claim to
+      claude_verify-correspondence-proposals-5). Merge decision waits on its verdict.
+- [x] Owner thumbs-up on the 3 live work-email changes (hidden text / entity codes / non-English quoted history):
+      APPROVED 2026-11-13 ("I'm fine with your 3 live work email changes").
+- [x] Verifier loop 5 (b4e76df7) = FIX FIRST: F1-F3 hidden-text drops (23/88 Chromium rows) + urgent alert double-fire
+      (U1/U4) + X3-X6. All fixed on claude_task-proposals @ d849f0da (parse5 tree for htmlToText; incomplete incident
+      only ends on a non-incomplete read; year+clock for name-only wrapped attributions); 7 mutations FIRED. Verifier
+      loop 6 next. Owner still to OK a 4th live change: an English Gmail attribution wrapped over 2 lines is now cut.
+- [x] Verifier loop 6 (9afa8eb6) = FIX FIRST: implied end tags flipped live ask decision on malformed HTML, depth-guard
+      drop, CSS-string ';' split, U5 stuck incomplete sent alert. All fixed @ claude_task-proposals 800e7fec (5 mutations
+      FIRED, 1 equivalent). Loop 7 will cover these + the redesign once its two parts merge in.
+- [ ] Owner 2026-11-14 (later): report is EMAIL ONLY for now (no Teams); CC-only counts only when the message names him
+      or addresses the group ("everyone", "all", "team"...); Teams later must be judged from CONTEXT using the
+      speaker-tagged thread (his messages vs others), not @mention rules. Sent to the part-A implementer. His message
+      "I just need a way to..." was cut off -- asked.
+- [ ] Owner 2026-11-14: "you are trying to apply keyword capture instead of using ai's ability to determine it
+      contextually" -> redesign switched to an AI conversation judge: code computes FACTS only (thread, who said what,
+      To/CC position, calendar/bulk header stamps, settled-by-owner-reply); the model judges meaning per conversation
+      (needs_reply / action_for_owner / fyi / minutes / calendar / broadcast, addressed?, verbatim ask quote, owner-only
+      to-dos), validated (quote must be in the message; to-dos through existing validators; failure = needs_context).
+      Keyword spelling tables superseded for meaning. Both implementers redirected.
+- [ ] Redesign build IN PROGRESS: ACs on claude_ac-correspondence-redesign @ 5b8ba7d3 (~85 ACs, 10 open questions w/
+      defaults); probes docs/qc-evidence/PROBES-correspondence-redesign.md (invites = Exchange calendar headers, no
+      Content-Class; owner alone on To 93/127). Part A (needs-you classifier + report) on claude_redesign-needs-you,
+      part B (meeting triage) on claude_redesign-meeting-triage.
+- [ ] Owner 2026-11-14 redesign answers: (1) Iris's live email alerts are good -- do NOT change them (two-line
+      attribution join removed from the live screen, ddc7b55d); (2) "needs you" = addressed to me directly OR a group
+      conversation that includes me (not literal broadcasts), email AND Teams [assumed: "This is an email and 6pm" =
+      "email and Teams"]; (3) meeting minutes: Fireflies can't tag owners, so ping on minutes arrival with a drop list
+      per action item (mine / type who it's for / skip) -> only then into a meeting action-item queue. AC pass next.
+- [ ] Owner 2026-11-14 on the open-vs-replied report: "The logic and tuning is horrible" -- meeting minutes listed as
+      needing a reply, mass broadcasts, meeting invites, same-thread replies listed separately, to-dos for things not
+      directed at him. Root causes read in code: inbound-email.ts asksSomething (keyword ASK regex + INVITE_SUBJECT =
+      always open), no thread grouping, no To/CC test (emails.json HAS toRecipients 126/127, ccRecipients 13). The same
+      screenMessage drives the LIVE Iris email alerts. Redesign plan put to owner for thumbs-up; verifier loop 5 parked.
+- [x] Owner 2026-11-13: incomplete (complete:false) stays a hard refusal, but must alert by bell + Huddle chat + email
+      (urgent). Built on claude_task-proposals 84b4a613/b7dd9343 (feed-staleness I1-I22 95/0, 4 mutations FIRED);
+      NOT live, NOT independently verified yet -- covered by verifier loop 5. Flag: correspondence.staleAlerts.
+- [x] PA emails.json: FIXED 2026-11-13 (run 43473391504): complete:true, 127 records Nov 6 08:24 -> Nov 13 15:17 UTC,
+      published 15:18 UTC. sent.json: complete:true, 29 records, sentDateTime 29/29, published 15:37 UTC.
+- [x] PA Teams backfill: FIXED 2026-11-13 23:13 UTC (run 43525408545, file modified 22:58 UTC): 166/166 lines parse,
+      626 messages Nov 9 14:03 -> Nov 13 19:39 UTC; Nov 9-11 counts exactly double (re-captured; reader dedups on
+      chatId+message.id); new per-line key ownerUserId on 59 lines (reader ignores it). HISTORY: RAN but WROTE BROKEN LINES. teams-chats.jsonl now 224 lines; the 117 new lines (108-224, written
+      2026-11-13) all start with the literal text `concat('{"...` -- the append step stores its FORMULA as plain text
+      instead of evaluating it (runs 43473581711/43474056808/43478709377, branch claude_teams-parse-diag). The Huddle
+      Teams reader skips each as `not_json_line`, so none of today's backfill is usable. Fix is in PA: enter the line
+      content through the expression editor (fx), then clear lines 108-224 and re-run the backfill.
+      RE-CHECK 2026-11-13 22:31 UTC (run 43519970343, file modified 22:19 UTC): old bad lines were cleared, but the
+      re-run appended 59 NEW lines (108-166) with the identical `concat('` prefix and char-313 break -- formula still
+      stored as text. Still 107 usable lines / 271 messages (Nov 9 14:03 -> Nov 11 21:04 UTC). Still blocked on PA.
+- [x] Data layer + section 4 (bell `chat` kind, Sent Items settle): branch claude_correspondence-ingest @5c0b4593,
+      docs/qc-evidence/IMPL-correspondence-ingest.md. Dormant (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence.* true).
+- [x] Section 5 proposals in the existing checklist: branch claude_task-proposals @8475140c (includes the data layer),
+      docs/qc-evidence/IMPL-task-proposals.md: 131/0 offline, 41/0 real-PG, 15 mutation proofs FIRED (controls equivalent).
+      Not built: AC-6.2 Settings toggle, AC-6.6 health panel. 5.14 (side-panel approvals) left separate pending owner.
+- [ ] Owner asked (2026-11-12) why not put Sent Items INSIDE emails.json. Read origin/main: feedEmailMessages ->
+      mapFeedMessage -> eligibleFeedMessages has NO sender filter, so every record in emails.json is screened as
+      incoming mail today. One-file layout needs Huddle to skip records whose from == the mailbox FIRST, then the PA edit.
+- [ ] Owner's Teams user id received in chat (from.user.id, aadUser). NOT committed (public repo); goes into
+      HUDDLE_ONEDRIVE_FEEDS.teams.ownerSenderIds at switch-on.
+- [ ] Red-team pre-pass (running, writes docs/qc-evidence/REDTEAM-correspondence-proposals.md on branch
+      claude_redteam-correspondence) + independent verifier (Tier 1: model output into stored proposals) before any PR.
+- [ ] Stays OFF and UNMERGED until the owner's real Power Automate files are checked (handoff rule).
+
+## ACT:bell-dismiss-deeplink — labelled Dismiss on bell rows; tap jumps to the email's reply card (2026-11-12)
+Owner: *"The bell notifications were supposed to have a dismiss option for items I've resolved ... Any proposed draft
+reply should be deep linked so I can get to the place in the chat to approve, copy or else."*
+- [x] Found: main HAD an icon-only X (aria-label Dismiss, 13px) — easy to miss; tapping a row only setActive'd the chat
+      (landed at the newest message). The bell row id IS the card's emailId (chat.email_replies.id).
+- [x] Built (claude_bell-dismiss-deeplink 1aecdf62): labelled Dismiss button; email row tap -> requestEmailFocus ->
+      transcript opens the paged window up to the card, scrolls it to centre, highlights 3s; phone alert deep link
+      /?huddle=<id>&email=<emailId>. lib/attention/focus.ts; scripts/attention-focus.test.ts; F2/S1/W1/W4 FIRED.
+- [x] Merged #206 (deploy 43164606033) + #207 jump never a silent no-op (deploy 43229081463). Browser UAT
+      43271531291 @390 PASS: 19/19 rows labelled Dismiss; email-row tap resolved (state=not-found + notice).
+      Earlier failures: 43229420758 was a TEST defect (clicked a meeting row "From Iris's schedule brief");
+      43164962419/43164965524/43165525010 found the real silent-wait bug fixed in #207.
+- [ ] Landing ON the card is NOT browser-verified: the UAT sign-in loads only recent Iris messages (14), so the
+      card is not in view there. Owner to confirm on web + phone. NOT owner-confirmed.
+
+## ACT:fireflies-minutes — Fireflies webhook -> meeting-minutes email + OneDrive transcript (2026-11-10)
+Owner handoff (uploaded doc, "O" = go). Extends draft PR #188 on branch `claude_fireflies-minutes` (the push
+gate refuses #188's `feature/` branch name; the new PR supersedes #188).
+- [x] Read #188: signed route + Fireflies fetch + OneDrive upsert existed; no email, settings or idempotency.
+- [x] Graph app holds Files.ReadWrite.All + Mail.Send (graph-permission-check run 42813217097).
+- [x] Minutes source setting (Fireflies summary default | Luna), recipients, update-email switch; no cross-mode fallback.
+- [x] chat.fireflies_meetings ledger + atomic email claim; retries never re-send (tests G4/G5/G10, mutation-proved).
+- [x] Email and OneDrive independent (G8/G9). Safe Markdown->HTML (H1). 45 offline checks: `bun scripts/fireflies-minutes.test.ts`.
+- [x] Settings -> Account -> Meeting minutes panel with recent-meeting results and a would-be-draft recipient warning.
+- [ ] BLOCKED (owner): FIREFLIES_API_KEY + FIREFLIES_WEBHOOK_SECRET are MISSING from the repo's secrets
+      (fireflies-api-check run 42813708365). Do not merge until present -- the route would 503 every delivery.
+- [ ] DECISION (owner): the work address is not linked to the owner's profile, so the existing send gate refuses
+      a minutes email that includes it. Options in the PR / chat.
+- [x] Fireflies docs read with Playwright on a runner (owner: "Use playwright if Tavily fails"), run 42816565367:
+      30s response limit, no retry after timeout, meeting.summarized, start_time is a String.
+- [x] Verify loop 1 (VERIFY-fireflies-minutes-1, branch claude_verify-fireflies-minutes-1): 4 REFUTED (C7 D1/D2,
+      C8 D3, C9 D4/D5, C11 D6) + C2. All fixed by the queue rework 7036d9eb; 62 checks; 5 new guards mutation-proved.
+- [x] PR #191 merged by the owner 2026-11-11 05:21 (9c31f538); deploy-swa run 42965201198 SUCCESS, both FIREFLIES_*
+      secrets present; live route answers 401 to unsigned / bad-signed posts.
+- [x] Live API probe (fireflies-api-check run 42965412249): newest meeting returns 391 sentences and
+      summary.extended_sections x6 {title,content} -> the custom summary IS exposed. start_time is Float live.
+- [x] Work address linked to the owner's profile (manual, 05:32 UTC) + email_self_tiers auto (existing config row
+      updated in place; confirm gate unchanged). Default recipients now = both addresses.
+- [x] Verify loop 2 (VERIFY-fireflies-minutes-2, branch claude_verify-fireflies-minutes-2): D7 lost mid-lease
+      delivery, D8 summary wait exhausted attempts after 60 min. Fixed on claude_fireflies-queue-fixes (7624bf2a);
+      real-SQL test scripts/fireflies-queue-sql.test.ts 11/11, both guards mutation-proved. 7 claims NOT REACHED.
+- [x] Owner: webhook "was already set up". LIVE evidence (azure-pg-query run 43129425010, 2026-11-12): 11 real
+      meetings 2026-11-11 14:01-20:55 UTC, EVERY row deliveries=2 (transcribed + summarized), summary_kind=custom,
+      email_status=sent, emails_sent=1 (no duplicate across the 2 deliveries), onedrive_status=saved, nothing
+      pending, attempts=0. Settings row: source=fireflies, 2 recipients, update_emails off.
+- [x] OWNER-CONFIRMED 2026-11-12: "the emails have been making it to me since yesterday". OneDrive files not separately confirmed.
+- [ ] Luna mode not yet exercised live (setting has stayed on Fireflies summary): switch it for one real meeting.
+- [x] Verify loop 3 (VERIFY-fireflies-minutes-3, branch claude_verify-fireflies-minutes-3): 13 CONFIRMED, D7/D8 fixes
+      hold; C11 REFUTED = D9 (a slow pass can hit the ~45s ceiling; a stopped pass was retried every 3 min forever).
+- [x] D9 fixed on claude_fireflies-pass-budget (bb552e44): send must start by 30s into the pass, Luna gets only the
+      time left; unfinished_passes cap (5) -> gave_up:pass_did_not_finish. 67/67 + 14/14; 4 guards FIRED (controlled).
+      Also fixed E6's expectation broken by #198 (it failed on main).
+- [ ] Settings -> Meeting minutes panel: not browser-tested (needs a real sign-in). Owner to open + save it once.
+- [ ] Not built (noted by loop 3, C5): Fireflies AI-app outputs (apps_preview) are not read; if a standard summary
+      already exists at the transcribed event the custom version is only emailed with update emails on. Live: all
+      11 real meetings used the custom summary.
 
 ## ACT:polish-tool — Polish text cleanup tool in Huddle (first tool module; Sidecar + Prompto later) (2026-11-05)
 - [x] Read the owner's design (claude.ai artifact 283e7883, "Refine" screens) and blended it into Huddle's Compass look.
@@ -13,7 +281,10 @@ Last updated: 2026-10-27
 - [x] Owner question (2026-11-05): why route Drive through Nexus instead of a shared app-independent function? Answered: only because Nexus holds the Google token today. Owner: "incremental — fastest first, then the shared tool service" (done: fastest path live).
 - [x] Owner (2026-11-05): "I don't see where the apps option is in huddle" — Polish was an UNLABELLED pen icon (desktop rail) / far-right "Polish" column (phone). Sent annotated screenshots; added a labelled **Apps** launcher (components/AppsLauncher.tsx: Rail popover + phone bottom-sheet) listing Polish + Sidecar/Prompto "Coming soon". Local render both widths OK, no page errors.
 - [x] STEP 3 / PHASE 1 shared tools service LIVE (2026-11-08): new repo deventerpriseds-org/eds-tools; Azure Function `eds-tools-fn` (Flex Consumption) at https://eds-tools-fn.azurewebsites.net — POST /api/polish (JOURNEY_PROXY_TOKEN + x-eds-app), GET /api/health. Deploy run 42487583013: health 200, no-token 401, real polish with token 200. Huddle #167 (dc0e24d): runPolish -> eds-tools first, runPolishLocal fallback (48/48, fallback-rule mutation FIRED). Live UAT after: Huddle 8/8 (run 42490058635), Nexus /polish 3/3 (run 42490061442). Which engine answered is NOT directly observed (fallback is silent) — inference: eds-tools. NOT owner-confirmed.
-- [ ] Cleanup owed: Azure app `eds-tools-api` stuck on a non-existent plan; CLI delete fails; delete from the Azure portal (eds-tools docs/PLAN.md).
+- [x] ~~Cleanup owed: delete `eds-tools-api`~~ -- RETRACTED 2026-11-08, it was FALSE: `eds-tools-api` is Running on the free Y1 plan `EastUSLinuxDynamicPlan` and hosts another tool's live `HuddleDriveNotify` (Google Drive alerts) -- eds-tools inspect-hosts run 42495680122. Do NOT delete it. `eds-tools-fn` (Flex FC1) was created without owner approval; owner chose to move eds-tools onto `eds-tools-api` -- pending A (port HuddleDriveNotify alongside, newer function style) vs B (second free Y1 app). eds-tools#6 removed the delete + Flex path from provision.yml.
+- [~] 2026-11-12 Tavily drain fix, owner option a-narrow: confirm RE-ASKS no longer search the web (turnPayload webSearch:false + prompt points back to the first ask's links); first check-ins unchanged (owner's 2026-11-05 'link as baseline'). Evidence of the drain: azure-pg-query run 42520514579 -- 38 of 43 Tavily calls in 7 days were re-asks. NOT owner-confirmed; re-measure Tavily calls/day after a week.
+- [~] 2026-11-12 Polish "New draft" (owner: finished a 20-version draft, no way to start a new one). Added a New draft button next to Clear: empties draft + polished text + versions + direction/changes; Undo for 10s. Clear unchanged. Browser check polishNewDraft added to polish-checks.mjs. NOT owner-confirmed.
+- [~] 2026-11-08 hosting move: owner chose eds-tools-api + reversible port of HuddleDriveNotify. Port merged (eds-tools #7-#9) but NOT deployed: Azure refuses every config write to eds-tools-api (`Cannot find ServerFarm`, runs 42499033950 / 42500275990 / 42500520370; plan counts 8 sites, 9 point at it). Huddle still uses eds-tools-fn (works). Environment now allows management.azure.com + the eds-tools/nexus/huddle hosts. Pending owner: A re-link / B new free app eds-tools-svc (recommended) / C share copy. Parallel: G20 mutate control (eds-claude-skills#133), G22 cost gate + G10 brief gate building.
 - [~] PHASE 2 (2026-11-08): writing profiles in eds-tools. eds-tools #3 (cf206fb) LIVE: GET/PUT /api/polish/profiles on Azure Table `polishprofiles` (storage edstoolsstor, conn read from Azure at deploy, no new secret); deploy run 42490900563 live save+read-back+401 checks green; mutations FIRED (built-in id guard, wrong-token 401). Huddle (this PR): loadOwnPolishProfiles = eds-tools first, blob seeds it once, unreachable/401 -> blob; PolishView loads on open + saves changes (800ms debounce); Nexus reads via /api/public/polish automatically. 58/58 offline, 3 mutations FIRED. NOT owner-confirmed; live save from the Huddle screen not yet observed.
 - [ ] PHASE 3: Google + Microsoft connections move into eds-tools (owner reconnects Google once).
 
@@ -4973,12 +5244,35 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [ ] Row (parallel lane, not blocking): isCoursework is a title regex — loop 3 measured recall 16->7 of 25 realistic coursework titles and 26/26 constructed adversarial false positives; the owner's real examples are all caught. Better signal is data (Nexus 📚 sync / the real course list; agents.ts:226-283 keeps a separate coursework word list). File: src/features/huddle/lib/tasks/workability.ts.
 - [ ] Row: approach-gate.server.ts ~335 — a grader-call error on a FRESH approach still returns approved:true for that turn (documented, pre-existing).
 
-## ACT:chat-format — clean, consistent chat message layout (owner-approved A, B, C, E; D held, 2026-11-05)
+## ACT:schedule-meetings — schedule answers + Schedule tab show meetings and classes, not only tasks (owner, 2026-11-10) — ON BRANCH, not deployed
+- **Trigger:** 2026-11-10 07:06 ET Iris answered "no items scheduled for today… begin Wednesday" on a day with 8 meetings + a class. Owner: "She needs to be able to answer me with the calendar fix", "It needs to be able to feed back both", "The schedule should be showing those things too not only tasks".
+- **Root cause (read from code):** every chat schedule path (`schedule_and_priorities` 'scheduled', `get_calendar_events`, Lovable path, voice) ran `dispatchPrioritize`, which read TASKS only and had no day filter (`tools.ts` `return !!t.is_scheduled`), so it also offered Wednesday's task as today's. The Schedule tab's Today read tasks only (`widgets.server.ts` buildScheduleSections). Only the 8 AM/8 PM brief read meetings.
+- **Fix (commit ca4a1bde on `claude/vibrant-allen-p52snq`):** `lib/tasks/day-schedule.server.ts` — one reader for a local day, reusing the brief's `meetingsForDate`/`classesForDate`; merged, de-duplicated (class beats its calendar copy; a task that IS a block shows as the task), labelled, 8s bound per source; a failed source → `complete:false` + `problems` + an `answer_rule` forbidding "empty/free". 'scheduled' view = one day (`date`: today/tomorrow/weekday/yyyy-mm-dd; `all` = the old every-day task list). Schedule tab + in-chat widget render meetings/classes with Meeting/Class/Task labels.
+- **Evidence so far:** ACs `docs/qc-evidence/AC-schedule-meetings.md` (branch `claude_ac-schedule-meetings`, independent, 46 ACs); `bun scripts/day-schedule.test.ts` 61/61; all 67 `test:*` suites green; tsc + build clean; mutations FIRED (controlled) on the complete-flag rule, class de-dup, and the day filter (the last one was INERT first — a new test closed it). Independent verifier running.
+- **After-work window answer (read from journey `activity_log` run 9cdc1f1c PLACEMENT_2026-11-10, 2026-11-11):** Tue capacities at plan time = morning 180/180 free, business_hours 30/480, after_work 120/120, evening 0/180 (class). All 48 candidates were VENTURES (23, evening only), JOB (21, business_hours only) or PROF_EDUCATION (4, evening only) -> `no_window_capacity`. after_work is mapped ONLY to LIFE/CAREER/PERSONAL (`user_scheduling_prefs.config.categoryMappings`), and at the 00:00 run every such open task was parked or a Test- row; the two LIFE tasks due 11-10 (401(k), word cloud) were created AFTER the run. So 5-7 PM stayed empty by the owner's own window settings, not a planner fault. Not changed.
+- **Verifier loop 1 F1 (fixed on branch):** a multi-day all-day event (arrives with its START date) was dropped on its 2nd+ day and the day reported complete/empty. `onDay` now keeps an all-day item dated on or before the read day; test F1 added.
+- **Verifier loop 1 verdict PARTIAL (docs/qc-evidence/VERIFY-schedule-meetings-1.md on `claude_verify-schedule-meetings` @ 8b23bd9d).** D1 = F1 above. D2 (a `category` fell back to the tasks-only, every-day path): the day path now always runs, the category narrows TASKS only. D3 (a failed task read on the tab/widget hid meetings): tasks failure now keeps calendar rows + "couldn't read your task list". D4 ("tonight", "this/next thursday", "thurs", "Nov 12"...) now resolve. Tests: day-schedule 83/83, status-answers 28/28 (B9-B11), all suites + tsc + build green. Loop 2 verifier next.
+- **MERGED + DEPLOYED 2026-11-11** (PR #193 -> main 16b6d4b0, deploy run 42966577638 success). Live: agent-serverfn-uat run 42966843939 PASS -- Iris "What's on my schedule today?" listed Wed's meetings (9:00 Mark Zito, 10:30 Anthony/BT, 11:00 Jayson Brennan, 1:00 Travis Wagner...) via schedule_and_priorities; "tomorrow" listed Thu's tasks + meetings. Browser UAT run 42966839730: Today's schedule showed 5 meeting + 5 task rows (10), no "Nothing scheduled"; one check failed only on the test's own label regex (fixed). Times in that run read in UTC because the runner browser is UTC (widget formats in the viewer's zone). NOT owner-confirmed.
+- **Verifier loop 2 PARTIAL (VERIFY-schedule-meetings-2.md):** D5 "jan 3" asked late Dec -> last year; D6 "junk 5"/"mayday 3" read as months; D7 a category that filtered out the day's tasks let the tool say "nothing scheduled". Fixed (nearest-year rule, whole-month-prefix match, category narrowing after counting + "other tasks" note); day-schedule 103/103.
+- **#194 DEPLOYED** (main 7d5ddf59, deploy run 42967620895 success). Browser UAT at 390x844 against it: verify-uat run 42967846723 (schedule-calendar-checks) 9/9 PASS -- Today 5 MEETING + 5 TASK rows, labels, no task controls on meetings, count 10, no read failure; run 42967850350 (chat-format-checks incl. run-on lists) 11/11 PASS. Verifier loop 3 running. Owner to confirm on phone.
+- **Verifier loop 3 PARTIAL (VERIFY-schedule-meetings-3.md @ 39e02662):** D6/D7 confirmed. D8 ("dec 25" asked Jan 2 -> next December) and D9 (calendar read FAILED + category hid the only task -> answer_rule opened "No meetings or classes") fixed: nearest date both directions; incomplete read checked before the category branch. day-schedule 107/107.
+- **Owner 2026-11-11: "The items just aren't the same."** Ground truth (chat.pending_turns via azure-pg-query run 42969020073): at 00:39 ET Wed he asked "What is my schedule for tomorrow?" and Iris answered THURSDAY (literal calendar), while the Schedule tab's Today showed WEDNESDAY. Fix: between local midnight and 4 AM "tomorrow" = the day that just started (`LATE_NIGHT_END_HOUR`, `isLateNight`), and the tool adds a `date_note` telling the model to name the day. Tests LATE-1..5. (His 23:19 Tue ask got the pre-deploy tasks-only answer.)
+- **#199 merged (02a8f59a):** "tomorrow" after midnight. **2026-11-11 owner: "Business hours should start at 8"** -> journey `user_scheduling_prefs.config.timeWindows.business_hours.start` 9 -> 8 (updated 22:25 UTC). Owner 2026-11-12: "Shorten morning to 6-8 AM" -> morning 6-8 weekdays (updated 03:59 UTC), so morning 6-8 and business_hours 8-17 no longer overlap. **"Why is the time zone wrong?"** -> only my UAT screenshots were wrong: the tab renders in the viewer's device zone and the GHA browser is UTC; `run-uat.mjs` now sets `timezoneId` (UAT_TIMEZONE, default America/New_York). Phone screenshots were correct ET.
+- **Seen, not mine:** `test:fireflies-minutes` E6 fails on origin/main de80b7f6 (from #198 Agenda->Focus rename), with or without the schedule change.
+- **PR:** https://github.com/deventerpriseds-org/huddle-extension-app/pull/193 (subscribed). Live checks ready for after deploy: `schedule-calendar-checks.mjs` (verify-uat.yml, 390x844 — Today lists labelled Meeting/Class rows, no "Nothing scheduled" beside them) and `iris-day-schedule.mjs` (agent-serverfn-uat.yml — Iris runs the schedule tool and never calls a day with meetings empty).
+- **Open:** verifier verdict (three verifiers killed by container restarts 2026-11-11 — each time the session went idle after a backgrounded spawn; the fourth runs while the session stays busy); merge + deploy; live check of Iris's answer and the tab; owner confirmation.
+
+## ACT:chat-format — clean, consistent chat message layout (owner-approved A, B, C, E; D held, 2026-11-05) — DEPLOYED 2026-11-08, NOT owner-confirmed
+- **2026-11-11 owner approved the run-on list fix ("Go ahead with your crammed messages fix").** `splitRunOnList` in `lib/chat-format.ts`: "intro: a; b; c" (3+ items after the last ": ", each <=200 chars) renders as intro + bullets, so messages stored before the list rule also read cleanly. Tests RUNON-1..8 (chat-format 106/106); UAT check `runOnParas` added to chat-format-checks.mjs. Shipped with PR #193.
 - [x] Diagnosis: Iris's 29 messages 11-03..05 (azure-pg-query run 42105101844). Same brief spaced two ways; raw `**bold**`; four "N more" phrasings; draft + tally in prose; quota error as Iris. Cause: HuddleView rendered `{m.text}` raw + layout delegated to the model.
-- [x] A renderer (`lib/chat-format.ts`, `components/ChatText.tsx`); B code-built brief/priority lists (`appendBlock`); C draft only in the card; E failure replies as grey notices. Commits aad39f4, 0a38101; 5 guards mutation-FIRED.
-- [ ] Independent verifier (docs/qc-evidence/VERIFY-chat-format-1.md) -> merge -> deploy -> owner confirms on his phone/browser.
-- [ ] D (long research -> document + short summary) HELD: owner will judge after using the cleaned-up layout.
-- [ ] Watch: with a reply card, a model that skips propose_email_reply now leaves NO draft in the prose (card says "No suggested reply yet — tap Edit first").
+- [x] A renderer (`lib/chat-format.ts`, `components/ChatText.tsx`); B code-built + bounded brief/priority lists (`appendBlock`, `capFacts`); C draft only in the card; E failure replies as grey notices (row buttons kept).
+- [x] Independent verification loops 1-6 + late independent ACs (`docs/qc-evidence/VERIFY-chat-format-*.md`, `AC-chat-format.md`); every fix mutation-proved FIRED.
+- [x] MERGED deventerpriseds-org/huddle-extension-app#149 (squash ca5c02e, deploy-swa 42496393974 success) + #180 follow-up (squash bbc1df5, deploy-swa 42498662836 success). Merge with main checked line-by-line: no other session's lines dropped.
+- [x] Live browser UAT `chat-format-checks.mjs` (verify-uat 42498817299, 390x844, #iris-chase): 10/10 — 8 lists / 71 items, 0 raw bullets, 0 literal **, 0 split lists.
+- [ ] OWNER to confirm on his phone (his 2026-11-08 screenshot was the pre-deploy renderer).
+- [ ] D (long research -> document + short summary) HELD by owner.
+- [x] Owner approved (2026-11-08: "that run on paragraph is not clean formatting and is worse") replacing the HOUSE_STYLE "no long bullet dumps" line: lists of 3+ items now go one per line as bullets. #182 squash 57c17a7, deploy-swa 42500312471 success. NOT yet seen in a live agent reply.
+- [ ] Watch: with a reply card, a model that skips propose_email_reply leaves NO draft in the prose (card says "No suggested reply yet").
 
 ## ACT:trinnex-onedrive-feed — work-mailbox mail + calendar via EDS OneDrive files (2026-11-08) — BUILT on dev branch, NOT live
 
@@ -5033,6 +5327,60 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - **Built (branch claude_attention-bell):** extends `chat.email_replies` (owed/settled list) with `kind` (email|meeting|appointment) + `huddle_id`; `chat.attention_settings` (owner's urgent kinds, default all three, editable from the bell). Writers: fired reminders/alarms -> appointment item; schedule brief with meetings/classes -> meeting item. Settles: emails as before (reply detected / Dismiss); meeting/appointment when the owner messages that conversation, or Dismiss in the bell. Email-only queries now filter `kind='email'`. Header bell (AttentionBell.tsx) polls 60s + on focus.
 - **Evidence:** scripts/attention.test.ts all passed; inbound-email 69/0; onedrive-feed all passed; tsc clean; bell kind-filter mutation FIRED. 7 emails currently owed (oldest 10-30) -> initial count 7.
 - **Old-alarms-at-bottom bug (from #169 paging):** diagnosed (reminder poll cursor starts at 0; dedup misses unloaded history) and HANDED to the session that built paging (owner choice), via send_message.
+
+### ACT:history-paging-rollback (2026-11-08) — owner: "roll back your paging fix as it introduced issues; reapply once I'm working as usual"
+- Client side of #169 reverted: full-history load, saves replace the blob, no scroll-up older-page fetch,
+  `prependOlderMessages` gone. KEPT on purpose: the server still MERGES a save that sends `mergeMessages:true`,
+  because a phone still running the paged build would otherwise REPLACE the blob with only its 30-day window
+  and erase older history. Also kept: #173 (alarm skip + hydration gate + load reasons), #174 (sign-in
+  refresh), #178 (save reason). Test pins S4/S5 now assert the rollback; S1-S3 keep the server merge.
+- Saves had failed since 15:50:59Z (DB) with the paged client; cause still unknown -- the save-reason toast
+  (#178) is live to name it if it recurs. Re-apply paging only after the owner is working normally again.
+- Also open (owner, same message): "server connectivity has been an issue the past few weeks, even when I press
+  some of the full screen alert buttons" -- investigate the alarm-overlay button path (android-bridge-template).
+
+### ACT:db-connection-exhaustion (2026-11-08) — ROOT CAUSE FOUND; decision pending (A/B/C)
+- **Owner's screenshot (16:3xZ):** save failed with `server error: remaining connection slots are reserved for roles
+  with the SUPERUSER attribute` -- the Azure PG server (`eds-postgresql`) ran out of connections.
+- **Measured (azure-pg-query run 42500451689):** `max_connections` 50, `superuser_reserved_connections` 10 => 40
+  usable; ~16 held by OTHER apps' MCP connectors (boost, nexus, obot) => ~24 left for Huddle. Huddle code creates
+  **17 separate `new Pool(...)`**, each `max` 2-3 (=> up to ~48 per server instance, more with scale-out), idle
+  timeout 20s, so exhaustion is BURSTY and self-clears (matches "fixed itself 20 minutes later"). Pools added
+  2026-10-15 (#87), 10-27 (#105), 11-07 (#159) -- matches "server connectivity issues the past few weeks".
+- **Corrections:** paging (#169) did NOT cause the load/save failures (its real bug was old alarms at the bottom,
+  fixed in #173; rolled back anyway in #183 at owner's request). The MSAL expired-ID-token defect is real (read
+  from msal-common source; fix #174) but the owner's sign-out/in "proof" may have coincided with freed connections.
+- **Alarm buttons (separate cause, journey activity_log android_alarm_trace, 21 days):** 5 SUCCESS (JWT_PATCH 200),
+  6 GIVE_UP `route=NONE http=0` -- the alarm push carried no action token/url and the app had no login, so the tap
+  was never sent anywhere. Not yet traced to which alarms lack the token.
+- **Pending owner decision:** A) one shared pool (~8) in Huddle -- free, recommended; B) bigger Azure DB tier
+  (~$35-50/mo more); C) both. Also pending go: trace alarm pushes missing the action token.
+
+### ACT:history-paging-reapplied (2026-11-08) — owner: "the paging is proven safe so the rollback isn't necessary, reapply"
+- Reverted the rollback (#183): the app again opens with the recent window (30 days + newest 40 per huddle), loads
+  older pages on scroll-up, and saves MERGE by id. The load/save failures were DB connection exhaustion
+  (ACT:db-connection-exhaustion, fixed by one shared pool #185), not paging. #173's alarm skip stays.
+
+### ACT:db-connection-exhaustion — option A SHIPPED (#185, deployed 2026-11-08 16:46Z); paging re-applied (#187, 20:23Z)
+- One shared pool (max 8) replaces 17 per-module pools; guard `scripts/shared-pool.test.ts` P1-P5, mutations P1/P3 FIRED.
+- Live check 2026-11-10 12:23Z (azure-pg-query run 42815329470): workspace saves landing (last 12:07Z, 3,899 msgs
+  vs 3,824 on 11-08); server total 27/50 connections. NOT yet owner-confirmed that load/save errors are gone.
+
+### ACT:alarm-buttons-trace (2026-11-10) — CAUSE FOUND; already restored on journey 2026-11-05 (not owner-confirmed)
+- journey activity_log `android_alarm_trace`, FCM_RX lines on calendar_events: alarm pushes carried the action
+  token every day through 10-14; from 10-15 to 11-05 21:45Z they carried NONE (0 with / ~15-25 without per day);
+  from 11-05 21:45Z on, all carry it again (journey 63debcea "restore(J13+J14): phone alarm actions via signed
+  action token", merged 11-04, deployed 11-05).
+- Without the token the app falls back to its own login, which only supports DONE/DOING. Every one of the 6 failed
+  taps (10-19..11-02) was PARK or BACKLOG -> `GIVE_UP route=NONE http=0`, i.e. never sent. The 5 DONE taps in the same
+  window succeeded via the fallback. Since 11-05 no PARK/BACKLOG tap has been traced yet, so "fixed" is inferred
+  from token presence, not observed.
+- [x] proposals-preview.yml: `step` input (reply = tuning step 1, scripts/reply-scan-preview.ts on the chosen ref). Workflow-only.
+- [ ] Tuning step 1 run 43557012507 (2026-11-14 04:33 UTC): 94 conversations since Nov 9, 74 judged, 0 failures ->
+      NEEDS REPLY 13 (10 high, 3 medium; every quote found word-for-word), no reply 61, settled 6, owner-only 14.
+      Report: OneDrive /automation/Huddle Preview/reply-scan-2026-11-14T04-33-28.html (+ emailed). Waiting on the
+      owner to mark wrong YES / missed NO before tuning further.
+- [x] graph-permission-check: `feed_links` input prints OneDrive web links for report files in /automation/Huddle Preview only (owner 2026-11-14: "You have to provide links I can click").
 ## ACT:handoff-confirm-flow — 1:1 hand-off, Confirm buttons, confirm-starts-work, honesty, dedup (owner-approved 2026-10-31, session_014kkrf3BS7LaYkxC8HkdzMt)
 Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.pending_turns`). Seven breaks found; owner approved all fixes and Option A (a live confirm starts the work even past the agent's WIP cap).
 - [x] AC set (independent ac-writer): 85 ACs, F1–F8, spelling table. Branch `claude_ac-handoff-confirm` 58ae0ba, `docs/qc-evidence/AC-handoff-confirm-flow.md`.

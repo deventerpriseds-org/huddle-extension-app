@@ -11,6 +11,7 @@ import {
   meetingBellTitle,
   parseUrgentKinds,
   toAttentionItem,
+  SETTINGS_KINDS,
 } from "../src/features/huddle/lib/attention/attention";
 
 let fail = 0;
@@ -33,6 +34,7 @@ const row = (o: Record<string, unknown>) => ({
 });
 
 // A: settings
+t("A0 the What-counts list does not offer Teams chats while Teams is out of scope (owner 2026-11-14)", [...SETTINGS_KINDS], ["email", "meeting", "appointment"]);
 t("A1 unset setting -> default (email, meeting, appointment)", parseUrgentKinds(null), DEFAULT_URGENT_KINDS);
 t("A2 garbage -> default", parseUrgentKinds("email"), DEFAULT_URGENT_KINDS);
 t("A3 unknown kinds dropped, duplicates removed", parseUrgentKinds(["meeting", "spam", "meeting"]), ["meeting"]);

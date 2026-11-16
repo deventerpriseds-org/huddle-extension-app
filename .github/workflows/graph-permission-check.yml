@@ -13,6 +13,9 @@ name: Graph permission check (read-only)
 #             Section 5 (2026-11-08) proves the app-only key can READ the work-mailbox OneDrive feed
 #             files (external-feeds/onedrive-feed.server.ts). Power Automate WRITING them proves nothing
 #             about Huddle's own application permission. Prints status/size/shape/counts only.
+#             Section 5b (2026-11-13) LISTS the feed folders (name, size, modified time only) so a renamed
+#             output file is found by reading the drive, not by guessing; a .jsonl path prints line count
+#             and the KEY NAMES of its last line (never values).
 # SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 # EVIDENCE:   .claude/evidence/schedule-brief-fix.md; deploy-swa.yml "Ensure Graph Mail.Send" step
 #             (grants Mail.Send only).
@@ -35,6 +38,19 @@ on:
         description: "Section 5: comma-separated drive-relative feed file paths."
         required: false
         default: "/automation/email/emails.json,/automation/appointments/appointments.json"
+      feed_list_folders:
+        description: "Section 5b: comma-separated drive-relative folders to LIST (names/sizes/modified only; needs feed_drive_users)."
+        required: false
+        default: ""
+      feed_links:
+        description: "Section 5b: also print each file's OneDrive web link -- ONLY for the /automation/Huddle Preview folder (owner's own report files; no content)."
+        required: false
+        type: boolean
+        default: false
+      mail_probe_subject:
+        description: "Section 7: find messages whose subject STARTS WITH this text in each mailbox (all folders, incl. Junk). Prints count, folder, time only."
+        required: false
+        default: ""
       feed_dry_run:
         description: "Section 6: dry-run the REAL feed files through the shipped code, using the HUDDLE_ONEDRIVE_FEEDS repo secret (masked in logs). Verdicts and counts only."
         required: false
@@ -58,6 +74,9 @@ jobs:
           MAILBOXES: ${{ inputs.mailboxes }}
           FEED_USERS: ${{ inputs.feed_drive_users }}
           FEED_PATHS: ${{ inputs.feed_paths }}
+          FEED_FOLDERS: ${{ inputs.feed_list_folders }}
+          FEED_LINKS: ${{ inputs.feed_links && '1' || '0' }}
+          MAIL_PROBE: ${{ inputs.mail_probe_subject }}
           # A SECRET, never a workflow input: inputs are printed in this public log's env block
           # (VERIFY-trinnex-onedrive-feed-1 D1 -- an earlier run printed the config that way).
           FEED_CONFIG: ${{ inputs.feed_dry_run && secrets.HUDDLE_ONEDRIVE_FEEDS || '' }}
@@ -136,10 +155,77 @@ jobs:
                   "https://graph.microsoft.com/v1.0/users/$u/drive/root:$p:/content")
                 CSUM=$(python3 -c '
           import json
+          raw=open("/tmp/f.json", encoding="utf-8", errors="replace").read()
           try:
-              d=json.load(open("/tmp/f.json"))
+              d=json.loads(raw)
           except Exception:
-              print("not JSON"); raise SystemExit
+              lines=[l for l in raw.splitlines() if l.strip()]
+              # Parse EVERY line. The old gate tried only the last line, so one bad trailing
+              # line (a half-written append) hid an otherwise readable JSONL file entirely.
+              recs=[]; bad=[]
+              for i, l in enumerate(lines, 1):
+                  try:
+                      o=json.loads(l)
+                      if isinstance(o, dict): recs.append(o)
+                      else: bad.append((i, len(l), "not an object: " + type(o).__name__))
+                  except Exception as ex:
+                      # json error text is position-only ("Expecting , delimiter: line 1 column 9"),
+                      # never content -- safe for these PUBLIC logs.
+                      # Shape of the failure without content: first/last code point, where the first
+                      # "{" sits, and whether the text from that brace on parses.
+                      b0=l.find("{")
+                      tail_err=""
+                      try:
+                          tail_ok=isinstance(json.loads(l[b0:]), dict) if b0 >= 0 else False
+                      except json.JSONDecodeError as te:
+                          tail_ok=False
+                          p=te.pos
+                          tail_err=" | from-brace error: %s at char %d, chars there %s" % (te.msg, p, "".join("a" if c.isalpha() else "9" if c.isdigit() else c for c in l[b0+max(p-3,0):b0+p+3]))
+                      except Exception:
+                          tail_ok=False
+                      # A short prefix made only of key-name characters is schema, not content: print it.
+                      import re as _re
+                      pre=l[:b0] if 0 <= b0 <= 16 else ""
+                      # Only a word from a fixed schema/function vocabulary is printed; anything else
+                      # (it could be a name) is reduced to its character classes.
+                      VOCAB={"content","contents","chatid","chatname","source","status","messages","message","capturedat","synthetic","body","value","values","data","json","record","item","items","line","text","concat","string","outputs","output","body/value"}
+                      word=_re.sub(r"[^A-Za-z/]", "", pre).lower()
+                      pre=pre if word in VOCAB or word == "" else "<withheld: %d chars, %s>" % (len(pre), "".join(sorted(set("a" if c.isalpha() else "9" if c.isdigit() else "_" if c.isspace() else "p" for c in pre))))
+                      head="".join("a" if c.isalpha() else "9" if c.isdigit() else c for c in (l[b0:b0+4] if b0 >= 0 else ""))
+                      shape="first U+%04X last U+%04X first-brace-at %d prefix %r head %r parses-from-brace %s%s" % (ord(l[0]), ord(l[-1]), b0, pre, head, tail_ok, tail_err)
+                      bad.append((i, len(l), type(ex).__name__ + ": " + str(ex)[:90] + " | " + shape))
+              if bad:
+                  print("JSONL UNPARSEABLE LINES:", len(bad), "of", len(lines), "| last line ok:", not bad or bad[-1][0] != len(lines))
+                  for b in bad[:15]: print("   line", b[0], "| length", b[1], "|", b[2])
+              if recs:
+                  from collections import Counter
+                  short=lambda v: v if isinstance(v,(bool,int)) or v is None or (isinstance(v,str) and len(v)<=24 and "@" not in v) else "<long/other>"
+                  lk=Counter(k for r in recs for k in r)
+                  st=Counter(str(short(r.get("status"))) for r in recs)
+                  src=Counter(str(short(r.get("source"))) for r in recs)
+                  syn=Counter(str(r.get("synthetic","<absent>")) for r in recs)
+                  msgs=[m for r in recs for m in (r.get("messages") if isinstance(r.get("messages"),list) else []) if isinstance(m,dict)]
+                  withm=sum(1 for r in recs if isinstance(r.get("messages"),list) and r.get("messages"))
+                  mk=Counter(k for m in msgs for k in m)
+                  fk=Counter(k for m in msgs if isinstance(m.get("from"),dict) for k in m["from"])
+                  fu=Counter(k for m in msgs if isinstance(m.get("from"),dict) and isinstance(m["from"].get("user"),dict) for k in m["from"]["user"])
+                  bt=Counter(("dict:"+",".join(sorted(m["body"].keys()))) if isinstance(m.get("body"),dict) else type(m.get("body")).__name__ for m in msgs)
+                  mt=Counter(str(short(m.get("messageType"))) for m in msgs)
+                  ct=Counter(str(short((m.get("body") or {}).get("contentType"))) for m in msgs if isinstance(m.get("body"),dict))
+                  ids=Counter((r.get("chatId") is not None) for r in recs)
+                  print("JSONL | lines", len(lines), "| parsed", len(recs), "| lines with messages", withm, "| messages total", len(msgs))
+                  print("   line keys (count):", dict(lk))
+                  print("   status values:", dict(st), "| source values:", dict(src), "| synthetic:", dict(syn), "| chatId present:", dict(ids))
+                  print("   message keys (count):", dict(mk))
+                  print("   from keys:", dict(fk), "| from.user keys:", dict(fu))
+                  print("   body types:", dict(bt), "| contentType:", dict(ct), "| messageType:", dict(mt))
+                  tsk=[k for k in ("createdDateTime","timestamp","lastModifiedDateTime") if mk.get(k)]
+                  ct_=sorted(str(m.get("createdDateTime")) for m in msgs if m.get("createdDateTime") and m.get("messageType")=="message")
+                  if ct_: print("   message createdDateTime range:", ct_[0], "->", ct_[-1], "| per day:", dict(sorted(Counter(t[:10] for t in ct_).items())))
+                  print("   time keys present:", tsk, "| capturedAt range:", min((str(r.get("capturedAt",""))[:10] for r in recs), default="-"), "->", max((str(r.get("capturedAt",""))[:10] for r in recs), default="-"))
+              else:
+                  print("not JSON, not JSONL | lines", len(lines))
+              raise SystemExit
           v=((d.get("snapshot") or {}).get("value")) if isinstance(d,dict) else None
           print("feed_type", d.get("feed_type"), "| schema", d.get("schema_version"), "| complete", d.get("complete"),
                 "| synthetic", d.get("synthetic"), "| records", len(v) if isinstance(v,list) else "-",
@@ -152,11 +238,78 @@ jobs:
                   return "[" + (str(len(o)) + "x " + (shape(o[0], depth+1) if depth < 1 else (sorted(o[0].keys()).__str__() if isinstance(o[0], dict) else type(o[0]).__name__)) if o else "") + "]"
               return type(o).__name__
           print("   envelope keys:", sorted(d.keys()) if isinstance(d,dict) else "-")
-          if isinstance(v,list) and v: print("   record[0] shape:", shape(v[0]))' 2>/dev/null || echo "-")
+          if isinstance(v,list) and v: print("   record[0] shape:", shape(v[0]))
+          if isinstance(v,list) and v:
+              keys=sorted({k for r in v if isinstance(r,dict) for k in r})
+              print("   non-empty per field (of", len(v), "records):", {k: sum(1 for r in v if isinstance(r,dict) and r.get(k) not in (None, "", [], {})) for k in keys})
+              for tk in ("receivedDateTime","sentDateTime"):
+                  ts=sorted(str(r.get(tk)) for r in v if isinstance(r,dict) and r.get(tk))
+                  if ts: print("   ", tk, "range:", ts[0], "->", ts[-1], "| per day:", dict(sorted(__import__("collections").Counter(t[:10] for t in ts).items())))
+          print("   window_start_utc:", d.get("window_start_utc"), "| published_utc:", d.get("published_utc"), "| retention_days:", d.get("retention_days"))' 2>/dev/null || echo "-")
                 echo "$u $p | item HTTP $M -> $MSUM | content HTTP $C -> $CSUM"
               done
             done
             echo "(403 on the item = the app lacks Files.Read.All / Files.ReadWrite.All application permission)"
+          fi
+
+          # 5b. LIST feed folders: name, size, modified time only (public logs: no content, no ids). A name
+          #     holding an address-like token (@) or a long digit run is masked.
+          if [ -n "${FEED_USERS// /}" ] && [ -n "${FEED_FOLDERS// /}" ]; then
+            echo "=== 5b. OneDrive feed folder listing (names/sizes/modified only) ==="
+            IFS=',' read -ra FU <<< "$FEED_USERS"; IFS=',' read -ra FF <<< "$FEED_FOLDERS"
+            for u in "${FU[@]}"; do
+              u=$(echo "$u" | xargs)
+              for f in "${FF[@]}"; do
+                f=$(echo "$f" | xargs)
+                L=$(curl -s -o /tmp/l.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+                  "https://graph.microsoft.com/v1.0/users/$u/drive/root:$f:/children?\$select=name,size,lastModifiedDateTime,folder,file,webUrl&\$top=200")
+                echo "$f | list HTTP $L"
+                FOLDER="$f" python3 -c '
+          import json, re, os
+          links=os.environ.get("FEED_LINKS")=="1" and os.environ.get("FOLDER","").rstrip("/") in ("/automation/Huddle Preview","/automation/Huddle%20Preview")
+          d=json.load(open("/tmp/l.json"))
+          e=(d.get("error") or {}).get("code")
+          if e: print("   error", e); raise SystemExit
+          for c in sorted(d.get("value") or [], key=lambda c: c.get("name","").lower()):
+              n=c.get("name","")
+              if "@" in n or re.search(r"\d{7,}", n): n="<masked name>"
+              kind="folder" if c.get("folder") is not None else "file"
+              print("   ", kind, n, "| size", c.get("size","-"), "| modified", c.get("lastModifiedDateTime","-"))
+              if links and kind=="file" and n.lower().endswith(".html"): print("      link", c.get("webUrl","-"))' 2>/dev/null || echo "   (unreadable listing)"
+              done
+            done
+          fi
+
+          # 7. Did a message arrive? Subject-prefix search per mailbox across ALL folders (Inbox, Junk, ...).
+          #    Prints count, folder display name and received time only.
+          if [ -n "${MAIL_PROBE// /}" ]; then
+            echo "=== 7. Mail delivery probe (subject prefix; counts, folders, times only) ==="
+            IFS=',' read -ra MB <<< "$MAILBOXES"
+            Q=$(python3 -c 'import os,urllib.parse;p=os.environ["MAIL_PROBE"].replace("\x27","\x27\x27");print(urllib.parse.quote(f"startswith(subject,\x27{p}\x27)"))')
+            for m in "${MB[@]}"; do
+              m=$(echo "$m" | xargs)
+              P=$(curl -s -o /tmp/p.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+                "https://graph.microsoft.com/v1.0/users/$m/messages?\$filter=$Q&\$select=receivedDateTime,parentFolderId&\$top=25")
+              echo "$m | search HTTP $P"
+              python3 - "$TOKEN" "$m" <<'PY2'
+          import json, sys, urllib.request
+          tok, mb = sys.argv[1], sys.argv[2]
+          d = json.load(open("/tmp/p.json"))
+          if d.get("error"): print("   error", d["error"].get("code")); raise SystemExit
+          v = d.get("value") or []
+          print("   matches:", len(v))
+          names = {}
+          for x in v:
+              fid = x.get("parentFolderId")
+              if fid not in names:
+                  try:
+                      r = urllib.request.Request(f"https://graph.microsoft.com/v1.0/users/{mb}/mailFolders/{fid}?$select=displayName", headers={"Authorization": f"Bearer {tok}"})
+                      names[fid] = json.load(urllib.request.urlopen(r)).get("displayName", "?")
+                  except Exception:
+                      names[fid] = "?"
+              print("   -", x.get("receivedDateTime"), "| folder", names[fid])
+          PY2
+            done
           fi
 
           # 6. Dry-run the REAL feed files through the shipped code (validator, mapper, screen).

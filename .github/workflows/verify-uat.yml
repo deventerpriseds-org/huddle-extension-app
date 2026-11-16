@@ -66,25 +66,38 @@ jobs:
           retention-days: 7
 
       # CCR sessions can't download the artifact zip (proxy blocks the blob redirect), so publish the
-      # shots to a throwaway orphan branch the session CAN reach via git (the git proxy works). The
-      # session `git fetch origin uat-shots` and reads the PNGs + results.json straight off disk — no
-      # base64-through-logs context bloat. Force-pushed each run; safe to delete anytime.
-      - name: Publish shots to uat-shots branch
+      # shots to a throwaway orphan branch the session CAN reach via git (the git proxy works).
+      # ONE BRANCH PER RUN: uat-shots-run-<run_id>. Owner, 2026-11-08: "make sure a mechanized rule is in
+      # place preventing a branch being overwritten by another session". The old shared `uat-shots`
+      # branch was force-pushed by EVERY run, so with parallel sessions one session's screenshots were
+      # replaced by another's before it read them (run 42496877380's shots were overwritten by 42496820414
+      # within minutes). A per-run name cannot be overwritten by another run. Read it with:
+      #   git fetch origin uat-shots-run-<run_id> && git show FETCH_HEAD:uat-shots/<file>.png > /tmp/x.png
+      - name: Publish shots to this run's own branch
         if: always()
+        env:
+          SHOTS_BRANCH: uat-shots-run-${{ github.run_id }}
         run: |
           git config user.email "actions@github.com"
           git config user.name "gha-uat"
-          git checkout --orphan uat-shots
+          git checkout --orphan "$SHOTS_BRANCH"
           git reset >/dev/null 2>&1 || true
-          # A run that produced NOTHING must not leave the previous run's shots standing on the
-          # branch: that is how run 34761827362's results were nearly read as run 34763366985's.
-          # Fail soft here, and always stamp the run id in the commit so provenance is checkable.
           shopt -s nullglob
           shots=(uat-shots/*.png)
           if [ ${#shots[@]} -eq 0 ]; then
-            echo "::warning::this run produced NO screenshots -- leaving uat-shots untouched. Do NOT read that branch as this run's output."
+            echo "::warning::this run produced NO screenshots -- no shots branch was created for it."
             exit 0
           fi
           git add -f uat-shots/*.png uat-shots/results.json
           git commit -q -m "uat shots — run ${{ github.run_id }}" || { echo "no shots to commit"; exit 0; }
-          git push -f origin uat-shots
+          # A brand-new name: no force needed, and a plain push can never replace another run's branch.
+          git push origin "$SHOTS_BRANCH"
+          echo "Shots published to branch $SHOTS_BRANCH"
+          # Housekeeping: drop per-run shot branches older than 7 days (the artifact zip is kept 7 days too).
+          cutoff=$(date -u -d '7 days ago' +%s)
+          git ls-remote --heads origin 'uat-shots-run-*' | awk '{print $2}' | while read -r ref; do
+            b=${ref#refs/heads/}
+            git fetch -q --depth 1 origin "$b" 2>/dev/null || continue
+            ts=$(git log -1 --format=%ct FETCH_HEAD 2>/dev/null || echo "$cutoff")
+            if [ "$ts" -lt "$cutoff" ]; then git push -q origin --delete "$b" || true; fi
+          done

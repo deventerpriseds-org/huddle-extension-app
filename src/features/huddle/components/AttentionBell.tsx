@@ -8,7 +8,7 @@
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   lib/attention/attention.ts; .claude/actions.md ACT:attention-bell.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, CalendarClock, Mail, AlarmClock, X } from "lucide-react";
+import { Bell, CalendarClock, Mail, AlarmClock, MessageSquare, FileWarning, X } from "lucide-react";
 import { toast } from "sonner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuth } from "@/hooks/useAuth";
@@ -19,18 +19,23 @@ import {
   setAttentionKindsFn,
 } from "../lib/attention/attention.functions";
 import {
-  ATTENTION_KINDS,
+  SETTINGS_KINDS,
   ATTENTION_KIND_LABEL,
+  badgeCount,
   type AttentionItem,
   type AttentionKind,
+  type BellKind,
 } from "../lib/attention/attention";
 
 const POLL_MS = 60_000;
 
-const KIND_ICON: Record<AttentionKind, typeof Mail> = {
+const KIND_ICON: Record<BellKind, typeof Mail> = {
   email: Mail,
   meeting: CalendarClock,
   appointment: AlarmClock,
+  chat: MessageSquare,
+  // A OneDrive feed file stopped updating (2026-11-13). Only rendered when such a row exists.
+  feed: FileWarning,
 };
 
 function when(iso: string | null): string {
@@ -87,7 +92,8 @@ export function AttentionBell() {
   }, [open, refresh]);
 
   if (!caller) return null;
-  const count = items.length;
+  // "Can't tell if answered" chat rows are listed but not counted (2026-11-12).
+  const count = badgeCount(items);
 
   async function dismiss(id: string) {
     setItems((xs) => xs.filter((x) => x.id !== id));
@@ -99,7 +105,11 @@ export function AttentionBell() {
   }
 
   function openChat(item: AttentionItem) {
-    useHuddleStore.getState().setActive(item.huddleId);
+    const store = useHuddleStore.getState();
+    store.setActive(item.huddleId);
+    // An email row's id IS its reply card's emailId: land on the card (approve / copy / dismiss), not
+    // at the bottom of the chat (owner, 2026-11-12).
+    if (item.kind === "email") store.requestEmailFocus(item.huddleId, item.id);
     setOpen(false);
   }
 
@@ -144,7 +154,7 @@ export function AttentionBell() {
         </div>
         {showSettings && (
           <div className="space-y-1.5 border-b border-hairline px-3 py-2" data-testid="attention-settings">
-            {ATTENTION_KINDS.map((k) => (
+            {SETTINGS_KINDS.map((k) => (
               <label key={k} className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={kinds.includes(k)} onChange={() => void toggleKind(k)} />
                 {ATTENTION_KIND_LABEL[k]}
@@ -153,7 +163,7 @@ export function AttentionBell() {
           </div>
         )}
         <div className="max-h-80 overflow-y-auto">
-          {count === 0 ? (
+          {items.length === 0 ? (
             <p className="px-3 py-6 text-center text-xs text-muted-foreground">Nothing waiting on you.</p>
           ) : (
             items.map((it) => {
@@ -161,19 +171,36 @@ export function AttentionBell() {
               return (
                 <div key={it.id} className="flex items-start gap-2 border-b border-hairline px-3 py-2 last:border-b-0" data-testid="attention-item">
                   <Icon size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
-                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => openChat(it)}>
-                    <p className="truncate text-xs font-medium text-foreground">{it.title}</p>
-                    <p className="truncate text-[11px] text-muted-foreground">
-                      {[it.detail, when(it.at)].filter(Boolean).join(" · ")}
-                    </p>
-                  </button>
+                  <div className="min-w-0 flex-1">
+                    <button type="button" className="w-full text-left" onClick={() => openChat(it)}>
+                      <p className={`truncate text-xs font-medium ${it.uncertain ? "text-muted-foreground" : "text-foreground"}`}>{it.title}</p>
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {[it.detail, when(it.at)].filter(Boolean).join(" · ")}
+                      </p>
+                    </button>
+                    {/* Only when the source supplied a link: a missing link renders no dead control. */}
+                    {it.link && (
+                      <a
+                        href={it.link}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        data-testid="attention-source-link"
+                        className="text-[11px] text-primary hover:underline"
+                      >
+                        Open in Teams
+                      </a>
+                    )}
+                  </div>
+                  {/* A labelled button: the owner did not find the old icon-only X (2026-11-12). */}
                   <button
                     type="button"
-                    aria-label="Dismiss"
-                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    aria-label={`Dismiss ${it.title}`}
+                    data-testid="attention-dismiss"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-hairline px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
                     onClick={() => void dismiss(it.id)}
                   >
-                    <X size={13} />
+                    <X size={11} />
+                    Dismiss
                   </button>
                 </div>
               );

@@ -13,7 +13,7 @@ const sched = src.slice(src.indexOf("export function ScheduleWidget("), src.inde
 const prio = src.slice(0, src.indexOf("export function ScheduleWidget("));
 let fail = 0;
 const check = (n: string, ok: boolean) => { console.log(`${ok ? "PASS" : "FAIL"} ${n}`); if (!ok) fail++; };
-check("T1 every Schedule band flows (no inner scroll)", (sched.match(/<ScrollBand full=\{full\} flow>/g) ?? []).length === 2 && !/<ScrollBand full=\{full\}>/.test(sched));
+check("T1 every Schedule band flows (no inner scroll)", (sched.match(/<ScrollBand full=\{full\} flow>/g) ?? []).length >= 2 && !/<ScrollBand full=\{full\}>/.test(sched));
 check("T2 a flowing full band is not a scroll container", /cn\(flow && full \? "" : "overflow-y-auto"/.test(src));
 check("T3 the Schedule page shell scrolls and its sections never shrink", /chrome === "page" && "overflow-y-auto \[&>\*\]:shrink-0"/.test(sched));
 check("T4 all three Schedule sections are collapsible", ["schedule-today", "schedule-doing", "schedule-upnext"].every((id) => sched.includes(`<CollapsibleSection id="${id}"`)));

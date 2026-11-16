@@ -1,5 +1,60 @@
 # Project Memory — huddle-extension-app
 
+## Correspondence + proposals (ACT:correspondence-checklist) -- 2026-11-13, NOT live, branch claude_task-proposals
+- TUNING ORDER (owner 2026-11-14): one question at a time. Step 1 = needs a reply (reply-scan, reviewed: no YES
+  disputed; six NO rows need ACTION not a reply). Step 2 = on To -> open item (reply or do-it). Step 3 = CC/list ->
+  action for him. Step 4 = cut off in his message ("Next ask for"). Run: proposals-preview.yml step=reply|action.
+  Forwards: the text path cuts at the forward header (right for Iris, which must not change), so the judge reads the
+  forwarded email separately via lib/correspondence/forwarded.ts. Always give him the OneDrive web link (logged as
+  "OPEN THE REPORT:").
+- Owner decisions: ETL route A (OneDrive files -> Huddle ingest -> Azure PG chat.correspondence_ledger; no new
+  endpoint) + a file-staleness alert (built, flag correspondence.staleAlerts, default OFF, bell kind 'feed').
+- Real files (read via graph-permission-check, counts only -- public repo, never print content):
+  emails.json (complete:TRUE since 2026-11-13 15:18 UTC, 127 records Nov 6-13), sent.json (complete:true, 29/29
+  sentDateTime), /automation/Teams Chats/teams-chats.jsonl (source "teams", capturedAt; 107 good lines; the 117
+  backfill lines written 2026-11-13 are the PA formula as literal text `concat('{"...` -- unreadable until PA fixes
+  the append step). Code defaults follow the real Teams path/source (8a336404).
+- Hardening (2026-11-13): graph-permission-check judged a JSONL file by its LAST line only, so 117 bad lines read as
+  "not JSON" with no detail. Fixed in #227: every line parsed, failures reported content-safely (prefix only when it
+  is a known schema/function word; letters/digits masked a/9). A first draft would have printed a name-like prefix.
+- Owner-facing previews: proposals-preview.yml -> owner's OneDrive /automation/Huddle Preview/ and (email input) an HTML
+  email via Graph sendMail to the private feed-config mailbox. Logs print counts only.
+- Verifier loop 3 FIX FIRST -> D1-D6/M1/M2 fixed. Lesson: a subagent's stale index reverted another lane (4fc54efe);
+  agents sharing a branch must commit with `git commit --only -- <paths>` and diff --stat against origin before push.
+
+## Fireflies meeting minutes (2026-11-10; #191 MERGED + DEPLOYED 2026-11-11 9c31f538; queue fixes D7/D8 follow; NOT owner-confirmed live)
+- Route `POST /api/public/fireflies-webhook` (from #188) only VERIFIES + QUEUES (`recordWebhook`). Fireflies docs:
+  a 2xx is due within 30s and a timed-out request is NOT retried -- so no work happens in the request.
+  The worker `processDueFirefliesMeetings` runs inside `runDueScheduledJobs` (started first, awaited last, so
+  existing jobs never wait), one meeting per tick under a 3-min lease; email + OneDrive via Promise.allSettled.
+- Fireflies events: `meeting.transcribed` (transcript ready) and `meeting.summarized` (summary, LATER). Fireflies-
+  summary mode waits up to 3h for the summary. `reprocessed_at` (ms) marks a resend; a retry keeps the same value.
+- `sentences.start_time` is a STRING in Fireflies' schema. `summary.extended_sections[{title,content}]` = the
+  dashboard-customised summary. Docs are readable only from a runner: `fireflies-docs-read.yml` (Playwright),
+  branch `claude_fireflies-docs-read`, run 42816565367.
+- `cross-app-turn-gate` G7 requires every existing public route file to be byte-identical to main -- so the
+  worker hooks into scheduler.server, not run-turn.ts.
+- Pure rules in `lib/fireflies/minutes.ts`; ledger + settings in `minutes-store.server.ts`
+  (`chat.fireflies_meetings`, `chat.meeting_minutes_settings`); Settings UI `components/MeetingMinutesPanel.tsx`.
+- "Luna" in Huddle = the `gpt-5.6-luna` model tier, called via `callOpenAIResponses` (no separate Luna service).
+- Idempotency keys on a hash of the meeting INPUT (transcript+summary), never on generated text (Luna wording varies).
+- Email goes through `sendGraphEmail`, so the D4b recipient gate applies: only AUTO-tier own addresses send.
+  2026-11-11: the work (trinnex.io) address is linked to the owner's profile (manual) with tier 'auto' in
+  email_self_tiers, so minutes and self-digests can send there. Default recipients = auto-tier own addresses.
+- FIREFLIES_* secrets: MISSING 2026-11-10, PRESENT from the 2026-11-11 deploy. Live probe: summary.extended_sections
+  returns the owner's custom sections; sentences.start_time is Float live (String in the docs) -- code accepts both.
+- Queue invariants (real-SQL test scripts/fireflies-queue-sql.test.ts): every delivery bumps queue_version; a worker
+  clears pending only for its claimed version; attempts count FAILED passes only; giveUpIfExhausted makes it visible.
+- FIREFLIES_* secrets were MISSING on 2026-11-10 (probe run 42813708365). docs.fireflies.ai does not resolve from
+  CCR; Tavily plan was over its limit (HTTP 432). The live schema probe is `fireflies-api-check.yml`.
+
+- LIVE 2026-11-12 (azure-pg-query run 43129425010): 11 real meetings, each 2 deliveries, custom summary, ONE email,
+  OneDrive saved. Fireflies-summary mode works; Luna mode not yet run live. NOT owner-confirmed (inbox/OneDrive).
+- D9 (verify loop 3): a pass that the ~45s host ceiling stops never reaches releaseMeeting. Pass budget: send starts
+  by SEND_CUTOFF_MS=30s, Luna gets lunaBudgetMs(elapsed); unfinished_passes +1 per claim, 0 on release/delivery,
+  >=5 -> gave_up:pass_did_not_finish (applied at the top of claimDueMeetings). The shared Graph sender was NOT
+  given a timeout (other features use it; that would change their behaviour).
+
 ## Attention bell (2026-11-08) — one "needs you" list on chat.email_replies
 - `kind` column (email|meeting|appointment): ANY new query on chat.email_replies that means "emails" must filter `kind='email'` (findOwed*, listOwedEmailReplies, counts already do). Non-email rows: mailbox '', graph_message_id = own id, no conversation_id.
 - A push the server sent can still not show on the phone (FCM accepts data-only messages; the Huddle app does not report display). The bell is the in-app record that needs no push.
@@ -9,6 +64,12 @@
 - Read barge answers by `data-turn-kind="answer"`, never by row position: the ceremony keeps speaking during a barge.
 - Playwright `waitForFunction(fn, ARG, OPTIONS)`: an options object in the ARG slot is silently ignored (30s default).
 - Before trusting a UAT "pass", check which CHECKS_FILE the run used: 42452788195 / 42411015067 ran narrow check files, not the full suite (ledger corrected in #165).
+
+## Huddle exhausts the shared Azure PG connection limit (2026-11-08; ROOT CAUSE, fix pending owner A/B/C)
+- `eds-postgresql` allows 50 connections (10 reserved) and is SHARED with boost/nexus/obot MCP connectors (~16).
+  Huddle has 17 separate `new Pool()` (max 2-3 each). Busy bursts => "remaining connection slots are reserved
+  for roles with the SUPERUSER attribute" on loads, saves, turns. Self-clears after the 20s idle timeout.
+  Check idle connections too: a `state <> 'idle'` filter hides this (it did on 2026-11-08).
 
 ## Sign-in: MSAL hands back EXPIRED ID tokens — "history stuck loading" (2026-11-08; FIX SHIPPING, NOT owner-confirmed)
 - `getToken()` returns `result.idToken`; MSAL's silent flow checks only the ACCESS token's expiry before returning the
@@ -108,7 +169,7 @@ emails can pick the profile with zero tasks. (:1032, :1033, :2786)
 | Memory | Azure `public.rag_chunks` | every user msg auto-written `scope='global'`; retrieval filters scope/agent only, **no huddle filter** — this is the only cross-huddle bridge. Score floor **0.3** (`text-embedding-3-large` scores real hits 0.4–0.5). |
 | Fast read from CCR | `getTurnUpdates` server fn over HTTPS (~1s) | **but the deployed SWA host is frequently NOT in session egress** (measured 2026-10-15: curl → `CONNECT tunnel failed, 403`; node fetch → `ENOTFOUND`). When it is blocked, use `azure-pg-query.yml` or the pg MCP. |
 | Seroval CONST map | `0=null 1=undefined 2=true 3=false 4=-0 5=Infinity 6=-Infinity 7=NaN` | `huddle.mjs` ships a WRONG map that decodes `true` as `null`. |
-Last updated: 2026-09-21 (PR triage pass, 4 open PRs: merged #39 — docs-only spec research,
+Last updated: 2026-11-15 (parked.md: owner go on verify-loop-work-slug-alias.) Previously: 2026-09-21 (PR triage pass, 4 open PRs: merged #39 — docs-only spec research,
 re-verified its two load-bearing technical claims against live code before merging (see
 ACT:pr-triage-2026-09-21 in actions.md). Its finding worth carrying: `eds-claude-skills/CLAUDE.md`'s
 "Realtime AS EAR ONLY (Huddle `useVoiceCallRealtime`)" line is STALE — Huddle's current default 1:1
@@ -135,7 +196,16 @@ index into a requirement list**.
 
 (previous header) Last updated: 2026-08-25
 
-## Chat message layout: rendered lists/bold/links + code-built brief lists (2026-11-05, branch claude/vibrant-allen-p52snq, NOT merged, NOT deployed, NOT owner-confirmed)
+## Schedule answers = ONE local day of meetings + classes + tasks (2026-11-10 incident; DEPLOYED 2026-11-11 via #193 + #194, live UAT green, NOT owner-confirmed)
+- `lib/tasks/day-schedule.server.ts` is the ONE "what's on my day" reader: `readDaySchedule` (chat/voice) and `readTodayCalendar`+`composeTodayItems` (Schedule tab, in-chat widget). It reuses the brief's `meetingsForDate` (Graph + work feed) and `classesForDate` (Nexus); never add a second calendar read.
+- The `schedule_and_priorities` 'scheduled' view (and its alias `get_calendar_events`, voice + Lovable) answers ONE day; `date` = today/tomorrow/tonight/this|next weekday/abbrev/"Nov 12"/yyyy-mm-dd (nearest occurrence; a word must BE a month or its prefix); `date:"all"` = the old every-day TASK list.
+- A `category` narrows TASK rows only, AFTER counting (`dayScheduleToolJson({category})` -> `other_tasks_outside_category`). Filtering tasks before the count let a day read as empty (verifier loop 2 D7).
+- A failed/timed-out source sets `complete:false` and the tool's `answer_rule` forbids calling the day empty. "Nothing scheduled" is only allowed when every source read OK. A failed task read on the tab keeps the meetings and says so.
+- Callers must pass `{ caller }` so the OWNER's calendar mailbox is resolved (`resolveCalendarMailbox`), not the app's sending mailbox.
+- The Schedule tab formats times in the VIEWER's browser zone: a GHA browser run shows UTC (5 h ahead of ET) -- the test browser, not a bug.
+- Live checks: `iris-day-schedule.mjs` (agent-serverfn-uat.yml) and `schedule-calendar-checks.mjs` (verify-uat.yml, 390x844).
+
+## Chat message layout: rendered lists/bold/links + code-built brief lists (2026-11-05; #149 ca5c02e + #180 bbc1df5 DEPLOYED 2026-11-08, live UAT 10/10 run 42498817299; NOT owner-confirmed)
 - Agent bubbles render via `ChatText` (`lib/chat-format.ts` = the ONE set of layout rules: normalize whitespace, parse blocks, `noticeText`, `stripRepeatedDraft`, `joinOpenerAndBlock`). User bubbles unchanged.
 - Scheduled brief + priority check: the list is CODE-BUILT (`briefDeliveryPlan(...).appendBlock`, `priorityAppendBlock`) and attached by `ensureAppendBlockDelivered` at BOTH turn endings, before `ensureNavLinkDelivered`. The model writes one opener only. Do not move layout back into prompt prose — that is what made the same brief come out spaced two different ways.
 - Email alerts with a card: draft lives only in the card. D (research -> artifact) HELD by owner.
@@ -1719,6 +1789,7 @@ hard-headed. When a canned line is reported as "the agents sound robotic", check
 shared path before touching any prompt: the snapshot layer is not always the source of an agent's words.
 
 ## Active work — 1:1 VOICE latency (journey-speed) — plan + premise CONFIRMED, build next (2026-08-01)
+- **2026-11-12 Polish "New draft" (LIVE, #208, UAT 11/11 run 43268935452, NOT owner-confirmed).** Owner had a finished 20-version draft and no way to start over. New draft (Draft header, next to Clear) empties draft + polished text + versions + direction/changes; Undo for 10s via toast; disabled while a polish is in flight. Clear unchanged (draft box only). Browser check `polishNewDraft` in polish-checks.mjs.
 User complaint: "the delay for my convo with Flex to SPEAK takes way too long, much longer than journey."
 It's a VOICE latency ask (not text). Today's 1:1 voice is SLOW because Realtime is ears-only
 (`create_response:false`, remote track muted) → transcript → full Responses turn (5–10s) → 2500ms poll
@@ -3951,3 +4022,26 @@ here as fact three times before being checked.)
 - Trinnex tenant refused Huddle's Graph app; owner's own Power Automate (CDM Smith dev env) publishes snapshots to von.ellis@enterpriseds.io OneDrive `/automation/email/emails.json` + `/automation/appointments/appointments.json`. Huddle's app key (Files.ReadWrite.All) reads them (proved, run 42436209509). dev@'s OneDrive does NOT have them.
 - Feed records: email `from` is a STRING, headers `[{name,value}]` (68), `body` string + `isHtml`; no inferenceClassification. Appointments: `startWithTimeZone`/`endWithTimeZone`, `location`/`organizer` strings.
 - Feed ids are `feed:<mailbox>:<original id>` — never pass one to Graph. Config = server-only HUDDLE_ONEDRIVE_FEEDS (deploy secret). Repo is PUBLIC: never commit tenant/flow/calendar ids or the cdmsmith login.
+
+- 2026-11-13 ACT:correspondence-checklist (IN PROGRESS, unmerged, nothing live): real OneDrive files read (counts only):
+  Teams file is /automation/Teams Chats/teams-chats.jsonl (source "teams", capturedAt, synthetic:false from Nov 13);
+  sent.json exists but sentDateTime null on 29/29; emails.json last written Nov 11 14:02 UTC. Verifier loop 3 = FIX
+  FIRST; D1-D5/M1/M2 fixed (aa0d6ade), D6 in progress, loop 4 verifier next. Preview + open-vs-replied report go to
+  the owner's OneDrive only (proposals-preview.yml) -- never print item text in this public repo's logs.
+- 2026-11-14 correspondence redesign (branch claude_task-proposals, NOT live): "needs you" is decided by an AI
+  conversation JUDGE (lib/correspondence/needs-you.ts) -- code computes facts only (thread, OWNER/OTHER speakers,
+  To/CC position, calendar/bulk header stamps, settled-by-owner-reply), the model (EXTRACT_MODEL gpt-5.6-luna) judges
+  meaning; its ask quote must be verbatim in the latest OTHER message. Owner rejected keyword capture. Report is
+  EMAIL ONLY. Meeting action items only via the triage ping (Mine / For someone / Skip). Iris's live alert screen
+  (inbound-email.ts) is pinned unchanged.
+  UPDATE 2026-11-13 ~23:00 UTC: loop-4 repair pass DONE at claude_task-proposals 03cabacc (12 items; implementer
+  reports all suites green, 33 mutations FIRED) -- CLAIMED, NOT yet independently verified. Verifier LOOP 5 running
+  (report -> branch claude_verify-correspondence-proposals-5, docs/qc-evidence/VERIFY-correspondence-proposals-5.md).
+  Merge adds nullable chat.email_replies.feed_pending at bootstrap (live DDL, additive). Files: emails.json + sent.json
+  complete:true; Teams still broken -- re-run at 22:19 UTC wrote 59 new concat(' text lines (108-166). Nothing live.
+  Teams FIXED 23:13 UTC: 166/166 parse, 626 msgs to Nov 13 19:39 UTC (Nov 9-11 duplicated by the re-run; dedup
+  on chatId+message.id handles it). Lines now carry ownerUserId (owner's Teams id -- never print/commit it).
+  Owner decisions 23:30 UTC: 3 live work-email changes APPROVED; complete:false stays refused (no warn-and-use) but
+  is URGENT -> bell + Iris chat (dm-iris-chase, push) + self-email, once per incident (feed-staleness 'incomplete'
+  state reads chat.external_feed_state.last_status; email/sent only). Container restarted 3x in ~30 min and killed
+  verifier loop 5 twice -- commit+push per step.

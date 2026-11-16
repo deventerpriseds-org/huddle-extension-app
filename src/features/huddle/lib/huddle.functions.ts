@@ -3,8 +3,10 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
+import { agentBudgetMs, turnDeadlineMs } from "./turn-deadline";
 import { joinOpenerAndBlock } from "./chat-format";
 import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
+import { sanitizeChecklistPayload } from "./proposals/proposals";
 // The two in-chat widget payloads ride back on a reply exactly as `checklist` does, so they are
 // declared alongside it at every DTO site below. Type-only import: `widgets.server` is server code,
 // and the reply DTOs are shared with the client bundle.
@@ -150,6 +152,7 @@ import {
 } from "./email/email-reply-ask";
 import { GENERIC_SUPPORT_NOTE } from "./agents/domain-roles";
 import { textWithStreamContext, streamContextInstructionBlock } from "./stream-context";
+import { messageDeepLink } from "./attention/focus";
 import {
   assignCreatedJourneyTasks,
   isOneToOne,
@@ -323,6 +326,15 @@ const Input = z.object({
     .optional(),
   // A tab-switch button attached to the TARGET agent's reply (the priority check: "Open Priorities").
   // Attached from the payload, like emailReplyRef, so it is there whatever the model does.
+  // A CODE-BUILT checklist attached to the TARGET agent's reply, like navLink: the evening task-proposal
+  // posting (lib/proposals, AC-correspondence-checklist 5.16) carries every open proposal here so the
+  // widget is there whatever the model writes. Re-validated by sanitizeChecklistPayload at attach time.
+  checklist: z
+    .object({
+      title: z.string().max(120),
+      rows: z.array(z.record(z.string(), z.unknown())).max(500),
+    })
+    .optional(),
   navLink: z
     .object({
       view: z.enum(["priorities", "schedule", "board", "artifacts"]),
@@ -401,7 +413,7 @@ function effectiveModelPolicy(
 // all agents. (Lane ownership / handoffs are already shared, generated dynamically
 // by buildRoster from agents.ts.)
 const HOUSE_STYLE =
-  "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers, and no long bullet dumps unless the user explicitly asks for a list or a detailed breakdown. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
+  "\n\nFormat every reply in the Huddle house style: plain prose in sentence case — no emoji, no markdown headings or bolded section headers. When your reply contains a list of three or more items (times, tasks, steps, options, people), put each item on its own line starting \"• \" — never run a list together in one sentence with commas or semicolons (owner, 2026-11-08: a run-on schedule sentence \"is not clean formatting and is worse\"). Keep the words around the list short; do not pad a two-item answer into bullets. Do not prefix your reply with your own name or a bracketed label; the UI already shows who you are. Keep it to 1–3 short sentences unless the user asks for detail." +
   ' Never claim an action was actually carried out — sent, emailed, scheduled, booked, created, updated, cancelled, or completed — unless you called a tool THIS turn that performed it and it returned success. If you only drafted, proposed, or planned something, say exactly that; never state it "has been sent" or "is done" when it has not. Email specifically: text you write in the chat is "draft text" — only say you "saved a draft to your inbox" if you called the create_email_draft tool and it returned success, and only say an email was "sent" if send_email returned success.' +
   ' Tool results are ground truth: if a tool result contains an "error" field or otherwise reports failure, the action did NOT happen — tell the user plainly that it didn\'t work (one short sentence) and do NOT claim it succeeded, is scheduled, or will happen. Never paper over a failed tool with a confident success message.' +
   ' Be precise about QUANTITY: when you report how many of something you did — tasks created, emails sent, items scheduled, reminders set — state the EXACT number the tool result gives you (e.g. its `created` count), not the number requested. If you were asked for two and the tool created one, say you created one and that the other didn\'t go through (or was already there); never round up to "both" or "all of them" unless the tool\'s own count confirms it.' +
@@ -433,8 +445,8 @@ const OPERATING_CONTRACT =
   "saving a note or artifact — is reversible and expected: it is NOT the 'irreversible/external/financial' that " +
   "requires asking first, so just do it and report it. Only genuinely OUTBOUND actions (sending a message, a " +
   "purchase or moving money, placing a call, a deletion) need that confirmation." +
-  " FORM: in chat, deliver all of this as tight, high-signal prose sized to the question — not headings or " +
-  "long lists. When you produce a document via create_artifact, give it the FULL structure: an executive " +
+  " FORM: in chat, deliver all of this as tight, high-signal writing sized to the question — no headings; " +
+  "a list of three or more items goes one per line as \"• \" bullets (never one run-on sentence). When you produce a document via create_artifact, give it the FULL structure: an executive " +
   "conclusion, key findings with their evidence, analysis, prioritized recommendations (with owner/timing/" +
   "risk), risks & assumptions, and the sources you used." +
   " Documents & links: when you save work with create_artifact the app renders it as a clickable chip on " +
@@ -767,8 +779,13 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // and stop THIS execution (a fresh runner execution continues the turn). Separate from — and below
   // — the synchronous path's 36s deadline so a chunk lands comfortably under the hosting ceiling.
   const CHUNK_BUDGET_MS = 30_000;
-  const TURN_DEADLINE_MS = 36_000;
-  const deadlineMs = chunked ? CHUNK_BUDGET_MS : TURN_DEADLINE_MS;
+  // Sync turns get 36s; a ceremony BARGE gets 25s so its answer always lands inside the client's 30s
+  // barge timer (MeetingBar.tsx). WHY + evidence: turn-deadline.ts header.
+  const deadlineMs = turnDeadlineMs({
+    chunked,
+    chunkBudgetMs: CHUNK_BUDGET_MS,
+    ceremonyBarge: !!data.ceremonyBarge,
+  });
   // Runaway guard: cap the number of continuation executions. `chunks` counts boundary saves (bumped
   // by saveTurnChunk, NOT the mid-chunk streaming writes), so this is the execution count so far.
   const MAX_CHUNKS = 6;
@@ -3976,8 +3993,12 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           emailTools.push(SEARCH_EMAIL_TOOL, READ_EMAIL_TOOL);
         }
 
-        const { PRIORITIZE_TOOL, CHECKLIST_TOOL, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
+        const { PRIORITIZE_TOOL, checklistTool, PRIORITIES_WIDGET_TOOL, SCHEDULE_WIDGET_TOOL, FOCUS_TOOL } =
           await import("./tasks/tools");
+        // build_checklist offers `proposals` only while task proposals are switched on (verifier loop 9, claim 4).
+        const proposalsOn = await import("./proposals/proposals.server")
+          .then((m) => m.proposalsConfig() !== null)
+          .catch(() => false);
         // The scrum master alone gets the backlog-grooming tool (Jira-style triage/assign).
         const groomTools = ownsGrooming ? [(await import("./tasks/groom")).GROOM_BACKLOG_TOOL] : [];
         const { SCHEDULE_REMINDER_TOOL } = await import("./tasks/reminders");
@@ -4020,7 +4041,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           CANCEL_REMINDER_TOOL,
           MOVE_REMINDER_TOOL,
           PRIORITIZE_TOOL,
-          CHECKLIST_TOOL,
+          checklistTool(proposalsOn),
           // The two in-chat journey widgets. Ungated, exactly like CHECKLIST_TOOL above: whichever
           // agent is answering is the one the user asked, so gating these to a single agent would
           // make the widget reachable only by talking to that agent.
@@ -4774,7 +4795,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const args = (c.arguments ?? {}) as Record<string, unknown>;
             const out = isPriorities
               ? await dispatchPrioritiesWidget(email, args, tz)
-              : await dispatchScheduleWidget(email, args, tz);
+              : await dispatchScheduleWidget(email, args, tz, { caller: data.caller });
             let ok = true;
             let detail = "";
             try {
@@ -4855,15 +4876,19 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
               c.name === "get_calendar_events"
                 ? { view: "scheduled", ...c.arguments }
                 : c.arguments;
-            const out = await dispatchPrioritize(email, pArgs, tz);
+            const out = await dispatchPrioritize(email, pArgs, tz, { caller: data.caller });
             // Record it like every other tool (this was the ONE tool missing recordToolUse, which is
             // why it never showed in the tool trace / UAT even though it ran).
             let ok = true,
               detail = "";
             try {
-              const p = JSON.parse(out) as { error?: string; view?: string; count?: number };
+              const p = JSON.parse(out) as { error?: string; view?: string; count?: number; date?: string; complete?: boolean; problems?: string[] };
               ok = !p.error;
-              detail = p.error ? String(p.error) : `view=${p.view ?? "?"} count=${p.count ?? "?"}`;
+              // A partial day (a source failed or timed out) is shown in the trace by name (AC-21).
+              detail = p.error
+                ? String(p.error)
+                : `view=${p.view ?? "?"}${p.date ? ` date=${p.date}` : ""} count=${p.count ?? "?"}` +
+                  (p.complete === false ? ` INCOMPLETE: ${(p.problems ?? []).join(" | ").slice(0, 300)}` : "");
             } catch {
               /* keep defaults */
             }
@@ -6286,11 +6311,13 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           const { dispatchPrioritize } = await import("./tasks/tools");
           lovableTools.schedule_and_priorities = tool({
             description:
-              "The user's schedule + tasks: their nightly-planned schedule (scheduled items for a day) plus their open tasks/backlog, ranked by priority, due dates, and staleness. Call it for ANY question about the user's schedule, calendar, agenda, day, meetings, tasks, backlog, priorities, or what's next. Use view 'scheduled' for 'what's on my schedule/calendar/day today'. (Only an explicit 'external/Outlook calendar' ask uses get_calendar_events instead.)",
+              "The user's schedule + tasks: their nightly-planned schedule (scheduled items for a day) plus their open tasks/backlog, ranked by priority, due dates, and staleness. Call it for ANY question about the user's schedule, calendar, agenda, day, meetings, tasks, backlog, priorities, or what's next. Use view 'scheduled' for 'what's on my schedule/calendar/day today' — it returns that ONE day's meetings, classes AND tasks together (pass `date` for another day: 'tomorrow', a weekday name, or yyyy-mm-dd). (Only an explicit 'external/Outlook calendar' ask uses get_external_calendar_events instead.)",
             inputSchema: z.object({
               view: z.enum(["priorities", "backlog", "up_next", "scheduled", "overdue", "blocked"]).optional(),
               category: z.string().optional(),
               limit: z.number().optional(),
+              // Mirrors PRIORITIZE_TOOL.date — the day the 'scheduled' view answers.
+              date: z.string().optional(),
               // Mirrors PRIORITIZE_TOOL. Without it zod strips the key and this backend could never
               // see a BLOCKED task (status-answers.test.ts L1 pins the parity).
               include_blocked: z.boolean().optional(),
@@ -6303,6 +6330,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 ident.email ?? data.caller?.entra_email,
                 args as Record<string, unknown>,
                 ident.timeZone || data.timeZone || "UTC",
+                { caller: data.caller },
               );
             },
           });
@@ -6310,8 +6338,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           // to update; "what's on my calendar" returns the combined schedule, never raw Outlook.
           lovableTools.get_calendar_events = tool({
             description:
-              "The user's calendar / day / schedule — their COMBINED nightly schedule (tasks + calendar), the source of truth. Use for 'what's on my calendar/schedule/agenda/day', meetings, or appointments. (For the RAW external Outlook calendar specifically, use get_external_calendar_events.)",
-            inputSchema: z.object({ category: z.string().optional() }),
+              "The user's calendar / day / schedule — ONE day's meetings, classes and scheduled tasks together, merged and in time order, the source of truth. Use for 'what's on my calendar/schedule/agenda/day', meetings, or appointments. Pass `date` for another day ('tomorrow', a weekday name, or yyyy-mm-dd); omit it for today. (For the RAW external Outlook calendar specifically, use get_external_calendar_events.)",
+            inputSchema: z.object({ category: z.string().optional(), date: z.string().optional() }),
             execute: async (args) => {
               const ident = await (
                 await import("./journey/identity")
@@ -6320,6 +6348,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
                 ident.email ?? data.caller?.entra_email,
                 { view: "scheduled", ...(args as Record<string, unknown>) },
                 ident.timeZone || data.timeZone || "UTC",
+                { caller: data.caller },
               );
             },
           });
@@ -6363,14 +6392,15 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // tools array: CHECKLIST_SYSTEM_HINT is appended to BOTH backends' instructions, so omitting
         // it here told this backend to call a tool it was never offered.
         {
-          const { dispatchBuildChecklist } = await import("./tasks/tools");
+          const { dispatchBuildChecklist, lovableChecklistSchema } = await import("./tasks/tools");
+          const lovableProposalsOn = await import("./proposals/proposals.server")
+            .then((m) => m.proposalsConfig() !== null)
+            .catch(() => false);
           lovableTools.build_checklist = tool({
             description:
               "Render an INTERACTIVE CHECKLIST of the user's existing tasks in the chat (tick-boxes plus a per-row Doing/Backlog/parking-lot control). ONLY when the user EXPLICITLY asks for a checklist — an ordinary 'what are my tasks' question wants a prose answer from schedule_and_priorities instead. Call schedule_and_priorities first and pass ITS task ids; never invent one.",
-            inputSchema: z.object({
-              title: z.string(),
-              task_ids: z.array(z.string()),
-            }),
+            // Same gate as the OpenAI tool: `proposals` is offered only while task proposals are switched on.
+            inputSchema: lovableChecklistSchema(z, lovableProposalsOn),
             execute: async (args) => {
               // Same per-turn ledger claim as the OpenAI path: in a group turn two responders would
               // otherwise each render their own widget over the same tasks.
@@ -6432,7 +6462,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             const tz = ident.timeZone || data.timeZone || "UTC";
             const out = isPriorities
               ? await dispatchPrioritiesWidget(email, args, tz)
-              : await dispatchScheduleWidget(email, args, tz);
+              : await dispatchScheduleWidget(email, args, tz, { caller: data.caller });
             let ok = true;
             let detail = "";
             try {
@@ -7238,19 +7268,10 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         const parsed = JSON.parse(checklistToolUse.detail as string) as { checklist?: unknown };
         const c = parsed.checklist as ChecklistPayload | undefined;
         if (c && typeof c.title === "string" && Array.isArray(c.rows) && c.rows.length) {
-          replyChecklist = {
-            title: c.title,
-            rows: c.rows
-              .filter((row) => row && typeof row.taskId === "string" && typeof row.title === "string")
-              .map((row) => ({
-                taskId: row.taskId,
-                title: row.title,
-                status: typeof row.status === "string" ? row.status : "BACKLOG",
-                tags: Array.isArray(row.tags) ? row.tags.filter((t): t is string => typeof t === "string") : [],
-              })),
-            ...(typeof c.more === "number" && c.more > 0 ? { more: c.more } : {}),
-          };
-          if (!replyChecklist.rows.length) replyChecklist = undefined;
+          // Field-by-field, as before, now in ONE pure function shared with the payload path below: a row
+          // with no `kind` maps exactly as it always did; a proposal row (kind "proposal", prop- id) keeps
+          // its display detail (AC-correspondence-checklist 5.1/5.2). No rows left -> no widget.
+          replyChecklist = sanitizeChecklistPayload(c) as ChecklistPayload | undefined;
         } else {
           console.warn("[checklist] build_checklist returned an unexpected shape; no widget rendered");
         }
@@ -7314,7 +7335,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       confirmAsk: replyConfirmAsk,
       overrideAsk: replyOverrideAsk,
       emailReply: replyEmailReply,
-      checklist: replyChecklist,
+      // A payload-carried checklist (the evening task proposals, AC-5.16) rides on the TARGET agent's reply
+      // exactly like navLink, so it is there whatever the model writes; its own tool call wins if it made one.
+      checklist:
+        replyChecklist ??
+        (nextId === data.targetAgentId ? (sanitizeChecklistPayload(data.checklist) as ChecklistPayload | undefined) : undefined),
       priorities: replyPriorities,
       schedule: replySchedule,
       navLink: data.navLink && nextId === data.targetAgentId ? data.navLink : undefined,
@@ -7454,7 +7479,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   // Per-agent hard timeout. After parallelization a group turn's wall-time is
   // primary + max(wave agent); OpenAI per-call latency is high-variance, so one stalled agent can
   // still drag a wave to the deadline. Bound each agent by the time REMAINING to `deadlineMs` (the
-  // 36s sync-path deadline OR the 30s per-chunk budget). NOTE: this races the response only; a
+  // 36s sync-path deadline, the 25s ceremony-barge deadline, OR the 30s per-chunk budget). NOTE: this races the response only; a
   // truly abandoned call's late tool side-effects aren't cancelled here (rare). In CHUNKED mode a
   // higher floor keeps a late-in-chunk agent from getting a near-zero bound that guarantees a
   // timeout-drop — the pre-wave budget gate re-queues agents there's no room for, so anything that
@@ -7469,7 +7494,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // (nearly) the whole hosting request instead of the shared chunk/turn slice. This is what lets a
     // slow high-effort (Sol) 1:1 reply finish instead of being cut; if it STILL overruns, the streamed
     // partial is already persisted and the durable turn continues in a fresh execution.
-    const budgetMs = data.scope === "one-to-one" ? 40_000 : deadlineMs;
+    const budgetMs = agentBudgetMs({ scope: data.scope, ceremonyBarge: !!data.ceremonyBarge, deadlineMs });
     const remaining = Math.max(floor, budgetMs - (Date.now() - turnStartMs));
     // Tied to the timeout below: when the deadline fires we don't just stop WAITING on the agent's
     // call, we actually tell it to stop. Without this, an "abandoned" attempt keeps running in the
@@ -7637,6 +7662,20 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   // front of the owner. Owner, 2026-10-16: "There is no scenario or excuse for priority message not being
   // produced". The target agent's reply gets the button wherever it was built (normal, hardReply); if the
   // model produced nothing at all (timeout, empty completion), a short deterministic reply carries it.
+  // A turn whose payload carries a checklist (the evening task proposals) ends with that checklist under
+  // the target agent's reply even when the model produced nothing (timeout, empty completion).
+  const ensureChecklistDelivered = () => {
+    const c = sanitizeChecklistPayload(data.checklist) as ChecklistPayload | undefined;
+    const target = data.targetAgentId;
+    if (!c || !target) return;
+    const i = replies.findIndex((r) => r.agentId === target);
+    if (i >= 0) {
+      if (!replies[i].checklist) replies[i] = { ...replies[i], checklist: c };
+      return;
+    }
+    replies.push({ agentId: target, text: "Hello Sir, here is what's waiting for your review.", checklist: c });
+  };
+
   const ensureNavLinkDelivered = () => {
     const link = data.navLink;
     const target = data.targetAgentId;
@@ -7932,6 +7971,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     ensureNotSilentOnRealWork();
     ensureAppendBlockDelivered();
     ensureNavLinkDelivered();
+    ensureChecklistDelivered();
     await ensureProduceOfferDelivered();
     try {
       await turnStore.saveTurnChunk(turnId, presentedReplies(), null, true, finalResult());
@@ -7946,6 +7986,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
   ensureNotSilentOnRealWork();
   ensureAppendBlockDelivered();
   ensureNavLinkDelivered();
+  ensureChecklistDelivered();
   await ensureProduceOfferDelivered();
   persistResearchedMemory();
   await advanceLiveConfirmedTasks(); // F3
@@ -8444,6 +8485,10 @@ async function executeClaimedTurn(record: {
           // fcmData.deepLink; the Android bridge loads baseUrl + deepLink, so in the Huddle app this
           // opens `?huddle=<id>` (the client reads it and switches to that huddle). Harmless elsewhere.
           const huddleId = String((record.payload as { huddleId?: string })?.huddleId ?? "");
+          // A new-email alert carries its reply card's id: the tap lands ON the card (owner 2026-11-12).
+          const focusEmailId = String(
+            (record.payload as { emailReplyRef?: { emailId?: string } })?.emailReplyRef?.emailId ?? "",
+          );
           await invokeJourneyTool({
             toolName: "send_push",
             args: {
@@ -8456,7 +8501,7 @@ async function executeClaimedTurn(record: {
               app: "huddle",
               data: {
                 ...(huddleId
-                  ? { deepLink: `/?huddle=${huddleId}`, source: "huddle-message", huddleId }
+                  ? { deepLink: messageDeepLink(huddleId, focusEmailId), source: "huddle-message", huddleId }
                   : {}),
                 // UNIQUE per turn. The Android bridge identifies a notification by its `tag`
                 // (`notify(tag, 0, …)`) and journey defaults an untagged push to the constant `'fcm'`,

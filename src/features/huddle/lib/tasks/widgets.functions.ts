@@ -86,9 +86,23 @@ export const getScheduleWidget = createServerFn({ method: "POST" })
       const timeZone = safeTimeZone(await resolveTimeZone(data.caller, data.timeZone));
       if (!email) return empty(false, timeZone, "Could not resolve your account.");
       const { getBoardTasks } = await import("./tasks.server");
-      const rows = await getBoardTasks(email);
-      const sections = buildScheduleSections(rows, timeZone, Date.now());
-      return { ok: true, timeZone, ...sections };
+      const ds = await import("./day-schedule.server");
+      const { localDate } = await import("./schedule-brief.server");
+      const nowMs = Date.now();
+      // Meetings + classes are read alongside the tasks (2026-11-10: the tab showed tasks only, so a
+      // day of 8 meetings read "Nothing scheduled for today"). The calendar read never throws.
+      // A failed task read must not hide meetings that were read fine (verifier loop 1 D3): the tab
+      // shows the read error AND the calendar rows, with "couldn't read your task list" in the problems.
+      const [rowsR, cal] = await Promise.all([
+        getBoardTasks(email).then(
+          (rows) => ({ rows, error: undefined as string | undefined }),
+          (err) => ({ rows: [] as Awaited<ReturnType<typeof getBoardTasks>>, error: err instanceof Error ? err.message : String(err) }),
+        ),
+        ds.readTodayCalendar(localDate(nowMs, timeZone), timeZone, data.caller, email),
+      ]);
+      const sections = buildScheduleSections(rowsR.rows, timeZone, nowMs);
+      const today = ds.composeTodayItems({ todayKey: sections.todayKey, tz: timeZone, cal, todaySchedule: sections.todaySchedule, tasksError: rowsR.error });
+      return { ok: !rowsR.error, ...(rowsR.error ? { error: rowsR.error } : {}), timeZone, ...sections, ...today };
     } catch (err) {
       return empty(false, data.timeZone ?? "UTC", err instanceof Error ? err.message : String(err));
     }

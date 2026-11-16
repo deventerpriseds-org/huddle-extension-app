@@ -1,0 +1,685 @@
+<!--
+WHAT:          Running implementation log for AC section 5: task proposals as a new row kind in the EXISTING
+               chat checklist (extraction from email / Teams / Fireflies, a server-side proposal store,
+               Approve / Edit / Mark done / Dismiss, delivery in Iris's 1:1).
+WHY:           Owner handoff "Huddle Email and Teams Daily Processing" (2026-11-12) + AC
+               docs/ac/AC-correspondence-checklist.md section 5 (branch claude_ac-correspondence-checklist).
+               Tier 1: it admits model output (extracted to-dos) into stored claims. Written as the work lands
+               so a killed session leaves a trail.
+SUPERSEDES:    nothing
+SUPERSEDED-BY: nothing -- current
+EVIDENCE:      branch claude_task-proposals; scripts/task-proposals.test.ts; scripts/task-proposals-sql.test.ts
+-->
+
+# IMPL: task proposals (AC section 5)
+
+Base: `origin/claude_correspondence-ingest` ef86de83 (the data layer; not edited here, only imported).
+Branch: `claude_task-proposals`. Nothing is enabled: everything is gated on
+`HUDDLE_ONEDRIVE_FEEDS.correspondence.proposals` (the data layer's flag), which defaults OFF. No live DB,
+OneDrive, journey, workflow or deploy was touched.
+
+## Owner decisions (binding) and the safe defaults chosen for the open questions
+
+| Question | Decision | Source |
+|---|---|---|
+| OQ-7 where/when | Posted in IRIS's 1:1 (`dm-iris-chase`) after the 6pm processing pass AND on request ("show my proposed tasks"). No bell item for proposals. | owner |
+| OQ-7 re-post | Each posting shows ALL open proposals, not only new ones. | default (reversible) |
+| OQ-8 "Mark done" | Closes the proposal (`completed`) and creates NO task. | default (reversible) |
+| OQ-9 cross-source | The same to-do (normalized title) from two sources is ONE proposal keeping both source refs. | default (reversible) |
+
+## Step log
+
+### Step 1 -- pure core (AC-5.1, 5.2, 5.18-5.21 validator, OQ-7 timing)
+
+- `src/features/huddle/lib/proposals/proposals.ts` (new, dependency-light): source text from a ledger
+  `SourceItem` (email reuses `screenMessage` in "people" mode + `newTextOnly`; Teams skips app senders and
+  the owner's own messages; transcripts read Fireflies' action items + overview only), the strict JSON
+  schema + instructions for extraction, THE VALIDATOR `validateCandidates`, due-date resolution relative to
+  the SOURCE's time in the owner's zone, `prop-` ids, `proposalChecklistRow`, `sanitizeChecklistPayload`
+  (the reply-assembly's field-by-field rule, extended for the new kind), and evening-delivery timing.
+- Validator rules (model output -> stored claim): evidence must be a verbatim span of the source's NEW
+  text (only whitespace collapse and typographic quote/dash straightening are forgiven; case-exact), 8-400
+  chars; the task must share a content word with its evidence (blocks a real quote glued to an invented
+  task); assignee kept only when the span names that person (pronouns -> null); due words kept only when
+  they are in the span, and a date only when they resolve (`next Friday`, `next week`, `soon` -> null);
+  in-batch duplicates and anything past 8 per source dropped. Nothing is repaired.
+- `scripts/task-proposals.test.ts` sections A-E incl. the spelling table S-P1..S-P18: **69 passed, 0 failed**.
+
+### Step 2 -- proposal store in Azure PG (AC-5.4, 5.5, 5.8, 5.11-5.13, 5.21, OQ-9)
+
+- `lib/proposals/proposals-store.server.ts` (new): `chat.task_proposals` (id CHECK `prop-%`, state CHECK,
+  current title + original title + norm title, verbatim evidence, assignee/due only as extracted, source refs
+  as jsonb, journey `task_id`, `approve_lease_until`) with a PARTIAL UNIQUE index on (owner, norm_title)
+  WHERE state='proposed' (one active proposal per to-do), and `chat.task_proposal_refs` PK (owner, source,
+  source_item_id, norm_title) = the dedup memory across every state. Shared pool, lazy idempotent bootstrap.
+- upsert: seen (ref exists, any state) -> nothing; same to-do active from another source -> attach ref;
+  else create. Unique-index races re-evaluate (max 3 rounds).
+- Approve = compare-and-set LEASE (not a state flip), so a killed approve leaves the row `proposed` and
+  claimable again after the lease, and a retry then links to the task journey already created (AC-5.10).
+  Dismiss / Mark done / Edit refuse while a lease is held, so Approve and Dismiss can't both win.
+- `bun scripts/task-proposals-sql.test.ts` (real PostgreSQL 16): **41 passed, 0 failed** (first run 39/2:
+  jsonb key order in the returned refs -- fixed by rebuilding refs in a fixed shape -- and a test regex
+  that matched `due_text`).
+
+### Step 3 -- engine: processor, transcripts, owner actions, delivery (AC-5.3, 5.7-5.16, 5.18-5.22, 3.3)
+
+- `lib/proposals/engine.ts` (new, I/O injected): `proposeFromSource` (extract -> validate -> skip open board
+  titles -> store), `proposalsProcessor` (the data layer's `ItemProcessor` seam, name "proposals"; a failed
+  extraction throws the code `proposals:extract_failed` so the ledger marks it failed_retryable, never
+  processed), `runTranscriptProposals` (Fireflies meetings the minutes flow already FINISHED, observed into
+  the SAME ledger as source `transcript`, keyed by meeting_id; read-only), `approveProposal` (CAS lease ->
+  `screenCapabilityMetaTask` -> `screenRawJourneyCreate` against the owner's open titles -> the existing
+  journey create; a duplicate links to the open task), `decideProposal`, `editProposal`,
+  `proposalChecklistResult` (build_checklist proposals mode), `deliverEveningProposals` (ONE durable turn
+  per owner per local weekday, in `dm-iris-chase`, journey disabled, payload carries every open proposal).
+- `scripts/task-proposals.test.ts` sections G-J: the processor runs through the data layer's REAL
+  `runIngestPass` against its dummy fixtures (adapter -> ledger -> proposals, AC-7.1). **123 passed, 0
+  failed**. `tsc --noEmit -p .` clean (node_modules symlinked from the main checkout, untracked).
+
+### Merge -- data layer finished (coordinator, 2026-11-12)
+
+Merged `origin/claude_correspondence-ingest` 5c0b4593 (merge commit 714e7aa6, no conflicts). After merge:
+task-proposals 123/0, correspondence-ingest 148/0, task-proposals-sql 41/0. The seam change (optional
+`batch` on the processor context) needs nothing from proposals.
+
+### Step 4 -- server binding + wiring (AC-5.7, 5.15, 5.16, 5.22, 6.1/6.3)
+
+- `lib/proposals/proposals.server.ts` (new): `proposalsConfig()` = OFF unless
+  `correspondence.proposals === true`; extraction through the EXISTING strict-JSON path `callOpenAIRouter`
+  (Responses + json_schema strict) on the `gpt-5.6-luna` tier the minutes flow uses, 20 s bound;
+  open titles via `loadOpenTaskTitles`; Approve creates through `invokeJourneyTool quick_create_task` (the
+  one journey chokepoint, as the voice/text create paths do) and reads the journey id from its result;
+  transcripts via the minutes store's `listRecentMeetings` (finished meetings only, 7 days) + Fireflies
+  `fetchTranscript` (read-only); the evening turn via `enqueueTurn` + `runTurnById` (inbound-email shape).
+  Optional `correspondence.proposalsDeliverAt` ("HH:MM", default 18:30 ET).
+- `lib/proposals/proposals.functions.ts` (new): `getProposalStatesFn` (ONE request for every proposal row of
+  a mounted checklist) and `actOnProposalFn` (approve/complete/dismiss/edit). Proposal actions never touch
+  `updateBoardTask` (AC-5.3).
+- Edits outside lib/proposals, each additive:
+  - `lib/correspondence/ingest.server.ts` (data layer file; its header names `processorsForPass` as where
+    proposals plug in): appends the proposals processor, and runs processors when `bell || proposals`.
+    `activeProcessors` still runs each only under its own flag.
+  - `lib/tasks/scheduler.server.ts`: `runProposalsPass()` started alongside Fireflies/ingest, awaited in
+    both return paths. No route file touched (G7).
+  - `lib/fireflies/fireflies.server.ts`: `fetchTranscript` gains `export` (one word; behaviour unchanged;
+    webhook, `saveTranscript`, `TRANSCRIPT_FOLDER` and minutes settings untouched -- AC-6.5).
+  - `lib/tasks/tools.ts`: `build_checklist` gets a `proposals` boolean; the dispatcher delegates to
+    `proposalChecklistForUser` (not_enabled when OFF). The parameter description is always visible to the
+    model; it is inert when OFF.
+  - `lib/huddle.functions.ts`: the reply-assembly's inline row mapping now calls the shared pure
+    `sanitizeChecklistPayload` (byte-identical output for kind-less rows, proven in test section D); the
+    turn Input gains an optional `checklist` (bounded: 500 rows) attached to the TARGET agent's reply like
+    `navLink`, with `ensureChecklistDelivered` beside `ensureNavLinkDelivered`; the Lovable
+    `build_checklist` schema accepts `proposals`.
+- tsc clean; task-proposals 123/0; correspondence-ingest 148/0; cross-app-turn-gate 92/0.
+
+### Step 5 -- the EXISTING checklist UI gets the proposal row kind (AC-5.1-5.3, 5.6, 5.9, 5.17, 5.24, 8.x)
+
+- `data/seed.ts`: `ChecklistRow` gains optional `kind` ("task" | "proposal"; absent = task, unchanged) and
+  `proposal` (display detail). `store.ts`: `ChecklistRowState` gains optional `title` / `linkedTaskId`.
+- `components/HuddleView.tsx` `ChecklistCard`: stage 2 now reads proposal rows from `getProposalStatesFn`
+  (ONE request for all of them) and task rows -- plus any task an approved proposal became -- from
+  `getBoardTasks` as before; a checklist without proposal rows makes exactly the one read it always made.
+  Rendering: task rows unchanged; an APPROVED proposal renders as an ordinary `ChecklistItem` keyed by its
+  journey id (AC-5.9); every other proposal renders `ProposalChecklistItem`.
+- `components/ProposalChecklistItem.tsx` (new): dashed approve box + Approve / Edit (inline input) / Mark
+  done / Dismiss menu; source, date, due and named owner on a second line; the evidence span as the title's
+  tooltip; decided rows inert and labelled. Same optimistic -> server -> rollback contract and `busy` guard
+  as task rows; actions go to `actOnProposalFn`, never `updateBoardTask`.
+- `lib/stream-context.ts`: proposal rows summarised on their OWN line, "NOT tasks on the board unless
+  approved", each with its state (`1. approved: ...`); a task-only checklist produces the identical line.
+- AC-5.14 (ContextPanel "Needs your approval"): LEFT UNTOUCHED and documented as a separate feature. It
+  lists client-only agent-suggested `Task.suggested` cards (`approveTask` flips a local lane, `skipTask`
+  deletes) and never shows server proposals, so there is ONE place proposals are approved: the chat
+  checklist. Folding that panel into proposals would change an existing flow -> owner thumbs-up first
+  (Huddle hard rule).
+- Tests: task-proposals **131 passed, 0 failed** (sections K stream-context + build_checklist OFF, L
+  hygiene). context-and-confirm ALL PASS. tsc clean.
+
+### Step 6 -- full suite + mutation proofs
+
+Suites on the branch head (after the data-layer merge): task-proposals **131/0**; task-proposals-sql (real
+PG 16) **41/0**; correspondence-ingest **148/0**; correspondence-ledger-sql **50/0**; attention all passed;
+attention-focus all passed; cross-app-turn-gate **92/0**; inbound-email **72/0**; onedrive-feed all passed;
+context-and-confirm ALL PASS; fireflies-queue-sql all passed; fireflies-minutes **64 PASS / 3 FAIL -- the
+same G3/G5/G8 failures recorded on untouched main** (IMPL-correspondence-ingest.md), not caused here.
+`tsc --noEmit -p .` clean.
+
+Mutation proofs (`mutate.sh`, every one exit 0, "FIRED (control EQUIVALENT)"):
+
+| # | Guard (file) | Mutation | Named test that failed |
+|---|---|---|---|
+| M1 | evidence must be verbatim (proposals.ts) | `if (false)` | S-P4 PARAPHRASED evidence |
+| M2 | task must share a word with its evidence | `if (false)` | S-P5 invented task on a real quote |
+| M3 | assignee only when the span names them | `return a` | AC-5.20 assignee NOT named in the span |
+| M4 | due words only when in the span | keep any due_text | AC-5.20 model invents a date not in the span |
+| M5 | "next <weekday>" -> no date | line removed | AC-5.20 'next Friday' is ambiguous |
+| M6 | proposal row must carry a prop- id | line removed | AC-5.2 a 'proposal' row whose id is a task uuid is DROPPED |
+| M7 | owner's own Teams message is not a source | line removed | S-12 owner's own Teams message -> skipped |
+| M8 | to-do already open on the board not proposed (engine.ts) | `if (false)` | AC-5.21 to-do equal to an open board title |
+| M9 | failed extraction throws a code (never `processed`) | `return out` | AC-3.3/3.8 extraction failure throws a short code |
+| M10 | Approve links to an open duplicate | `if (false)` | AC-5.10 title already OPEN on the board |
+| M11 | meta-task guard on Approve | line removed | AC-5.7 create-task-core meta-task guard runs on Approve |
+| M12 | one evening turn per day | line removed | AC-5.16 a second tick the same evening sends nothing twice |
+| M13 | refs "seen" short-circuit (store SQL) | line removed | `FAIL harness` -- CAVEAT: with it gone the refs PRIMARY KEY still refuses the duplicate, so the upsert throws after its 3 retries instead of returning `seen`. Proves the line makes a re-read a clean no-op; duplicates are blocked by the PK either way. |
+| M14 | Approve CAS lease condition (store SQL) | lease clause removed | AC-5.8 two concurrent Approve claims |
+| M15 | proposals on their own stream-context line | `propRows = []` | AC-5.17 proposal rows are on their own line |
+
+## Handoff (what is needed to turn it on -- NOT done here)
+
+- Config: `HUDDLE_ONEDRIVE_FEEDS.correspondence.proposals: true` (needs `ingest: true` for email/Teams
+  sources; transcripts additionally need `FIREFLIES_API_KEY` and `minutesOwner()` inside the owner's scope).
+  Optional `correspondence.proposalsDeliverAt: "HH:MM"` (owner zone, default 18:30, weekdays, until 22:00;
+  waits up to 60 min for still-due extraction work).
+- Migration: none to run; `chat.task_proposals` and `chat.task_proposal_refs` bootstrap lazily (idempotent).
+- Model: `gpt-5.6-luna` via `callOpenAIRouter`; real extraction quality is UNVERIFIED (offline tests use a
+  stub model; the validator is what guarantees nothing ungrounded is stored).
+- Not verified live (forbidden this task): the journey create on Approve, the durable Iris turn, the UI
+  ([UI] rows of AC-5.3/5.6/5.9/5.24 timing), and the [DB] checks.
+- Not built here: the per-owner Settings toggle (AC-6.2) and the health panel (AC-6.6) -- the data layer
+  scoped those to a later pass.
+
+## Red-team fix pass (2026-11-12)
+
+Fixes for `docs/qc-evidence/REDTEAM-correspondence-proposals.md` (F1-F19, S1/S2/S4/S5). Repro suite:
+`bun scripts/redteam-correspondence.test.ts` (no red-team assertion was weakened or removed). Rows are
+appended as each fix lands.
+
+| finding | change | file | red-team test now passing |
+|---|---|---|---|
+| F1 | `teams` is OPT-IN: only an object (or literal `true` = default path) enables it; `false`, `"off"`, 0, arrays, null, absent = OFF (`optInFile`). email/appointments keep main's default-on `file()` untouched. | `external-feeds/onedrive-feed.ts` `optInFile` / `teamsFile` | RT-22, RT-22b, RT-22d |
+| F2 | `sent` goes through the same `optInFile`. | `onedrive-feed.ts` parseFeedsConfig | RT-22c |
+| F18 | Synthetic Sent Items: `RE:/Re:/FW:/Fwd:/AW:/TR:/WG:/SV:/RV:` (repeated, `[n]`) stripped before the prefix test (`stripReplyPrefixes`). | `onedrive-feed.ts` mapSentRecords | RT-23 |
+| S1 | `parseUtcMs`: a zone-less ISO date-time is UTC (Sent Items `sentDateTime`, Teams `timestamp`). Main's envelope checks are unchanged. | `onedrive-feed.ts`, `teams-log.ts` | (suspected; no RT test) |
+| F8 | `htmlToText` drops `<head>`, comments, `<script>/<style>`, and any element hidden by inline style (`display:none`, `visibility:hidden`, `font-size:0`, `opacity:0`, `max-height:0`, `mso-hide:all`) or the `hidden` attribute, with its whole subtree (nested same-name tags matched; an unclosed hidden element swallows the rest). | `onedrive-feed.ts` `stripHiddenElements` | RT-13, RT-13b |
+| F19 | One-pass entity decode: numeric (`&#8217;`, `&#x2019;`) and common named entities (`&rsquo;` etc. -> plain quotes, `&nbsp;`, `&mdash;` ...); `&amp;lt;` -> `&lt;` (never double-decoded). | `onedrive-feed.ts` `decodeHtmlEntities` | RT-14, RT-14b |
+| F16 | A Teams message with no sender id -> `fromOwner: null` (can't tell), never `false`. | `teams-log.ts` parseTeamsLog | RT-16, RT-16b |
+| F17 | URLs removed before the ask heuristic in `chatMessageAsks` (any source path), and plain-text Teams bodies get the HTML path's `[link]` rule. | `correspondence/bell.ts`, `teams-log.ts` bodyText | RT-17 |
+| S2 | Owner presence decided PER CHAT (AC-4.6 "for that chat"). Two existing `correspondence-ingest.test.ts` checks encoded the old cross-chat rule and were updated: AC-7.1 charlie row is now `owner_messages` (can't tell, fixture has no owner message in that chat); AC-4.13's owner message moved into the SAME chat (before the ask), so the two-pass settle is still proved with a certain row. Recall cost: a chat where the owner has never posted is listed "can't tell", not counted. | `bell.ts` makeBellProcessor | (suspected) + updated AC-7.1 / AC-4.13 |
+| F9 | `newTextOnly` cuts non-English reply headers (FR `De :`/`Envoyé :`, DE `Von:`/`Gesendet:`, ES `De:`/`Enviado:`, IT, NL, PT, Nordic, PL, RU, TR) -- a From-line still needs a Sent/Date-line within 4 lines --, translated "On ... wrote:" attributions and "Original Message" separators, and a Gmail attribution wrapped over two lines. | `email/inbound-email.ts` newTextOnly | RT-12, RT-12b, RT-12c (RT-12d still passes) |
+| F3 | `validYmd` round-trips every date (ISO, month-day, day-month); an impossible date -> no due date, the to-do kept. `proposeFromSource` isolates each candidate's store write: a failure is counted, the others are still stored, and the item then throws `proposals:store_failed` so the ledger retries (refs make the stored ones `seen`). | `proposals/proposals.ts` resolveDueDate/validYmd; `proposals/engine.ts` proposeFromSource | RT-8, RT-8b; new `F3` checks in task-proposals.test.ts |
+| F4 | `titleGrounding`: every digit-bearing token of the title (amounts, accounts, `Q3`) must be a whole token of the evidence, and a STRICT MAJORITY of the title's content words must be grounded. New reject reason `task_number_not_grounded`. | `proposals.ts` titleGrounding | RT-1 |
+| F5 | Evidence needs >= 15 characters AND >= 4 words (was 8 chars). (20 chars was tried first; it refused the realistic 19-char span "send me the Q3 deck", which the red-team's own RT-7/RT-25 rely on.) | `proposals.ts` EVIDENCE_MIN / EVIDENCE_MIN_WORDS | RT-2 |
+| F6 | Whole-word match with a light suffix strip (`s/es/ed/ied/ing`), no 5-letter prefix stem. | `proposals.ts` lightStem/contentWords | RT-3 |
+| F7 | The stored + displayed evidence is the full enclosing sentence (`enclosingSentence`; falls back to the span if the sentence exceeds 400 chars). A span whose lead-in clause negates the action (`do not / don't / never / no need to / not / shouldn't / must not / won't / cannot / stop / hold off / no longer`) is refused as `evidence_negated`; "don't forget/hesitate to", "not only", "if not" are not negations; the clause is cut at `, ; :` and "but". | `proposals.ts` enclosingSentence/negatesAction | RT-4 |
+| F10 | `due_text` kept only when every word is a date word (weekdays, months, numbers/ordinals, ISO, "by/on/before/until/end of day/..."), <= 8 words. | `proposals.ts` isDateWords | RT-10 |
+| F11 | Month = whole word (full name, 3-letter abbreviation, "sept"); day-month order ("14 November", "3rd of December") added; every date term found, a term right after a negation dropped, earliest remaining wins. | `proposals.ts` resolveDueDate | RT-9, RT-9b, RT-9c |
+| F12 | Assignee only for a capitalized 1-3 word name (not weekday/month/greeting) that is the subject ("Dana will/to/should ..."), addressee ("Dana, ...", "..., Dana?", "@Dana") or hand-off target ("ask Dana to ..."); a requester ("Bob asked me ...") -> null. | `proposals.ts` groundedAssignee | RT-11, RT-11b |
+| F13 | `sanitizeTitle` (NFKC, invisible/Cf chars removed, Cyrillic/Greek look-alikes folded inside mixed-script words only) on every model title; `titleKey` = sanitizeTitle + the UNCHANGED `normalizeTaskTitle`, used for proposal dedup, the on-board check (board titles mapped through it too) and Approve's duplicate screen. `normalizeTaskTitle` itself is not touched. | `proposals.ts` sanitizeTitle/titleKey; `engine.ts` | RT-7, RT-7b, RT-25, RT-25b |
+| F14 | New store read `priorRelated(owners, ref, normTitle)` (rows of ANY state referencing this source item + dismissed rows with this exact key). The engine suppresses a candidate that is a reworded version of a to-do already recorded from the SAME item (`similarTitleKeys`: content-word Jaccard >= 0.6 AND identical number tokens). Store `upsert` is unchanged. | `proposals.ts` ProposalStore/similarTitleKeys; `proposals-store.server.ts` priorRelated; `engine.ts` | RT-24; `F14` over-match negative (Q3 vs Q4 still proposed); SQL checks in task-proposals-sql.test.ts |
+| F15 | **Decision taken (reversible):** a DISMISSED to-do (exact key) is not proposed again from ANY source. Consistent with OQ-9 "one proposal, many source refs". To revert: drop the `dismissed` clause in `proposeFromSource` (engine.ts). The store-level SQL test "AC-5.21 same text from a NEW source item after a dismissal -> a new proposal" still passes because the store contract is unchanged; the suppression is the engine's. | `engine.ts` | RT-24b |
+| S4 | After a successful create, `finishApprove` is retried once; if it still fails the lease is released at once, so the owner's retry re-reads the board and links the task just created (`alreadyOnBoard`) instead of waiting out the 90s lease. | `engine.ts` approveProposal | `S4` checks in task-proposals.test.ts |
+| S5 | `[onedrive-feed] teams state write failed` logs only `pg_<SQLSTATE>` or the error class, never `err.message`. The two older lines in the same file (main code) are unchanged. | `onedrive-feed.server.ts` | (suspected; no RT test) |
+
+Red-team fixture note: `scripts/redteam-correspondence.test.ts` `memStore` gained ONE method, `priorRelated`, an
+in-memory model of the new store contract (same as task-proposals.test.ts's twin). No assertion, input or expected
+value in that file was changed. Without the method RT-24/24b cannot be satisfied by any engine change, because the
+fixture's `upsert` keys on the exact title and has no read of decided rows.
+
+### Fix-pass suite results (head `1abbce6b`, 2026-11-13, isolated worktree)
+
+| suite | runner | result |
+|---|---|---|
+| redteam-correspondence.test.ts | bun | **49 passed, 0 failed** (was 16/33 at `8475140c`) |
+| task-proposals.test.ts | bun | **164 passed, 0 failed** |
+| correspondence-ingest.test.ts | bun | **148 passed, 0 failed** |
+| task-proposals-sql.test.ts | bun, real PostgreSQL 16 (`/usr/lib/postgresql/16`, throwaway initdb) | **45 passed, 0 failed** |
+| correspondence-ledger-sql.test.ts | bun, real PostgreSQL 16 | **50 passed, 0 failed** |
+| onedrive-feed.test.ts | bun | **all passed** (the one "FAIL" grep hit is the section title "I. EDS FAILS, FEED LOADS") |
+| inbound-email.test.ts | bun | **72 passed, 0 failed** |
+| attention.test.ts | tsx@4.19.2 | **15 PASS, 0 FAIL**, rc 0 |
+| attention-focus.test.ts | tsx@4.19.2 | **all passed** (19 PASS) |
+| cross-app-turn-gate.test.ts | bun | **92 passed, 0 failed** |
+| fireflies-minutes.test.ts | bun | 64 PASS / **3 FAIL: G3, G5, G8** -- the same three recorded on untouched main (IMPL-correspondence-ingest.md); not from this branch |
+| `npx tsc --noEmit -p .` | tsc | **clean** (rc 0, no output) |
+
+No production fix was needed in this step. (After the F5 isolating checks below, task-proposals is **166 passed, 0 failed**.)
+
+### Fix-pass mutation proofs (`mutate.sh`, controlled; anchors generated from the live source lines, never typed)
+
+Exit 0 = FIRED with an equivalent comment-only control (the failure is about behaviour, not the file's
+identity). 1 = INERT. 3 = NOT-APPLIED (nothing tested). Every run restored the file to HEAD and re-ran the
+test command clean. Rows are in run order, and every non-0 row is kept.
+
+| guard | file | mutation | test that failed | exit code |
+|---|---|---|---|---|
+| F1 teams opt-in (optInFile) | `external-feeds/onedrive-feed.ts` | `` if (!v \|\| typeof v !== "object" \|\| Array.isArray(v)) return { enabled: false, ... `` -> `` if (false) return { enabled: false, path: fallback }; `` | `` RT-22 `"teams": false` `` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F2 sent opt-in (optInFile) | `external-feeds/onedrive-feed.ts` | `` sent: optInFile(j.sent, SENT_PATH_DEFAULT, file), `` -> `` sent: file(j.sent, SENT_PATH_DEFAULT), `` | `RT-22c` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F8 hidden-HTML strip | `external-feeds/onedrive-feed.ts` | `` const visible = stripHiddenElements( `` -> `` const visible = String( `` | `RT-13` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F19 numeric entity decode | `external-feeds/onedrive-feed.ts` | `` return String.fromCodePoint(cp); `` -> `` return whole; `` | `RT-14` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F18 reply-prefix strip | `external-feeds/onedrive-feed.ts` | `` const next = s.replace(/^\s*(re\|fw\|fwd\|aw\|tr\|wg\|sv\|rv\|antw)(\[\d+\])?\s*:\s*/i, ""); `` -> `` const next = s; `` | `RT-23` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F9 non-English header cut | `email/inbound-email.ts` | `` const HDR_FROM = /^\s*(From\|De\|Von\|Van\|Da\|Od\|...)\s*:\s/i; `` -> `` const HDR_FROM = /^\s*(From)\s*:\s/i; `` | `RT-12` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F16 null sender -> fromOwner null | `external-feeds/teams-log.ts` | `` fromOwner: owners.size && who.id ? owners.has(who.id) : null, `` -> `` fromOwner: owners.size ? owners.has(who.id) : null, `` | `RT-16` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F17 URL strip before ask test | `correspondence/bell.ts` | `` bodyText: m.text.replace(/\b(?:https?:\/\/\|www\.)\S+/gi, "[link]") `` -> `` bodyText: m.text `` | `RT-17` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| S2 per-chat owner presence | `correspondence/bell.ts` | `` const ownerMessagesExported = thread.some((m) => m.fromOwner === true); `` -> `` ... = teams.some(...) `` (the old cross-chat rule) | `AC-7.1 fixture: exactly ONE open row` (correspondence-ingest.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F3 validYmd round-trip | `proposals/proposals.ts` | `` return utcToYmd(ymdToUtc(ymd)) === ymd ? ymd : null; `` -> `` return ymd; `` | `RT-8` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F3 per-row write isolation | `proposals/engine.ts` | `` out.failed++; `` -> `` throw code("proposals:store_failed"); `` | `F3 ...and the OTHER to-do` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F4 number grounding | `proposals/proposals.ts` | `` if (/\d/.test(w) && !evTokens.has(w)) return "task_number_not_grounded"; `` -> `` if (false) return ...; `` | `F4 numbers:` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F4 strict majority | `proposals/proposals.ts` | `` return hit * 2 > tw.length ? "ok" : "task_not_grounded"; `` -> `` return hit > 0 ? "ok" : ...; `` | `F4 majority:` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F5 min evidence words -- BEFORE the isolating checks | `proposals/proposals.ts` | `` evidence.length < EVIDENCE_MIN \|\| words(evidence).length < EVIDENCE_MIN_WORDS `` -> `` evidence.length < EVIDENCE_MIN `` | `F5 size:` (task-proposals.test.ts) | **1** INERT (see notes) |
+| F6 whole-word stem (no 5-letter prefix) | `proposals/proposals.ts` | `` if (/\d/.test(w)) return w; `` -> `` ...; if (w.length > 5) return w.slice(0, 5); `` (main's prefix stem) | `F6 a prefix collision` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F5 min evidence words (>= 4) | `proposals/proposals.ts` | words floor removed (as above) | `F5 size (words)` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F5 min evidence chars (>= 15) | `proposals/proposals.ts` | `` evidence.length < EVIDENCE_MIN \|\| `` removed | `F5 size (chars)` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F7 negation refusal | `proposals/proposals.ts` | `` if (negatesAction(sentence.text, at - sentence.start, evidence, title)) { `` -> `` if (false) { `` | `RT-4` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F10 due_text date-words only | `proposals/proposals.ts` | `` dueRaw && isDateWords(dueRaw) && ... `` -> `` dueRaw && ... `` | `RT-10` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F11 negated date term dropped | `proposals/proposals.ts` | `` terms.filter((t) => !negated(t)) `` -> `` terms.filter((t) => true) `` | `F11 every date term negated` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F12 assignee role -- wrong test named | `proposals/proposals.ts` | `` return roles.some((r) => re(r).test(ev)) ? a : null; `` -> `` return a; `` | `RT-11b` (redteam-correspondence.test.ts) | **1** INERT (see notes) |
+| F12 assignee role required | `proposals/proposals.ts` | same mutation | `F12 a name that is only the RECIPIENT` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F12 requester veto ("Bob asked me") | `proposals/proposals.ts` | `` if (re(...REQUESTER_VERBS...).test(ev)) return null; `` -> `` if (false) return null; `` | `RT-11b` (redteam-correspondence.test.ts) | **1** INERT -- NOT PROVEN (see notes) |
+| F13 sanitizeTitle (NFKC + invisible strip) | `proposals/proposals.ts` | `` String(raw ?? "").normalize("NFKC").replace(INVISIBLE, "") `` -> `` String(raw ?? "") `` | `RT-7` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F13 titleKey uses sanitizeTitle | `proposals/proposals.ts` | `` normalizeTaskTitle(sanitizeTitle(title)) `` -> `` normalizeTaskTitle(title) `` | `F13 titleKey folds` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F14 reworded re-extraction suppressed | `proposals/engine.ts` | `` const reworded = prior.find(...similarTitleKeys...) `` -> `` const reworded = undefined as any; `` | `RT-24` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| F15 dismissed suppressed cross-source | `proposals/engine.ts` | `` const dismissed = prior.find(...) `` -> `` const dismissed = undefined as any; `` | `RT-24b` (redteam-correspondence.test.ts) | **0** FIRED (control EQUIVALENT) |
+| S4 lease release after finishApprove fails | `proposals/engine.ts` | `` await deps.store.releaseApprove(id).catch(() => {}); `` -> `` void 0; `` | `S4 ...and the lease is RELEASED` (task-proposals.test.ts) | **3** NOT-APPLIED (anchor matched 2 places) |
+| S4 lease release after finishApprove fails | `proposals/engine.ts` | `` if (!done) { await deps.store.releaseApprove(id)... `` -> `` if (!done) { void 0; `` (unique 2-line anchor) | `S4 ...and the lease is RELEASED` (task-proposals.test.ts) | **0** FIRED (control EQUIVALENT) |
+
+Notes on the non-0 rows (none of them is a broken guard):
+- **F5 INERT -> split.** The only F5 test ("send the deck") is 3 words AND 13 characters, so each floor
+  masked the other and neither could be proved alone. Two isolating checks were added to
+  `task-proposals.test.ts`: `F5 size (chars)` (4 words, 13 chars) and `F5 size (words)` (22 chars, 2 words).
+  No existing check was changed. Both floors then FIRED.
+- **F12 role mutation INERT against RT-11b.** The wrong test was named: "Bob asked me ..." returns at the
+  requester check before the role check runs. Re-run against `F12 a name that is only the RECIPIENT`: FIRED.
+- **F12 requester veto: INERT, NOT PROVEN.** Removing the line changes no tested answer, because on "Bob asked
+  me ..." / "Bob asked Dana ..." no role pattern matches either. The line IS reachable. Probed directly,
+  `groundedAssignee("Bob", "Ask Bob to send the deck, Bob said he can.")` returns null, where the hand-off role
+  alone would give "Bob". So today it only vetoes inputs where a role did match: a recall loss (no
+  assignee shown, display-only), not a safety gain. Observation only; not changed in this pass.
+- **S4 NOT-APPLIED -> re-run.** The release line appears twice in `engine.ts` (lines 242 and 283). Re-anchored
+  on the unique `if (!done) {` + release block: FIRED.
+
+### Fix-pass existing-behaviour check (what changes on main once merged, LIVE config = no correspondence/teams/sent keys)
+
+Source: `git diff origin/main...HEAD` (39 files; 15 exist on main), every diff read, plus a probe
+(`bun` on the branch functions, inputs below). With the live config, `teams.enabled`, `sent.enabled` and every
+`correspondence.*` flag are false (RT-21c), so the ingest and proposals passes return before any DB or Graph
+call (`runCorrespondenceIngest` / `runProposalsPass` gates read).
+
+| main file | live behaviour changes? | what changes (plain words) |
+|---|---|---|
+| `external-feeds/onedrive-feed.ts` -- **F8** `htmlToText` hidden-element strip | **YES** (work-mailbox feed email only; EDS mail uses Graph's own body, not this function) | Text Outlook hides is no longer read: preheaders (`display:none`), `mso-hide:all` fallbacks, the `hidden` attribute, `<head>`/`<title>`, comments. So Iris's summary of a work email and the "does it ask something" screen no longer see hidden text. **OVER-MATCH FOUND, see below.** |
+| same -- **F19** entity decode | **YES** (work feed email) | `&#8217;`, `&rsquo;`, `&mdash;`, `&#63;` and the like now show as the real characters instead of literal codes; `&amp;lt;` now shows `&lt;` (main decoded it twice, to `<`); a raw non-breaking space becomes a plain space. Note: `&#8217;` becomes a curly apostrophe but `&rsquo;` becomes a plain one. |
+| same -- config parse, Sent/Teams readers, F18, S1 | no | New keys default OFF; email/appointments keep main's default-on rule; `validateEnvelope` email branch unchanged; F18/S1 run only on Sent/Teams paths. |
+| `email/inbound-email.ts` -- **F9** `newTextOnly` | **YES** (both the EDS mailbox watcher and the work feed; the live default screen mode `needs-reply` runs `asksSomething`) | A reply whose quoted history sits under a French/German/Spanish/Italian/Dutch/Portuguese/Nordic/Polish/Russian/Turkish header, a translated "... a écrit :" line, or a Gmail "On ... <addr>" / "wrote:" split over two lines, no longer counts the OLD question as a new ask. So fewer "thanks!" replies get announced as needing a reply. English From:/Sent: behaviour is unchanged. |
+| `onedrive-feed.server.ts` | no | `readFeed` refactored onto `fetchDriveFile`; email/appointments read the same (meta now also selects `id`, explicit GET). Teams/sent readers unused when off. |
+| `email/email-replies.server.ts` | schema only | On first bootstrap after deploy, two nullable columns (`needs_context`, `source_link`) are added to `chat.email_replies` (additive, `IF NOT EXISTS`). Sent-Items settle for feed rows returns null when `sent` is off -> rows skipped, same as main. |
+| `attention/attention.ts`, `attention.functions.ts`, `AttentionBell.tsx` | **YES (visible, small)** | The bell's "What counts" list shows a new **"Teams chats"** checkbox (no rows can appear while off). Saving that list now also stores `-chat` when it is unticked. Badge = known items; with no chat rows that is the same number as main. |
+| `tasks/tools.ts`, `huddle.functions.ts` (Lovable tool schema) | **YES (agent-facing)** | The checklist tool now has a `proposals` option in BOTH tool schemas, which every agent sees. If a model sets it while the feature is off, the tool returns "Task proposals are not switched on". Each turn's prompt also carries a few more tool-schema tokens. |
+| `huddle.functions.ts` checklist sanitize / payload checklist | no | Rows with no `kind` map field-by-field as before (`sanitizeChecklistPayload`). The payload `checklist` is optional and nothing live sends it. |
+| `HuddleView.tsx`, `stream-context.ts`, `seed.ts`, `store.ts` | no | A checklist with no proposal rows makes the same single board read and the same context line. |
+| `tasks/scheduler.server.ts` | no (negligible) | Two dynamic imports per tick, which return at once when off. |
+| `fireflies/fireflies.server.ts` | no | `fetchTranscript` exported; body unchanged. |
+
+**OVER-MATCH in F8 (found by this check, NOT fixed here: it changes live behaviour, so it is a decision).**
+Probe outputs on the branch:
+- `<td style="font-size:0"><div style="font-size:14px">Can you review the deck?</div></td>` -> `""`.
+  Responsive email templates commonly set `font-size:0` on a wrapper to kill inline-block gaps and then set the
+  real size on the children. F8 drops the whole subtree, so a VISIBLE ask disappears. The work-feed screen then
+  sees no ask, and Iris's summary gets an empty body: `bodyText` is `""`, not null, so `bodyPreview` is not used.
+  On main (read from the code: no hidden strip) that text is kept.
+- An unclosed hidden element swallows the rest: `<p>Hello</p><div style="display:none">x<p>Can you call me?</p>`
+  -> `"Hello"`. This is the documented fail-closed choice, but on the live screen it means a real ask is lost
+  on malformed HTML.
+- Smaller F9 over-match: a body whose own lines start `Da: ...` and then `Data: ...` (Italian "from / date")
+  within 4 lines is cut from that point (probe -> `""`). Unlikely in an English-language org.
+The other probes behaved as designed: preheader dropped, `mso-hide:all` dropped, `hidden` attribute dropped,
+`<title>` dropped, FR/DE/Gmail-wrapped replies -> no ask, English From/Sent unchanged.
+
+### F8 over-match fix (commit b7b0c3c5, 2026-11-13)
+The finisher's existing-behaviour check found F8 blanking visible text: `<td style="font-size:0"><div style="font-size:14px">ask</div></td>` -> "" ; and an unclosed hidden element swallowing the rest of the email. Coordinator took the reversible, in-scope fix (option A) without a menu.
+- `font-size:0` is no longer in HIDDEN_STYLE; a font-size:0 element keeps ONLY descendants that set a real size again (`SIZED_STYLE`: non-zero number, size keywords, `initial`; `inherit`/`unset`/`0px` do not count) and their content is re-stripped for nested hidden elements. Its own zero-size text is still dropped.
+- An UNCLOSED hidden element ends where its parent closes (first close tag taking the all-tag depth below zero); with no parent close it still hides the rest (fail closed).
+- display:none / visibility:hidden / opacity:0 / max-height:0 / mso-hide:all / `hidden` unchanged.
+- Tests: 8 new F8b/F8c checks in scripts/task-proposals.test.ts (174/0); redteam 49/0, correspondence-ingest 148/0, onedrive-feed all passed, inbound-email 72/0, tsc clean.
+
+| Mutation (mutate.sh, anchors from files) | Named test | Verdict |
+|---|---|---|
+| font-size:0 element keeps nothing (re-sized descendants dropped) | F8b font-size:0 wrapper with a re-sized child | FIRED (control EQUIVALENT), exit 0 |
+| unclosed element never ends at its parent | F8c an UNCLOSED hidden element ends ... | FIRED (control EQUIVALENT), exit 0 |
+| every descendant counts as re-sized | F8b a font-size:0px / inherit child does NOT re-size | FIRED (control EQUIVALENT), exit 0 |
+
+### Teams adapter: empty messages + capture coverage (commit 3f6bb5fb, 2026-11-13)
+Owner: "ignore empty and system-event records ... the observed Teams listing returned 50 chats, so capture counts
+should be monitored." System events were already skipped (`not_a_message`); dedup by (chatId, id) already existed.
+- New skip `empty`: no readable text after HTML -> text AND no attachment. A file-only message is KEPT (it can be
+  the owner's reply, which is what settles a chat).
+- `captureChats`: distinct chats per capture day (capturedAt/capturedUtc UTC date) over lines that passed the
+  source/synthetic/chatId checks. `captureCoverage()` flags a DROP when the newest capture has under half the
+  previous one's chats (previous >= 10). `teamsParseNote` now leads with totals ("kept M message(s) in C chat(s) from
+  L line(s)", "latest capture <day>: N chat(s)", "COVERAGE DROP: ...") -- counts only.
+- Tests EMPTY-1/2, COVER-1..5 (redteam-correspondence 59/0); all other suites unchanged and green; tsc clean.
+
+| Mutation (mutate.sh) | Named test | Verdict |
+|---|---|---|
+| empty skip removed | EMPTY-1 | FIRED (control EQUIVALENT), exit 0 |
+| attachment exemption removed | EMPTY-2 | FIRED (control EQUIVALENT), exit 0 |
+| drop flag never set | COVER-2 | FIRED (control EQUIVALENT), exit 0 |
+| small-capture floor removed | COVER-5 | FIRED (control EQUIVALENT), exit 0 |
+
+### Verifier loop-3 fix pass
+Source: `docs/qc-evidence/VERIFY-correspondence-proposals-3.md` on `claude_verify-correspondence-3`. Started at head
+`5113e4bf`, isolated worktree. Synthetic `.example` data only. Each defect is committed and pushed on its own.
+
+#### D1 -- hidden-text stripping dropped VISIBLE text (commit 271790ee)
+`src/features/huddle/lib/external-feeds/onedrive-feed.ts`
+- `hasHiddenAttr` (:411): attribute values are blanked before testing, so `hidden` matches only as an attribute NAME
+  (`title="a hidden gem"`, `class="hidden md-show"` no longer hide; bare / `hidden=""` still do).
+- `elementEnd` (:472) rewritten as one walk with a stack of the tags opened inside the element. A close tag for
+  something not open inside it (the parent's `</p>`, `</td>`, `</tr>`, a stray close) ends it just BEFORE that tag;
+  its own close ends it after. `startTagEnds` (:446) adds the browser's implied ends: a `<p>` by the next block start,
+  a cell (or anything in a cell) by the next `<td>`/`<th>`/`<tr>`/section, a row by the next row, `<li>` by `<li>`,
+  `<dt>`/`<dd>` by either, a heading by a heading. A table opened INSIDE the element shields its own parts. Errors
+  lean toward ending early, so possibly-visible text is kept. No close at all -> still the end of the document.
+- `mayResize` (:500): inside a font-size:0 wrapper a child is kept when it has an inline size, ANY class (a `<style>`
+  rule may size it), or is `<font size=...>`.
+- `max-height:0` hides only with `overflow:hidden`/`clip` in the same style (:423).
+- Also V13: `visibility:hidden` alone keeps descendants set `visibility:visible` (:551); any other hiding rule on the
+  same element still wins.
+- Verifier probes after the fix: V1 "Please approve the budget by Friday. Thanks", V2/V3/V5/V6/V7/V13/V19 keep the
+  ask; H7-H10, H13-H15 still hidden; RT-13, F8b, F8c green. H1-H6/H11/H12/H16 (hidden-text KEPT) are unchanged --
+  out of scope for this pass (keeping is the safe direction for this converter).
+- Tests (task-proposals): D1-V1, D1-V19, D1-V2 (x2), D1-V5, D1-V6, D1-V7, D1-V13, plus 6 "D1 neg" checks that
+  certainly-hidden text stays hidden. Suites: task-proposals 188/0, redteam 59/0, ingest 149/0, onedrive-feed all
+  passed, inbound-email 72/0, cross-app-turn-gate 92/0; tsc clean.
+
+| Mutation (mutate.sh, anchors generated by grep from the committed line) | Named test | Verdict |
+|---|---|---|
+| attribute-value blanking removed | D1-V2 attribute VALUE | FIRED (control EQUIVALENT), exit 0 |
+| unmatched close ignored (old same-name scan behaviour) | D1-V1 | FIRED (control EQUIVALENT), exit 0 |
+| next cell/row does not end the element | D1-V19 | FIRED (control EQUIVALENT), exit 0 |
+| class child not treated as re-sized | D1-V6 | FIRED (control EQUIVALENT), exit 0 |
+| `<font size>` not treated as re-sized | D1-V5 | FIRED (control EQUIVALENT), exit 0 |
+| max-height:0 hides without overflow | D1-V7 | FIRED (control EQUIVALENT), exit 0 |
+| visibility:visible descendants dropped | D1-V13 | FIRED (control EQUIVALENT), exit 0 |
+
+#### D2 -- `newTextOnly` cut real English content (commit 35296c11)
+`src/features/huddle/lib/email/inbound-email.ts` (LIVE: EDS main mailbox + work feed, via `asksSomething`)
+- English is main's exact rule again: attribution `^\s*On .+wrote:\s*$` (:97) and header `From:` + `Sent:|Date:`
+  within 4 lines (:77), no space before the colon, exactly as `origin/main`.
+- `HDR_PAIRS` (:77): each From-word pairs only with ITS language's Sent/Date words (en, fr, es, pt, de, nl, it, pl,
+  sv, da/no, fi, hu, ru, tr). "From: Marketing" + "Data: ..." (N4) is no longer a header block. The unexplained
+  `Fta` From-word was dropped (no language); no Sent/Date word was added.
+- `ATTRIBUTIONS` (:97): each foreign opener needs its own verb (Le/a écrit, Am/schrieb, El/escribió, Il/ha
+  scritto, Op/schreef, Em/escreveu, Den/skrev) AND a digit (the date every real attribution carries).
+- Two-line Gmail wrap (:123): only when the first line carries a digit, then the joined line must match one rule.
+- Behaviour vs main, measured: main's `inbound-email.test.ts` (byte-identical on both branches) runs 72/0 against
+  main's code and 72/0 against this branch. All 1232 string literals in the inbound-email, redteam, ingest and
+  task-proposals suites were run through main's and this branch's `newTextOnly` + `asksSomething`: 15 differ, and
+  all 15 are the deliberate F9 cuts (FR/DE/IT/PL/ES header blocks, FR/DE/ES/IT/NL/PT/SV attributions, the two-line
+  Gmail wrap). No English sentence differs from main.
+- Tests (redteam-correspondence): D2 N1-N9 survive (N1, N2, N3, N4, N7, N8, N8b, N9); D2 real openers still cut
+  (14 cases); D2 foreign opener + English verb; D2 two-line sentence without a date; D2 translated attribution needs
+  its date. Suites: task-proposals 188/0, redteam 64/0, ingest 149/0, onedrive-feed all passed, inbound-email 72/0,
+  cross-app-turn-gate 92/0; tsc clean.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| English rule loosened to the pre-fix `wrote ...:` form | D2 English 'wrote' sentences (N1-N9) | FIRED (control EQUIVALENT), exit 0 |
+| digit guard on the two-line join removed | D2 two-line sentence with no date | FIRED (control EQUIVALENT), exit 0 |
+| English header pair accepts `Data:` (cross-language pairing) | D2 English 'wrote' sentences (N4) | FIRED (control EQUIVALENT), exit 0 |
+| German opener accepts the English verb | D2 foreign opener with the ENGLISH verb | FIRED (control EQUIVALENT), exit 0 |
+| French attribution date requirement removed | D2 translated attribution needs its date | FIRED (control EQUIVALENT), exit 0 |
+
+#### D3 + D4 -- Teams empty-skip and capture coverage (commit 380f0440, one commit: same file)
+`src/features/huddle/lib/external-feeds/teams-log.ts`
+- D3: `hasNonTextContent` (:111) -- a body holding `<img>`, `<emoji>`, `hostedContents` or a Giphy itemtype is not
+  empty; the `empty` skip (:224) now needs no text, no attachment AND no such media. An image-only, emoji-only or
+  Giphy owner reply is kept and settles the chat ("answered"), as before 3f6bb5fb. Its stored `text` stays "" (the
+  converter still drops `<img>`/`<emoji>`); nothing downstream needed text to settle a chat.
+- D4: capture days are the America/New_York date (`easternDay`, :120, :183). A 7:30pm-Eastern rerun no longer
+  lands on the next UTC day and raises a false drop. Lines with no capture time are counted
+  (`noCaptureTimeLines`, optional field) and the note says "N line(s) with no capture time" (:283). The drop rule
+  is unchanged (newest < half of previous, previous >= 10); "unknown" is still excluded from it.
+- Tests (redteam-correspondence): D3 image/emoji/Giphy kept + answered; D3 neg whitespace-only still empty; D4 rerun
+  no false drop; D4 Eastern-midnight boundary splits; D4 untimed lines named; D4 neg no note when all timed.
+  EMPTY-1/2 and COVER-1..5 unchanged and green. Suites: task-proposals 188/0, redteam 70/0, ingest 149/0,
+  onedrive-feed all passed, inbound-email 72/0, cross-app-turn-gate 92/0; tsc clean.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| media check removed from the empty skip | D3 image/emoji/Giphy reply kept | FIRED (control EQUIVALENT), exit 0 |
+| `<emoji>` not counted as content | D3 image/emoji/Giphy reply kept | FIRED (control EQUIVALENT), exit 0 |
+| capture day back to the UTC date | D4 7:30pm-Eastern rerun | FIRED (control EQUIVALENT), exit 0 |
+| untimed-lines note suppressed | D4 lines with no capture time named | FIRED (control EQUIVALENT), exit 0 |
+
+#### M1 -- an opt-in object written to switch OFF turned it ON
+`src/features/huddle/lib/external-feeds/onedrive-feed.ts` `optInFile`: for `teams`/`sent`, an object is on only when
+`enabled` is absent or literally `true`; any other value ("false", 0, "off", null, "true", 1, "0") is off.
+`email`/`appointments` keep `file()`'s original `!== false` rule (unchanged; test pins it).
+- Tests (task-proposals): M1 off-values (7 values x 2 keys), M1 `{enabled:true}`/`{}` on, M1 email/appointments
+  unchanged. Suites: task-proposals 191/0, others unchanged; tsc clean.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| guard narrowed back to `enabled === false` | M1 teams/sent {enabled:<anything but true>} -> off | FIRED (control EQUIVALENT), exit 0 |
+
+#### M2 -- non-date words kept as `due_text`
+`src/features/huddle/lib/proposals/proposals.ts` `isDateWords`: still all-date-words and <= 8 words, AND now needs one
+`REAL_DATE_TERM`: a weekday; a month name next to a day number (either order, "the"/"of" between); today / tomorrow /
+tonight; EOD / EOW / COB or "end of [the] day/week", "close of business"; a numeric date (2026-11-14, 11/14,
+11/14/2026); "next"/"this" + day/week/month/weekday. Now rejected: "may", "3", "by 3", "asap", "soon", "in May",
+"the 3rd". `asap`/`soon` were accepted as `dueText` before (date stayed null); they now leave `dueText` null too.
+- Tests (task-proposals): M2 non-date words (7), M2 real date terms (14), M2 end to end (`due_text` "may"/"3" dropped,
+  tasks kept). Suites: task-proposals 194/0, others unchanged; tsc clean.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| real-date-term requirement removed | M2 non-date words are not a due text | FIRED (control EQUIVALENT), exit 0 |
+
+#### D5 -- negation spellings accepted as a "send" to-do
+`src/features/huddle/lib/proposals/proposals.ts` `NEGATION` / `NOT_NEGATION` / `negatesAction`:
+- New negators: "under no circumstances", "refrain from", "no reason to", "avoid" directly before the action or a
+  gerund ("avoid sending"; "To avoid delays, send ..." is NOT negated).
+- Comma asides: while the clause leading into the action is <= 4 words, the previous clause joins it if it is <= 3
+  words ("Never, ever send", "Please don't, under any circumstances, send"). A longer earlier clause never joins,
+  so "If you can't make it, send ..." / "I can't believe it, send ..." stay accepted.
+- Affirmative phrases removed before the test: "don't worry", "never mind", "no worries", "not a problem".
+- All six verifier spellings refused. False-reject cost measured on 11 affirmative controls: 10 accepted; the one
+  new false reject is "Not yet, send the contract ..." (fails closed: no proposal, nothing reaches the board).
+  Existing suites unchanged (task-proposals 196/0 incl. new tests; redteam 70/0; ingest 149/0).
+- Not addressed (not in the verifier list): a negation on a PREVIOUS line ("Do not do this\nsend the contract ...",
+  probe F7f) -- the newline is a sentence boundary by design.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| comma-aside join disabled | D5 negation spellings are refused | FIRED (control EQUIVALENT), exit 0 |
+| new negators removed | D5 negation spellings are refused | FIRED (control EQUIVALENT), exit 0 |
+| previous-clause length cap lifted (3 -> 99) | D5 neg: affirmative look-alikes accepted | FIRED (control EQUIVALENT), exit 0 |
+| "don't worry" exemption removed | D5 neg: affirmative look-alikes accepted | FIRED (control EQUIVALENT), exit 0 |
+
+#### D6 -- an added word rode on a majority of grounded words
+`src/features/huddle/lib/proposals/proposals.ts` `titleGrounding`: EVERY title content word (light stem, stopwords
+dropped) must be in the evidence; it used to be a strict majority. The number rule (`task_number_not_grounded`) is
+unchanged. This enforces what `EXTRACTION_INSTRUCTIONS` already asks the model for: "a short imperative in the text's
+own words".
+- Now refused: "Pay the vendor invoice twice", "Pay all vendor invoices from the reserve fund" (from "pay the vendor
+  invoice this week"), "Redo the deck you sent" (from "loved the deck you sent last week").
+- False-reject cost, measured: 0 of the existing tests broke (task-proposals, redteam, ingest unchanged and green).
+  On 12 realistic model-style paraphrases (scratch probe, deleted), 3 that the majority rule accepted are now
+  refused because each adds one verb: "Return the signed NDA" ("I need the signed NDA back"), "Schedule a call with
+  Pat" ("set up a call with Pat"), "Reply to Pat about the budget" ("Pat is waiting on your answer about the
+  budget"). These fail closed: no proposal, nothing reaches the board. The other 9 are unchanged (8 accepted, 1
+  already refused).
+- Still accepted (not in the verifier's must-fail list): verifier F5b, "Send the budget review" from "Thanks for
+  sending the budget review yesterday". Every word is grounded ("sending" -> "send"); refusing it needs a "thanks for
+  <verb>ing" / past-event rule, not grounding.
+- Tests (task-proposals): D6 three invented titles -> `task_not_grounded`; D6 neg five own-words titles accepted.
+  Suites: task-proposals 198/0, redteam 70/0, ingest 149/0, onedrive-feed all passed, inbound-email 72/0,
+  cross-app-turn-gate 92/0; tsc clean.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| every-word rule back to strict majority | D6 a title that adds a content word is not grounded | FIRED (control EQUIVALENT), exit 0 |
+
+### Verifier loop-4 fix pass
+Source: `docs/qc-evidence/VERIFY-correspondence-proposals-4.md` on `claude_verify-correspondence-4`. Started at head
+`2cf5fa8d`, isolated worktree, only writer on the branch. Synthetic `.example` data only. Each defect is committed
+and pushed on its own. File-staleness items (5, 6) are written up in `IMPL-feed-staleness.md`.
+
+#### Item 12 -- origin/main merged first (commit 0cb6d8a0)
+`git merge origin/main` (20 commits: workflows, docs, ledgers, autowork, HuddleView, PolishView, focus). Clean
+auto-merge, no conflict markers; the `.claude/*.md` ledgers carry both sides. tsc clean; every suite unchanged, plus
+main's new `attention-focus` (all passed) and `confirm-ask-context` (21/21).
+
+#### D1 W1-W3, W4 (mso), W7 -- live work-email screen dropped visible text (commit ac0a5a8f)
+`src/features/huddle/lib/external-feeds/onedrive-feed.ts`
+- `stripHiddenElements` now walks every tag and keeps the stack of open ANCESTORS (`lengthAfterStartTag` /
+  `lengthAfterEndTag`). `elementEnd` takes those ancestors: a start tag whose implied closes pop an ancestor ends
+  the hidden element just before that tag. Covered: every p-end-tag-omission start tag (incl. void `<hr>`, checked
+  before the void skip), next `<li>` (search stops at special elements except address/div/p), next `<dd>`/`<dt>`,
+  heading after heading, cell/row/section in the same table. A hidden FORMATTING element (`a b big code em font i nobr
+  s small strike strong tt u`) is NOT ended this way: Chromium re-opens it, so its text stays hidden (W1b, PCLOSE-font-p).
+- W4: `mso-hide:all` removed from `HIDDEN_STYLE` (Outlook-desktop-only). Comments, incl. `<!--[if mso]>`, are still
+  removed as before. Result: exactly one copy of the text survives.
+- W7: `attrsOf` tokenizes the start tag (name, optional `=` double/single/bare value, first occurrence wins, a stray
+  quote belongs to the name). `styleOf`, `hasHiddenAttr` and `mayResize` read it, so `style=` inside another
+  attribute's value never hides.
+- Ground truth: `scripts/html-visible-text-truth.mjs` drives real Chromium (`/opt/pw-browsers/chromium-1243`,
+  `page.setContent`, `<!doctype html>`, blockquotes removed from the DOM because htmlToText drops quoted history on
+  purpose, then `document.body.innerText`) and writes 81 rows to `scripts/fixtures/html-visible-text-truth.json`.
+  `scripts/onedrive-feed-truth.test.ts` compares offline (whitespace-normalised).
+
+| Chromium comparison, 81 rows | rows identical to Chromium |
+|---|---|
+| origin/main (no hidden stripping at all: keeps hidden text, keeps the mso copy twice) | 8 |
+| branch before this pass (2cf5fa8d) | 27 |
+| branch now | **80** |
+
+The one non-identical row is `LEAK-formatting-reopened` (`<p><b style="display:none">pre</p><p>Wire 5000</p>`):
+Chromium re-opens the hidden `<b>` inside the next paragraph and hides it; htmlToText keeps "Wire 5000". It only
+ever KEEPS extra text (asserted by its own test). No row drops a word Chromium shows. W1, W2, W3, W4, W7: now
+identical to Chromium ("Please approve the budget by Friday?", "Can you sign the NDA today?", "Can you call the
+vendor?", "Can you sign the NDA?" once, "Can you approve the PO?"). W1b: `""`, as Chromium.
+
+- Suites: task-proposals 198/0, redteam 70/0, ingest 149/0, onedrive-feed all passed, onedrive-feed-truth 11/0,
+  inbound-email 72/0, cross-app-turn-gate 92/0, feed-staleness 66/0, attention all passed; tsc clean.
+
+| Mutation (mutate.sh, anchors written from the committed line) | Named test | Verdict |
+|---|---|---|
+| ancestor-close check disabled (`false &&`) | TRUTH W1-W3 ... ends where its <p>/<li> parent ends | FIRED (control EQUIVALENT), exit 0 |
+| formatting-element exception removed | TRUTH W1b a hidden FORMATTING element ... stays hidden | FIRED (control EQUIVALENT), exit 0 |
+| `<li>`/`<dd>`/`<dt>` search removed | TRUTH <li>/<dd>/<dt> closes | FIRED (control EQUIVALENT), exit 0 |
+| void skip moved back before the close checks | TRUTH every p-end-tag-omission closer ... | FIRED (control EQUIVALENT), exit 0 |
+| `mso-hide:all` back in `HIDDEN_STYLE` | TRUTH W4 + mso | FIRED (control EQUIVALENT), exit 0 |
+| `styleOf` back to the in-tag regex | TRUTH W7 + attributes | FIRED (control EQUIVALENT), exit 0 |
+
+#### Item 3 (X1/X2) -- wrapped plain-text English cut as quoted history (commit 1a75905f)
+`src/features/huddle/lib/email/inbound-email.ts` `isWrappedAttribution` (LIVE: EDS main mailbox + work feed)
+- The two-line Gmail join now needs, on the FIRST line, a weekday or month name (English, plus 3+-letter
+  abbreviations in the attribution languages, so no 2-letter English word counts), a 1-2 digit day, and a year or
+  a time; and on the joined line an email address, or a capitalised name (not "I") right before `wrote:`. The
+  joined line must still match an attribution rule. A bare digit is no longer enough.
+- X1 (`On Nov 12 the auditor sent ... and Pat` / `also wrote:`) and X2 (`On 3 occasions the client` / `complained,
+  and today she wrote:`) now keep their ask, as main does; both screen as asks.
+- Still cut: all 14 loop-3 real openers (unchanged test green), RT-12c, plus 5 wrapped attributions (email,
+  name-only, day-month-year + time, email split across the wrap, French wrap).
+- Main-vs-branch over every string literal in the inbound-email, redteam, ingest and task-proposals suites
+  (TypeScript AST, 1436 literals, `newTextOnly` + `asksSomething`): **19 differ**. All 19 are deliberate cuts of
+  quoted history main misses: 7 one-line foreign attributions (fr, de, es, it, nl, pt, sv), 6 foreign header blocks
+  (fr, de, it `Inviato`, it `Data`, pl, es), and 6 two-line wrapped attributions (RT-12c, en-2line, name-only,
+  day-month-year + time, email split across the wrap, French wrap). No sentence of the sender's own text differs
+  from main. (Loop 3 counted 15 of 1232; the 4 new ones are this pass's wrapped-cut fixtures.)
+- Tests (redteam-correspondence): D2 X1/X2 hard-wrapped lines kept (X1, X2, lower-case word before wrote, no year,
+  "I" before wrote); D2 X1/X2 still screened as asks; D2 real two-line wrapped attributions still cut. 73/0.
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| shape check back to "any digit" | D2 X1/X2 hard-wrapped English lines ... | FIRED (control EQUIVALENT), exit 0 |
+| year-or-time requirement removed | D2 X1/X2 hard-wrapped English lines ... | FIRED (control EQUIVALENT), exit 0 |
+| name-before-verb check always true | D2 X1/X2 hard-wrapped English lines ... | FIRED (control EQUIVALENT), exit 0 |
+| name-before-verb check always false | D2 real two-line wrapped attributions are still cut | FIRED (control EQUIVALENT), exit 0 |
+
+#### Items 5, 6 (file-staleness) -- see `IMPL-feed-staleness.md` "Verifier loop-4 fix pass" (commits 81e5fc41,
+572d00d7, 04356a0e). Note for the live-change list: `chat.email_replies.feed_pending` (nullable, additive) is added
+by the existing bootstrap, so it lands on the live table at merge even with every flag off.
+
+#### Item 7 (D5) -- "Nobody should send ..." accepted (commit 0cf8abec)
+`src/features/huddle/lib/proposals/proposals.ts` `NEGATION` gains `nobody | no one | no-one`; `NOT_NEGATION` treats
+"nobody/no one forget(s)/miss(es)/fail(s)/hesitate(s) to" as affirmative, like "don't forget to". Verifier probe D5 n6
+now `evidence_negated`. Tests (task-proposals): D5 loop 4 refused (4 spellings), D5 loop 4 neg (earlier clause /
+earlier sentence still accepted).
+
+#### Item 8 (D6) -- a title that inverts its evidence was grounded (commit 9191d353)
+`proposals.ts`
+- `titleGrounding`: after the every-content-word rule, every NEGATOR in the title (`negators()`: not / no / never /
+  nobody / none / nothing / neither / nor; `n't`, `cannot`, `dont`... -> `not`; `no one` -> `nobody`) must also be in the
+  evidence, read with the affirmative look-alikes ("don't forget to") removed -> `task_not_grounded` otherwise.
+  "Do not / Don't / Never send the deck to finance" from "send the deck to finance" (and from "Don't forget to send
+  ...") are refused; "Do the no-show follow-up" from "the no-show follow-up" is still grounded.
+- The other direction, "a title whose evidence negates it": `negatesAction` also returns true when a title word is
+  negated in EVERY place the evidence has it (its own clause, after the last , ; : or "but", leads with a negation)
+  -> `evidence_negated`. "Send the deck to legal" from "send the deck to finance, not legal" and "Send the deck and
+  the budget sheet" from "send the deck but not the budget sheet" are refused; "Send the deck to finance" from the
+  same evidence, and "Send the deck to Dana" from "Send the deck, not the draft deck, to Dana" are accepted (one
+  affirmative occurrence keeps a word).
+- Tests (task-proposals): D6 loop 4 refused (6), D6 loop 4 neg accepted (4), negators normalisation.
+
+#### Item 9 (D3) -- `<customemoji>`-only owner reply skipped as empty (commit 7244f963)
+`src/features/huddle/lib/external-feeds/teams-log.ts` `hasNonTextContent`: any element whose NAME contains "emoji"
+(`<customemoji>`, upper case, `<teams-emoji>`) counts as content. "emoji" in an attribute or a comment does not.
+Tests (redteam): D3 loop 4 kept + settles the chat (3 shapes), D3 loop 4 neg (still empty). Not changed: `<video>`-only
+is still `empty` (the verifier listed it; not in this pass's scope).
+
+#### Items 10, 11 -- preview script (commit 42c5630b)
+`scripts/proposals-preview.ts`: `parseFeedJson` wraps the three uncaught `JSON.parse` calls on feed content (email,
+email re-read, sent); a non-JSON file logs only `email: not JSON` / `sent: not JSON`. The two Teams parses were
+already inside try/catch with no logging. Header now says it WRITES one Markdown file to the owner's OneDrive every
+run and, with `PREVIEW_EMAIL=1`, EMAILS the report; env list completed. `scripts/proposals-preview.test.ts` runs the
+real script under `bun --preload scripts/fixtures/preview-fetch-stub.ts` (Graph stubbed, no network): PV-1 a
+"Secret merger ..." non-JSON file prints none of its words and no parser message; PV-2 the run completes with one
+OneDrive write; PV-3/PV-4 sendMail only with `PREVIEW_EMAIL=1`; PV-5 the header (a source check -- weak by nature).
+
+| Mutation | Named test | Verdict |
+|---|---|---|
+| nobody/no one removed from NEGATION | D5 loop 4: 'Nobody should send' / 'No one should send' are refused | FIRED (control EQUIVALENT), exit 0 |
+| title-negator rule always ok | D6 loop 4: a title that negates its evidence ... | FIRED (control EQUIVALENT), exit 0 |
+| affirmative look-alikes not removed from the evidence | D6 loop 4: a title that negates its evidence ... | FIRED (control EQUIVALENT), exit 0 |
+| per-title-word negation check off | D6 loop 4: a title that negates its evidence ... | FIRED (control EQUIVALENT), exit 0 |
+| "every occurrence" -> "any occurrence" | D6 loop 4 neg: matching polarity ... still accepted | FIRED (control EQUIVALENT), exit 0 |
+| media regex back to `<img` / `<emoji` only | D3 loop 4: a <customemoji>-only ... owner reply | FIRED (control EQUIVALENT), exit 0 |
+| parseFeedJson re-throws the raw parse | PV-1 non-JSON email / sent files print 'not JSON' ... | FIRED (control EQUIVALENT), exit 0 |
+| header back to "sends nothing" | PV-5 the header states the OneDrive write ... | FIRED (control EQUIVALENT), exit 0 |
+
+Verifier's own `scripts/verify4-probes.ts` re-run at this head (copied in, run, removed): W1-W4, W7 match Chromium;
+X1/X2 `same: true` vs main; D3 customemoji kept; D5 n6 refused; D6 n4 refused; every loop-3 control unchanged.
+
+## Verifier loop-5 fix pass (2026-11-14, commits 7def0eea, 4th CSS-test commit, 66cdfe95)
+
+Loop 5 (docs/qc-evidence/VERIFY-correspondence-proposals-5.md on claude_verify-correspondence-proposals-5 @ b4e76df7)
+= FIX FIRST: 23 of 88 Chromium-recorded rows dropped a visible word (F1-F3 the serious one), plus X3-X6.
+
+| item | fix | proof |
+|---|---|---|
+| F1-F3 + CSS (comment / last-wins / invalid value) + comment ends + `>` in quoted attrs | `htmlToText` now gets the visible part from `html-visible.ts`: parse5 7.3.0 builds the tree as the browser does (standards mode, as webmail embeds a message), hiding rules applied to the real element; ~270 lines of hand scanner removed | `scripts/html-visible-loop5.test.ts` over the verifier's 88 rows copied unchanged: 0 drops, 83/88 exact (3 keep-more in quirks rows; 2 `opacity:0%` hidden ON PURPOSE -- transparent text innerText still counts); Chromium truth 11/0; CSS rule rows |
+| F8b test input | a bare `<td>` outside `<table>` is discarded by the browser's tree builder, so the old input no longer tested font-size:0: input wrapped in a real table (intent unchanged) + a new row pins the bare-`<td>` behaviour (shown, as Chromium shows it) | task-proposals 204/0 |
+| RT-14b | parse5 decodes `&rsquo;` itself; typographic quotes are normalised to plain after decoding | redteam 76/0 |
+| X3-X6 | a name-only two-line attribution needs a year AND a clock time; with an email address unchanged | redteam X1-X6 row |
+
+Mutation proofs (mutate.sh, exit 0, control EQUIVALENT): standards-mode prefix (TRUTH p-closers), class re-size
+keep-more (D1-V6), `!important` precedence (LOOP5), hidden attr vs invalid display (CSS row), quote normalisation
+(RT-14b), year+clock requirement (X1-X6). ONE not proven: `displayValid &&` in the `display:none` test is
+behaviourally equivalent (an invalid value can never equal "none") -- INERT, correctly.
+Suites: task-proposals 204/0, redteam 76/0, inbound-email 72/0, correspondence-ingest 149/0, cross-app 92/0,
+onedrive-feed all, attention all, feed-staleness 96/0, preview 6/0, html-visible-loop5 9/0, tsc clean.
+
+## Verifier loop-6 fix pass (2026-11-14, commits 8d87253c, 800e7fec)
+
+Loop 6 (docs/qc-evidence/VERIFY-correspondence-proposals-6.md on claude_verify-correspondence-proposals-6 @ 9afa8eb6)
+= FIX FIRST on three items; all fixed:
+
+| item | fix | proof |
+|---|---|---|
+| 1 implied end tags changed the live ask decision on 5/8 malformed bodies | `visibleHtml` re-emits only tags the source wrote (parse5 `sourceCodeLocationInfo`) | verifier's 8 screen probes: 0 differ from main; IMPLIED rows in html-visible-loop5 |
+| 2 depth guard dropped text (405 nested divs) | past depth 400 the subtree's text is kept (iterative, no recursion) | DEPTH rows |
+| 2 `;` inside a quoted CSS string split a declaration | quote/paren-aware declaration split | CSS rows |
+| 3 U5 incomplete sent.json stuck `transient` forever | the staleness check reads an unread newer copy itself (`refreshRead` = existing `readFeed` + `readFeedStatus`) | feed-staleness I24/I25 |
+| nits | redteam suite exits 1 on failure; inbound-email comment corrected | -- |
+
+Verifier's 130 Chromium rows re-run: 110 OK, 10 keep-more, 10 "drop" -- every one a deliberate visual-hiding rule
+(opacity 0.0, max-height:0+overflow:clip, font-size:0 incl. the `font:0/0` shorthand and an unsized sibling under a
+font-size:0 body) where innerText counts invisible text. No depth / CSS-string row drops any more.
+Mutation proofs (exit 0, control EQUIVALENT): source-only end tags (IMPLIED), depth keep-more (DEPTH), quoted CSS
+string (CSS quoted display:none), U5 refresh (I24). One honest INERT: the paren-depth guard is equivalent for the
+quoted-string test input (quote handling alone prevents that split).
+Suites: html-visible-loop5 16/0, feed-staleness 98/0, redteam 77/0 (now exits 1 on failure), task-proposals 204/0,
+inbound-email 72/0, tsc 0.

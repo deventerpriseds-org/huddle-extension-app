@@ -16,14 +16,18 @@ export const GET_CALENDAR_EVENTS_TOOL = {
   type: "function" as const,
   name: "get_calendar_events",
   description:
-    "The user's calendar / day / schedule — their COMBINED nightly schedule (tasks + calendar items), the source of truth. Use this for \"what's on my calendar / schedule / agenda / day / plate / today\", meetings, or appointments. Returns the day's scheduled items with times already in the user's timezone. (For the user's RAW external Outlook/Microsoft calendar specifically, use get_external_calendar_events instead — only when they explicitly ask for their external/Outlook calendar.)",
+    "The user's calendar / day / schedule — their COMBINED nightly schedule (tasks + calendar items), the source of truth. Use this for \"what's on my calendar / schedule / agenda / day / plate / today\", meetings, or appointments. Returns ONE day's meetings, classes and scheduled tasks, merged in time order and labelled, with times already in the user's timezone; omit `date` for today. If the result has complete:false, say which source couldn't be read — never call that day empty. (For the user's RAW external Outlook/Microsoft calendar specifically, use get_external_calendar_events instead — only when they explicitly ask for their external/Outlook calendar.)",
   parameters: {
     type: "object" as const,
     additionalProperties: false,
     properties: {
+      date: {
+        type: "string",
+        description: "Which day: omit (or 'today') for today, 'tomorrow', a weekday name like 'thursday' (the next one, today included), or yyyy-mm-dd.",
+      },
       category: {
         type: "string",
-        description: "Optional domain to scope to (LIFE, VENTURES, JOB, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION; JOB = work for the user's employer; CAREER = getting their next role). Omit to span everything.",
+        description: "Optional domain to scope to (LIFE, VENTURES, JOB, CAREER, EDUCATION, PERSONAL, PROF_EDUCATION; JOB = work for the user's employer; CAREER = getting their next role). Omit to span everything. NOTE: a category returns TASKS only (calendar items carry no category) — omit it for a schedule/calendar question.",
       },
     },
     required: [] as string[],

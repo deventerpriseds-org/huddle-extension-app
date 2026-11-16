@@ -7,11 +7,15 @@
 //             only; every existing Graph tool stays exactly as it is.
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   .claude/actions.md ACT:trinnex-onedrive-feed; scripts/onedrive-feed.test.ts.
+// 2026-11-12: the same config now also carries the rolling Teams log (`teams`, OFF when absent) and the
+//             correspondence ingest switches (`correspondence`, all OFF by default); the Teams parser is
+//             teams-log.ts. AC: docs/ac/AC-correspondence-checklist.md sections 1, 6.
 //
 // THIS REPO IS PUBLIC: no tenant, drive, flow or calendar identifiers live in code. Everything that
 // binds the feed to a person comes from the server-only HUDDLE_ONEDRIVE_FEEDS setting.
 
 import type { InboundMessage } from "../email/inbound-email";
+import { visibleHtml } from "./html-visible";
 
 /** One feed file (email or appointments) inside the owner's EDS OneDrive. */
 export interface FeedFileConfig {
@@ -19,6 +23,76 @@ export interface FeedFileConfig {
   /** Drive-relative path, e.g. "/automation/email/emails.json". */
   path: string;
 }
+
+/** The rolling Teams JSON Lines log (correspondence feature, 2026-11-12). Same drive + owner binding as
+ *  the email/appointments files; `source` is the label every line must carry, `ownerSenderIds` the owner's
+ *  own Teams sender ids as they appear in `from.user.id` (config key `ownerSenderIds`; `ownerIds` accepted as
+ *  an alias), lower-cased, used only to recognise HIS replies, never to address anyone. None configured =>
+ *  every chat is "can't tell" (OQ-4). */
+export interface TeamsFeedConfig extends FeedFileConfig {
+  source: string;
+  ownerSenderIds: string[];
+}
+
+/** Correspondence ingest switches (all OFF unless HUDDLE_ONEDRIVE_FEEDS.correspondence turns them on).
+ *  `ingest` alone reads the sources into the processing ledger; `bell` / `proposals` select the
+ *  processors that a later pass plugs in. Nothing here runs unless `ingest` is true. */
+export interface CorrespondenceConfig {
+  ingest: boolean;
+  sources: ("teams" | "email")[];
+  bell: boolean;
+  proposals: boolean;
+  /** Meeting-minutes TRIAGE (AC-correspondence-redesign R5, AC-R9.1): a finished meeting's action items are
+   *  offered in ONE ping (Mine / For someone / Skip) instead of becoming proposals. Works inside `proposals`
+   *  (its store and Iris's 1:1). OFF unless literally `true`; when OFF the Fireflies pass makes NO proposals
+   *  and no calls at all (AC-R9.3). */
+  meetingTriage: boolean;
+  maxAttempts: number;
+  /** Minimum gap between two eTag checks of the Teams log (the flow writes once a weekday evening). */
+  minIntervalMinutes: number;
+  /** Teams daily load (owner 2026-11-15: "The teams file should be scheduled to load everyday at 6pm"): the Teams
+   *  file is read only from this local time (America/New_York, "HH:MM") until midnight each day, at the normal
+   *  interval, so the evening file is picked up whenever the flow writes it after 6pm. null = no daily window
+   *  (read at the interval all day, the previous behaviour). Seeded default "18:00"; change it in the config. */
+  teamsLoadAt: string | null;
+  /** File-staleness alert on the bell (owner decision 2026-11-13). OFF unless literally `true`; independent of
+   *  `ingest`. lib/correspondence/feed-staleness.ts. */
+  staleAlerts: boolean;
+  /** email / sent are stale after MORE than this many working hours (Mon-Fri 8-18 ET) unchanged. */
+  staleHours: number;
+  /** Needs-you redesign (owner 2026-11-14, AC-R9.1): the per-CONVERSATION classifier
+   *  (lib/correspondence/needs-you.ts) drives the Teams bell rows and the proposals. OFF unless literally `true`;
+   *  OFF = every path exactly as before, and the classifier is never called (AC-R9.2). */
+  conversations: boolean;
+  /** AC-R9.4 / OQ-2 (owner: "not now"): would group the EMAIL bell rows per conversation. Parsed so the switch
+   *  exists, but NOTHING reads it yet: Iris's live email alerts and their bell rows stay exactly as today. */
+  emailBell: boolean;
+  /** OQ-4: extra addresses that are the owner (aliases, +tags). Lower-cased whole addresses; empty by default. */
+  ownerAliases: string[];
+  /** AC-R6.7 / OQ-5: the owner's names (display name, first name) used to recognise him as the doer of a to-do
+   *  or as the person named in a meeting-chat question. From config only, never from the model. */
+  ownerNames: string[];
+  /** Stored-content retention (owner decision 2026-11-16, content stored in Azure): content older than this many
+   *  days, by the item's own time, is set to NULL once a day (row kept). Seeded default 90; change it in the config. */
+  contentRetentionDays: number;
+}
+
+/** The REAL file the owner's Teams flow writes (read from the drive 2026-11-13, graph-permission-check run
+ *  43407021220 folder listing): its own "Teams Chats" folder, not the email folder the first contract named. */
+export const TEAMS_LOG_PATH_DEFAULT = "/automation/Teams Chats/teams-chats.jsonl";
+/** Sent Items snapshot (owner decision 2026-11-12, option A): a SEPARATE replace-in-place file beside the
+ *  inbox snapshot, feed_type "sent_snapshot". */
+export const SENT_PATH_DEFAULT = "/automation/email/sent.json";
+/** The `source` value every line of the real file carries (run 43408812837: 50/50 lines "teams"). */
+export const TEAMS_SOURCE_EXPECTED = "teams";
+export const CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT = 5;
+export const CORRESPONDENCE_MIN_INTERVAL_DEFAULT = 10;
+/** Owner 2026-11-15: the Teams file loads every day at 6pm (America/New_York). */
+export const CORRESPONDENCE_TEAMS_LOAD_AT_DEFAULT = "18:00";
+/** Owner decision 2026-11-13: email/sent stale after N working hours; N defaults to 6. */
+export const CORRESPONDENCE_STALE_HOURS_DEFAULT = 6;
+/** Owner brief 2026-11-16: stored correspondence content is kept 90 days by default (config-centric seed). */
+export const CONTENT_RETENTION_DAYS_DEFAULT = 90;
 
 export interface OneDriveFeedsConfig {
   enabled: boolean;
@@ -40,6 +114,11 @@ export interface OneDriveFeedsConfig {
   notBeforeUtc?: string;
   email: FeedFileConfig;
   appointments: FeedFileConfig;
+  /** Absent `teams` key => disabled (unlike email/appointments, which predate it and default on). */
+  teams: TeamsFeedConfig;
+  /** Absent `sent` key => disabled: with no Sent Items file, owed work email behaves exactly as today. */
+  sent: FeedFileConfig;
+  correspondence: CorrespondenceConfig;
 }
 
 export const FEED_MAX_BYTES_DEFAULT = 2_000_000;
@@ -47,6 +126,30 @@ export const FEED_MAX_RECORDS = 1000;
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 const isIso = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
+
+/** Pure (red-team S1): an ISO date-time with NO zone (`2026-11-10T10:00:00`) is read as UTC, never in the
+ *  host's local zone (Date.parse would), so settle/order decisions do not depend on where the server runs.
+ *  A value that already carries Z or an offset, or a date-only value (already UTC in JS), is unchanged.
+ *  Used by the NEW correspondence paths only (Sent Items, Teams log); NaN when it does not parse. */
+export function parseUtcMs(v: unknown): number {
+  if (typeof v !== "string") return NaN;
+  const s = v.trim();
+  if (!s) return NaN;
+  const zoneless = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s);
+  return Date.parse(zoneless ? `${s.replace(" ", "T")}Z` : s);
+}
+
+/** Pure (red-team F18): drop leading reply/forward markers in the common languages (RE:, Re:, FW:, Fwd:,
+ *  AW: German, TR: French, WG: German forward, SV: Nordic, RV: Spanish), repeated, with optional [n]. */
+export function stripReplyPrefixes(subject: string): string {
+  let s = subject;
+  for (let i = 0; i < 10; i++) {
+    const next = s.replace(/^\s*(re|fw|fwd|aw|tr|wg|sv|rv|antw)(\[\d+\])?\s*:\s*/i, "");
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
 
 /**
  * Pure: parse the server-only HUDDLE_ONEDRIVE_FEEDS JSON. Returns null (feature OFF) when it is absent,
@@ -88,6 +191,82 @@ export function parseFeedsConfig(raw: string | undefined | null): OneDriveFeedsC
     notBeforeUtc: isIso(j.notBeforeUtc) ? str(j.notBeforeUtc) : undefined,
     email: file(j.email, "/automation/email/emails.json"),
     appointments: file(j.appointments, "/automation/appointments/appointments.json"),
+    teams: teamsFile(j.teams, file),
+    sent: optInFile(j.sent, SENT_PATH_DEFAULT, file),
+    correspondence: correspondenceFlags(j.correspondence),
+  };
+}
+
+/** Pure: an OPT-IN file key (teams, sent -- the keys that postdate the feed). Red-team F1/F2: only an object
+ *  (or a literal `true`, meaning "on at the default path") can switch one on. Absent, null, `false`, "off",
+ *  0, an array or any other non-object is OFF -- a value written to be safe must never enable a source. An
+ *  object goes through the SAME `file()` path rule as email/appointments (AC-1.1). email/appointments keep
+ *  their original default-on `file()` behaviour untouched (they predate this rule). */
+function optInFile(v: unknown, fallback: string, file: (v: unknown, fallback: string) => FeedFileConfig): FeedFileConfig {
+  if (v === true) return file({}, fallback);
+  if (!v || typeof v !== "object" || Array.isArray(v)) return { enabled: false, path: fallback };
+  // Verifier loop 3, M1: inside an opt-in object, `enabled` must be absent or literally `true`. "false", 0,
+  // "off", null written to switch it OFF must never leave it on (file()'s `!== false` is email-only).
+  const en = (v as Record<string, unknown>).enabled;
+  if (en !== undefined && en !== true) return { ...file(v, fallback), enabled: false };
+  return file(v, fallback);
+}
+
+/** Pure: the Teams entry (opt-in, see optInFile). An absent key is OFF -- a new source must never switch
+ *  itself on for an existing config (AC-6.1). */
+function teamsFile(v: unknown, file: (v: unknown, fallback: string) => FeedFileConfig): TeamsFeedConfig {
+  const o = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
+  const base = optInFile(v, TEAMS_LOG_PATH_DEFAULT, file);
+  return {
+    ...base,
+    source: str(o.source) || TEAMS_SOURCE_EXPECTED,
+    ownerSenderIds: [
+      ...new Set(
+        [...(Array.isArray(o.ownerSenderIds) ? o.ownerSenderIds : []), ...(Array.isArray(o.ownerIds) ? o.ownerIds : [])]
+          .map((x) => str(x).toLowerCase())
+          .filter(Boolean),
+      ),
+    ],
+  };
+}
+
+/** Pure: correspondence switches. Every flag defaults OFF; only a literal `true` turns one on. */
+function correspondenceFlags(v: unknown): CorrespondenceConfig {
+  const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  const sources = (Array.isArray(o.sources) ? o.sources : ["teams", "email"]).filter(
+    (s): s is "teams" | "email" => s === "teams" || s === "email",
+  );
+  const n = (x: unknown, dflt: number, max: number) => {
+    const k = Number(x);
+    return Number.isFinite(k) && k >= 1 ? Math.min(Math.floor(k), max) : dflt;
+  };
+  return {
+    ingest: o.ingest === true,
+    sources: [...new Set(sources)],
+    bell: o.bell === true,
+    proposals: o.proposals === true,
+    meetingTriage: o.meetingTriage === true,
+    maxAttempts: n(o.maxAttempts, CORRESPONDENCE_MAX_ATTEMPTS_DEFAULT, 20),
+    minIntervalMinutes: n(o.minIntervalMinutes, CORRESPONDENCE_MIN_INTERVAL_DEFAULT, 24 * 60),
+    teamsLoadAt:
+      o.teamsLoadAt === null || o.teamsLoadAt === false || o.teamsLoadAt === "off"
+        ? null
+        : typeof o.teamsLoadAt === "string" && /^([01]?\d|2[0-3]):[0-5]\d$/.test(o.teamsLoadAt.trim())
+          ? o.teamsLoadAt.trim()
+          : CORRESPONDENCE_TEAMS_LOAD_AT_DEFAULT,
+    staleAlerts: o.staleAlerts === true,
+    staleHours: n(o.staleHours, CORRESPONDENCE_STALE_HOURS_DEFAULT, 200),
+    conversations: o.conversations === true,
+    emailBell: o.emailBell === true,
+    ownerAliases: [
+      ...new Set(
+        (Array.isArray(o.ownerAliases) ? o.ownerAliases : [])
+          .map((x) => str(x).toLowerCase())
+          .filter((x) => /^[^\s@<>"]+@[^\s@<>"]+$/.test(x)),
+      ),
+    ],
+    ownerNames: [...new Set((Array.isArray(o.ownerNames) ? o.ownerNames : []).map((x) => str(x)).filter((x) => x.length >= 2 && x.length <= 80))],
+    contentRetentionDays: n(o.contentRetentionDays, CONTENT_RETENTION_DAYS_DEFAULT, 3650),
   };
 }
 
@@ -128,7 +307,7 @@ type Validation<R> = { ok: true; snapshot: ValidSnapshot<R> } | { ok: false; rea
 function validateEnvelope(
   j: unknown,
   cfg: OneDriveFeedsConfig,
-  feedType: "email_snapshot" | "appointments_snapshot",
+  feedType: "email_snapshot" | "appointments_snapshot" | "sent_snapshot",
   nowMs: number,
 ): Validation<Record<string, unknown>> {
   if (!j || typeof j !== "object" || Array.isArray(j)) return { ok: false, reason: "not_json" };
@@ -150,7 +329,7 @@ function validateEnvelope(
   if (!isIso(e.published_utc) || !isIso(e.window_start_utc)) return { ok: false, reason: "bad_timestamps" };
   const published = Date.parse(str(e.published_utc));
   if (published > nowMs + FUTURE_SKEW_MS) return { ok: false, reason: "bad_timestamps" };
-  if (feedType === "email_snapshot" && Date.parse(str(e.window_start_utc)) > published) {
+  if ((feedType === "email_snapshot" || feedType === "sent_snapshot") && Date.parse(str(e.window_start_utc)) > published) {
     return { ok: false, reason: "bad_timestamps" };
   }
   if (feedType === "appointments_snapshot") {
@@ -184,6 +363,57 @@ export const validateEmailSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowM
   validateEnvelope(j, cfg, "email_snapshot", nowMs);
 export const validateAppointmentSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowMs: number = Date.now()) =>
   validateEnvelope(j, cfg, "appointments_snapshot", nowMs);
+/** Sent Items snapshot: the SAME envelope rules as the inbox snapshot, feed_type "sent_snapshot". */
+export const validateSentSnapshot = (j: unknown, cfg: OneDriveFeedsConfig, nowMs: number = Date.now()) =>
+  validateEnvelope(j, cfg, "sent_snapshot", nowMs);
+
+/** One sent message, reduced to what reply detection needs (no body, no recipients). */
+export interface SentMessage {
+  conversationId: string;
+  sentAt: string;
+}
+
+/**
+ * Pure: Sent Items records -> {conversationId, sentAt}. `conversationId` is the match key and required;
+ * `sentDateTime` (fallback `receivedDateTime`) must parse. While synthetic, only subjects carrying the test
+ * prefix count (same rule as the inbox). Anything else is dropped and counted.
+ */
+export function mapSentRecords(records: Record<string, unknown>[], cfg: OneDriveFeedsConfig): { sent: SentMessage[]; skipped: number } {
+  const sent: SentMessage[] = [];
+  let skipped = 0;
+  for (const r of records) {
+    const conversationId = str(r.conversationId);
+    const atMs = Number.isFinite(parseUtcMs(r.sentDateTime)) ? parseUtcMs(r.sentDateTime) : parseUtcMs(r.receivedDateTime);
+    // F18: the owner's reply to a synthetic test email is "RE: <prefix>...": reply/forward prefixes are
+    // stripped before the synthetic prefix test (the prefix itself is still required).
+    if (!conversationId || !Number.isFinite(atMs) || (cfg.synthetic && !stripReplyPrefixes(str(r.subject)).startsWith(cfg.subjectPrefix ?? "\u0000"))) {
+      skipped++;
+      continue;
+    }
+    sent.push({ conversationId, sentAt: new Date(atMs).toISOString() });
+  }
+  return { sent, skipped };
+}
+
+/** Pure (owner decision 2026-11-12, option A): an owed WORK email is answered when a sent message in the same
+ *  conversation is LATER than the email's receipt. No conversation id, no receipt time, or no later sent
+ *  message => not settled (it stays owed, exactly as today). */
+export function sentReplySettles(
+  row: { conversation_id: string | null; received_at: string | Date | null },
+  latestSent: Map<string, number>,
+): boolean {
+  if (!row.conversation_id || !row.received_at) return false;
+  const received = row.received_at instanceof Date ? row.received_at.getTime() : Date.parse(row.received_at);
+  const sent = latestSent.get(row.conversation_id);
+  return Number.isFinite(received) && sent !== undefined && sent > received;
+}
+
+/** Pure: latest sent time per conversation (ms). */
+export function latestSentByConversation(sent: SentMessage[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const s of sent) m.set(s.conversationId, Math.max(m.get(s.conversationId) ?? -Infinity, Date.parse(s.sentAt)));
+  return m;
+}
 
 /** Prefix that marks an id as coming from a feed. EDS Graph ids never start with it, so a feed record
  *  can never be mistaken for (or collide with) an EDS Graph message or event. */
@@ -217,21 +447,52 @@ function stripBlockquotes(html: string): string {
   return out.replace(/<blockquote\b[\s\S]*$/i, " ");
 }
 
+/** The visible part of an HTML body now comes from `visibleHtml` (html-visible.ts), which builds the element tree
+ *  the way a browser does (parse5). The hand-written tag scanner that stood here was retired after verifier loop 5
+ *  (F1-F3): every pass found new markup shapes where it dropped a visible ask. */
+
+const NAMED_ENTITIES: Record<string, string> = {
+  nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'",
+  // Typographic quotes decode to their plain form (the converter already wrote &#39; as "'").
+  rsquo: "'", lsquo: "'", sbquo: "'", rdquo: '"', ldquo: '"', bdquo: '"',
+  ndash: "\u2013", mdash: "\u2014", hellip: "\u2026", bull: "\u2022", middot: "\u00b7", copy: "\u00a9",
+  reg: "\u00ae", trade: "\u2122", euro: "\u20ac", pound: "\u00a3", yen: "\u00a5", cent: "\u00a2",
+  deg: "\u00b0", times: "\u00d7", divide: "\u00f7", laquo: "\u00ab", raquo: "\u00bb", shy: "",
+  zwnj: "", zwj: "", ensp: " ", emsp: " ", thinsp: " ",
+};
+/** Pure (red-team F19): decode numeric (&#8217; &#x2019;) and common named entities in ONE pass, so
+ *  "&amp;lt;" becomes the literal "&lt;" (never double-decoded). Unknown names stay literal. */
+export function decodeHtmlEntities(s: string): string {
+  return s.replace(/&(#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});/gi, (whole, ent: string) => {
+    if (ent[0] === "#") {
+      const cp = ent[1] === "x" || ent[1] === "X" ? parseInt(ent.slice(2), 16) : parseInt(ent.slice(1), 10);
+      if (!Number.isFinite(cp) || cp <= 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return " ";
+      return String.fromCodePoint(cp);
+    }
+    const v = NAMED_ENTITIES[ent.toLowerCase()];
+    return v === undefined ? whole : v;
+  });
+}
+
 export function htmlToText(html: string): string {
-  return stripBlockquotes(
-    // Quoted history is the OTHER person's old words, not this email's ask: Outlook's reply/forward
-    // header block and everything after it, and any <blockquote>, are dropped (verifier D5).
-    html.replace(/<div[^>]*id=["']?(divRplyFwdMsg|appendonsend)["']?[\s\S]*$/i, " "),
+  // What a browser shows: <head>, comments, scripts, styles and hidden elements are gone (html-visible.ts).
+  const visible = visibleHtml(html);
+  return decodeHtmlEntities(
+    stripBlockquotes(
+      // Quoted history is the OTHER person's old words, not this email's ask: Outlook's reply/forward
+      // header block and everything after it, and any <blockquote>, are dropped (verifier D5).
+      visible.replace(/<div[^>]*id=["']?(divRplyFwdMsg|appendonsend)["']?[\s\S]*$/i, " "),
+    )
+      .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+      .replace(/<br\s*\/?>|<\/(p|div|li|tr|h\d)>/gi, "\n")
+      // No quote-aware tag rule: every attempt at one swallowed visible text in some shape a browser shows (verifier
+      // loops 8 and 9), so tags end exactly as on main. A `>` inside a quoted attribute leaves main's residue.
+      .replace(/<[^>]+>/g, " "),
   )
-    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<br\s*\/?>|<\/(p|div|li|tr|h\d)>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
+    .replace(/\u00a0/g, " ")
+    // Typographic quotes read as their plain form (the parser now decodes &rsquo; etc. itself; red-team RT-14b).
+    .replace(/[\u2018\u2019\u201a]/g, "'")
+    .replace(/[\u201c\u201d\u201e]/g, '"')
     // A URL's "?" is a query string, not a question.
     .replace(/\bhttps?:\/\/\S+/gi, "[link]")
     .replace(/[ \t]+/g, " ")
@@ -245,7 +506,20 @@ export function htmlToText(html: string): string {
  * connector's output and is left undefined rather than invented, so the "Other folder" rule simply
  * does not apply to feed mail (documented gap).
  */
-export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): InboundMessage {
+/** mapFeedMessage's result: an InboundMessage plus OPTIONAL fields only the correspondence "needs you" classifier
+ *  reads (lib/correspondence/needs-you.ts). InboundMessage itself is unchanged, and screenMessage /
+ *  asksSomething never read these fields (pinned by scripts/needs-you.test.ts section P). Each field is present
+ *  only when the record carries the source field, so a record without them maps exactly as before. */
+export interface FeedInboundMessage extends InboundMessage {
+  /** The record's `toRecipients` as given (a `;`-separated STRING in the real feed, probe P-5; Graph's array
+   *  shape is accepted too). Parsed by needs-you.ts parseRecipients. */
+  toRecipients?: unknown;
+  ccRecipients?: unknown;
+  /** Lower-cased value of a `Content-Class` header, when present (absent on all 127 real emails, probe P-1). */
+  contentClass?: string | null;
+}
+
+export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): FeedInboundMessage {
   // Outlook connectors write header items as {name,value} or {Name,Value}; accept both.
   const headers = (Array.isArray(rec.internetMessageHeaders) ? rec.internetMessageHeaders : []).map((h) => {
     const o = (h && typeof h === "object" ? h : {}) as Record<string, unknown>;
@@ -279,6 +553,10 @@ export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): I
     headerNames: headers.map((h) => str(h?.name).toLowerCase()).filter(Boolean),
     precedence: val("precedence"),
     autoSubmitted: val("auto-submitted"),
+    // Needs-you redesign (2026-11-14): optional, present only when the record carries them.
+    ...(rec.toRecipients !== undefined ? { toRecipients: rec.toRecipients } : {}),
+    ...(rec.ccRecipients !== undefined ? { ccRecipients: rec.ccRecipients } : {}),
+    ...(header("content-class") ? { contentClass: val("content-class") } : {}),
   };
 }
 

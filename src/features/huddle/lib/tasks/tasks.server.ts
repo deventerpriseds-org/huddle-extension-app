@@ -2,7 +2,8 @@
 // to /api/public/tasks-sync on every add/edit/delete. This makes prioritization
 // supabase-independent: the scorer reads from here, not from journey at request time.
 // Auto-bootstraps its schema on first use (same pattern as identity/identity.server.ts).
-import { Pool } from "pg";
+import type { Pool } from "pg";
+import { getSharedPool } from "../db/shared-pool.server";
 import type { ScorableTask } from "./scoring";
 
 let _pool: Pool | null = null;
@@ -10,13 +11,7 @@ function getPool(): Pool {
   if (_pool) return _pool;
   const url = process.env.AZURE_PG_URL;
   if (!url) throw new Error("AZURE_PG_URL not configured");
-  _pool = new Pool({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
-    max: 3,
-    idleTimeoutMillis: 20_000,
-    connectionTimeoutMillis: 10_000,
-  });
+  _pool = getSharedPool();
   return _pool;
 }
 
@@ -576,12 +571,12 @@ export async function getScheduledTasksBetween(
   userEmail: string,
   startIso: string,
   endIso: string,
-): Promise<{ id: string; title: string; start_time: string | null; status: string | null }[]> {
+): Promise<{ id: string; title: string; start_time: string | null; status: string | null; category?: string | null }[]> {
   await ensureBootstrapped();
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { emails } = await resolveScopeByEmail(userEmail);
-  const { rows } = await getPool().query<{ id: string; title: string; start_time: string | null; status: string | null }>(
-    `SELECT id, title, start_time, status
+  const { rows } = await getPool().query<{ id: string; title: string; start_time: string | null; status: string | null; category: string | null }>(
+    `SELECT id, title, start_time, status, category
        FROM tasks.journey_tasks
       WHERE lower(user_email) = ANY($1)
         AND start_time >= $2 AND start_time < $3

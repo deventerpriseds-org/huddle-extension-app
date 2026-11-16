@@ -16,6 +16,7 @@ import {
 } from "./tasks.server";
 import {
   resolveJobCadence,
+  isJobEnabled,
   DEFAULT_TZ,
   type JobCadence,
   type JobTypeKey,
@@ -278,6 +279,22 @@ async function fireJob(job: ScheduledJob, slotId: string): Promise<void> {
  */
 export async function runDueScheduledJobs(): Promise<number> {
   const now = new Date();
+  // Fireflies meeting minutes (2026-11-10): the webhook only queues a meeting; this heartbeat emails the
+  // minutes and saves the transcript. STARTED here and awaited only at the very end, so it runs ALONGSIDE
+  // the existing jobs and a slow Luna call can never delay them. One meeting per tick; never throws.
+  const fireflies = import("../fireflies/fireflies.server")
+    .then((m) => m.processDueFirefliesMeetings(1))
+    .catch(() => 0);
+  // Correspondence ingest (2026-11-12): Teams log + email feed -> processing ledger. Same shape as Fireflies:
+  // started here, awaited at the end, never throws, OFF (zero work) unless HUDDLE_ONEDRIVE_FEEDS turns it on.
+  const correspondence = import("../correspondence/ingest.server")
+    .then((m) => m.runCorrespondenceIngest())
+    .catch(() => null);
+  // Task proposals (2026-11-12, AC section 5): Fireflies transcripts -> proposals, and the evening checklist
+  // in Iris's 1:1. Same shape again; OFF (zero work) unless correspondence.proposals is literally true.
+  const proposals = import("../proposals/proposals.server")
+    .then((m) => m.runProposalsPass())
+    .catch(() => undefined);
   try {
     await ensureGroomJobs(now);
   } catch {
@@ -297,6 +314,9 @@ export async function runDueScheduledJobs(): Promise<number> {
   try {
     claimed = await claimDueScheduledJobs(20);
   } catch {
+    await fireflies;
+    await correspondence;
+    await proposals;
     return 0;
   }
   let fired = 0;
@@ -327,6 +347,10 @@ export async function runDueScheduledJobs(): Promise<number> {
     } catch {
       /* if this fails the 90s hold retries the job later — idempotent slot id prevents a double run */
     }
+    // Switched off by the user (e.g. Meetings → "Automatic stand-up"): the next run was advanced above,
+    // so switching it back on resumes at the next listed hour; nothing fires now. Manual runs never
+    // pass through here, so they keep working either way.
+    if (!isJobEnabled(cadence)) continue;
     // Stable per-slot id (local hour bucket) so a retry within the same slot can't double-fire the job.
     const slotKey = new Intl.DateTimeFormat("en-CA", {
       timeZone: tz,
@@ -341,5 +365,8 @@ export async function runDueScheduledJobs(): Promise<number> {
     void fireJob({ ...job, cadence }, `${job.id}-${slotKey}`);
     fired++;
   }
+  await fireflies; // keep the request alive until the minutes pass finishes (it never throws)
+  await correspondence; // same for the correspondence pass (never throws; bounded by PASS_BUDGET_MS)
+  await proposals; // same for the proposals pass (never throws; transcripts bounded at 25s)
   return fired;
 }

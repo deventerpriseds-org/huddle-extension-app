@@ -2,7 +2,8 @@
 // user), so this is keyed by agent_id alone — editable from Settings and applied to every synth path
 // (1:1, ceremony, group) without a redeploy. Mirrors the identity pool/bootstrap pattern; the agents.ts
 // `voiceId` remains the built-in DEFAULT when no override row exists.
-import { Pool } from "pg";
+import type { Pool } from "pg";
+import { getSharedPool } from "../db/shared-pool.server";
 import { AGENT_BY_ID, type AgentId } from "../../data/agents";
 
 let _pool: Pool | null = null;
@@ -10,13 +11,7 @@ function getPool(): Pool {
   if (_pool) return _pool;
   const url = process.env.AZURE_PG_URL;
   if (!url) throw new Error("AZURE_PG_URL not configured");
-  _pool = new Pool({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
-    max: 3,
-    idleTimeoutMillis: 20_000,
-    connectionTimeoutMillis: 10_000,
-  });
+  _pool = getSharedPool();
   return _pool;
 }
 

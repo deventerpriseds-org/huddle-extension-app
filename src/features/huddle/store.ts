@@ -69,6 +69,12 @@ export interface ChecklistRowState {
   prevStatus?: string;
   busy?: boolean;
   today?: boolean;
+  /** Proposal rows only (2026-11-12, AC-correspondence-checklist 5): the owner's edited text, and the
+   *  journey task an Approve created/linked -- the row then renders as an ordinary task row (AC-5.9). */
+  title?: string;
+  linkedTaskId?: string | null;
+  /** Meeting-triage rows only (AC-correspondence-redesign R5.10): the For someone name, text only. */
+  assignee?: string | null;
 }
 
 export type MeetingKind = "morning" | "midday" | "afternoon" | "adhoc" | "virtual-meeting";
@@ -164,6 +170,11 @@ interface HuddleState {
   toggleContextPanelCollapsed: () => void;
   setContextPanelTab: (tab: ContextPanelTab) => void;
   setActive: (id: string) => void;
+  /** Jump to one email's reply card in a huddle (bell tap or `?email=` deep link). The transcript
+   *  for that huddle consumes it: scrolls to and highlights the card, then clears it. */
+  focusRequest: { huddleId: string; emailId: string; nonce: number } | null;
+  requestEmailFocus: (huddleId: string, emailId: string) => void;
+  clearFocusRequest: () => void;
   markHuddleRead: (huddleId: string) => void;
   setView: (v: View) => void;
   // Open the Artifacts view focused on a specific artifact (from a chat chip); null just clears focus.
@@ -290,6 +301,10 @@ export const useHuddleStore = create<HuddleState>()((set) => ({
       return { contextPanelCollapsed: next };
     }),
   setContextPanelTab: (tab) => set({ contextPanelTab: tab }),
+  focusRequest: null,
+  requestEmailFocus: (huddleId, emailId) =>
+    set((s) => ({ focusRequest: { huddleId, emailId, nonce: (s.focusRequest?.nonce ?? 0) + 1 } })),
+  clearFocusRequest: () => set({ focusRequest: null }),
   // Opening a huddle marks it read (badge clears immediately, before the debounced sync). Also mark the
   // huddle being LEFT as read up to now, so messages watched streaming in while it was open aren't counted
   // as unread after switching away — regardless of which append path added them.
