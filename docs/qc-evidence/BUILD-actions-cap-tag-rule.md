@@ -110,3 +110,36 @@ Stored shape (the brief's per-kind flags), written by the parser whenever it has
 - `groupMentionOnly: boolean` -- `unresolvedMention` is true AND every unresolved mention is a team / channel / tag
   mention (no @Everyone, no app, no malformed entry, no unexplained `<at>`).
 - The rule hides on an unresolved mention ONLY when `groupMentionOnly === true && chatWideMention === false`.
+
+## Step 3 -- the mention rule (code)
+
+- `teams-log.ts` `mentionFacts` -> also returns `chatWide` and `groupOnly`; new `mentionKind` (exactly one non-null
+  variant, a non-empty string id; `tag` or `conversation` team/channel = group; `conversation` chat = chat-wide;
+  anything else = unknown). A body `<at id=N>` matched by a classified non-user mention is now explained.
+  `unresolved` is computed EXACTLY as before.
+- `source-item.ts`: `TeamsMessage` / `TeamsContent` gain optional `chatWideMention`, `groupMentionOnly`;
+  `teamsContent` copies them. `stableHash` inputs are untouched (MK-H1).
+- `report-from-ledger.ts` `maybeMentionsOwner`: an unresolved mention no longer shows the chat when
+  `groupMentionOnly === true && chatWideMention === false`. The "bad user-id entry" check still runs after it.
+- Tests: `scripts/report-from-ledger.test.ts` MK-R1..R26, MK-N1..N4, MK-P1..P2, MK-H1, MK-S1..S7, MK-F1 (one per
+  table row); `scripts/actions-view.test.ts` MK-A1..A3 (the Actions classifier path, `threadUnits`).
+
+Changed existing tests:
+
+| test | before | after | why |
+|---|---|---|---|
+| VF1-2 (report-from-ledger) | asserted `unresolvedMention` true for tag / app / `{team}` / `{channel}` | also asserts `groupMentionOnly`: tag true; app, `{team}`, `{channel}` false | `{team:..}` / `{channel:..}` are not Graph's shape (G2/G4: team and channel are `conversation` types), so they stay unknown and SHOW |
+
+No other existing test asserted a chat-level tag -> SHOW: VF1-*/VF4-* pin the parser's `unresolvedMention`, whose
+meaning is unchanged; actions-view S-9 (`mentionedUserIds: []`, no flags) already expected HIDE.
+
+Counts after step 3: report-from-ledger 103 pass / 0 fail (was 62); actions-view 85 / 0 (was 82).
+
+**Behaviour beyond the brief, found while building:**
+- `ownerMentioned` for a tag-only chat is now `false` (was `null`). It reaches the classifier's input as
+  `owner_mentioned_in_chat` (action-classify.ts:147) only when the owner has switched "Hide group and meeting chats
+  I never wrote in" OFF (otherwise the chat is never classified). Pinned by MK-F1.
+- Messages ALREADY in the ledger keep their stored content: `ledger.server.ts` rewrites `content` only when the
+  content hash changes, and the hash deliberately excludes these flags. So tag-only chats stored before deploy keep
+  SHOWING (fail open, row S1); the new rule applies to messages first stored after deploy. A backfill is not part
+  of this change.

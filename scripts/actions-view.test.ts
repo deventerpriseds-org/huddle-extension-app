@@ -141,6 +141,29 @@ const S = (o: Partial<ActionsSettings> = {}) => ({ ...ACTIONS_SETTINGS_DEFAULT, 
   t("D-1 window: an email conversation before Monday is not a unit", on.units.some((u) => u.email?.key.includes("conv-old")), false);
 }
 
+// ── Owner decision 2026-11-17, through the Actions classifier path (threadUnits reuses chatInvolvement): a group chat
+//    whose only mention is a team / tag / channel mention never becomes a unit (so it can never reach the model);
+//    @Everyone and an old row without kind flags still do. Spelling table: docs/qc-evidence/BUILD-actions-cap-tag-rule.md.
+{
+  const TAGC = `19:tagonly${AT}thread.v2`;
+  const EVC = `19:everyone${AT}thread.v2`;
+  const OLDC = `19:oldrow${AT}thread.v2`;
+  const groupOnly = { unresolvedMention: true, groupMentionOnly: true, chatWideMention: false };
+  const mkRows: LedgerReportRow[] = [
+    trow(TAGC, "1", "2026-11-10T16:00:00Z", groupOnly),
+    trow(EVC, "1", "2026-11-10T16:00:00Z", { unresolvedMention: true, groupMentionOnly: false, chatWideMention: true }),
+    trow(OLDC, "1", "2026-11-10T16:00:00Z", { unresolvedMention: true }),
+    trow(ONE, "1", "2026-11-10T17:00:00Z", groupOnly),
+  ];
+  const mkAsm = assembleLedgerPlan({ rows: mkRows, proposals: [], bell: [] }, cfg, SINCE);
+  const on = threadUnits(mkAsm, S());
+  const off = threadUnits(mkAsm, S({ hideUninvolvedChats: false }));
+  const has = (u: typeof on, c: string) => u.units.some((x) => x.teams?.chatId === c);
+  t("MK-A1 Actions: a tag/team/channel-only group chat is NOT a unit and is counted hidden", [has(on, TAGC), on.uninvolvedHidden], [false, 1]);
+  t("MK-A2 Actions: @Everyone and an old row (no kind flags) ARE units; a 1:1 with a tag mention is a unit", [has(on, EVC), has(on, OLDC), has(on, ONE)], [true, true, true]);
+  t("MK-A3 Actions: with the switch OFF the tag-only chat is a unit flagged uninvolved", off.units.some((x) => x.teams?.chatId === TAGC && x.uninvolved), true);
+}
+
 // ── E. CLASSIFY PASS (AC-E-7, E-8, E-5, EU-2, H-3, meetings) ──────────────────────────────────────────
 const stub = (answer: (system: string, input: string) => unknown) => {
   const calls: string[] = [];
