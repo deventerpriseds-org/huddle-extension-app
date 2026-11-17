@@ -149,3 +149,52 @@ logged 0 lines with "secret". `scripts/proposals-preview.ts` swaps its private `
 
 Every restore was asserted against HEAD by mutate.sh. Caveat on G1: it is a source-text guard. It proves that the
 helper's import line is checked. It does not prove the bundle property, which C4 measures directly.
+
+## C6 Changes to existing behaviour -- CONFIRMED for the four listed; THREE the BUILD list misses
+
+Confirmed from the diff: (1) `listOpenAttention` sorts `kind IN ('feed','ai_quota')` first; (2) routes and agent turns
+run in a job context; (3) `settleAttentionForHuddle` excludes `ai_quota`; (4) `KIND_ICON.ai_quota = CreditCard`.
+Tokens: the AttentionBell diff only adds an icon import and a map entry. A grep of AttentionBell.tsx for hex,
+`rgb(`, and `(text|bg|border)-(red|blue|...)-N` returns nothing, so no raw colour is used.
+
+Missed by the BUILD "Existing behaviour that changes" list:
+- **M1 (MEDIUM, spec deviation, owner decision):** on recovery Iris posts a SECOND fixed message,
+  "OpenAI calls are working again. The out-of-credit alert has cleared.", as a durable turn with `notify:"push"`.
+  So an outage causes two chat messages and two phone pushes. The spec says ONE chat message, and "both clear".
+  The recovery message also posts when the owner had dismissed the bell row. The code switch is
+  `recoveryNotice` (ai-quota.ts, default true; ai-quota.server.ts does not set it).
+- **M2 (LOW):** every successful model call inside a background job now runs `UPDATE chat.email_replies ... kind='ai_quota'`
+  at most once per 60 s per owner per instance, plus one owner-resolution lookup the first time.
+- **M3 (LOW):** agent-turn and background failures that were silent before now print `[ai-job] job=... failed kind=...`
+  (including the classify/extract/judge timeouts). These are new log lines, and they hold no content (C5).
+- `cross-app-turn-gate` G7 goes red pre-merge (see the suite table). It is not in CI.
+
+## C7 Merge with current main (#266) -- CONFIRMED clean
+
+Scratch worktree at 457356ac, `git merge origin/main` (27146c4d): no conflicts, 10 files from #266. After the merge,
+`actions.server.ts` still has its classify_timeout hook next to #266's cap code. On the merged tree:
+ai-quota-alert 49/0, -sql 12/0, router-winners 39/0, router-redteam 12/0, barge-deadline 13/0, barge-route 10/0,
+turn-push 9/0, turn-catchup 5/0, turn-identity ALL PASS, attention / attention-focus pass, feed-staleness 98/0 and
+23/0, proposals-preview 15/0, correspondence-ingest 186/0, actions-view 90/0 (82 to 90 from #266),
+actions-view-server 28/0, report-from-ledger 103/0, cross-app-turn-gate 91/1 (the same G7). `tsc --noEmit` exit 0
+on the branch and on the merge. `npm run build` exit 0 on the merge; `AsyncLocalStorage` appears only in the lazy
+`ai-quota.server-*.js` chunk. The one build "error" line is the existing `web-push` node:util externalisation
+warning.
+
+## Verdict
+
+| claim | result |
+|---|---|
+| C1 no regression to normal turns | CONFIRMED (suites equal to base; diff read) |
+| C2 no model call for the notice | CONFIRMED (probe + order read); LOW hardening note |
+| C3 dedupe / clear / dismiss / non-quota | CONFIRMED (suites, real PG, two-instance probe); two LOW gaps |
+| C4 browser bundle | CONFIRMED (client grep, compared with base) |
+| C5 logs | CONFIRMED |
+| C6 behaviour changes | CONFIRMED + 3 unlisted (M1 MEDIUM) |
+| C7 merge with main | CONFIRMED clean |
+| UI: bell row renders with the CreditCard icon; Iris's message shows in dm-iris-chase; phone push arrives | **UI-UNVERIFIED**, no browser or device run in this loop |
+| live end to end (real enqueueTurn -> push on prod) | NOT REACHED (no live DB or workflows, by brief) |
+
+PASS 7/7 code claims | FAIL 0 | UI-UNVERIFIED 1 | **Verdict: MERGE-PENDING-UAT.** Before calling the work done,
+the owner decides M1 (keep or drop the second recovery message and push), and a verify-uat run checks the bell row and
+Iris's message after landing. Until then the status is NOT YET UAT-VERIFIED.
