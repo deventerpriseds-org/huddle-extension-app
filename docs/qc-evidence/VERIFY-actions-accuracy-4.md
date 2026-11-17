@@ -72,8 +72,9 @@ D3e "Example, Pat" sender vs "Pat Example" -> ["s-pat"]
 D3f "Pat Exampleson" vs "Pat Example"      -> []
 ```
 `git show 30898bae -- src | grep '^+' | grep -ciE 'von|ellis|vonda|enterpriseds'` -> 2 lines, both COMMENTS in
-`meeting-triage.ts` (lines 80 and 89 region: `"- Note: Von to send pricing"`). No identity in matching logic.
-**LOW (D4-L1):** the owner's first name is quoted in two comments of a public repo; replace with "Pat".
+`meeting-triage.ts` (the two `"- Note: <owner first name> to send pricing"` examples near lines 80 and 99). No
+identity in matching logic. **LOW (D4-L1):** the owner's first name is quoted in two comments of a public repo;
+replace it with a placeholder such as "Pat".
 
 ## D-4 cross-chat id needs 2+ chats or a clear majority -- CONFIRMED
 ```
