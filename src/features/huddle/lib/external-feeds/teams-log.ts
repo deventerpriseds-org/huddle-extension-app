@@ -95,31 +95,68 @@ function sender(m: Record<string, unknown>): { id: string; name: string; isApp: 
  *  channel; only a user carries an id we can compare with the owner's. Everything else -- and an entry that is not
  *  an object, has no `mentioned`, or a user whose id is empty or not a string -- MAY include the owner, so it sets
  *  `unresolved` and the uninvolved-chat rule SHOWS the chat (fail open). A body `<at id="N">` tag whose N is not a
- *  resolved user mention (or that has no id) is unresolved too. */
-function mentionFacts(ms: unknown[], rawBody: string): { ids: string[]; unresolved: boolean } {
+ *  resolved user mention (or that has no id) is unresolved too.
+ *
+ *  Owner decision 2026-11-17 (docs/qc-evidence/BUILD-actions-cap-tag-rule.md, spelling table): the unresolved
+ *  mentions are now also told apart by KIND, without changing what `unresolved` means:
+ *    chatWide  -- a `conversation` mention of type `chat` (@Everyone): aimed at everyone in the chat, the owner too.
+ *    groupOnly -- `unresolved` is true and EVERY unresolved mention is provably a team / channel `conversation`
+ *                 mention or a `tag` mention (no @Everyone, no app, no device, no malformed entry, no `<at>` tag
+ *                 left unexplained). There is no tag-membership data, so a tag is never "aimed at" the owner.
+ *  Graph sends the other variants as explicit `null` (chatmessage-post.md, Examples 8 and 9), so a variant counts
+ *  only when it is a non-null object; two non-null variants in one entry are ambiguous (unknown). */
+export function mentionFacts(ms: unknown[], rawBody: string): { ids: string[]; unresolved: boolean; chatWide: boolean; groupOnly: boolean } {
   const out = new Set<string>();
   const resolvedTagIds = new Set<string>();
   let unresolved = false;
+  let chatWide = false;
+  let unknown = false;
+  const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+  const idOf = (v: Record<string, unknown> | null) => (v && typeof v.id === "string" ? v.id.trim() : "");
   for (const x of ms) {
-    const o = x && typeof x === "object" && !Array.isArray(x) ? (x as Record<string, unknown>) : null;
-    const mt = o?.mentioned && typeof o.mentioned === "object" ? (o.mentioned as Record<string, unknown>) : null;
-    const user = mt?.user && typeof mt.user === "object" ? (mt.user as Record<string, unknown>) : null;
-    const id = user && typeof user.id === "string" ? user.id.trim().toLowerCase() : "";
-    if (!id) {
-      unresolved = true;
+    const o = obj(x);
+    const mt = obj(o?.mentioned);
+    const user = obj(mt?.user);
+    const id = idOf(user).toLowerCase();
+    const atId = o && (typeof o.id === "number" || typeof o.id === "string") ? String(o.id).trim() : null;
+    if (id) {
+      out.add(id);
+      if (atId !== null) resolvedTagIds.add(atId);
       continue;
     }
-    out.add(id);
-    if (o && (typeof o.id === "number" || typeof o.id === "string")) resolvedTagIds.add(String(o.id).trim());
+    unresolved = true;
+    const kind = mentionKind(mt);
+    if (kind === "chat") chatWide = true;
+    else if (kind !== "group") unknown = true;
+    if (kind && atId !== null) resolvedTagIds.add(atId);
   }
   for (const tag of rawBody.matchAll(/<at\b([^>]*)>/gi)) {
     const idm = /\bid\s*=\s*["']?([^"'\s>]+)/i.exec(tag[1] ?? "");
     if (!idm || !resolvedTagIds.has(idm[1])) {
       unresolved = true;
+      unknown = true;
       break;
     }
   }
-  return { ids: [...out], unresolved };
+  return { ids: [...out], unresolved, chatWide, groupOnly: unresolved && !chatWide && !unknown };
+}
+
+/** Pure: the kind of a non-user mention, or null when it cannot be shown to be one of Graph's documented shapes.
+ *  "chat" = a `conversation` of type chat (@Everyone); "group" = a `conversation` of type team / channel, or a `tag`.
+ *  Exactly ONE non-null variant is required, with a non-empty string id (a malformed entry stays unknown). */
+function mentionKind(mt: Record<string, unknown> | null): "chat" | "group" | null {
+  if (!mt) return null;
+  const present = Object.entries(mt).filter(([, v]) => v !== null && v !== undefined);
+  if (present.length !== 1) return null;
+  const [key, v] = present[0];
+  const o = v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  if (!o || typeof o.id !== "string" || !o.id.trim()) return null;
+  if (key === "tag") return "group";
+  if (key !== "conversation") return null;
+  const t = o.conversationIdentityType;
+  if (t === "chat") return "chat";
+  if (t === "team" || t === "channel") return "group";
+  return null;
 }
 
 /** The raw body string (HTML or text) of a Graph-style message, for the `<at>` tag check only (never stored). */
@@ -304,7 +341,7 @@ export function parseTeamsLog(
         ...(chatName ? { chatName } : {}),
         ...(str(m.webUrl) ? { webUrl: str(m.webUrl) } : {}),
         ...(mentionedUserIds ? { mentionedUserIds } : {}),
-        ...(mf ? { unresolvedMention: mf.unresolved } : {}),
+        ...(mf ? { unresolvedMention: mf.unresolved, chatWideMention: mf.chatWide, groupMentionOnly: mf.groupOnly } : {}),
         // Whether the owner is among the mentioned: known only when both the mention list and an owner id are.
         ...(mentionedUserIds && lineOwners.size ? { mentionsOwner: mentionedUserIds.some((id) => lineOwners.has(id)) } : {}),
         ...(lineOwnerId ? { ownerUserId: lineOwnerId } : {}),

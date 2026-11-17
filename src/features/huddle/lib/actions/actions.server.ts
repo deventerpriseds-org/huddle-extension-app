@@ -18,6 +18,7 @@ import { getFeedsConfig } from "../external-feeds/onedrive-feed.server";
 import type { ProposalSourceRef } from "../proposals/proposals";
 import {
   bellTargetsFor,
+  capNotice,
   classifyEnabled,
   resolveActionsSettings,
   withItemCorrection,
@@ -108,6 +109,12 @@ export async function actionCallsToday(owners: readonly string[], dayStartIso: s
   return Math.max(Number(r.rows[0]?.calls ?? 0) || 0, Number(r.rows[0]?.verdicts ?? 0) || 0);
 }
 
+/** THE "used today" both the heartbeat cap and the page's cap notice read (owner 2026-11-17): the same owners and
+ *  the same day boundary (the owner's local midnight), so the notice and the cap can never disagree. */
+export function usedTodayFor(ownerLogins: readonly string[], nowMs: number, timeZone: string): Promise<number> {
+  return actionCallsToday(lower(ownerLogins), new Date(localMidnightMs(nowMs, timeZone)).toISOString());
+}
+
 // ── the model ────────────────────────────────────────────────────────────────────────────────────────
 
 const MODEL_TIMEOUT_MS = 15_000;
@@ -159,7 +166,7 @@ export function runActionsClassify(): Promise<ClassifyResult | null> {
       const assembled = assembleLedgerPlan(data, cfg, sinceMondayMs(now, s.timeZone));
       const verdicts = await loadVerdicts(owners);
       const judged = new Set([...verdicts.values()].map((v) => v.key));
-      const used = await actionCallsToday(owners, new Date(localMidnightMs(now, s.timeZone)).toISOString());
+      const used = await usedTodayFor(cfg.ownerLogins, now, s.timeZone);
       const left = classifyCallsLeft(used, s.dailyCap);
       const { proposeFromSource } = await import("../proposals/engine");
       const { deps } = await import("../proposals/proposals.server");
@@ -224,7 +231,18 @@ async function addMeetingRows(owner: string, m: MeetingItems, items: string[]): 
 
 export type ActionsPage =
   | { status: "signed_out" | "off" | "error"; error?: string }
-  | ({ status: "ok"; sinceIso: string; settings: ActionsSettings; classifyOn: boolean; neverClassified: boolean; meetingOthersHidden: number } & ActionsSelection);
+  | ({
+      status: "ok";
+      sinceIso: string;
+      settings: ActionsSettings;
+      classifyOn: boolean;
+      neverClassified: boolean;
+      meetingOthersHidden: number;
+      /** AI checks used today: the SAME count the heartbeat caps on (actionCallsToday); null when it could not be read. */
+      capUsedToday: number | null;
+      /** The "Daily AI check limit reached ..." notice (capNotice), or null. */
+      capNotice: string | null;
+    } & ActionsSelection);
 
 const proposalCols = `id, state, title, assignee, owner_correction`;
 
@@ -297,13 +315,18 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
   const sel = selectActionItems(candidates, s);
   sel.hidden.uninvolved += uninvolvedHidden;
   sel.hidden.total += uninvolvedHidden;
+  const classifyOn = classifyEnabled(s, true);
+  // The heartbeat's own count and day boundary (usedTodayFor, also used by runActionsClassify).
+  const capUsedToday = await usedTodayFor(cfg.ownerLogins, now, s.timeZone).catch(() => null);
   return {
     status: "ok",
     sinceIso: new Date(sinceMs).toISOString(),
     settings: s,
-    classifyOn: classifyEnabled(s, true),
+    classifyOn,
     neverClassified: verdicts.size === 0,
     meetingOthersHidden,
+    capUsedToday,
+    capNotice: capNotice(capUsedToday, s.dailyCap, classifyOn),
     ...sel,
   };
 }
