@@ -63,11 +63,19 @@ export const checks = [
     // change nothing stored; Send is never pressed.
     const rowsN = await page.locator('[data-testid="actions-row"]').count();
     if (rowsN) {
-      const row = page.locator('[data-testid="actions-row"]').first();
+      // Loop-2 UI: "More" shows ONLY on a row whose text is cut off, and it is a 44px touch target.
+      const withMore = page.locator('[data-testid="actions-row"]').filter({ has: page.locator('[data-testid="actions-row-more"]') });
+      const plain = page.locator('[data-testid="actions-row"]').filter({ hasNot: page.locator('[data-testid="actions-row-more"]') });
+      if (await plain.count()) {
+        const fit = await plain.first().locator('[data-testid="actions-row-title"]').first().evaluate((el) => el.scrollWidth <= el.clientWidth + 1).catch(() => true);
+        check("ACC-5 a row WITHOUT More shows its whole title (nothing cut off)", fit);
+      }
+      const row = (await withMore.count()) ? withMore.first() : page.locator('[data-testid="actions-row"]').first();
       const titleEl = row.locator('[data-testid="actions-row-title"]').first();
       const more = row.locator('[data-testid="actions-row-more"]').first();
-      check("ACC-5 a row has a More control", (await more.count()) === 1);
       if (await more.count()) {
+        const h = await more.evaluate((el) => el.getBoundingClientRect().height);
+        check("ACC-5 the More control is at least 44px tall", h >= 43.5, `${h}px`);
         await more.click();
         await page.waitForTimeout(300);
         const full = await titleEl.evaluate((el) => ({ fits: el.scrollWidth <= el.clientWidth + 1, ws: getComputedStyle(el).whiteSpace, expanded: el.closest("li")?.querySelector('[data-testid="actions-row-more"]')?.getAttribute("aria-expanded") }));

@@ -379,6 +379,22 @@ function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; loca
   // 2026-11-17 (owner: "the text areas don't expand so the text is cut off"): tap the text, or "More", to read the
   // full title, meta line, summary and quote; tap again ("Less") to fold it back. Display only.
   const [expanded, setExpanded] = useState(false);
+  // Loop-2 UI: "More" shows only when some text is actually cut off (measured: scroll size > box), re-measured when
+  // the row resizes (phone rotation, panel width). While expanded it stays so "Less" can fold the row back.
+  const titleRef = useRef<HTMLParagraphElement | null>(null);
+  const metaRef = useRef<HTMLParagraphElement | null>(null);
+  const summaryRef = useRef<HTMLParagraphElement | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  useLayoutEffect(() => {
+    if (expanded) return;
+    const els = [titleRef.current, metaRef.current, summaryRef.current].filter((e): e is HTMLParagraphElement => !!e);
+    const measure = () => setTruncated(els.some((el) => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    els.forEach((el) => ro.observe(el));
+    return () => ro.disconnect();
+  });
   const Icon = SOURCE_ICON[row.source];
 
   async function act(action: "approve" | "complete" | "dismiss" | "edit" | "triage", extra: { title?: string; choice?: "mine" | "someone" | "skip"; name?: string } = {}) {
@@ -532,6 +548,7 @@ function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; loca
             />
           ) : (
             <p
+              ref={titleRef}
               className={cn("text-[13px] font-medium leading-snug", expanded ? "whitespace-pre-wrap break-words" : "truncate", open || triaging ? "text-foreground" : "text-muted-foreground line-through")}
               title={title}
               onClick={() => setExpanded((x) => !x)}
@@ -543,13 +560,14 @@ function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; loca
           {editing ? (
             <p className="text-[10px] text-muted-foreground">Enter saves · Esc cancels</p>
           ) : (
-            <p className={cn("text-[11px] text-muted-foreground", expanded ? "break-words" : "truncate")} title={meta}>
+            <p ref={metaRef} className={cn("text-[11px] text-muted-foreground", expanded ? "break-words" : "truncate")} title={meta}>
               {open || triaging ? meta : closedLabel}
               {draftSaved && (open || triaging) ? " · Draft saved" : ""}
             </p>
           )}
           {(open || triaging) && row.reasonLine && (
             <p
+              ref={summaryRef}
               className={cn("mt-0.5 text-[12px] text-foreground/80", expanded ? "whitespace-pre-wrap break-words" : "line-clamp-2")}
               onClick={() => setExpanded((x) => !x)}
               data-testid="actions-row-summary"
@@ -558,12 +576,12 @@ function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; loca
               {row.quote ? <span className="text-muted-foreground"> “{row.quote}”</span> : null}
             </p>
           )}
-          {!editing && !naming && (
+          {!editing && !naming && (truncated || expanded) && (
             <button
               type="button"
               aria-expanded={expanded}
               onClick={() => setExpanded((x) => !x)}
-              className="mt-0.5 min-h-6 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              className="-my-2.5 inline-flex min-h-11 items-center text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
               data-testid="actions-row-more"
             >
               {expanded ? "Less" : "More"}
