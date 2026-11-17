@@ -52,7 +52,8 @@ export interface AiQuotaDeps {
   log(line: string): void;
   /** Per-instance throttle on store calls (the store itself is what dedupes across instances). Default 60s. */
   throttleMs?: number;
-  /** Iris also posts "working again" when the outage ends. Default true. */
+  /** Iris also posts "working again" when the outage ends. Default FALSE (owner 2026-11-17: one message per
+   *  outage -- the bell row auto-clears silently). Opt in with true. */
   recoveryNotice?: boolean;
 }
 
@@ -121,7 +122,7 @@ export function createAiQuotaMonitor(deps: AiQuotaDeps) {
     if (!cleared) return "nothing_open";
     lastRaise.delete(o); // the outage ended: the next quota error must reach the store at once
     deps.log(`[ai-quota] alert cleared job=${job}`);
-    if (deps.notify && deps.recoveryNotice !== false) {
+    if (deps.notify && deps.recoveryNotice === true) {
       try {
         await deps.notify({ ownerEmail: o, id: aiQuotaAttentionId(o), kind: "recovered", text: aiQuotaRecoveredText(), nowMs: now });
       } catch (e) {

@@ -59,7 +59,7 @@ function twin() {
   return { rows, store, writes: () => writes };
 }
 
-function harness(opts: { throttleMs?: number } = {}) {
+function harness(opts: { throttleMs?: number; recoveryNotice?: boolean } = {}) {
   const tw = twin();
   const notices: { kind: string; text: string }[] = [];
   const logs: string[] = [];
@@ -68,7 +68,7 @@ function harness(opts: { throttleMs?: number } = {}) {
     notices.push({ kind: r.kind, text: r.text });
     return true;
   };
-  const m = createAiQuotaMonitor({ store: tw.store, notify, now: () => now, log: (l) => logs.push(l), throttleMs: opts.throttleMs ?? 0 });
+  const m = createAiQuotaMonitor({ store: tw.store, notify, now: () => now, log: (l) => logs.push(l), throttleMs: opts.throttleMs ?? 0, recoveryNotice: opts.recoveryNotice });
   return { m, tw, notices, logs, tick: (ms: number) => (now += ms) };
 }
 
@@ -105,16 +105,24 @@ function harness(opts: { throttleMs?: number } = {}) {
   t("Q3 concurrent raise -> one notice", notices.length, 1);
 }
 
-// Q4 success -> cleared (and Iris says it's working again); a later quota error raises a NEW alert
+// Q4 success -> cleared silently (owner: one message per outage); a later quota error raises a NEW alert
 {
   const h = harness();
   await h.m.onFailure("Grooming", O, QUOTA);
   const out = await h.m.onSuccess("Stand-up", O);
   t("Q4 success -> cleared", out, "cleared");
   t("Q4 row auto-cleared", [...h.tw.rows.values()].map((r) => r.status), ["replied"]);
-  t("Q4 recovery notice", h.notices.map((n) => n.kind), ["outage", "recovered"]);
+  t("Q4 NO recovery notice by default (one message per outage)", h.notices.map((n) => n.kind), ["outage"]);
   t("Q4 a second success clears nothing", await h.m.onSuccess("Stand-up", O), "nothing_open");
   t("Q4 next outage raises again", await h.m.onFailure("Grooming", O, QUOTA), "alerted");
+}
+
+// Q4b recovery notice only when explicitly opted in
+{
+  const h = harness({ recoveryNotice: true });
+  await h.m.onFailure("Grooming", O, QUOTA);
+  await h.m.onSuccess("Stand-up", O);
+  t("Q4b opt-in recovery notice", h.notices.map((n) => n.kind), ["outage", "recovered"]);
 }
 
 // Q5 a non-quota error -> no alert, but its kind is logged (never the message text)
