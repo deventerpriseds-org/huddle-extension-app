@@ -204,11 +204,27 @@ export function quoteIsVerbatim(quote: string | null | undefined, haystack: stri
   return pieces.some((piece) => canonQuote(piece ?? "").includes(q));
 }
 
+/**
+ * 2026-11-17 loop-2 D-1: THE CLASSIFIER-INPUT VERSION, per source. A stored verdict is reused only when it was
+ * judged at the CURRENT version of its source; an older one is judged again (spending the daily cap as any call).
+ * BUMP the source's number whenever its role labelling (who is OWNER / OTHER), its input text, or its instructions
+ * change in a way that can change a verdict -- otherwise verdicts judged under the old logic stay listed until the
+ * thread gets a new message (the verifier's D-1: reversed-sender Teams rows survived the fix).
+ *  - teams 2: owner ids across all rows + the display-name last resort (sender no longer reversed), GROUNDED, the
+ *    settled guard. A verdict without `inputVersion` was judged at version 1.
+ *  - email 1: NOT bumped. The email labelling is unchanged on this branch; only GROUNDED (prompt) and the settled
+ *    guard were added, and re-judging every email thread would hide its correct rows ("not checked yet") for hours
+ *    at 6 calls per pass. One-line change to re-judge email too: set it to 2.
+ */
+export const CLASSIFIER_INPUT_VERSION = { email: 1, teams: 2 } as const;
+
 /** What is stored per classification key (ledger result_ids.action). `open` is the only status ever listed. */
 export interface ActionVerdict {
   v: 1;
   /** Thread key + latest message ledger id: a newer message re-classifies. */
   key: string;
+  /** D-1: CLASSIFIER_INPUT_VERSION[source] when judged; absent = 1 (judged before versions existed). */
+  inputVersion?: number;
   status: "open" | "none" | "not_checked";
   /** Why not_checked: quote_not_found | bad_shape. */
   notCheckedReason?: "quote_not_found" | "bad_shape";
@@ -238,8 +254,8 @@ const str = (v: unknown, max = 300) => (typeof v === "string" && v.trim() ? v.tr
  *  - open_item false -> none (answeredByReply when the thread was settled);
  *  - otherwise open.
  */
-export function admitActionVerdict(raw: unknown, haystack: string | QuoteHaystack, a: { key: string; settled: boolean; nowIso: string }): ActionVerdict {
-  const base: ActionVerdict = { v: 1, key: a.key, status: "not_checked", notCheckedReason: "bad_shape", kind: null, category: null, confidence: null, todo: null, due: null, quote: null, reason: null, answeredByReply: false, proposalId: null, at: a.nowIso };
+export function admitActionVerdict(raw: unknown, haystack: string | QuoteHaystack, a: { key: string; settled: boolean; nowIso: string; inputVersion?: number }): ActionVerdict {
+  const base: ActionVerdict = { v: 1, key: a.key, ...(a.inputVersion !== undefined ? { inputVersion: a.inputVersion } : {}), status: "not_checked", notCheckedReason: "bad_shape", kind: null, category: null, confidence: null, todo: null, due: null, quote: null, reason: null, answeredByReply: false, proposalId: null, at: a.nowIso };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return base;
   const o = raw as Record<string, unknown>;
   if (typeof o.open_item !== "boolean") return base;

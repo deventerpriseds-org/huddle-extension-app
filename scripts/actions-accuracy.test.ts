@@ -21,7 +21,8 @@ import { assembleLedgerPlan, foldPersonName, ownerTeamsIdsAcross, teamsChatsFrom
 import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { teamsSourceItemId, type TeamsContent } from "../src/features/huddle/lib/correspondence/source-item";
 import { CORRECTION_LABEL, CORRECTION_REASONS, makeCorrection, ACTIONS_SETTINGS_DEFAULT, type ActionCandidate } from "../src/features/huddle/lib/actions/actions";
-import { collapseDuplicateTeamsItems, teamsSourceLabel, threadUnits } from "../src/features/huddle/lib/actions/pipeline";
+import { buildCandidates, collapseDuplicateTeamsItems, currentlyJudgedKeys, runClassify, teamsSourceLabel, threadUnits, verdictIsCurrent, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
+import { CLASSIFIER_INPUT_VERSION, type ActionVerdict } from "../src/features/huddle/lib/correspondence/action-classify";
 import { detailLineOf, splitActionItems } from "../src/features/huddle/lib/proposals/meeting-triage";
 
 let fail = 0;
@@ -172,6 +173,45 @@ t(
   ["Teams 1:1", "Teams group chat", "Teams, Synthetic squad", "Teams"],
 );
 void GRP;
+
+// ── R7. LOOP-2 D-1: a verdict judged by the OLD labelling is judged again ───────────────────────────
+// The chat's LAST message is the owner's own (so the item key is the same before and after the fix). The verdict
+// the old code stored for that key took the owner's sentence as an ask from someone else.
+{
+  const rowsD1 = [older, ask, own];
+  const u = threadUnits(asm, ACTIONS_SETTINGS_DEFAULT).units.find((x) => x.teams?.chatId === ONE)!;
+  const storeKey = `${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`;
+  const stale: ActionVerdict = { v: 1, key: u.itemKey, status: "open", kind: "action", category: "person_request", confidence: "high", todo: "Tell them how often", due: null, quote: "please let me know how often you want our synthetic 1:1", reason: "Asked directly.", answeredByReply: false, proposalId: "p-stale", at: NOW };
+  const verdicts = new Map<string, ActionVerdict>([[storeKey, stale]]);
+  t("R7-1 GUARD: a stored Teams verdict from before the version (no inputVersion) is NOT counted as judged", currentlyJudgedKeys(verdicts).has(u.itemKey), false);
+  const cands = (vs: ReadonlyMap<string, ActionVerdict>, props: [string, string][]) =>
+    buildCandidates({ assembled: asm, rows: rowsD1, settings: ACTIONS_SETTINGS_DEFAULT, verdicts: vs, proposals: new Map(props.map(([id, title]) => [id, { id, state: "proposed", title, assignee: null, correction: null }])), meetingProposals: [], replies: [], isDraftable: () => false }).candidates.find((c) => c.source === "teams")!;
+  const before = cands(verdicts, [["p-stale", "Tell them how often"]]);
+  t("R7-2 GUARD: until re-judged the stale verdict is not shown (not checked yet), never the owner's own sentence", [before.status, before.display.quote], ["not_checked", null]);
+  const answer = (kind: string) => ({ open_item: true, kind, todo: "Say whether weekly works", due: null, quote: "can we meet weekly?", confidence: "high", reason: "Asked directly.", category: "person_request" });
+  const run = async (kind: string) => {
+    const stored = new Map<string, ActionVerdict>();
+    const deps: ClassifyDeps = {
+      recordCall: async () => {},
+      model: async () => answer(kind),
+      propose: async () => ({ id: "p-new", onBoard: false }),
+      storeVerdict: async (at, v) => void stored.set(`${at.source}\u0000${at.sourceItemId}`, v),
+      addMeetingRows: async () => 0,
+      nowIso: () => NOW,
+    };
+    const r = await runClassify(asm, { ...ACTIONS_SETTINGS_DEFAULT, sources: { ...ACTIONS_SETTINGS_DEFAULT.sources, email: false, meeting: false } }, currentlyJudgedKeys(verdicts), 6, deps);
+    return { r, nv: stored.get(storeKey) };
+  };
+  const { r, nv } = await run("action");
+  // Two Teams threads in this plan (ONE, and the older ONE2 chat which has no verdict at all): both are called.
+  t("R7-3 the old-version thread is judged again (inside the per-pass limit) and stored at the current version", [r.calls, r.alreadyJudged, nv?.inputVersion, nv?.key === u.itemKey], [2, 0, CLASSIFIER_INPUT_VERSION.teams, true]);
+  const after = cands(new Map([[storeKey, nv!]]), [["p-new", "Say whether weekly works"]]);
+  t("R7-4 the corrected sender wins: shown as the OTHER person's ask, quoting the OTHER person's message", [after.status, after.display.who, after.display.quote, after.display.title], ["open", "Pat Example", "can we meet weekly?", "Say whether weekly works"]);
+  const rep = await run("reply");
+  t("R7-5 the re-judged verdict passes the settled guard (owner wrote last): a reply he already gave is not owed", [rep.nv?.status, rep.nv?.answeredByReply], ["none", true]);
+  t("R7-6 a current-version verdict is reused (no call); a verdict for an older item key is not", [currentlyJudgedKeys(new Map([[storeKey, nv!]])).has(u.itemKey), verdictIsCurrent({ ...nv!, key: "teams:x|old" }, u.itemKey, "teams")], [true, false]);
+  t("R7-7 email verdicts without inputVersion stay current (email version not bumped)", verdictIsCurrent({ key: "e|1" }, "e|1", "email"), true);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

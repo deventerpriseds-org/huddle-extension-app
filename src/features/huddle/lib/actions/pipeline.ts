@@ -17,6 +17,7 @@ import {
   actionSectionFor,
   admitActionVerdict,
   canonQuote,
+  CLASSIFIER_INPUT_VERSION,
   emailActionInput,
   emailInstructionsFor,
   emailQuoteHaystack,
@@ -82,6 +83,23 @@ export function meetingUnits(meetings: readonly MeetingItems[], ownerNames: read
     m.open.forEach((it, i) => (meetingItemIsOwnersOrUnassigned(m.openHeadings?.[i] ?? null, ownerNames) ? items.push(it) : othersHidden++));
     return { meeting: m, items, othersHidden };
   });
+}
+
+/** Pure (loop-2 D-1): is a stored verdict the CURRENT judgement of this thread version? Same item key AND judged at
+ *  the current classifier-input version of its source (absent = 1). An older verdict is neither reused nor shown. */
+export function verdictIsCurrent(v: Pick<ActionVerdict, "key" | "inputVersion"> | null | undefined, itemKey: string, source: "email" | "teams"): boolean {
+  return !!v && v.key === itemKey && (v.inputVersion ?? 1) === CLASSIFIER_INPUT_VERSION[source];
+}
+
+/** Pure (loop-2 D-1): the item keys whose stored verdict is current, from the stored verdicts keyed
+ *  "<source>\u0000<ledger id>" (as loadVerdicts reads them). Only these are skipped by the classify pass. */
+export function currentlyJudgedKeys(verdicts: ReadonlyMap<string, ActionVerdict>): Set<string> {
+  const out = new Set<string>();
+  for (const [k, v] of verdicts) {
+    const source = k.slice(0, k.indexOf("\u0000"));
+    if ((source === "email" || source === "teams") && v && typeof v.key === "string" && verdictIsCurrent(v, v.key, source)) out.add(v.key);
+  }
+  return out;
 }
 
 /** At most this many model calls per pass (a pass rides the ~45s heartbeat). */
@@ -169,7 +187,7 @@ export async function runClassify(
     }
     const haystack = u.email ? emailQuoteHaystack(u.email, a.forwards) : teamsQuoteHaystack(u.teams!);
     const settled = u.email ? u.email.settled : u.teams!.settled;
-    let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso() });
+    let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source] });
     if (v.status === "open") {
       const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");
       try {
@@ -248,7 +266,7 @@ export function buildCandidates(a: {
   const { units, uninvolvedHidden } = threadUnits(a.assembled, a.settings);
   for (const u of units) {
     const v = a.verdicts.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`);
-    const current = v && v.key === u.itemKey ? v : null;
+    const current = v && verdictIsCurrent(v, u.itemKey, u.source) ? v : null;
     const p = current?.proposalId ? a.proposals.get(current.proposalId) ?? null : null;
     const base = {
       proposalId: p?.id ?? null,

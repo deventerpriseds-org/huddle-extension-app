@@ -69,3 +69,24 @@ over ALL Teams rows (`oid`), and per-chat counts. No content, id or name was sel
   neither is a needs-reply item. Belt and braces: open Teams items with the same sender and the same quote, or the
   same backing proposal, collapse to the newest one; a group chat named only after the owner is labelled
   "Teams group chat".
+
+## Loop-2 fixes
+
+Source of the defects: `docs/qc-evidence/VERIFY-actions-accuracy-2.md` on `claude_verify-actions-accuracy-1`
+(e4588d3c). Synthetic data only. Each fix is committed and pushed on its own.
+
+### D-1 (HIGH): old verdicts are re-judged
+
+- CHANGE: `CLASSIFIER_INPUT_VERSION = { email: 1, teams: 2 }` (action-classify.ts). Every new verdict stores
+  `inputVersion`. `verdictIsCurrent(v, itemKey, source)` = same key AND same version (absent = 1). The classify
+  pass skips only `currentlyJudgedKeys(verdicts)`; the page shows only a current verdict.
+- BEHAVIOUR: a Teams verdict judged before this fix is not shown (counted "not checked yet") until the heartbeat
+  re-judges it, then the corrected verdict shows. Re-judging rides the existing cap (500/day, 6 per pass,
+  one pass per 10 min): about 36 re-judges an hour, so a few dozen Teams threads clear in about an hour.
+- JUDGEMENT CALL (reversible, one line): email NOT bumped. The email labelling did not change on this branch
+  (only the GROUNDED prompt text and the settled guard), and re-judging every email thread would hide correct
+  email rows for hours. Set `email: 2` to re-judge email too.
+- RESIDUAL (not changed): the stale verdict's backing proposal row is left as it was (it is no longer referenced
+  by a current verdict, so Actions never shows it).
+- TESTS: actions-accuracy R7-1..R7-7 (stale not judged; stale not shown; re-judged at the current version; the
+  corrected sender and the OTHER person's quote win; settled guard on the re-judge; current reused; email kept).
