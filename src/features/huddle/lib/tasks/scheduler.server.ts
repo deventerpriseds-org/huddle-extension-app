@@ -282,18 +282,22 @@ export async function runDueScheduledJobs(): Promise<number> {
   // Fireflies meeting minutes (2026-11-10): the webhook only queues a meeting; this heartbeat emails the
   // minutes and saves the transcript. STARTED here and awaited only at the very end, so it runs ALONGSIDE
   // the existing jobs and a slow Luna call can never delay them. One meeting per tick; never throws.
-  const fireflies = import("../fireflies/fireflies.server")
-    .then((m) => m.processDueFirefliesMeetings(1))
+  // Each heartbeat pass runs as a background AI job (lib/ai-quota, 2026-11-17): a quota error inside it raises the
+  // ONE bell + Iris alert, a success clears it. No owner is passed: the alert falls back to the feed owner.
+  const asJob = <T,>(job: string, fn: () => Promise<T>): Promise<T> =>
+    import("../ai-quota/ai-quota.server").then((q) => q.runAsAiJob(job, null, fn), () => fn());
+  const fireflies = asJob("Meeting minutes and triage", () => import("../fireflies/fireflies.server")
+    .then((m) => m.processDueFirefliesMeetings(1)))
     .catch(() => 0);
   // Correspondence ingest (2026-11-12): Teams log + email feed -> processing ledger. Same shape as Fireflies:
   // started here, awaited at the end, never throws, OFF (zero work) unless HUDDLE_ONEDRIVE_FEEDS turns it on.
-  const correspondence = import("../correspondence/ingest.server")
-    .then((m) => m.runCorrespondenceIngest())
+  const correspondence = asJob("Correspondence and Actions classifier", () => import("../correspondence/ingest.server")
+    .then((m) => m.runCorrespondenceIngest()))
     .catch(() => null);
   // Task proposals (2026-11-12, AC section 5): Fireflies transcripts -> proposals, and the evening checklist
   // in Iris's 1:1. Same shape again; OFF (zero work) unless correspondence.proposals is literally true.
-  const proposals = import("../proposals/proposals.server")
-    .then((m) => m.runProposalsPass())
+  const proposals = asJob("Task proposals", () => import("../proposals/proposals.server")
+    .then((m) => m.runProposalsPass()))
     .catch(() => undefined);
   try {
     await ensureGroomJobs(now);
@@ -306,7 +310,7 @@ export async function runDueScheduledJobs(): Promise<number> {
   // (claimConfirmAskSend) so this never double-sends. Never throws.
   try {
     const { fireDueConfirmAsks } = await import("./autowork.server");
-    await fireDueConfirmAsks(now);
+    await asJob("Confirm-intent asks", () => fireDueConfirmAsks(now));
   } catch {
     /* best-effort — a confirm-ask delivery hiccup must never break the heartbeat */
   }

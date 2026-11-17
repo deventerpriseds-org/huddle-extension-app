@@ -225,9 +225,12 @@ const everyone = { body: { contentType: "html", content: '<at id="0">Everyone</a
 const pe = parseOne(everyone);
 t("VF1-1 parser: @Everyone (conversation mention) -> no user ids, unresolvedMention true", [pe.mentionedUserIds, pe.unresolvedMention], [[], true]);
 t(
-  "VF1-2 parser: tag / application / team / channel mentions -> unresolvedMention true",
-  [{ tag: { id: "tag-1", displayName: "Leads" } }, { application: { id: "app-1" } }, { team: { id: "team-1" } }, { channel: { id: "chan-1" } }].map((mentioned) => parseOne({ mentions: [{ id: 0, mentioned }] }).unresolvedMention),
-  [true, true, true, true],
+  "VF1-2 parser: tag / application / team / channel mentions -> unresolvedMention true; [2026-11-17] only the Graph tag shape is groupMentionOnly (app and the non-Graph {team}/{channel} shapes stay unknown)",
+  [{ tag: { id: "tag-1", displayName: "Leads" } }, { application: { id: "app-1" } }, { team: { id: "team-1" } }, { channel: { id: "chan-1" } }].map((mentioned) => {
+    const m = parseOne({ mentions: [{ id: 0, mentioned }] });
+    return [m.unresolvedMention, m.groupMentionOnly];
+  }),
+  [[true, true], [true, false], [true, false], [true, false]],
 );
 t(
   "VF1-3 parser: a resolved user mention whose <at> id matches, and an empty list with no <at>, -> unresolvedMention false",
@@ -336,6 +339,103 @@ t(
   "VF2-4 a malformed chat is counted as can't-tell in the plan (alongside the no-mention-data one)",
   mixedPlan ? mixedPlan.teams.cantTell : "no plan",
   2,
+);
+
+// ── Owner decision 2026-11-17: a group / meeting / channel chat whose ONLY mention is a team, tag or channel mention
+//    is HIDDEN; @Everyone, the owner's id, the owner writing, 1:1, and anything unreadable still SHOW. One test per
+//    row of the spelling table in docs/qc-evidence/BUILD-actions-cap-tag-rule.md (Graph shapes from Graph's own docs).
+//    Synthetic ids only.
+const CHAT_1B = "19:ccc_ddd@unq.gbl.spaces";
+const lineFor = (chatId: string, msgs: unknown[], ownerUserId: string | null = OWNER) =>
+  JSON.stringify({ source: "teams", synthetic: false, chatId, ...(ownerUserId ? { ownerUserId } : {}), capturedUtc: "2026-11-10T23:00:00Z", messages: msgs });
+const mk = (mentions: unknown, o: { body?: string; chatId?: string; extra?: unknown[]; ownerUserId?: string | null } = {}) => {
+  const msgs = [
+    pmsg("1", { body: { contentType: "html", content: o.body ?? "Please send the synthetic numbers" }, ...(mentions === undefined ? {} : { mentions }) }),
+    ...(o.extra ?? []),
+  ];
+  const parsedMk = parseTeamsLog(lineFor(o.chatId ?? CHAT_G, msgs, o.ownerUserId === undefined ? OWNER : o.ownerUserId), cfg).messages;
+  const v = chatInvolvement(o.chatId ?? CHAT_G, parsedMk.map(teamsContent));
+  return `${v.hide ? "HIDE" : "SHOW"}:${v.reason}`;
+};
+const conv = (conversationIdentityType: unknown, id: unknown = "19:conv01@thread.v2") => ({ conversation: { id, displayName: "Synthetic", ...(conversationIdentityType === undefined ? {} : { conversationIdentityType }) } });
+const one = (mentioned: unknown, id = 0) => [{ id, mentionText: "Synthetic", mentioned }];
+const SHOW_MAYBE = "SHOW:owner_maybe_mentioned";
+const HIDE_UN = "HIDE:uninvolved";
+
+t("MK-R1 user mention of the owner's id -> SHOW", mk(one({ user: { id: OWNER.toUpperCase() } })), "SHOW:owner_mentioned");
+t("MK-R2 user mention of another user only -> HIDE (unchanged)", mk(one({ user: { id: "user-guid-0002" } })), HIDE_UN);
+t("MK-R3 user id empty / whitespace / number / user null -> SHOW", [one({ user: { id: "" } }), one({ user: { id: "  " } }), one({ user: { id: 9 } }), one({ user: null })].map((m) => mk(m)), [SHOW_MAYBE, SHOW_MAYBE, SHOW_MAYBE, SHOW_MAYBE]);
+t("MK-R4 application (bot) mention -> SHOW (not covered by the decision)", mk(one({ application: { id: "app-guid-0001", displayName: "Synthetic bot" } })), SHOW_MAYBE);
+t("MK-R5 @Everyone (conversation, type chat) -> SHOW", mk(one(conv("chat", CHAT_G))), SHOW_MAYBE);
+t("MK-R6 team mention (conversation, type team) -> HIDE", mk(one(conv("team", "team-guid-0001"))), HIDE_UN);
+t("MK-R7 channel mention (conversation, type channel) -> HIDE", mk(one(conv("channel", "19:chan01@thread.tacv2"))), HIDE_UN);
+t("MK-R8 conversation type unknownFutureValue -> SHOW", mk(one(conv("unknownFutureValue"))), SHOW_MAYBE);
+t("MK-R9 conversation with no conversationIdentityType -> SHOW", mk(one(conv(undefined))), SHOW_MAYBE);
+t("MK-R10 team type but id empty / missing / non-string -> SHOW", [conv("team", ""), { conversation: { displayName: "Synthetic", conversationIdentityType: "team" } }, conv("team", 5)].map((x) => mk(one(x))), [SHOW_MAYBE, SHOW_MAYBE, SHOW_MAYBE]);
+t("MK-R11 tag mention -> HIDE (no tag-membership data)", mk(one({ tag: { id: "tag-guid-0001", displayName: "Synthetic leads" } })), HIDE_UN);
+t("MK-R12 tag with empty / missing id, or tag not an object -> SHOW", [{ tag: { id: "" } }, { tag: { displayName: "x" } }, { tag: "tag-guid-0001" }].map((x) => mk(one(x))), [SHOW_MAYBE, SHOW_MAYBE, SHOW_MAYBE]);
+t(
+  "MK-R13 Graph's real channel shape (Ex.8: other variants explicit null) + matching <at id=0> -> HIDE",
+  mk(one({ application: null, device: null, user: null, tag: null, conversation: { id: "19:chan01@thread.tacv2", displayName: "General", conversationIdentityType: "channel" } }), { body: '<at id="0">General</at>&nbsp;Hello there!' }),
+  HIDE_UN,
+);
+t("MK-R14 two non-null variants in one entry (tag AND conversation) -> SHOW (ambiguous)", mk(one({ tag: { id: "tag-guid-0001" }, ...conv("team", "team-guid-0001") })), SHOW_MAYBE);
+t("MK-R15 device mention -> SHOW (Graph: not supported -> unreadable)", mk(one({ device: { id: "dev-0001" } })), SHOW_MAYBE);
+t("MK-R16 conversationIdentityType wrong case ('Team') -> SHOW", mk(one(conv("Team", "team-guid-0001"))), SHOW_MAYBE);
+t("MK-R17 body <at id=0> with NO mentions entry -> SHOW", mk([], { body: '<at id="0">Someone</at> ok?' }), SHOW_MAYBE);
+t("MK-R18 body <at id=0> matched by a tag mention at id 0 -> HIDE", mk(one({ tag: { id: "tag-guid-0001" } }), { body: '<at id="0">Synthetic leads</at> ok?' }), HIDE_UN);
+t("MK-R19 tag at id 0 + an unexplained <at id=1> -> SHOW", mk(one({ tag: { id: "tag-guid-0001" } }), { body: '<at id="0">Leads</at> and <at id="1">Someone</at>' }), SHOW_MAYBE);
+t("MK-R20 mix: tag + the owner's user id -> SHOW (owner mentioned)", mk([...one({ tag: { id: "tag-guid-0001" } }), ...one({ user: { id: OWNER } }, 1)]), "SHOW:owner_mentioned");
+t("MK-R21 mix: tag + @Everyone -> SHOW", mk([...one({ tag: { id: "tag-guid-0001" } }), ...one(conv("chat", CHAT_G), 1)]), SHOW_MAYBE);
+t("MK-R22 mix: tag + application -> SHOW", mk([...one({ tag: { id: "tag-guid-0001" } }), ...one({ application: { id: "app-guid-0001" } }, 1)]), SHOW_MAYBE);
+t("MK-R23 a null entry / an entry with no `mentioned` (alongside a tag) -> SHOW", [[null, ...one({ tag: { id: "tag-guid-0001" } }, 1)], [{ id: 0 }]].map((m) => mk(m)), [SHOW_MAYBE, SHOW_MAYBE]);
+t("MK-R24 non-Graph shapes {team:{..}} / {channel:{..}} -> SHOW (unreadable)", [{ team: { id: "team-1" } }, { channel: { id: "chan-1" } }].map((x) => mk(one(x))), [SHOW_MAYBE, SHOW_MAYBE]);
+t("MK-R25 meeting chat, team mention only -> HIDE", mk(one(conv("team", "team-guid-0001")), { chatId: CHAT_M }), HIDE_UN);
+t("MK-R26 channel chat (thread.tacv2), channel mention only -> HIDE", mk(one(conv("channel", CHAT_C)), { chatId: CHAT_C }), HIDE_UN);
+t("MK-N1 over-match negative: 1:1 chat with a tag mention -> SHOW", mk(one({ tag: { id: "tag-guid-0001" } }), { chatId: CHAT_1B }), "SHOW:one_on_one");
+t(
+  "MK-N2 over-match negative: group chat with a tag mention where the owner wrote -> SHOW",
+  mk(one({ tag: { id: "tag-guid-0001" } }), { extra: [{ id: "9", createdDateTime: "2026-11-10T15:00:00Z", from: { user: { id: OWNER, displayName: "Owner" } }, body: { contentType: "text", content: "on it" }, mentions: [] }] }),
+  "SHOW:owner_sent",
+);
+t(
+  "MK-N3 over-match negative: tag-only message + a message with no mention data -> SHOW",
+  mk(one({ tag: { id: "tag-guid-0001" } }), { extra: [{ id: "8", createdDateTime: "2026-11-10T15:00:00Z", from: { user: { id: "other-guid", displayName: "Pat Example" } }, body: { contentType: "text", content: "no mentions field" } }] }),
+  "SHOW:cant_tell_no_mention_data",
+);
+t("MK-N4 over-match negative: tag-only message, owner id unknown -> SHOW", mk(one({ tag: { id: "tag-guid-0001" } }), { ownerUserId: null }), "SHOW:cant_tell_owner_unknown");
+
+const pk = (mentions: unknown[], body?: string) => {
+  const m = parseOne({ mentions, ...(body ? { body: { contentType: "html", content: body } } : {}) });
+  return [m.unresolvedMention, m.chatWideMention, m.groupMentionOnly];
+};
+t(
+  "MK-P1 parser kind flags: tag / team / @Everyone / app / user only / none",
+  [pk(one({ tag: { id: "tag-guid-0001" } })), pk(one(conv("team", "team-guid-0001"))), pk(one(conv("chat", CHAT_G))), pk(one({ application: { id: "app-1" } })), pk(one({ user: { id: "user-guid-0002" } })), pk([])],
+  [[true, false, true], [true, false, true], [true, true, false], [true, false, false], [false, false, false], [false, false, false]],
+);
+t("MK-P2 stored content carries chatWideMention and groupMentionOnly", (() => { const c = teamsContent(parseOne({ mentions: one({ tag: { id: "tag-guid-0001" } }) })); return [c.unresolvedMention, c.chatWideMention, c.groupMentionOnly]; })(), [true, false, true]);
+const tagMsg = parseOne({ mentions: one({ tag: { id: "tag-guid-0001" } }) });
+t("MK-H1 the content hash is unchanged by the new kind flags (nothing re-processes)", teamsSourceItem(tagMsg, { path: "/t" }).contentHash === teamsSourceItem({ ...tagMsg, chatWideMention: undefined, groupMentionOnly: undefined, unresolvedMention: undefined, mentionedUserIds: undefined }, { path: "/t" }).contentHash, true);
+
+const st = (o: Partial<TeamsContent>) => chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), ...o }]).reason;
+t("MK-S1 stored OLD row: unresolvedMention true, no kind flags -> SHOW", st({ unresolvedMention: true }), "owner_maybe_mentioned");
+t("MK-S2 stored new row: groupMentionOnly true, chatWideMention false -> HIDE", st({ unresolvedMention: true, groupMentionOnly: true, chatWideMention: false }), "uninvolved");
+t("MK-S3 stored inconsistent: groupMentionOnly true AND chatWideMention true -> SHOW", st({ unresolvedMention: true, groupMentionOnly: true, chatWideMention: true }), "owner_maybe_mentioned");
+t("MK-S4 stored groupMentionOnly true but chatWideMention absent -> SHOW", st({ unresolvedMention: true, groupMentionOnly: true }), "owner_maybe_mentioned");
+t("MK-S5 stored groupMentionOnly true + an empty user id entry -> SHOW", st({ unresolvedMention: true, groupMentionOnly: true, chatWideMention: false, mentionedUserIds: [""] }), "owner_maybe_mentioned");
+t(
+  "MK-S6 two stored messages: one new tag-only, one OLD unresolved -> SHOW",
+  chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), unresolvedMention: true, groupMentionOnly: true, chatWideMention: false }, { ...(g1[1].content as TeamsContent), unresolvedMention: true }]).reason,
+  "owner_maybe_mentioned",
+);
+t("MK-S7 stored groupMentionOnly true with unresolvedMention false -> HIDE (nothing unresolved)", st({ unresolvedMention: false, groupMentionOnly: true, chatWideMention: false }), "uninvolved");
+const tagChats = teamsChatsFromLedger([tagMsg].map((m) => ({ source: "teams" as const, sourceItemId: m.messageId, threadId: m.chatId, at: m.at, content: teamsContent(m) })));
+const tagPlan = planLedgerReport({ emailFacts: [], teams: tagChats, meetings: [], signals: [], sinceMs: SINCE });
+t(
+  "MK-F1 end to end: a tag-only group chat lands in hiddenUninvolved; ownerMentioned is now false (was null)",
+  [tagPlan.teams.hiddenUninvolved.length, tagPlan.teams.scan.length, tagChats[0].involvement.reason, tagChats[0].ownerMentioned],
+  [1, 0, "uninvolved", false],
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);

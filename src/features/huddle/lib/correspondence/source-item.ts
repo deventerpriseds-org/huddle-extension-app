@@ -79,6 +79,12 @@ export interface TeamsContent {
    *  empty or malformed entry, or a body <at> tag with no matching user mention) -- the owner MAY be addressed.
    *  Present whenever mentionedUserIds is (rows stored before 2026-11-16 evening lack it). */
   unresolvedMention?: boolean;
+  /** 2026-11-17: some mention was a conversation mention of the chat itself (@Everyone) -- aimed at the owner too.
+   *  Present whenever the parser had a `mentions` array; ABSENT on rows stored before 2026-11-17 (kind unknown). */
+  chatWideMention?: boolean;
+  /** 2026-11-17: unresolvedMention is true AND every unresolved mention is a team / channel / tag mention (not aimed
+   *  at the owner). ABSENT on older rows: those keep showing (fail open). Not part of the content hash. */
+  groupMentionOnly?: boolean;
 }
 
 export interface TranscriptContent {
@@ -120,6 +126,10 @@ export interface TeamsMessage {
   mentionsOwner?: boolean;
   /** A mention that names no comparable user (see TeamsContent.unresolvedMention). */
   unresolvedMention?: boolean;
+  /** See TeamsContent.chatWideMention. */
+  chatWideMention?: boolean;
+  /** See TeamsContent.groupMentionOnly. */
+  groupMentionOnly?: boolean;
 }
 
 export interface SourceItem {
@@ -202,6 +212,8 @@ export function teamsContent(m: TeamsMessage): TeamsContent {
     ...(m.ownerUserId ? { ownerUserId: m.ownerUserId } : {}),
     ...(typeof m.mentionsOwner === "boolean" ? { mentionsOwner: m.mentionsOwner } : {}),
     ...(typeof m.unresolvedMention === "boolean" ? { unresolvedMention: m.unresolvedMention } : {}),
+    ...(typeof m.chatWideMention === "boolean" ? { chatWideMention: m.chatWideMention } : {}),
+    ...(typeof m.groupMentionOnly === "boolean" ? { groupMentionOnly: m.groupMentionOnly } : {}),
   };
 }
 

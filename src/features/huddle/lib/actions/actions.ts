@@ -41,10 +41,34 @@ export interface ActionsSettings {
   dailyCap: number;
   /** The owner's zone for "since Monday" and the daily cap's day. */
   timeZone: string;
+  /** Which correspondence the page lists AND the classifier judges (owner 2026-11-17: "an option for all time vs this
+   *  week"). "week" = since Monday 00:00 (the original behaviour, default); "all" = everything still stored. */
+  range: ActionsRange;
 }
 
-export const DAILY_CAP_DEFAULT = 150;
+export type ActionsRange = "week" | "all";
+export const ACTIONS_RANGES: readonly ActionsRange[] = ["week", "all"];
+export const ACTIONS_RANGE_LABEL: Record<ActionsRange, string> = { week: "This week", all: "All time" };
+
+/** Owner decision 2026-11-17: 150 -> 500 (150 ran out mid-day). The owner changes it in DAILY_CAP_SETTING_PATH. */
+export const DAILY_CAP_DEFAULT = 500;
 export const DAILY_CAP_MAX = 2000;
+/** Where the owner changes the daily limit: the Actions page's "What shows" panel, "Sorting" heading, "Daily limit"
+ *  field (WhatShows in ActionsView.tsx). Named in the cap notice, so it must match those labels. */
+export const DAILY_CAP_SETTING_PATH = "What shows → Sorting → Daily limit";
+
+/**
+ * Pure (owner 2026-11-17): the notice shown at the top of the Actions page when today's AI checks are used up, or
+ * null. `usedToday` is the SAME count the heartbeat caps on (actionCallsToday: every recorded attempt since the
+ * owner's local midnight, loop-2 D2), and the condition is the one that makes classifyCallsLeft return 0, so the
+ * page says "limit reached" exactly when the heartbeat stops calling the model. No notice when sorting is off (the
+ * cap is not the reason) or the count could not be read.
+ */
+export function capNotice(usedToday: number | null | undefined, dailyCap: number, classifyOn: boolean): string | null {
+  if (!classifyOn || typeof usedToday !== "number" || !Number.isFinite(usedToday)) return null;
+  if (usedToday < dailyCap) return null;
+  return `Daily AI check limit reached (${usedToday} of ${dailyCap} used today). Remaining items wait until tomorrow. To change the limit, open ${DAILY_CAP_SETTING_PATH} on this page.`;
+}
 
 export const ACTIONS_SETTINGS_DEFAULT: ActionsSettings = {
   hideCategories: [...HIDEABLE_CATEGORIES],
@@ -54,6 +78,7 @@ export const ACTIONS_SETTINGS_DEFAULT: ActionsSettings = {
   classify: null,
   dailyCap: DAILY_CAP_DEFAULT,
   timeZone: "America/New_York",
+  range: "week",
 };
 
 const isZone = (z: unknown): z is string => {
@@ -86,6 +111,7 @@ export function resolveActionsSettings(raw: unknown): ActionsSettings {
     classify: typeof o.classify === "boolean" ? o.classify : null,
     dailyCap: cap,
     timeZone: isZone(o.timeZone) ? o.timeZone : d.timeZone,
+    range: (ACTIONS_RANGES as readonly unknown[]).includes(o.range) ? (o.range as ActionsRange) : d.range,
   };
 }
 
@@ -130,14 +156,26 @@ export function sinceMondayMs(nowMs: number, tz: string): number {
   return localMidnightMs(noon - back * 86_400_000, tz);
 }
 
+/** Pure: the ONE window start that both the page read (getActionsPage) and the heartbeat classify pass
+ *  (runActionsClassify) use, so what the owner sees and what gets judged never differ. "week" -> since Monday 00:00 in
+ *  the owner's zone; "all" -> 0, i.e. every item still stored (correspondence content is kept 90 days, so this is
+ *  "from the earliest stored item"). */
+export function actionsWindowStartMs(nowMs: number, s: Pick<ActionsSettings, "range" | "timeZone">): number {
+  return s.range === "all" ? 0 : sinceMondayMs(nowMs, s.timeZone);
+}
+
 // ── CORRECTIONS (Wrong?) ─────────────────────────────────────────────────────────────────────────────
 
-export const CORRECTION_REASONS = ["not_mine", "already_handled", "not_an_action", "wrong_section", "stop_list"] as const;
+// 2026-11-17 (owner: "there is no good option for when the information is just ai inaccuracy"): `ai_misread` is
+// ADDED for a summary that is wrong, a reversed sender, or an ask that is not in the message. Additive: the earlier
+// reasons and their stored values are unchanged; it rides the same store (owner_correction) and ledger mirror.
+export const CORRECTION_REASONS = ["not_mine", "already_handled", "not_an_action", "ai_misread", "wrong_section", "stop_list"] as const;
 export type CorrectionReason = (typeof CORRECTION_REASONS)[number];
 export const CORRECTION_LABEL: Record<CorrectionReason, string> = {
   not_mine: "Not mine to do",
   already_handled: "Already handled",
   not_an_action: "Not an action",
+  ai_misread: "AI misread it",
   wrong_section: "Wrong section",
   stop_list: "Stop flagging this list",
 };

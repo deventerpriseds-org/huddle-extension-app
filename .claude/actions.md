@@ -5426,3 +5426,14 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
 - [x] ACT:uninvolved-chat-findings merged #262 (verify loop 2 MERGE). ACT:correspondence-tuning merged #261, forward refill applied: 7 re-written, 0 failed.
 - [x] Owner 2026-11-17 "tracking able to detect what is taking so long each step": eds-agent-steps.py live (eds-claude-skills #140, v80); judge-failure kinds logged (#263).
 - [ ] Owner decision: rule change for background agents (session idle freezes them). [ ] OpenAI quota top-up (owner).
+## ACT:actions-accuracy — owner 2026-11-17 phone report: sender reversed, hallucinated "you have not replied", no AI-inaccuracy reason, meeting label lines as rows, text cut off, one ask twice — branch claude_actions-accuracy, NOT merged, NOT live
+- [x] Root causes + fixes + tests (actions-accuracy 25/25, 7 guards FIRED with control): docs/qc-evidence/BUILD-actions-accuracy.md.
+- [ ] Merge + deploy + live UAT (actions-view-checks.mjs ACC-3/4/5) + owner confirms on his phone.
+- [x] Loop-2 fixes from VERIFY-actions-accuracy-2 (D-1..D-7 + UI; actions-accuracy 55/55, 12 new guards FIRED with control): docs/qc-evidence/BUILD-actions-accuracy.md "## Loop-2 fixes". D-1 done (re-judge old verdicts), D-2 done (de-dup tightened), D-3 done (full names from config), D-4 done (id needs 2+ chats or clear majority), D-5 done (uninvolved fail-open kept), D-6 done (todo scrub), D-7 done (Label: action stays an item), UI More 44px + only when truncated (UAT pending).
+- [ ] Owner: set `teams.ownerSenderIds` in HUDDLE_ONEDRIVE_FEEDS (fixes the ingest-time bell path too) -- or check why recent Teams log lines carry no `ownerUserId`.
+## ACT:quota-alert-background — background AI jobs raise ONE "OpenAI is out of credit" bell item + Iris notice, auto-clear on success (owner 2026-11-17) — branch claude_quota-alert-background, NOT live
+- [ ] Build + tests + mutation proofs: docs/qc-evidence/BUILD-quota-alert-background.md.
+- [x] Offline suite scripts/ai-quota-alert.test.ts 45/45 (Step 3); SQL suite scripts/ai-quota-alert-sql.test.ts 12/12 (Step 4).
+- [x] 10/10 new guards mutation-proved FIRED, control EQUIVALENT (Step 5).
+- [x] Build caught node:async_hooks in a client chunk; fixed via hooks.ts registry; suite now 49/49, tsc + build clean (Steps 6-7).
+- [ ] Merge + deploy (not in this lane's brief: no PR, no merge, no dispatch).

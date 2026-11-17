@@ -11,7 +11,7 @@
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   docs/qc-evidence/BUILD-actions-view.md; .claude/skills/test-agent-serverfn/scripts/actions-view-checks.mjs.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarClock,
   Check,
@@ -41,9 +41,12 @@ import { actOnProposalFn } from "../lib/proposals/proposals.functions";
 import { saveEmailReplyDraftFn } from "../lib/email/email-replies.functions";
 import { ACTION_SECTION_LABEL, ACTION_SECTION_ORDER, type ActionSection } from "../lib/correspondence/action-classify";
 import {
+  ACTIONS_RANGE_LABEL,
+  ACTIONS_RANGES,
   CORRECTION_LABEL,
   CORRECTION_REASONS,
   CORRECTION_TEXT_MAX,
+  DAILY_CAP_MAX,
   HIDEABLE_CATEGORIES,
   HIDEABLE_CATEGORY_LABEL,
   type ActionRow,
@@ -90,7 +93,9 @@ function when(iso: string | null, tz: string): string {
   }
 }
 
-function sinceLabel(iso: string, tz: string, short: boolean): string {
+function sinceLabel(iso: string, tz: string, short: boolean, range: ActionsSettings["range"] = "week"): string {
+  // Owner 2026-11-17: the header names the chosen range ("Since Mon" or "All time").
+  if (range === "all") return ACTIONS_RANGE_LABEL.all;
   try {
     return short
       ? `Since ${new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(new Date(iso))}`
@@ -167,14 +172,27 @@ export function ActionsView() {
         ok ? (
           <>
             {/* `app-hidden`, never Tailwind's `hidden`: an extension's injected `.hidden` rule once collided with it. */}
-            <span className="md:app-hidden">{sinceLabel(ok.sinceIso, tz, true)}</span>
-            <span className="app-hidden md:inline">{sinceLabel(ok.sinceIso, tz, false)}</span>
+            <span className="md:app-hidden">{sinceLabel(ok.sinceIso, tz, true, ok.settings.range)}</span>
+            <span className="app-hidden md:inline">{sinceLabel(ok.sinceIso, tz, false, ok.settings.range)}</span>
           </>
         ) : null
       }
     >
+      {ok?.capNotice && (
+        // Owner 2026-11-17: say WHY items stopped being checked and where to change it. The app's existing notice band
+        // (PolishView's "You edited the polished text..." band: border-warning/40 + bg-band-cream), tokens only. Text is
+        // text-foreground, not PolishView's text-warning-foreground, which is near-black on the dark-theme band.
+        <div role="status" className="flex flex-wrap items-center gap-2 border-b border-warning/40 bg-band-cream px-3 py-2 text-[12px] text-foreground sm:px-6" data-testid="actions-cap-notice">
+          <span className="flex-[1_1_220px]">{ok.capNotice}</span>
+          {!showSettings && (
+            <button type="button" onClick={() => setShowSettings(true)} className={cn(ROW_BTN, "min-h-9 md:min-h-0")} data-testid="actions-cap-open-settings">
+              Change limit
+            </button>
+          )}
+        </div>
+      )}
       {ok && (
-        <div className="flex items-center gap-2 border-b border-hairline bg-surface px-3 py-2 sm:px-6">
+        <div className="flex flex-wrap items-center gap-2 border-b border-hairline bg-surface px-3 py-2 sm:px-6">
           {/* The ViewSwitcher inline pill anatomy; scrolls sideways inside itself on a phone (AC-G-2). */}
           <div className="min-w-0 overflow-x-auto">
             <div className="inline-flex rounded-lg border border-hairline bg-surface p-0.5" role="group" aria-label="Show">
@@ -194,6 +212,25 @@ export function ActionsView() {
                 </button>
               ))}
             </div>
+          </div>
+          {/* Range (owner 2026-11-17: "all time vs this week"): the same pill anatomy as the filter group. Saved in the
+              Actions settings, so the page AND the heartbeat classify pass both use it (actionsWindowStartMs). */}
+          <div className="inline-flex shrink-0 rounded-lg border border-hairline bg-surface p-0.5" role="group" aria-label="Range" data-testid="actions-range">
+            {ACTIONS_RANGES.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => (ok.settings.range === r ? undefined : void saveSettings({ ...ok.settings, range: r }))}
+                aria-pressed={ok.settings.range === r}
+                data-testid={`actions-range-${r}`}
+                className={cn(
+                  "whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium transition",
+                  ok.settings.range === r ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {ACTIONS_RANGE_LABEL[r]}
+              </button>
+            ))}
           </div>
           <button
             type="button"
@@ -362,6 +399,25 @@ function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; loca
   const [naming, setNaming] = useState(false);
   const [draft, setDraft] = useState(title);
   const [panel, setPanel] = useState<null | "wrong" | "reply">(null);
+  // 2026-11-17 (owner: "the text areas don't expand so the text is cut off"): tap the text, or "More", to read the
+  // full title, meta line, summary and quote; tap again ("Less") to fold it back. Display only.
+  const [expanded, setExpanded] = useState(false);
+  // Loop-2 UI: "More" shows only when some text is actually cut off (measured: scroll size > box), re-measured when
+  // the row resizes (phone rotation, panel width). While expanded it stays so "Less" can fold the row back.
+  const titleRef = useRef<HTMLParagraphElement | null>(null);
+  const metaRef = useRef<HTMLParagraphElement | null>(null);
+  const summaryRef = useRef<HTMLParagraphElement | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  useLayoutEffect(() => {
+    if (expanded) return;
+    const els = [titleRef.current, metaRef.current, summaryRef.current].filter((e): e is HTMLParagraphElement => !!e);
+    const measure = () => setTruncated(els.some((el) => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    els.forEach((el) => ro.observe(el));
+    return () => ro.disconnect();
+  });
   const Icon = SOURCE_ICON[row.source];
 
   async function act(action: "approve" | "complete" | "dismiss" | "edit" | "triage", extra: { title?: string; choice?: "mine" | "someone" | "skip"; name?: string } = {}) {
@@ -514,23 +570,45 @@ function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; loca
               className="w-full rounded border border-hairline bg-background px-1.5 py-0.5 text-[13px]"
             />
           ) : (
-            <p className={cn("truncate text-[13px] font-medium leading-snug", open || triaging ? "text-foreground" : "text-muted-foreground line-through")} title={title}>
+            <p
+              ref={titleRef}
+              className={cn("text-[13px] font-medium leading-snug", expanded ? "whitespace-pre-wrap break-words" : "truncate", open || triaging ? "text-foreground" : "text-muted-foreground line-through")}
+              title={title}
+              onClick={() => setExpanded((x) => !x)}
+              data-testid="actions-row-title"
+            >
               {title}
             </p>
           )}
           {editing ? (
             <p className="text-[10px] text-muted-foreground">Enter saves · Esc cancels</p>
           ) : (
-            <p className="truncate text-[11px] text-muted-foreground" title={meta}>
+            <p ref={metaRef} className={cn("text-[11px] text-muted-foreground", expanded ? "break-words" : "truncate")} title={meta}>
               {open || triaging ? meta : closedLabel}
               {draftSaved && (open || triaging) ? " · Draft saved" : ""}
             </p>
           )}
           {(open || triaging) && row.reasonLine && (
-            <p className="mt-0.5 line-clamp-2 text-[12px] text-foreground/80">
+            <p
+              ref={summaryRef}
+              className={cn("mt-0.5 text-[12px] text-foreground/80", expanded ? "whitespace-pre-wrap break-words" : "line-clamp-2")}
+              onClick={() => setExpanded((x) => !x)}
+              data-testid="actions-row-summary"
+            >
               {row.reasonLine}
               {row.quote ? <span className="text-muted-foreground"> “{row.quote}”</span> : null}
             </p>
+          )}
+          {!editing && !naming && (truncated || expanded) && (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((x) => !x)}
+              className="-my-2.5 inline-flex min-h-11 items-center text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              data-testid="actions-row-more"
+            >
+              {expanded ? "Less" : "More"}
+            </button>
           )}
           {/* Desktop: labelled buttons (a full page has room). Phone: the menu chip below. */}
           {(open || triaging) && (
@@ -664,6 +742,14 @@ function WrongPanel({ row, caller, onClose, onSent, onUndone }: { row: ActionRow
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const reasons = CORRECTION_REASONS.filter((r) => r !== "stop_list" || row.fromList);
+  // 2026-11-17: the note grows with what is typed (it used to scroll inside two fixed lines on a phone).
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+  useLayoutEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
   async function send() {
     if (!reason || busy) return;
     setBusy(true);
@@ -707,12 +793,14 @@ function WrongPanel({ row, caller, onClose, onSent, onUndone }: { row: ActionRow
         ))}
       </div>
       <textarea
+        ref={taRef}
         value={text}
         maxLength={CORRECTION_TEXT_MAX}
         onChange={(e) => setText(e.target.value)}
         placeholder="Optional: tell Iris why"
         rows={2}
-        className="mt-2 w-full resize-none rounded border border-hairline bg-background px-2 py-1 text-[13px]"
+        data-testid="actions-wrong-text"
+        className="mt-2 w-full resize-none overflow-hidden rounded border border-hairline bg-background px-2 py-1 text-[13px]"
       />
       <div className="mt-1 flex items-center justify-between gap-2">
         <p className="text-[11px] text-muted-foreground">The row leaves the list, and the reason goes back to the step that sorts your mail.</p>
@@ -787,12 +875,13 @@ function WhatShows({
         <input
           type="number"
           min={0}
-          max={2000}
+          max={DAILY_CAP_MAX}
           defaultValue={settings.dailyCap}
           onBlur={(e) => {
             const n = Math.floor(Number(e.target.value));
-            if (Number.isFinite(n) && n !== settings.dailyCap) onChange({ ...settings, dailyCap: Math.max(0, Math.min(2000, n)) });
+            if (Number.isFinite(n) && n !== settings.dailyCap) onChange({ ...settings, dailyCap: Math.max(0, Math.min(DAILY_CAP_MAX, n)) });
           }}
+          data-testid="actions-daily-limit"
           className="w-20 rounded border border-hairline bg-background px-1.5 py-0.5 text-xs tabular-nums"
         />
         <span className="text-muted-foreground">AI checks a day</span>

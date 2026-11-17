@@ -59,14 +59,19 @@ export const Route = createFileRoute("/api/public/run-ceremony")({
           const { runScheduledCeremony } = await import(
             "@/features/huddle/lib/tasks/ceremonies.server"
           );
-          const result = await runScheduledCeremony({
+          // Runs as a background AI job: a quota error inside it raises the bell + Iris alert (lib/ai-quota, 2026-11-17).
+          const result = await (await import("@/features/huddle/lib/ai-quota/ai-quota.server")).runAsAiJob(
+            "Ceremony",
+            userEmail,
+            () => runScheduledCeremony({
             runId,
             ceremonyType: ceremonyType as "standup" | "retro" | "planning" | "review" | "review_retro",
             userEmail,
             mode,
             autoRun: !!payload.autoRun,
             timeZone: payload.timeZone,
-          });
+          }),
+          );
           return json({
             ok: true,
             runId,

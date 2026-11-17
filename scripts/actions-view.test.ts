@@ -21,10 +21,15 @@ import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/oned
 import type { EmailContent, TeamsContent, TranscriptContent } from "../src/features/huddle/lib/correspondence/source-item";
 import { teamsSourceItemId } from "../src/features/huddle/lib/correspondence/source-item";
 import {
+  ACTIONS_RANGE_LABEL,
   ACTIONS_SETTINGS_DEFAULT,
+  actionsWindowStartMs,
   bellTargetsFor,
+  capNotice,
   chatIdOfTeamsItem,
   classifyEnabled,
+  DAILY_CAP_DEFAULT,
+  DAILY_CAP_SETTING_PATH,
   localMidnightMs,
   correctionFor,
   correctionHides,
@@ -139,6 +144,29 @@ const S = (o: Partial<ActionsSettings> = {}) => ({ ...ACTIONS_SETTINGS_DEFAULT, 
   const off = threadUnits(asm, S({ hideUninvolvedChats: false }));
   t("S-15 switch OFF: the uninvolved chat becomes a unit (classified like any other); ON: it does not", [on.units.some((u) => u.teams?.chatId === UNINV), off.units.some((u) => u.teams?.chatId === UNINV && u.uninvolved)], [false, true]);
   t("D-1 window: an email conversation before Monday is not a unit", on.units.some((u) => u.email?.key.includes("conv-old")), false);
+}
+
+// ── Owner decision 2026-11-17, through the Actions classifier path (threadUnits reuses chatInvolvement): a group chat
+//    whose only mention is a team / tag / channel mention never becomes a unit (so it can never reach the model);
+//    @Everyone and an old row without kind flags still do. Spelling table: docs/qc-evidence/BUILD-actions-cap-tag-rule.md.
+{
+  const TAGC = `19:tagonly${AT}thread.v2`;
+  const EVC = `19:everyone${AT}thread.v2`;
+  const OLDC = `19:oldrow${AT}thread.v2`;
+  const groupOnly = { unresolvedMention: true, groupMentionOnly: true, chatWideMention: false };
+  const mkRows: LedgerReportRow[] = [
+    trow(TAGC, "1", "2026-11-10T16:00:00Z", groupOnly),
+    trow(EVC, "1", "2026-11-10T16:00:00Z", { unresolvedMention: true, groupMentionOnly: false, chatWideMention: true }),
+    trow(OLDC, "1", "2026-11-10T16:00:00Z", { unresolvedMention: true }),
+    trow(ONE, "1", "2026-11-10T17:00:00Z", groupOnly),
+  ];
+  const mkAsm = assembleLedgerPlan({ rows: mkRows, proposals: [], bell: [] }, cfg, SINCE);
+  const on = threadUnits(mkAsm, S());
+  const off = threadUnits(mkAsm, S({ hideUninvolvedChats: false }));
+  const has = (u: typeof on, c: string) => u.units.some((x) => x.teams?.chatId === c);
+  t("MK-A1 Actions: a tag/team/channel-only group chat is NOT a unit and is counted hidden", [has(on, TAGC), on.uninvolvedHidden], [false, 1]);
+  t("MK-A2 Actions: @Everyone and an old row (no kind flags) ARE units; a 1:1 with a tag mention is a unit", [has(on, EVC), has(on, OLDC), has(on, ONE)], [true, true, true]);
+  t("MK-A3 Actions: with the switch OFF the tag-only chat is a unit flagged uninvolved", off.units.some((x) => x.teams?.chatId === TAGC && x.uninvolved), true);
 }
 
 // ── E. CLASSIFY PASS (AC-E-7, E-8, E-5, EU-2, H-3, meetings) ──────────────────────────────────────────
@@ -305,8 +333,66 @@ const cand = (o: Partial<ActionCandidate>): ActionCandidate => ({ proposalId: `p
 // ── H. Bell targets (X-6, AC-I-8) + settings + candidates ────────────────────────────────────────────
 t("H-1 bell targets from refs: email -> feed id; teams -> decoded chat id; meetings none", bellTargetsFor([{ source: "email", sourceItemId: `${MAILBOX}:m1` }, { source: "teams", sourceItemId: teamsSourceItemId(ONE, "1") }, { source: "transcript", sourceItemId: "mtg-1" }]), { emailGraphIds: [`feed:${MAILBOX}:m1`], chatIds: [ONE] });
 t("H-2 chat id decoded from a ledger id", chatIdOfTeamsItem(teamsSourceItemId(UNINV, "17")), UNINV);
-t("H-3 settings defaults: three noise categories, uninvolved ON, all sources, cap 150", [resolveActionsSettings(null).hideCategories, resolveActionsSettings(null).hideUninvolvedChats, resolveActionsSettings(null).dailyCap], [["meeting_invite", "timekeeping", "verification_code"], true, 150]);
+t("H-3 settings defaults: three noise categories, uninvolved ON, all sources, cap 500 (owner 2026-11-17, was 150)", [resolveActionsSettings(null).hideCategories, resolveActionsSettings(null).hideUninvolvedChats, resolveActionsSettings(null).dailyCap], [["meeting_invite", "timekeeping", "verification_code"], true, 500]);
+
+// ── Owner 2026-11-17: the daily-cap notice. Same count and same condition as the heartbeat's cap (classifyCallsLeft).
+t("CAP-1 default cap is 500; an explicitly stored 150 is the owner's value and is kept", [DAILY_CAP_DEFAULT, resolveActionsSettings({}).dailyCap, resolveActionsSettings({ dailyCap: 150 }).dailyCap], [500, 500, 150]);
+t(
+  "CAP-2 at the cap: the exact notice, naming where to change it",
+  capNotice(500, 500, true),
+  "Daily AI check limit reached (500 of 500 used today). Remaining items wait until tomorrow. To change the limit, open What shows → Sorting → Daily limit on this page.",
+);
+t(
+  "CAP-3 below the cap / sorting off / count unreadable -> no notice; over the cap (limit lowered) -> notice with the real count",
+  [capNotice(499, 500, true), capNotice(500, 500, false), capNotice(null, 500, true), capNotice(Number.NaN, 500, true), capNotice(undefined, 500, true), capNotice(520, 500, true)?.includes("(520 of 500 used today)")],
+  [null, null, null, null, null, true],
+);
+{
+  const pairs: [number, number][] = [];
+  for (const cap of [0, 1, 5, 150, 500, 2000]) for (const used of [0, cap - 1, cap, cap + 1, cap + 50]) if (used >= 0) pairs.push([used, cap]);
+  t("CAP-4 GUARD: notice shown EXACTLY when the heartbeat has no calls left (classifyCallsLeft = 0)", pairs.filter(([u, c]) => (capNotice(u, c, true) !== null) !== (classifyCallsLeft(u, c) === 0)), []);
+}
+{
+  const { readFileSync } = await import("node:fs");
+  const view = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
+  const [panel, heading, field] = DAILY_CAP_SETTING_PATH.split(" → ");
+  t(
+    "CAP-5 GUARD: the place the notice names exists in the Actions view (What shows button, Sorting heading, Daily limit field) and the notice is rendered",
+    [view.includes(`\`${panel}\${ok.hidden.total`), view.includes(`>${heading}</p>`), view.includes(`${field}\n`), view.includes("ok?.capNotice") && view.includes('data-testid="actions-cap-notice"')],
+    [true, true, true, true],
+  );
+}
 t("H-4 settings: junk falls back field by field; cap clamped", [resolveActionsSettings({ hideCategories: ["spam", "timekeeping"], dailyCap: 99999, timeZone: "Mars/Base" }).hideCategories, resolveActionsSettings({ dailyCap: 99999 }).dailyCap, resolveActionsSettings({ timeZone: "Mars/Base" }).timeZone], [["timekeeping"], 2000, "America/New_York"]);
+// ── RANGE (owner 2026-11-17: "an option for all time vs this week") ─────────────────────────────────
+t("RANGE-1 default range is this week; junk falls back to week; 'all' is kept", [ACTIONS_SETTINGS_DEFAULT.range, resolveActionsSettings(null).range, resolveActionsSettings({ range: "forever" }).range, resolveActionsSettings({ range: "all" }).range], ["week", "week", "week", "all"]);
+t("RANGE-2 week window = since Monday 00:00 (unchanged behaviour)", actionsWindowStartMs(Date.parse(NOW), S()), SINCE);
+{
+  const earliest = Math.min(...rows.map((r) => Date.parse(r.at)));
+  const allStart = actionsWindowStartMs(Date.parse(NOW), S({ range: "all" }));
+  t("RANGE-3 all-time window starts at or before the earliest stored item", allStart <= earliest, true);
+  const convs = (start: number) => assembleLedgerPlan(data, cfg, start).plan.email.scan.map((f) => f.conversationId).sort();
+  t("RANGE-4 the pre-Monday email is out of the week window and in the all-time window", [convs(actionsWindowStartMs(Date.parse(NOW), S())).includes("conv-old"), convs(allStart).includes("conv-old")], [false, true]);
+}
+{
+  // RANGE-5 GUARD: the page read and the heartbeat classify pass take their window from the SAME function and the SAME
+  // settings object, so what is listed and what is judged can never differ (and "All time" reaches the classifier).
+  const { readFileSync } = await import("node:fs");
+  const srv = readFileSync(new URL("../src/features/huddle/lib/actions/actions.server.ts", import.meta.url), "utf8");
+  const body = (start: string) => {
+    const i = srv.indexOf(start);
+    const j = srv.indexOf("\nexport ", i + start.length);
+    return i < 0 ? "" : srv.slice(i, j < 0 ? undefined : j);
+  };
+  const classify = body("export function runActionsClassify(");
+  const pageRead = body("export async function getActionsPage(");
+  t(
+    "RANGE-5 GUARD: page read and classify pass both window with actionsWindowStartMs(now, s), neither with a bare sinceMondayMs",
+    [classify.includes("assembleLedgerPlan(data, cfg, actionsWindowStartMs(now, s))"), pageRead.includes("const sinceMs = actionsWindowStartMs(now, s);") && pageRead.includes("assembleLedgerPlan(data, cfg, sinceMs)"), /sinceMondayMs\(/.test(srv)],
+    [true, true, false],
+  );
+  const view = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
+  t("RANGE-6 the view has the This week / All time toggle and the header follows the range", [view.includes('data-testid="actions-range"'), view.includes("ACTIONS_RANGES.map"), view.includes("sinceLabel(ok.sinceIso, tz, true, ok.settings.range)"), ACTIONS_RANGE_LABEL.week, ACTIONS_RANGE_LABEL.all], [true, true, true, "This week", "All time"]);
+}
 t("H-5 classify ON by default for the configured owner only; explicit wins", [classifyEnabled(S(), true), classifyEnabled(S(), false), classifyEnabled(S({ classify: false }), true)], [true, false, false]);
 {
   const s1 = stub(answerFor);

@@ -8439,18 +8439,41 @@ async function executeClaimedTurn(record: {
     // the normal multi-agent turn — its own web-search + create_artifact only (no delegate → no nesting),
     // then fans in to the persona's integration. Self-contained (never throws out); returns null so the
     // push/chunk logic below is skipped (workers are internal, notify:"silent").
+    // An agent-initiated turn (anything but the user's own `u-`/`xapp-` turn) runs as a BACKGROUND AI job, so a
+    // quota error inside it reaches the bell + Iris (lib/ai-quota, 2026-11-17). The user's own turns are unchanged.
+    const { runAsAiJob } = await import("./ai-quota/ai-quota.server");
+    const { agentTurnJob } = await import("./ai-quota/ai-quota");
+    const asJob = <T,>(fn: () => Promise<T>): Promise<T> =>
+      isUserTurn(record.id) ? fn() : runAsAiJob(agentTurnJob(record.id), record.user_email, fn);
     if ((record.payload as { worker?: unknown }).worker) {
-      await runWorkerTurn(record);
+      await asJob(() => runWorkerTurn(record));
       return null;
     }
-    const data = Input.parse(record.payload);
-    // DURABLE/CHUNKED run: the driver streams replies and persists the terminal 'done'/'partial' row
-    // itself (saveTurnChunk), so we do NOT completeTurn here. A resumed chunk rebuilds its mid-turn
-    // state from record.progress; a fresh durable run passes resume=undefined.
-    const result = await runHuddleTurn(data, {
-      turnId: record.id,
-      resume: record.progress ?? undefined,
-    });
+    // A SYSTEM NOTICE turn (2026-11-17, the background quota alert in lib/ai-quota): its reply is FIXED text, so it
+    // is saved as-is with NO model call (the account may be out of quota) and then gets the same push as any reply
+    // below. Checked BEFORE Input.parse / runHuddleTurn; every other turn takes exactly the path it took before.
+    const { systemNoticeResult } = await import("./ai-quota/ai-quota");
+    const notice = systemNoticeResult(record.payload);
+    let data: z.infer<typeof Input>;
+    let result: HuddleTurnResult;
+    if (notice) {
+      const { saveTurnChunk } = await import("./tasks/turns.server");
+      await saveTurnChunk(record.id, notice.replies, null, true, notice);
+      data = { huddleId: String((record.payload as { huddleId?: string }).huddleId ?? "") } as z.infer<typeof Input>;
+      result = notice as unknown as HuddleTurnResult;
+    } else {
+      data = Input.parse(record.payload);
+      // DURABLE/CHUNKED run: the driver streams replies and persists the terminal 'done'/'partial' row
+      // itself (saveTurnChunk), so we do NOT completeTurn here. A resumed chunk rebuilds its mid-turn
+      // state from record.progress; a fresh durable run passes resume=undefined.
+      const parsed = data;
+      result = await asJob(() =>
+        runHuddleTurn(parsed, {
+          turnId: record.id,
+          resume: record.progress ?? undefined,
+        }),
+      );
+    }
     // More agents remain (budget-sliced): kick the next chunk now and defer push until the turn is
     // fully done (a single "X replied" notification at the end, not one per chunk).
     if ((result as { partial?: boolean }).partial === true) {

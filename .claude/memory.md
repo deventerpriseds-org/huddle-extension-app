@@ -1,5 +1,17 @@
 # Project Memory — huddle-extension-app
 
+## Actions accuracy (2026-11-17, branch claude_actions-accuracy, NOT live) -- owner Teams ids are GLOBAL, not per chat
+- Live probe (counts only): 69 recent Teams rows, 0 carry `ownerUserId`, all `fromOwner` null; 37 were the owner's own id (seen on OLDER rows).
+  `teamsOwnerIds` was per chat, so those chats had no owner id and his own message read as OTHER ("X asks you...").
+- Fix: `ownerTeamsIdsAcross` (report-from-ledger.ts) over ALL rows; display-name last resort only when no id at all.
+- Still open: the ingest-time bell (`bell.ts`) uses parse-time `fromOwner` (null live = "can't tell"). Configuring
+  `teams.ownerSenderIds` fixes every path at once.
+- Settled guard (action-classify.ts): owner wrote last -> a `reply` verdict is not admitted; `both` -> `action`.
+- Loop-2 (verifier VERIFY-actions-accuracy-2): stored verdicts carry `inputVersion`; `CLASSIFIER_INPUT_VERSION`
+  (action-classify.ts, teams 2 / email 1) MUST be bumped for a source whenever its OWNER/OTHER labelling, input
+  text or instructions change, or old verdicts stay listed until the thread gets a new message. Teams de-dup
+  (`collapseDuplicateTeamsItems`) = same chat, or same sender ID + same quote >= 40 chars; never a shared proposal.
+
 ## Agent pace ROOT CAUSE (2026-11-17, measured) -- background agents FREEZE while the main session is idle
 - eds-agent-steps.py (eds-claude-skills #140, live v80) split 5 transcripts: model 1-10% of wall; 73-96% was steps in
   different agents ending within 1-33 s of each other. Every freeze window = main session had ZERO events; each ended

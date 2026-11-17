@@ -8,7 +8,7 @@
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   lib/attention/attention.ts; .claude/actions.md ACT:attention-bell.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, CalendarClock, Mail, AlarmClock, MessageSquare, FileWarning, X } from "lucide-react";
+import { Bell, CalendarClock, Mail, AlarmClock, MessageSquare, FileWarning, CreditCard, X } from "lucide-react";
 import { toast } from "sonner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuth } from "@/hooks/useAuth";
@@ -36,6 +36,8 @@ const KIND_ICON: Record<BellKind, typeof Mail> = {
   chat: MessageSquare,
   // A OneDrive feed file stopped updating (2026-11-13). Only rendered when such a row exists.
   feed: FileWarning,
+  // OpenAI is out of credit (2026-11-17, lib/ai-quota). Only rendered when such a row exists.
+  ai_quota: CreditCard,
 };
 
 function when(iso: string | null): string {

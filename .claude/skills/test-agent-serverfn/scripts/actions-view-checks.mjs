@@ -59,6 +59,58 @@ export const checks = [
       ["actions-section-needs_reply", "actions-caught-up", "actions-not-sorted", "actions-off", "actions-error"].filter((id) => document.querySelector(`[data-testid="${id}"]`)),
     );
     check("B-7/B-8/B-9 Actions shows a definite state (rows, caught up, not sorted, off or error)", state.length > 0 || (await page.locator('[data-testid="actions-row"]').count()) > 0, state.join(","));
+    // 2026-11-17 range toggle (BUILD-actions-all-time.md). READ-ONLY: never clicked, so the saved range is untouched.
+    const range = page.locator('[data-testid="actions-range"]').first();
+    if (await range.count()) {
+      const labels = (await range.locator("button").allTextContents()).map((x) => x.trim());
+      const pressed = await range.locator('button[aria-pressed="true"]').count();
+      check("RANGE-UI the range toggle shows This week / All time, exactly one selected", labels.join(",") === "This week,All time" && pressed === 1, labels.join(","));
+    } else if (state.some((s) => s === "actions-off" || s === "actions-error")) {
+      check("RANGE-UI range toggle not expected (page off / error)", true);
+    } else {
+      check("RANGE-UI the range toggle exists on the Actions page", false);
+    }
+    // 2026-11-17 accuracy fixes (BUILD-actions-accuracy.md). READ-ONLY: More / Less and opening + closing Wrong?
+    // change nothing stored; Send is never pressed.
+    const rowsN = await page.locator('[data-testid="actions-row"]').count();
+    if (rowsN) {
+      // Loop-2 UI: "More" shows ONLY on a row whose text is cut off, and it is a 44px touch target.
+      const withMore = page.locator('[data-testid="actions-row"]').filter({ has: page.locator('[data-testid="actions-row-more"]') });
+      const plain = page.locator('[data-testid="actions-row"]').filter({ hasNot: page.locator('[data-testid="actions-row-more"]') });
+      if (await plain.count()) {
+        const fit = await plain.first().locator('[data-testid="actions-row-title"]').first().evaluate((el) => el.scrollWidth <= el.clientWidth + 1).catch(() => true);
+        check("ACC-5 a row WITHOUT More shows its whole title (nothing cut off)", fit);
+      }
+      const row = (await withMore.count()) ? withMore.first() : page.locator('[data-testid="actions-row"]').first();
+      const titleEl = row.locator('[data-testid="actions-row-title"]').first();
+      const more = row.locator('[data-testid="actions-row-more"]').first();
+      if (await more.count()) {
+        const h = await more.evaluate((el) => el.getBoundingClientRect().height);
+        check("ACC-5 the More control is at least 44px tall", h >= 43.5, `${h}px`);
+        await more.click();
+        await page.waitForTimeout(300);
+        const full = await titleEl.evaluate((el) => ({ fits: el.scrollWidth <= el.clientWidth + 1, ws: getComputedStyle(el).whiteSpace, expanded: el.closest("li")?.querySelector('[data-testid="actions-row-more"]')?.getAttribute("aria-expanded") }));
+        check("ACC-5 an expanded row shows its full title (wraps, nothing cut off)", full.fits && full.ws !== "nowrap" && full.expanded === "true", JSON.stringify(full));
+        const sum = row.locator('[data-testid="actions-row-summary"]').first();
+        if (await sum.count()) {
+          const s = await sum.evaluate((el) => ({ clamp: getComputedStyle(el).webkitLineClamp, fits: el.scrollHeight <= el.clientHeight + 1 }));
+          check("ACC-5 an expanded row shows its full summary + quote (no line clamp)", (s.clamp === "none" || s.clamp === "" || !s.clamp) && s.fits, JSON.stringify(s));
+        }
+        await screenshot("actions-row-expanded-desktop");
+        await more.click();
+      }
+      const wrongBtn = row.locator("button", { hasText: "Wrong?" }).first();
+      if (await wrongBtn.count()) {
+        await wrongBtn.click();
+        const panel = page.locator('[data-testid="actions-wrong-panel"]').first();
+        const shownP = await panel.waitFor({ state: "visible", timeout: 5000 }).then(() => true).catch(() => false);
+        check("ACC-3 the Wrong? panel has the 'AI misread it' reason", shownP && (await panel.locator("button", { hasText: "AI misread it" }).count()) === 1);
+        await panel.locator('button[aria-label="Close"]').first().click().catch(() => {});
+      }
+    }
+    const titles = await page.locator('[data-source="meeting"] [data-testid="actions-row-title"]').allTextContents();
+    const LABEL = /^\s*(responsible(\s+person)?|owner|assignee|assigned to|time\s*stamps?|timing|due( date)?|deadline|context|notes?)\s*:/i;
+    check("ACC-4 no meeting row title starts with a label (Timestamp:, Responsible person:, ...) or carries **", titles.every((x) => !LABEL.test(x.replace(/\*\*/g, "")) && !x.includes("**")), `${titles.length} meeting rows`);
     await screenshot("actions-desktop-light");
     await setTheme(page, true);
     await page.waitForTimeout(400);
