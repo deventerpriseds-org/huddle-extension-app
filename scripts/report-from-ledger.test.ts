@@ -112,7 +112,8 @@ const gCfgMention = [tmsg(CHAT_G, "1", "2026-11-10T14:00:00Z", { ownerUserId: un
 t("U-9 configured owner ids count for the mention test", chatInvolvement(CHAT_G, contentsOf(gCfgMention), ["CFG-OWNER-ID"]).reason, "owner_mentioned");
 const gSenderId = [tmsg(CHAT_G, "1", "2026-11-10T14:00:00Z", { fromOwner: false, sender: { id: OWNER.toUpperCase(), name: "Owner", isApp: false } })];
 t("U-10 a message whose sender id IS the owner's id counts as sent by him", chatInvolvement(CHAT_G, contentsOf(gSenderId)).reason, "owner_sent");
-t("U-11 channels are not covered by the decision -> show", chatInvolvement(CHAT_C, contentsOf(g1)), { hide: false, kind: "channel", reason: "not_group_or_meeting" });
+// 2026-11-16 (Actions view, owner's accepted answers): channels are treated like group chats (was: always shown).
+t("U-11 a channel the owner never wrote in and was never @mentioned in -> HIDE, like a group", chatInvolvement(CHAT_C, contentsOf(g1)), { hide: true, kind: "channel", reason: "uninvolved" });
 
 // ── Teams facts + the plan (pre-filter BEFORE any AI step)
 const allTeams = [...g1, tmsg(CHAT_1, "9", "2026-11-11T09:00:00Z"), ...gMention.map((r) => ({ ...r, sourceItemId: r.sourceItemId + "m", content: { ...(r.content as TeamsContent), chatId: "19:group02@thread.v2" } }))];

@@ -26,7 +26,8 @@ import type { PolishProfile } from "./lib/polish/polish-core";
 // "priorities"/"schedule" are the two journey widgets as full-page views (they also render inline in
 // chat and docked in Iris's 1:1 — three surfaces, one component each).
 // "polish" = the Polish text-cleanup tool (components/PolishView.tsx), Huddle's first tool module.
-export type View = "huddle" | "board" | "artifacts" | "priorities" | "schedule" | "polish";
+// "actions" = the Actions page (components/ActionsView.tsx), opened from Modules with Priorities and Schedule.
+export type View = "huddle" | "board" | "artifacts" | "priorities" | "schedule" | "actions" | "polish";
 export type ContextPanelTab = "queue" | "activity" | "memory" | "artifacts";
 
 // Pure client-device UI layout prefs (panel collapse, active side-panel tab) — deliberately NOT part

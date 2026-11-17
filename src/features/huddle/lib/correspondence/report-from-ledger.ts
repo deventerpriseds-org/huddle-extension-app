@@ -15,9 +15,17 @@
 //
 // THIS REPO IS PUBLIC: no names, ids, addresses or content here. Nothing in this module logs.
 
-import { FEED_ID_PREFIX, type FeedInboundMessage, type SentMessage } from "../external-feeds/onedrive-feed";
+import { FEED_ID_PREFIX, latestSentByConversation, type FeedInboundMessage, type OneDriveFeedsConfig, type SentMessage } from "../external-feeds/onedrive-feed";
 import { forwardedPartText, forwardedText } from "./forwarded";
-import { emailConversationKey, type ConversationFacts } from "./needs-you";
+import {
+  conversationFacts,
+  effectiveOwnerNames,
+  emailConversationKey,
+  groupEmailConversations,
+  ownerAddressSet,
+  type ConversationFacts,
+  type NeedsYouContext,
+} from "./needs-you";
 import type { CorrespondenceContent, CorrespondenceSource, EmailContent, SentContent, TeamsContent, TranscriptContent } from "./source-item";
 import { actionItemsOf, splitActionItems } from "../proposals/meeting-triage";
 import { titleKey } from "../proposals/proposals";
@@ -151,8 +159,10 @@ export interface ChatInvolvement {
 
 /**
  * UNINVOLVED_CHAT_RULE (owner decision 2026-11-16), pure and reusable by the in-app judge:
- *   A Teams GROUP or MEETING chat is HIDDEN when the owner never sent a message in it AND was never @mentioned in it.
- *   1:1 chats ALWAYS show. Channels and chats of unknown kind are not covered by the decision and show.
+ *   A Teams GROUP, MEETING or CHANNEL chat is HIDDEN when the owner never sent a message in it AND was never
+ *   @mentioned in it. 1:1 chats ALWAYS show. Chats of unknown kind are not covered by the decision and show.
+ *   Team / channel / tag mentions name no user (teams-log mentionUserIds skips them), so they are not the owner.
+ *   ONE implementation: the open-items report and the Actions view (lib/actions) both call this.
  * Identity: the owner's Teams ids are the configured `teams.ownerSenderIds` plus every stored message's line
  * `ownerUserId`; mention ids are the same GUID format; all compared case-insensitively.
  * FAIL TOWARD SHOWING: the chat is hidden only when BOTH facts are known for EVERY message -- whose message it is
@@ -177,7 +187,8 @@ export function chatInvolvement(chatId: string, messages: readonly TeamsContent[
 function chatInvolvementOf(chatId: string, messages: readonly TeamsContent[], configuredOwnerIds: readonly string[]): ChatInvolvement {
   const kind = teamsChatKind(chatId);
   if (kind === "one_on_one") return { hide: false, kind, reason: "one_on_one" };
-  if (kind !== "group" && kind !== "meeting") return { hide: false, kind, reason: "not_group_or_meeting" };
+  // 2026-11-16 (Actions view, owner's accepted answers): team CHANNELS (thread.tacv2) are treated like group chats.
+  if (kind !== "group" && kind !== "meeting" && kind !== "channel") return { hide: false, kind, reason: "not_group_or_meeting" };
   const ownerIds = teamsOwnerIds(messages, configuredOwnerIds);
   if (messages.some((m) => isOwnerMessage(m, ownerIds))) return { hide: false, kind, reason: "owner_sent" };
   // Array.isArray BEFORE .some (finding 2): a string / object stored in the field is "no mention data" (shows below).
@@ -445,6 +456,8 @@ export interface MeetingItems {
   meetingAt: string | null;
   newestMs: number;
   open: string[];
+  /** The heading (assignee name, as Fireflies wrote it) each open item sat under; aligned with `open`. */
+  openHeadings: (string | null)[];
   resolved: { item: string; state: string }[];
 }
 
@@ -459,15 +472,19 @@ export function meetingItemsFromLedger(rows: readonly LedgerReportRow[], proposa
   for (const r of rows) {
     if (r.source !== "transcript" || r.content?.kind !== "transcript") continue;
     const c = r.content as TranscriptContent;
-    const items = splitActionItems(actionItemsOf(c.summary as { action_items?: unknown } | null)).items;
+    const split = splitActionItems(actionItemsOf(c.summary as { action_items?: unknown } | null));
     const open: string[] = [];
+    const openHeadings: (string | null)[] = [];
     const resolved: { item: string; state: string }[] = [];
-    for (const item of items) {
+    split.items.forEach((item, i) => {
       const st = decided.get(`${r.sourceItemId}\u0000${titleKey(item)}`);
       if (st) resolved.push({ item, state: st });
-      else open.push(item);
-    }
-    out.push({ meetingId: r.sourceItemId, title: c.title, meetingAt: c.meetingAt ?? r.at, newestMs: ms(c.meetingAt ?? r.at), open, resolved });
+      else {
+        open.push(item);
+        openHeadings.push(split.headings[i] ?? null);
+      }
+    });
+    out.push({ meetingId: r.sourceItemId, title: c.title, meetingAt: c.meetingAt ?? r.at, newestMs: ms(c.meetingAt ?? r.at), open, openHeadings, resolved });
   }
   return out.sort((a, b) => (b.newestMs || 0) - (a.newestMs || 0));
 }
@@ -536,4 +553,33 @@ export function planLedgerReport(a: {
     else plan.meetings.outOfWindow++;
   }
   return plan;
+}
+
+// ── ASSEMBLY: stored rows -> facts -> the plan (shared by the report script and the Actions view) ────
+
+export interface AssembledLedgerPlan {
+  ctx: NeedsYouContext;
+  plan: LedgerReportPlan;
+  /** Forwarded part of stored "Fw:" emails, by feed id. */
+  forwards: Map<string, string>;
+  forwardsMissing: number;
+  forwardsTotal: number;
+  signals: ResolutionSignal[];
+}
+
+/** Pure: everything the report script built by hand from loadLedgerReportData's rows, in one place, so the report
+ *  and the Actions view (lib/actions) cannot drift. */
+export function assembleLedgerPlan(
+  data: { rows: readonly LedgerReportRow[]; proposals: readonly ProposalSignalRow[]; bell: readonly BellSignalRow[] },
+  cfg: Pick<OneDriveFeedsConfig, "mailbox" | "ownerLogins" | "correspondence" | "teams">,
+  sinceMs: number,
+): AssembledLedgerPlan {
+  const sent = sentFromLedger(data.rows);
+  const ctx: NeedsYouContext = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), latestSent: latestSentByConversation(sent), sentKnown: sent.length > 0 };
+  const emailFacts = [...groupEmailConversations(cfg.mailbox, emailMessagesFromLedger(data.rows))].map(([k, msgs]) => conversationFacts(k, msgs, ctx));
+  const teams = teamsChatsFromLedger(data.rows, cfg.teams.ownerSenderIds);
+  const meetings = meetingItemsFromLedger(data.rows, data.proposals);
+  const signals = resolutionSignals(data.proposals, data.bell, messageLookup(data.rows, cfg.mailbox), cfg.mailbox);
+  const fw = forwardsFromLedger(data.rows);
+  return { ctx, plan: planLedgerReport({ emailFacts, teams, meetings, signals, sinceMs }), forwards: fw.forwards, forwardsMissing: fw.missing, forwardsTotal: fw.isForward, signals };
 }

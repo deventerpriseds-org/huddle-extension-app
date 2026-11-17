@@ -594,24 +594,27 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 /** A section with a tappable header that collapses it. Open by default; the choice is remembered per
  *  device (localStorage, best-effort -- private mode just means it opens again next time).
  *  Owner, 2026-11-07: "they should all be collapsible". */
-function CollapsibleSection({
+export function CollapsibleSection({
   id,
   label,
   count,
   children,
+  defaultOpen = true,
 }: {
   id: string;
   label: string;
   count?: number;
   children: React.ReactNode;
+  /** First-visit state (Actions' "Answered by your reply" starts collapsed). The device's choice still wins. */
+  defaultOpen?: boolean;
 }) {
   const storageKey = `huddle.widget.section.${id}.open`;
   const [open, setOpen] = useState<boolean>(() => {
     try {
       const v = typeof window !== "undefined" ? window.localStorage.getItem(storageKey) : null;
-      return v === null ? true : v === "1";
+      return v === null ? defaultOpen : v === "1";
     } catch {
-      return true;
+      return defaultOpen;
     }
   });
   const toggle = () => {
@@ -1652,11 +1655,12 @@ function LiveScheduleWidget({
  *  large empty area — and on a phone it was a card with a margin all round it for no reason. The
  *  view's OWN chrome is the container now: the header bar is the page header, and the widget fills
  *  the rest of the panel edge to edge and scrolls its own sections. */
-function WidgetPage({ title, children }: { title: string; children: React.ReactNode }) {
+export function WidgetPage({ title, children, subtitle }: { title: string; children: React.ReactNode; subtitle?: React.ReactNode }) {
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <div className="border-b border-hairline bg-surface px-3 py-2.5 sm:px-6">
+      <div className="flex items-baseline gap-2 border-b border-hairline bg-surface px-3 py-2.5 sm:px-6">
         <h1 className="text-sm font-semibold text-foreground">{title}</h1>
+        {subtitle ? <span className="truncate text-xs text-muted-foreground">{subtitle}</span> : null}
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
     </section>

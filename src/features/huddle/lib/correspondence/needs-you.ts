@@ -9,7 +9,10 @@
 // SUPERSEDES:    the keyword classifier this module held at 633d672c..a5f253c2 (ask / group-address / minutes /
 //                invite-subject / owner-name regex verdicts): REMOVED, not left unused. Iris's live screen
 //                (inbound-email.ts) is untouched and NOT superseded.
-// SUPERSEDED-BY: nothing -- current.
+// SUPERSEDED-BY: for the Actions heartbeat: lib/correspondence/action-classify.ts (2026-11-16) is the CANONICAL
+//                "needs you" classifier. This module stays the source of the deterministic conversation FACTS that
+//                classifier consumes; judgeConversation remains for the legacy flag correspondence.conversations and
+//                scripts/proposals-preview.ts, and its verbatim check now CALLS action-classify's quoteIsVerbatim.
 // EVIDENCE:      scripts/needs-you.test.ts; scripts/fixtures/needs-you-judge-cases.json;
 //                docs/qc-evidence/IMPL-needs-you-redesign.md.
 //
@@ -17,6 +20,7 @@
 // THIS REPO IS PUBLIC: no addresses, names or ids here; config supplies the owner's identity at run time.
 
 import { newTextOnly } from "../email/inbound-email";
+import { quoteIsVerbatim } from "./action-classify";
 import { parseAddress, parseUtcMs, sentReplySettles, type FeedInboundMessage } from "../external-feeds/onedrive-feed";
 
 // ── Recipients (AC-R3, S-A) ───────────────────────────────────────────────────────────────────────────
@@ -340,15 +344,6 @@ export function judgeInput(f: ConversationFacts, ownerNames: readonly string[]):
 
 // ── Tier 1 validation of the model's answer ───────────────────────────────────────────────────────────
 
-const canon = (s: string) =>
-  String(s ?? "")
-    .replace(/[‘’‚‛]/g, "'")
-    .replace(/[“”„‟]/g, '"')
-    .replace(/[–—]/g, "-")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-
 export interface JudgeTodo {
   title: string;
   quote: string;
@@ -366,8 +361,6 @@ export interface Judgement {
 }
 
 export type JudgeValidation = { ok: true; judgement: Judgement } | { ok: false; reason: "not_object" | "bad_category" | "bad_addressed" | "bad_ask" | "bad_todos" };
-
-const MIN_QUOTE = 8;
 
 /**
  * THE GUARD. Raw model JSON + the facts -> a judgement that may be reported/stored, or a refusal (the caller leaves
@@ -397,10 +390,9 @@ export function validateJudgement(raw: unknown, f: ConversationFacts): JudgeVali
   let category = o.category as JudgeCategory;
   let downgraded: Judgement["downgraded"] = null;
   if (category === "needs_reply") {
-    const latest = canon(f.latestOther?.text ?? "");
-    const q = canon(ask?.quote ?? "");
+    // ONE verbatim rule for both classifiers (action-classify.ts quoteIsVerbatim: same folding, same 8-char floor).
     if (!ask) downgraded = "ask_missing";
-    else if (q.length < MIN_QUOTE || !latest.includes(q)) downgraded = "quote_not_in_latest_other";
+    else if (!quoteIsVerbatim(ask.quote, f.latestOther?.text ?? "")) downgraded = "quote_not_in_latest_other";
     else if (o.addressed === "not_addressed") downgraded = "not_addressed";
     if (downgraded) {
       category = "fyi";

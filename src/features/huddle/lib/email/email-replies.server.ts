@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS chat.attention_settings (
   urgent_kinds TEXT[] NOT NULL,
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 2026-11-16 (Actions view "What shows"): the Actions settings live on the SAME per-owner settings row (no new
+-- table). urgent_kinds becomes nullable so an Actions-only row reads as "bell default" (getUrgentKinds -> null).
+ALTER TABLE chat.attention_settings ADD COLUMN IF NOT EXISTS actions_settings JSONB;
+ALTER TABLE chat.attention_settings ALTER COLUMN urgent_kinds DROP NOT NULL;
 `;
 
 let bootstrapped: Promise<void> | null = null;
@@ -545,4 +549,50 @@ export async function setUrgentKinds(ownerEmail: string, kinds: string[]): Promi
      ON CONFLICT (owner_email) DO UPDATE SET urgent_kinds = EXCLUDED.urgent_kinds, updated_at = now()`,
     [ownerEmail, kinds],
   );
+}
+
+/** Actions view "What shows" (2026-11-16): the raw stored JSON (lib/actions resolveActionsSettings validates it). */
+export async function getActionsSettingsRaw(ownerEmail: string): Promise<unknown> {
+  await ensureBootstrapped();
+  const r = await getPool().query<{ actions_settings: unknown }>(
+    `SELECT actions_settings FROM chat.attention_settings WHERE owner_email = lower($1)`,
+    [ownerEmail],
+  );
+  return r.rows[0]?.actions_settings ?? null;
+}
+
+/** Whole-object upsert of the Actions settings. A new row leaves urgent_kinds NULL = the bell's default. */
+export async function setActionsSettingsRaw(ownerEmail: string, settings: unknown): Promise<void> {
+  await ensureBootstrapped();
+  await getPool().query(
+    `INSERT INTO chat.attention_settings (owner_email, urgent_kinds, actions_settings, updated_at) VALUES (lower($1), NULL, $2::jsonb, now())
+     ON CONFLICT (owner_email) DO UPDATE SET actions_settings = EXCLUDED.actions_settings, updated_at = now()`,
+    [ownerEmail, JSON.stringify(settings)],
+  );
+}
+
+/** X-6: settle the OPEN bell rows (email by message id, chat by chat id) of an item decided in Actions. */
+export async function settleBellRows(owners: string[], emailGraphIds: string[], chatIds: string[]): Promise<number> {
+  if (!emailGraphIds.length && !chatIds.length) return 0;
+  await ensureBootstrapped();
+  const r = await getPool().query(
+    `UPDATE chat.email_replies SET status = 'dismissed', settled_at = now(), updated_at = now()
+      WHERE owner_email = ANY($1::text[]) AND status IN ('owed','drafted')
+        AND ((kind = 'email' AND graph_message_id = ANY($2::text[])) OR (kind = 'chat' AND conversation_id = ANY($3::text[])))`,
+    [owners.map((o) => o.toLowerCase()), emailGraphIds, chatIds],
+  );
+  return r.rowCount ?? 0;
+}
+
+/** The email reply rows (Draft reply) for the given message ids / conversation ids. */
+export async function listEmailRepliesFor(owners: string[], graphIds: string[], conversationIds: string[]) {
+  if (!graphIds.length && !conversationIds.length) return [];
+  await ensureBootstrapped();
+  const r = await getPool().query<{ id: string; graph_message_id: string; conversation_id: string | null; status: string; proposed_reply: string | null; draft_web_link: string | null }>(
+    `SELECT id, graph_message_id, conversation_id, status, proposed_reply, draft_web_link FROM chat.email_replies
+      WHERE owner_email = ANY($1::text[]) AND kind = 'email' AND (graph_message_id = ANY($2::text[]) OR conversation_id = ANY($3::text[]))
+      ORDER BY received_at DESC NULLS LAST LIMIT 2000`,
+    [owners.map((o) => o.toLowerCase()), graphIds, conversationIds],
+  );
+  return r.rows.map((x) => ({ id: x.id, graphMessageId: x.graph_message_id, conversationId: x.conversation_id, status: x.status, proposedReply: x.proposed_reply, draftWebLink: x.draft_web_link }));
 }

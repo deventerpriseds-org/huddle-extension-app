@@ -6,7 +6,8 @@ import { ContextPanel } from "./ContextPanel";
 import { HuddleView } from "./HuddleView";
 import { MeetingLayer } from "./MeetingBar";
 import { Rail } from "./Rail";
-import { ViewSwitcher } from "./ViewSwitcher";
+import { VIEW_TITLE, ViewSwitcher } from "./ViewSwitcher";
+import { ActionsView } from "./ActionsView";
 import { Sidebar } from "./Sidebar";
 import { SettingsSheet } from "./SettingsSheet";
 import { AgentSettingsDrawer } from "./AgentSettingsDrawer";
@@ -47,6 +48,7 @@ const VIEWS: Record<View, React.ReactNode> = {
   artifacts: <ArtifactsView />,
   priorities: <PrioritiesView />,
   schedule: <ScheduleView />,
+  actions: <ActionsView />,
   polish: <PolishView />,
 };
 
@@ -373,11 +375,13 @@ export function HuddleApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
 
-  const activeTitle = view === "polish" ? "Polish" : active
+  // X-5 (owner-approved 2026-11-16): every view shows its own name; only the huddle view shows the huddle's name.
+  // (It used to be "Polish" or the active huddle's name, so Board / Priorities / Schedule / Files read "Iris Chase".)
+  const activeTitle = VIEW_TITLE[view] ?? (active
     ? active.kind === "group"
       ? active.name
       : AGENT_BY_ID[active.members[0]].name
-    : "Huddle";
+    : "Huddle");
 
   return (
     // HEIGHT = WHAT THE USER CAN SEE, not what the layout viewport claims. `h-dvh` alone left the
