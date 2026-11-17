@@ -13,6 +13,7 @@
 // Both hooks are fire-and-forget and never throw, so a model call's own behaviour is unchanged.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createAiQuotaMonitor, systemNoticePayload, systemNoticeTurnId, type AiQuotaNotifier } from "./ai-quota";
+import { AI_QUOTA_HOOKS_KEY, type AiQuotaHooks } from "./hooks";
 
 export interface AiJobContext {
   /** Owner-readable job name ("Grooming", "Actions classifier", ...). Shown on the bell. */
@@ -107,7 +108,7 @@ export function noteAiSuccess(): void {
   })();
 }
 
-/** Raw-fetch sites: report an OpenAI HTTP response's outcome. Reads the body only on failure, from a CLONE, so the
+/** Raw-fetch sites (via hooks.ts reportAiResponse): report an OpenAI HTTP response's outcome. Reads the body only on failure, from a CLONE, so the
  *  caller's own read is untouched; only the kind (status + known code) is ever logged. */
 export function noteAiResponse(res: Response): void {
   if (!als.getStore()) return;
@@ -122,3 +123,7 @@ export function noteAiResponse(res: Response): void {
     noteAiFailure(new Error(`OpenAI ${res.status}: ${body}`));
   })();
 }
+
+// Register the hooks for hooks.ts (the client-safe entry the shared model helpers import). Loading this module is
+// what starts any background job (runAsAiJob), so the registry always exists before a job's first model call.
+(globalThis as Record<string, unknown>)[AI_QUOTA_HOOKS_KEY] = { noteAiFailure, noteAiSuccess, noteAiResponse } satisfies AiQuotaHooks;

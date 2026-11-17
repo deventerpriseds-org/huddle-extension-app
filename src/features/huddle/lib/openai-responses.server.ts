@@ -10,7 +10,7 @@
 
 // 2026-11-17: every call reports its outcome to the background-job quota alert (lib/ai-quota). Outside a background
 // job (an interactive chat turn) the hooks are no-ops; inside one they never throw and never delay the call.
-import { noteAiFailure, noteAiSuccess } from "./ai-quota/ai-quota.server";
+import { reportAiFailure as noteAiFailure, reportAiSuccess as noteAiSuccess } from "./ai-quota/hooks";
 
 const OPENAI_URL = "https://api.openai.com/v1/responses";
 

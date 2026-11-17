@@ -81,3 +81,40 @@ NOT wrapped (interactive, unchanged): the user's own `u-`/`xapp-` turns -- they 
 First M10 attempt (replace the alias line) was INERT -- the K1 check reads the import line; re-aimed at the import (the real
 "second copy" defect). First M1/M5 runs were UNDETERMINED: `/tmp` was full (other sessions' `corr-*` clusters plus this
 suite's own leaked `aiquota-*` dirs); the SQL suite now removes its cluster in `finally`, then both FIRED.
+
+## Step 6 -- build check found a client-bundle hazard; fixed
+
+- First `vite build` (rc=0) put `node:async_hooks` into the client `routing-*.js` chunk: `openai-responses.server.ts`
+  statically imported `ai-quota.server.ts`, and `routing.ts` (client-reachable) reaches that helper. Vite shims the
+  node module empty, so `new AsyncLocalStorage()` would throw when the chunk evaluates in a browser.
+- Fix: `lib/ai-quota/hooks.ts` (no imports at all) forwards through a `globalThis` registry that `ai-quota.server.ts`
+  fills when it loads (loading it is what starts any job). The helper and the raw-fetch sites import only `hooks.ts`.
+- Rebuild rc=0: the only `async_hooks` text left in `routing-*.js` is the AI SDK's own guarded diagnostics lookup
+  (`mo("node:async_hooks")`), not this code. `ai-quota.server` appears in public assets only as a LAZY chunk behind
+  `executeClaimedTurn` -- the same pattern as the existing `turns.server` / `email-replies.server` lazy chunks.
+- New guards: G1 (helper never imports ai-quota.server; hooks.ts has no imports), C2 (registry forwards, only inside
+  a job, kind only).
+
+## Step 7 -- final counts (head of branch)
+
+| check | result |
+|---|---|
+| `npx tsc --noEmit` | clean (0 lines) |
+| `npx vite build` | rc=0 |
+| `bun scripts/ai-quota-alert.test.ts` | 49 passed, 0 failed |
+| `bun scripts/ai-quota-alert-sql.test.ts` | 12 passed, 0 failed |
+| `bun scripts/feed-staleness.test.ts` / `-sql` | 98 / 23 passed, 0 failed |
+| `bun scripts/attention.test.ts` / `attention-focus.test.ts` | all passed |
+| `bun scripts/proposals-preview.test.ts` | 15 passed, 0 failed |
+| `bun scripts/correspondence-ingest.test.ts` | 186 passed, 0 failed |
+| `bun scripts/actions-view.test.ts` | 82 passed, 0 failed |
+| `bun scripts/barge-deadline.test.ts` / `approach-override.test.ts` | 13 passed / rc=0 |
+
+## Existing behaviour that changes (additive otherwise)
+
+1. `listOpenAttention` ordering: `ai_quota` rows sort first alongside `feed` rows (no existing row changes position
+   relative to another existing row).
+2. Agent-initiated durable turns and the scheduled job routes now run inside an AsyncLocalStorage job context; the
+   shared helpers fire-and-forget an outcome report. No return value, error or timing of any model call changes.
+3. `scripts/proposals-preview.ts` uses the shared `aiFailureKind` (identical body) instead of its local copy.
+4. Bell icon map gains `ai_quota` (CreditCard); shown only when such a row exists.

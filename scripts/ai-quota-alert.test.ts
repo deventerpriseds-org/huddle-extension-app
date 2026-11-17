@@ -217,6 +217,29 @@ t("J1 agent turn job name", agentTurnJob("autowork-abc-123"), "Agent turn (autow
     return S.currentAiJob()?.job;
   });
   t("C1 inside a job (across awaits): context", inside, "Grooming");
+  // C2 the client-safe hooks reach the server module through the registry, and only inside a job
+  const H = await import("../src/features/huddle/lib/ai-quota/hooks");
+  t("C2 registry filled by the server module", typeof (globalThis as Record<string, unknown>)[H.AI_QUOTA_HOOKS_KEY], "object");
+  const logged: string[] = [];
+  const realLog = console.log;
+  console.log = (l: unknown) => void logged.push(String(l));
+  try {
+    H.reportAiFailure(new Error("OpenAI 500: x")); // outside a job: nothing
+    await S.runAsAiJob("Grooming", O, async () => H.reportAiFailure(new Error("OpenAI 503: x")));
+    await new Promise((r) => setTimeout(r, 20));
+  } finally {
+    console.log = realLog;
+  }
+  t("C2 only the in-job failure is logged (kind only)", logged.filter((l) => l.startsWith("[ai-job]")), ["[ai-job] job=Grooming failed kind=503"]);
+}
+
+// G1 no node-only import reaches a module a browser chunk can load (routing.ts -> openai-responses.server)
+{
+  const strip = (s: string) => s.replace(/\/\/.*$/gm, "");
+  const helper = strip(readFileSync("src/features/huddle/lib/openai-responses.server.ts", "utf8"));
+  t("G1 the shared helper imports the client-safe hooks, never ai-quota.server", [/ai-quota\/hooks/.test(helper), /ai-quota\.server/.test(helper)], [true, false]);
+  const hooksSrc = strip(readFileSync("src/features/huddle/lib/ai-quota/hooks.ts", "utf8"));
+  t("G1 hooks.ts has no imports at all", /^\s*import\s/m.test(hooksSrc), false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
