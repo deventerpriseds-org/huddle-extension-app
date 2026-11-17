@@ -27,7 +27,23 @@ export const GROUNDED =
   " GROUNDING: `todo` and `reason` may state ONLY what the quoted OTHER message says, plus who wrote it as labelled " +
   "(OWNER / OTHER). Never state or guess the owner's own state -- whether he replied, submitted, completed, attended " +
   "or still has to -- except from the facts computed by code given above. A message labelled OWNER is his own: never " +
-  "describe it as someone asking him.";
+  "describe it as someone asking him." +
+  // 2026-11-17 (owner screenshot: a row read "OTHER asked how to handle PTO, and OWNER said..."): the role labels are
+  // for the model's input only. Added sentence; the wording above is unchanged. Deterministic half: plainRoles.
+  " Write `todo` and `reason` TO the owner: call him \"you\" and call the other person by name. Never write the " +
+  "words OWNER or OTHER in them.";
+
+/** Pure: the input role labels never reach the owner. Uppercase OWNER/OTHER (the labels; ordinary "other" is
+ *  untouched) become "you" / "they", capitalised at a sentence start. Applied when a verdict is admitted AND when a
+ *  stored one is shown, so verdicts judged before this fix read correctly too. */
+export function plainRoles(s: string | null | undefined): string | null {
+  if (s == null) return s ?? null;
+  const out = s
+    .replace(/\b(?:the )?OWNER['’][sS]\b/g, "your")
+    .replace(/\b(?:the )?OWNER\b/g, "you")
+    .replace(/\b(?:the )?OTHER\b/g, "they");
+  return out.replace(/(^|[.!?]\s+)([a-z])/g, (_m, a: string, b: string) => a + b.toUpperCase());
+}
 
 const COMMON =
   "You read ONE email conversation from the mailbox of the OWNER. Messages are labelled OWNER (written by him) or " +
@@ -262,7 +278,7 @@ export function admitActionVerdict(raw: unknown, haystack: string | QuoteHaystac
   if (!ACTION_KINDS.includes(o.kind as ActionKind)) return base;
   if (!ACTION_CATEGORIES.includes(o.category as ActionCategory)) return base;
   const conf: ActionVerdict["confidence"] = o.confidence === "high" || o.confidence === "medium" || o.confidence === "low" ? o.confidence : null;
-  const common = { ...base, kind: o.kind as ActionKind, category: o.category as ActionCategory, confidence: conf, todo: str(o.todo, 200), due: str(o.due, 120), quote: str(o.quote, 600), reason: str(o.reason) };
+  const common = { ...base, kind: o.kind as ActionKind, category: o.category as ActionCategory, confidence: conf, todo: plainRoles(str(o.todo, 200)), due: str(o.due, 120), quote: str(o.quote, 600), reason: plainRoles(str(o.reason)) };
   if (o.open_item === false) {
     const { notCheckedReason: _n, ...rest } = common;
     return { ...rest, status: "none", answeredByReply: a.settled };
