@@ -145,11 +145,39 @@ export interface AskClass {
 }
 
 // Explicit "do it now" signals — the user overriding the default (which is defer/queue).
-const URGENCY_RE: RegExp[] = [
-  /\b(right now|right away|immediately|this second|this instant|do it now|now please|asap|straight away)\b/i,
-  /\bnow\b\s*[!.]*$/i, // trailing "now"
-  /^\s*now\b[,\s]/i, // leading "now,"
-];
+// "now" is an ALLOWLIST (verify loop 7, VERIFY-handoff-confirm-flow-7-C2.md): five loops of listing the ways to
+// say "not now" each found new ones (unusual apostrophes, typos like "dnt", "Nah, right now I'm good", "I'll do it
+// myself right now"). So "now" is no longer "an urgency word minus the refusals we know about"; it is "an
+// INSTRUCTION to the agent that ends in now / asap / right away" — a closed set of shapes. Anything else is
+// `default` (one confirm step). The negation and deferral vetoes below still run on top as a second layer.
+const URGENCY_WORD = "(?:now|right now|right away|immediately|asap|a\\.s\\.a\\.p\\.?|straight away|this second|this instant)";
+// Verbs that instruct the agent. Not "stop / cancel / drop": acting at once on those is a different decision.
+const INSTRUCTION_VERB =
+  "(?:do|start|begin|handle|get|research|build|draft|write|find|book|send|make|create|look|check|run|plan|prepare|" +
+  "compare|go|take|fix|update|order|call|email|schedule|move|mark|add|put|finish|complete|work|tackle|pull|set|" +
+  "review|summari[sz]e|analy[sz]e|outline|design|sketch|groom|prioriti[sz]e|figure|knock|crank|jump)";
+// One clause that is an instruction ending in an urgency word: "do it now", "research Agentforce right now",
+// "can you do it now", "I want it done right away", "it's important to do it right away", "now please".
+const URGENT_INSTRUCTION_RE = new RegExp(
+  "^(?:(?:please|just|so|ok|okay|go ahead and)\\s+)*" +
+    "(?:(?:can|could|will|would) you\\s+(?:please\\s+|just\\s+)?)?" +
+    // An instruction is REQUIRED: "I want it (done)" with an optional verb, or an instruction verb. A bare
+    // "right now" left over after an idiom is stripped ("I don't care right now") is not one.
+    "(?:i (?:want|need) (?:it|this|that|them)(?:\\s+(?:done|[a-z]+ed))?\\s+" +
+    `(?:${INSTRUCTION_VERB}\\b(?:\\s+[\\w'-]+){0,6}?\\s+)?` +
+    "|(?:(?:it's|it is|this is) (?:important|urgent) (?:to\\s+)?)?" +
+    `${INSTRUCTION_VERB}\\b(?!\\s+(?:i|we)\\b)(?:\\s+[\\w'-]+){0,6}?\\s+)` +
+    `${URGENCY_WORD}(?:\\s+please)?$`,
+  "i",
+);
+// The whole message is only the urgency word ("asap", "right away", "now please").
+const BARE_URGENCY_RE = new RegExp(`^(?:please\\s+)?${URGENCY_WORD}(?:\\s+please)?$`, "i");
+// "Now, research chew treats" — a leading now followed by an instruction.
+const LEADING_NOW_RE = new RegExp(`^now\\s*[,:\\-–—]?\\s*${INSTRUCTION_VERB}\\b`, "i");
+const CLAUSE_SPLIT_RE = /\s*[.!?;,:]+\s*|\s+[—–-]\s+|\s+(?:and|so|but|then)\s+/i;
+// Every apostrophe-like character people type, mapped to ' before any matching (loop 7: ‘ ʼ ` ＇ ´ slipped past).
+const normalizeApostrophes = (t: string) =>
+  t.replace(/[‘’ʼ`＇´′]/g, "'").replace(/[^\p{L}\p{N}\s'?.!,;:—–-]+/gu, " ").replace(/\s+/g, " ");
 
 // WHICH DIRECTION IS UNSAFE. "now" is what lets an agent skip the confirm step (F1/F3), so a deferral read as
 // "now" acts on something the owner said to wait on; an urgent ask read as `default` only costs one confirm.
@@ -169,7 +197,7 @@ const URGENT_IDIOMS_RE =
 // The apostrophe is REQUIRED on "n't" (verify loop 3 W-1..W-6: "want", "urgent", "client" end in "nt"); the
 // apostrophe-less spellings people actually type are listed by name.
 const NEGATION_RE =
-  /\b(?:not|never|no|nothing|none|neither|nor|instead|rather|unless|without|[a-z]+n['’]t|dont|cant|wont|doesnt|isnt|didnt|wouldnt|shouldnt|couldnt|aint)\b/i;
+  /\b(?:not|never|no|nah|nope|nothing|none|neither|nor|instead|rather|unless|without|[a-z]+n['’]t|dont|cant|wont|doesnt|isnt|didnt|wouldnt|shouldnt|couldnt|aint)\b/i;
 // Any time, schedule or busy reference: the owner is placing the work somewhere other than this moment, or
 // saying why this moment is bad ("right now I'm slammed, get to it Monday").
 const DEFERRAL_RE = new RegExp(
@@ -191,9 +219,17 @@ const DEFERRAL_RE = new RegExp(
 
 /** Is this ask an explicit "do it now"? ONE classifier for urgency — consumers read `classifyAsk().urgency`. */
 function askIsUrgentNow(text: string): boolean {
-  if (!URGENCY_RE.some((re) => re.test(text))) return false;
-  const rest = text.replace(URGENT_IDIOMS_RE, " ");
-  return !NEGATION_RE.test(rest) && !DEFERRAL_RE.test(rest);
+  const t = normalizeApostrophes(text).trim().toLowerCase();
+  const rest = t.replace(URGENT_IDIOMS_RE, " ");
+  // Second layer: any negation or time/busy word anywhere still means not now.
+  if (NEGATION_RE.test(rest) || DEFERRAL_RE.test(rest)) return false;
+  const whole = t.replace(/[.!?]+$/g, "").trim();
+  if (BARE_URGENCY_RE.test(whole) || LEADING_NOW_RE.test(whole)) return true;
+  return rest
+    .split(CLAUSE_SPLIT_RE)
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .some((c) => URGENT_INSTRUCTION_RE.test(c));
 }
 
 export function classifyAsk(text: string): AskClass {
