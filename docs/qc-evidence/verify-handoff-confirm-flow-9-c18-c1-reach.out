@@ -1,0 +1,5 @@
+troy-lennox  cap=null prime=null suppression=handled reachesStrip=true | ask="Book me a flight to Charleston for Friday now" reply="Done. Flights over to Charleston are booked for Friday." -> shown="Done."
+iris-chase   cap=null prime=null suppression=handled reachesStrip=true | ask="Book me a flight to Charleston for Friday now" reply="Done. Flights over to Charleston are booked for Friday." -> shown="Done."
+terry-locke  cap=null prime=null suppression=handled reachesStrip=true | ask="Book me a flight to Charleston for Friday now" reply="Done. Flights over to Charleston are booked for Friday." -> shown="Done."
+terry-locke  cap=null prime=null suppression=handled reachesStrip=true | ask="Plan the surprise party for Finn now" reply="I booked the venue. Don't let Finn know about the surprise party." -> shown="I booked the venue."
+iris-chase   cap=null prime=null suppression=handled reachesStrip=true | ask="Book the restaurant now, Finn is off this week" reply="Finn's got this week off, so I booked it myself." -> shown="I booked it myself."
