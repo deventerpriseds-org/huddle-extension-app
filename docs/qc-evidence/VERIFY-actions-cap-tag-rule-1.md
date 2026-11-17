@@ -101,3 +101,26 @@ correspondence-ingest 186/0, fireflies-list 9/0 (matches the builder's 90/28/103
 | V5 | actions.ts | `DAILY_CAP_DEFAULT` 500 -> 150 | CAP-1 | exit 0, FIRED (control EQUIVALENT) |
 
 Every run restored the file to HEAD (`restored: ... matches HEAD`).
+
+## Claim 5 -- test merge of origin/main
+
+CONFIRMED, no conflict. `git rev-list --left-right --count origin/main...origin/claude_actions-cap-tag-rule` = `0 4`;
+`git merge-base --is-ancestor origin/main <branch>` true (origin/main 80a7cf0e). `git merge origin/main` exit 0 and HEAD
+stayed 763bd8f6, so the merged tree IS the tree the suites above ran on (no re-run needed: identical bytes).
+
+## Claim 6 -- the Actions classifier uses the same rule
+
+CONFIRMED (read). `runActionsClassify` (`actions.server.ts:166`) and `getActionsPage` (`:302`) both call
+`assembleLedgerPlan` -> `teamsChatsFromLedger` (`report-from-ledger.ts:587`) -> `chatFacts` -> `chatInvolvement` (`:316`).
+No other caller of `maybeMentionsOwner` / `chatInvolvement` in `src/`.
+
+## Not run
+
+- UI in a browser: the notice band and "Change limit" button were verified by reading `ActionsView.tsx` only. The
+  branch is not deployed and this pass was told not to dispatch workflows, so no Playwright run. UI-UNVERIFIED: 1.
+
+## Verdict
+
+MERGE-PENDING-UAT. No code defect found in the rule or the cap. Owed after landing: a browser run showing the
+notice at the cap and absent below it. Owner items: D1 (a stored `dailyCap: 150` keeps him at 150) and N1 (channel
+mentions hide, though his decision named only team and tag).
