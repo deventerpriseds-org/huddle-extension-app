@@ -134,3 +134,35 @@ Daily totals, ET days. Each cell shows `count / secondary`.
 **Inferred (confidence medium):** nothing recorded in the app DB looks like the kind of volume that exhausts a
 quota on its own. Either the spend came from token weight per call rather than call count, or it came from paths
 this DB does not record (see the list above), or it came from another consumer of the same key.
+
+---
+
+## F3 — Known events, checked against the data
+
+| event | in the data? | size | source |
+|---|---|---|---|
+| 4 real stand-ups started by UAT on 11-15, ET 19:07 / 19:17 / 19:31 / 21:02 | **YES** | verify-uat started at ET 19:05, 19:15, 19:30 and 21:00, about 7 min each. `ceremony_transcript` shows 3 runs in the 19:00 ET hour and 1 run in the 21:00 ET hour: 299 rows, 18 agent speech blocks, 36 group replies, 37 `model_usage` rows and 41 rag_chunks. Each stand-up also opens a `gpt-realtime` WebRTC session with `gpt-4o-mini-transcribe` for about the length of the run (from code: `useCeremonyVoice.ts`, `realtime.functions.ts`). All of this is on **UTC 11-16**. | F1, F2 |
+| many proposals-preview runs, 11-15 and 11-16 | **YES** | 10 runs. 362 successful calls (`gpt-5.6-luna` in the log), 265 of them on UTC 11-16. 218 more calls failed with 429. | F1 |
+| back-fills | **YES, but no model calls** | 16 correspondence-backfill runs. The workflow has no OpenAI key and the script has no model call. Ledger rows first seen: 338 (11-15) and 143 (11-16). | F1, F2 |
+| Actions build agent's live checks | **Mostly not visible** | 2 verify-uat runs (11-16 22:11 and 22:27 ET) came after the quota was gone. Only 1 user-originated durable turn appears on 11-16. A harness or server-fn call that skips the durable path is not recorded in this DB. | F1, F2 |
+| automatic stand-up, toggled off on 11-15 | **No sign that it contributed** | 0 ceremonies on 11-12, 11-13, 11-14 and 11-16. `tasks.ceremony_runs` has 0 rows in the window. On 11-16 the `standup-digest` job last ran at 08:00 ET, and it is not a ceremony. | F2 |
+
+## F4 — Can anything here read OpenAI's own usage data?
+
+**No.**
+- The only OpenAI secret referenced in `.github/workflows` is `secrets.OPENAI_API_KEY` (20 references).
+- No `OPENAI_ADMIN*` secret exists, and nothing calls `organization/usage` or `organization/costs`. The grep
+  covered `.github`, `scripts` and `src`, and returned 0 hits.
+- `public.usage_metering` (F2) is dead: it has 1 row, from July.
+
+**The same `OPENAI_API_KEY` secret is used by the live app** (`deploy-swa.yml` writes it into the SWA app
+settings) **and by `proposals-preview.yml`**. Their spend lands on the same key.
+
+**Other repos' Actions on 11-15 to 11-17:**
+- journey-voice: 38 runs, all CI or edge deploys (`checks`, `parse-edge-functions`, `deploy-supabase-functions`,
+  `check-edge-deploy-drift`).
+- eds-claude-skills: 21 runs, all guard suites.
+- nexus-hub: not readable from this session.
+
+Whether journey's live app (Iris uses OpenAI Realtime), or any other app, shares the same OpenAI org or project
+**cannot be checked from here**.
