@@ -47,3 +47,23 @@ create path, not the confirm/approach/not-ai paths of C4/C5/C9/C10, so the exclu
   behavioural test `expect(withMyTaskTag(["finance"],"my-task")).toEqual(["finance","my-task"])` would close it (observation
   of the gap; the fix wording is a suggestion, not a design).
 
+## C4 -- confirm-ask buttons / 'asked' stamp
+- Code read: `proposeTaskDod` (tasks.server.ts:1674-1719) INSERTs `confirm_status='asked'`, `confirm_ask_at = confirm_last_sent_at
+  = now()`, count 1; ON CONFLICT never downgrades a `confirmed` row. Callers: huddle.functions.ts:4371-4372 and 5887-5888
+  (both propose_task_intent dispatch paths).
+- **CHALLENGE to the claim's causal wording.** The buttons do NOT appear because of the 'asked' stamp. They render from
+  `m.confirmAsk` (HuddleView.tsx:924, 1463), which is derived per reply from the agent's own successful
+  `propose_task_intent` tool use JSON detail (huddle.functions.ts:7256-7276, 7356) -- no DB read. What the 'asked' stamp
+  does is make the ask THE pending one for a typed "yes": `getPendingConfirmForAgent` filters `es.confirm_status='asked'`
+  ORDER BY `confirm_last_sent_at DESC` (tasks.server.ts:1242-1245). Button press reads the owned row and is a no-op only on
+  `confirmed` (confirm-ask.functions.ts:54).
+- DB test (local throwaway PG 16 via scripts/local-pg-up.sh, never Azure): `bun scripts/handoff-lane-b-db.test.ts` ALL PASS,
+  incl. `AC-F4-3 fresh live proposal -> asked, last_sent set, ask_at == last_sent, count 1`.
+- Mutation INSERT `'asked'` -> `'pending'`: mutate.sh returned UNDETERMINED (it cannot read this non-bun-test harness's
+  `FAIL <name>` format), so it was applied by an exact-once python replace, run, then `git checkout` and asserted
+  `git diff --quiet HEAD` (RESTORED-MATCHES-HEAD). Result: `FAIL AC-F4-3 fresh live proposal ... "confirm_status":"pending"`
+  -- **FIRED** (no comment-only control run; the failure detail names the mutated field, so it is behavioural).
+- **C4 verdict: CONFIRMED** that propose_task_intent stamps 'asked' and the buttons appear on that reply; the stated
+  mechanism ("buttons appear BECAUSE of the stamp") is **imprecise** -- the stamp drives typed-yes binding, the reply
+  derivation drives the buttons.
+
