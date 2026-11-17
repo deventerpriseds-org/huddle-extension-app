@@ -72,3 +72,23 @@ UNDER-MATCH (false claims passed unchanged): "All set — it's marked as complet
 The S-B reference cases pass ("I marked 'Order Nike Pegasus Premium' done." rewritten; "I'm proceeding with the
 research." rewritten; deferred update -> "passed to the task's owner").
 
+## C10 "Not an AI task" button -- CONFIRMED (1 residual risk)
+Observed: notAiTaskFromButtonFn (confirm-ask.functions.ts:671-698): resolveCallerEmail -> getOwnedTaskForConfirmAsk
+(ownership guard) -> idempotent short-circuit when already BACKLOG + my-task + unassigned -> update_task
+{status BACKLOG, assigned_agent "", tags: withMyTaskTag(existing)} (full tag set; update_task replaces tags).
+journey side (local /home/user/journey-voice checkout, execute-tool/index.ts ~991-994; NOT fetched from origin):
+`if (args.assigned_agent !== undefined) updateData.assigned_agent = args.assigned_agent ? String(...) : null` -> "" clears.
+Autowork never picks it up because every automation reader requires an assignee: getDueConfirmAsks
+`jt.assigned_agent IS NOT NULL` (tasks.server.ts:1190), liveStartDecision `!task.assigned_agent` -> no start,
+getOpenAssignedTasks. autowork.server.ts itself has NO my-task check (diff is F3-only); groom.ts:252-255 excludes
+my-task from the groomable set (so groom never re-assigns), keeps it in groomTags, and feeds <=20 titles as examples.
+Only other assignment writer: assign-on-create.ts:162 (create time only).
+Button: HuddleView.tsx:1004-1018 on the ConfirmAskRow, disabled while busy.
+Mutations (test 'grooming never re-assigns a my-task task and feeds its title in as an example'):
+- drop `!(t.tags ?? []).includes(MY_TASK_TAG)` from the groom filter: FIRED (control EQUIVALENT)
+- same drop but the dropped text left in a trailing `//` comment: FIRED (control EQUIVALENT) -> the source-text test
+  is comment-proof.
+Residual risk (inference): the action does not touch tasks.task_engagement_state, so confirm_status / live_start_at
+survive. If the owner later re-assigns the task to an agent, a stale live marker would let the next approach
+approval live-start it past the caps without a fresh live confirm.
+
