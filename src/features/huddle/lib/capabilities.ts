@@ -284,8 +284,14 @@ export function laneHandoffSuppression(opts: {
 const escapeName = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** The deferral shapes a reply uses to hand an ask to teammate `N` (F1-4). */
 function deferralPatterns(name: string): RegExp[] {
-  const n = escapeName(name);
+  // "Finn" or "Finn Reid" (verify loop 8, 8-rest C1: a full name broke every pattern).
+  const [first, ...rest] = name.trim().split(/\s+/);
+  const n = rest.length ? `${escapeName(first)}(?:\\s+${escapeName(rest.join(" "))})?` : escapeName(first);
   return [
+    // verify loop 8 (8-rest C1): eleven more ways of promising a teammate
+    new RegExp(`\\b${n}(?:\\s+will|\\s+can|\\s+should|'ll|’ll)\\s+(?:take\\s+care\\s+of|sort(?:\\s+out)?|pick\\s+(?:that|this|it)\\s+up|review|cover|own|run\\s+with|take\\s+(?:the|that|this))\\b`, "i"),
+    new RegExp(`\\bget\\s+${n}\\s+to\\b|\\bask(?:ed)?\\s+${n}\\s*[.!]|\\bleav(?:e|ing)\\s+(?:it|this|that|the\\s+\\w+)\\s+with\\s+${n}\\b`, "i"),
+    new RegExp(`\\bover\\s+to\\s+${n}\\b|\\bflag(?:ged|ging)?\\s+(?:it|this|that)\\s+(?:for|to)\\s+${n}\\b|\\b${n}(?:'s|’s)\\s+your\\s+(?:guy|gal|person|go-?to)\\b`, "i"),
     new RegExp(`\\bloop(?:ing)?\\s+(?:in\\s+)?${n}\\b|\\bloop\\s+${n}\\s+in\\b`, "i"),
     new RegExp(`\\bpass(?:ed|ing)?\\s+(?:(?:this|it|that)\\s+)?(?:(?:along|over)\\s+)?to\\s+${n}\\b`, "i"),
     new RegExp(`\\bhand(?:ed|ing)?\\s+(?:(?:this|it|that)\\s+)?(?:(?:off|over)\\s+)?to\\s+${n}\\b`, "i"),
@@ -319,7 +325,7 @@ function deferralPatterns(name: string): RegExp[] {
  */
 export function stripTeammateDeferral(text: string, addressedId: string): string {
   const src = String(text ?? "");
-  const others = AGENTS.filter((a) => a.id !== addressedId).map((a) => a.name.split(/\s+/)[0]);
+  const others = AGENTS.filter((a) => a.id !== addressedId).map((a) => a.name);
   const pats = others.flatMap(deferralPatterns);
   const parts = src.split(/((?<=[.!?])\s+|\n+)/);
   let changed = false;
@@ -327,15 +333,23 @@ export function stripTeammateDeferral(text: string, addressedId: string): string
   for (let i = 0; i < parts.length; i += 2) {
     const sentence = parts[i] ?? "";
     const sep = parts[i + 1] ?? "";
-    if (sentence.trim() && pats.some((re) => re.test(sentence))) {
+    // Markdown emphasis and brackets never hide a name ("**Finn** will handle it", "(Finn will review it)").
+    const plain = (t: string) => t.replace(/[*_()[\]]+/g, "");
+    if (sentence.trim() && pats.some((re) => re.test(plain(sentence)))) {
       changed = true;
-      // A dash-joined sentence keeps its other clauses: "I booked it — Finn will handle the receipts" -> "I booked
-      // it." (verify loop 7, 7-rest C1: the whole one-sentence reply used to be kept because dropping it left nothing).
-      const clauses = sentence.split(/\s+[—–]\s+/);
-      // A clause that hands off by PRONOUN ("I'm looping them in") refers back to the named teammate, so it goes too.
+      // A sentence of several clauses keeps the others: "I booked it — Finn will handle the receipts" or "I booked
+      // the flight, and Finn will handle the receipts" -> "I booked it." (verify loops 7 and 8: dashes, then commas,
+      // semicolons and spaced hyphens). A clause that hands off by PRONOUN ("I'm looping them in") goes with it.
+      const pieces = sentence.split(/(\s+[—–-]\s+|\s*[;,]\s+)/);
       const pronounHandoff = /\b(?:loop(?:ing)?\s+(?:them|him|her)\s+in|(?:they|he|she)(?:'ll|’ll|\s+will)\s+(?:reach\s+out|follow\s+up|handle|take\s+(?:it|this|over)|get\s+back))\b/i;
-      const rest = clauses.filter((c) => !pats.some((re) => re.test(c)) && !pronounHandoff.test(c)).join(" — ").trim();
-      if (clauses.length > 1 && rest) kept.push((/[.!?]$/.test(rest) ? rest : `${rest}.`) + sep);
+      const keptClauses: string[] = [];
+      for (let j = 0; j < pieces.length; j += 2) {
+        const c = pieces[j] ?? "";
+        if (!c.trim() || pats.some((re) => re.test(plain(c))) || pronounHandoff.test(c)) continue;
+        keptClauses.push(c.trim());
+      }
+      const rest = keptClauses.join(", ").replace(/^(?:and|so|but)\s+/i, "").replace(/[\s,;—–-]+$/, "").trim();
+      if (pieces.length > 1 && rest) kept.push((/[.!?]$/.test(rest) ? rest : `${rest}.`) + sep);
       continue;
     }
     kept.push(sentence + sep);

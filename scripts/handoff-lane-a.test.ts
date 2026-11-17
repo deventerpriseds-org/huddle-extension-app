@@ -245,6 +245,20 @@ describe("F1-4 stripTeammateDeferral", () => {
     "Finn's got this one.",
     "Finn is on it.",
     "I'll let Finn know.",
+    // verify loop 8 (8-rest C1)
+    "Finn Reid will handle the rest.",
+    "**Finn** will handle the rest.",
+    "Finn will take care of the budget.",
+    "Finn will sort out the budget.",
+    "Finn will pick that up.",
+    "I'll get Finn to look at the numbers.",
+    "I've asked Finn.",
+    "I'll leave the budget with Finn.",
+    "Over to Finn for the numbers.",
+    "Finn should take the budget part.",
+    "I've flagged it for Finn.",
+    "Finn's your guy for this.",
+    "(Finn will review the budget.)",
   ]) {
     test(`removes: ${phrase}`, () => {
       expect(stripTeammateDeferral(`Done — research is underway. ${phrase}`, A)).toBe("Done — research is underway.");
@@ -252,6 +266,17 @@ describe("F1-4 stripTeammateDeferral", () => {
   }
   test("a dash-joined deferral clause is dropped and the rest kept (verify loop 7, 7-rest C1)", () => {
     expect(stripTeammateDeferral("I booked it — Finn will handle the receipts.", A)).toBe("I booked it.");
+  });
+  for (const [joined, kept] of [
+    ["I booked the flight, and Finn will handle the receipts.", "I booked the flight."],
+    ["I booked the flight; Finn will handle the receipts.", "I booked the flight."],
+    ["I booked the flight - Finn will handle the receipts.", "I booked the flight."],
+  ])
+    test(`a comma/semicolon/hyphen-joined deferral clause is dropped (verify loop 8): ${joined}`, () =>
+      expect(stripTeammateDeferral(joined, A)).toBe(kept));
+  test("mentions that are not deferrals are kept", () => {
+    for (const t of ["Finn's numbers look great, so I kept them.", "I checked with Finn's notes and it's done.", "I used Finn's template, and it's ready."])
+      expect(stripTeammateDeferral(t, A)).toBe(t);
   });
   test("a non-deferral mention of a teammate's brief is kept", () => {
     expect(stripTeammateDeferral("I read the brief Finn wrote last week.", A)).toBe("I read the brief Finn wrote last week.");
