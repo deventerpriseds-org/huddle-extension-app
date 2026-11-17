@@ -83,3 +83,7 @@ Fixes for the defects in `VERIFY-actions-view-2.md` (verifier probes copied to
   `quoteIsVerbatim` checks each piece separately -- never a joined string. Tests A-9 (Teams stitch), A-10 (body +
   forwarded-part stitch), A-11 (a quote inside one piece still admits). Probe `quote.ts`: Q15 and Q21 now `false` /
   `not_checked`. `actions-view` 65/65.
+- Merge: `origin/main` a4c1d6dd (#262, uninvolved-chat findings) merged after D1. Conflict in `chatInvolvement`:
+  kept main's body (never-throwing wrapper around `chatInvolvementOf`, shared `teamsOwnerIds` / `isOwnerMessage`,
+  `Array.isArray` mention guards, `owner_maybe_mentioned`) and added ONLY the branch's channel rule (`kind === "channel"`
+  hidden like a group). After: `report-from-ledger` 62/62, `actions-view` 65/65 (S-4 channel PASS), `tsc` exit 0.

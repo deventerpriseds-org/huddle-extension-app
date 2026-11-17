@@ -144,9 +144,12 @@ export type ChatInvolvementReason =
   | "not_group_or_meeting"
   | "owner_sent"
   | "owner_mentioned"
+  | "owner_maybe_mentioned"
   | "uninvolved"
   | "cant_tell_owner_unknown"
-  | "cant_tell_no_mention_data";
+  | "cant_tell_no_mention_data"
+  /** A stored row was malformed in a way the rule did not expect (it threw); the chat shows. */
+  | "cant_tell_malformed";
 
 export interface ChatInvolvement {
   hide: boolean;
@@ -165,22 +168,73 @@ export interface ChatInvolvement {
  * FAIL TOWARD SHOWING: the chat is hidden only when BOTH facts are known for EVERY message -- whose message it is
  * (`fromOwner` true/false, never null) and who it mentions (`mentionedUserIds` present) -- and the owner's ids are
  * known. Missing data is "can't tell", and a can't-tell chat SHOWS.
+ * A mention that names no comparable user -- @Everyone (a conversation/chat mention), a tag, an app, a team or a
+ * channel, an empty or malformed entry (stored `unresolvedMention: true`), or, on rows stored before that flag
+ * existed, an `<at>` tag left in the stored text with no stored user mention -- MAY address the owner, so the chat
+ * SHOWS ("owner_maybe_mentioned"; verifier report-from-ledger-1, finding 1).
  * `messages` = every stored message of the chat (not only the window's): "never sent" means never, in the data held.
  */
 export function chatInvolvement(chatId: string, messages: readonly TeamsContent[], configuredOwnerIds: readonly string[] = []): ChatInvolvement {
+  // Verifier report-from-ledger-1, finding 2: one malformed stored row must never throw out of the rule (it aborted
+  // the whole report). Anything unexpected -> can't tell -> SHOW.
+  try {
+    return chatInvolvementOf(chatId, messages, configuredOwnerIds);
+  } catch {
+    return { hide: false, kind: teamsChatKind(String(chatId ?? "")), reason: "cant_tell_malformed" };
+  }
+}
+
+function chatInvolvementOf(chatId: string, messages: readonly TeamsContent[], configuredOwnerIds: readonly string[]): ChatInvolvement {
   const kind = teamsChatKind(chatId);
   if (kind === "one_on_one") return { hide: false, kind, reason: "one_on_one" };
   // 2026-11-16 (Actions view, owner's accepted answers): team CHANNELS (thread.tacv2) are treated like group chats.
   if (kind !== "group" && kind !== "meeting" && kind !== "channel") return { hide: false, kind, reason: "not_group_or_meeting" };
-  const ownerIds = new Set<string>();
-  for (const id of configuredOwnerIds) if (String(id ?? "").trim()) ownerIds.add(String(id).trim().toLowerCase());
-  for (const m of messages) if (m.ownerUserId) ownerIds.add(m.ownerUserId.trim().toLowerCase());
-  const sentByOwner = (m: TeamsContent) => m.fromOwner === true || (!!m.sender?.id && ownerIds.has(m.sender.id.toLowerCase()));
-  if (messages.some(sentByOwner)) return { hide: false, kind, reason: "owner_sent" };
-  if (messages.some((m) => m.mentionsOwner === true || (m.mentionedUserIds ?? []).some((id) => ownerIds.has(String(id).toLowerCase())))) return { hide: false, kind, reason: "owner_mentioned" };
+  const ownerIds = teamsOwnerIds(messages, configuredOwnerIds);
+  if (messages.some((m) => isOwnerMessage(m, ownerIds))) return { hide: false, kind, reason: "owner_sent" };
+  // Array.isArray BEFORE .some (finding 2): a string / object stored in the field is "no mention data" (shows below).
+  if (messages.some((m) => m.mentionsOwner === true || mentionsOwnerId(m, ownerIds))) return { hide: false, kind, reason: "owner_mentioned" };
+  if (messages.some(maybeMentionsOwner)) return { hide: false, kind, reason: "owner_maybe_mentioned" };
   if (!ownerIds.size || messages.some((m) => m.fromOwner === null || m.fromOwner === undefined)) return { hide: false, kind, reason: "cant_tell_owner_unknown" };
   if (!messages.length || messages.some((m) => !Array.isArray(m.mentionedUserIds))) return { hide: false, kind, reason: "cant_tell_no_mention_data" };
   return { hide: true, kind, reason: "uninvolved" };
+}
+
+/** THE ONE Teams id normaliser for the uninvolved-chat rule AND the chat facts (verifier report-from-ledger-1,
+ *  finding 5: the two sites used to normalise differently): trim + lower-case; anything not a string is "" and
+ *  never matches. */
+export const normTeamsId = (v: unknown): string => (typeof v === "string" ? v.trim().toLowerCase() : "");
+
+/** Pure: the owner's Teams ids for one chat -- the configured ids plus every stored message's line `ownerUserId`,
+ *  all through normTeamsId. Shared by chatInvolvement and teamsChatsFromLedger. */
+export function teamsOwnerIds(messages: readonly TeamsContent[], configuredOwnerIds: readonly string[] = []): Set<string> {
+  const ids = new Set<string>();
+  for (const id of configuredOwnerIds ?? []) if (normTeamsId(id)) ids.add(normTeamsId(id));
+  for (const m of messages) if (normTeamsId(m.ownerUserId)) ids.add(normTeamsId(m.ownerUserId));
+  return ids;
+}
+
+/** Pure: is this stored message the owner's -- `fromOwner: true`, or its sender id is one of the owner's ids. */
+export function isOwnerMessage(m: TeamsContent, ownerIds: ReadonlySet<string>): boolean {
+  const sid = normTeamsId(m.sender?.id);
+  return m.fromOwner === true || (!!sid && ownerIds.has(sid));
+}
+
+/** Pure: does this stored message's user-mention list name one of the owner's ids (array checked first). */
+function mentionsOwnerId(m: TeamsContent, ownerIds: ReadonlySet<string>): boolean {
+  return Array.isArray(m.mentionedUserIds) && m.mentionedUserIds.some((id) => !!normTeamsId(id) && ownerIds.has(normTeamsId(id)));
+}
+
+/** Pure: does this stored message carry a mention that MAY address the owner but names no comparable user id?
+ *  New rows: the parser's `unresolvedMention` flag. Rows stored before the flag existed: an `<at` tag still present
+ *  in the stored text (only an escaped `&lt;at&gt;` survives the HTML-to-text step) with no stored user mention. */
+export function maybeMentionsOwner(m: TeamsContent): boolean {
+  if (m.unresolvedMention === true) return true;
+  // Finding 4: a stored mention entry that is not a non-empty string (empty id, null, a number) names someone we
+  // cannot compare -> unknown -> the chat shows. (The parser no longer writes such entries; older writers might.)
+  if (Array.isArray(m.mentionedUserIds) && m.mentionedUserIds.some((id) => typeof id !== "string" || !id.trim())) return true;
+  if (m.unresolvedMention === false) return false;
+  const users = Array.isArray(m.mentionedUserIds) ? m.mentionedUserIds.length : 0;
+  return users === 0 && /<at\b/i.test(typeof m.text === "string" ? m.text : "");
 }
 
 export interface TeamsThreadMessage {
@@ -219,11 +273,43 @@ export function teamsChatsFromLedger(rows: readonly LedgerReportRow[], configure
   }
   const out: TeamsChatFacts[] = [];
   for (const [chatId, list] of byChat) {
+    // Finding 2: one bad row can never abort the report -- a chat whose facts cannot be built SHOWS, with the
+    // defensively-built facts below.
+    try {
+      out.push(chatFacts(chatId, list, configuredOwnerIds));
+    } catch {
+      out.push(malformedChatFacts(chatId, list));
+    }
+  }
+  return out.sort((a, b) => b.newestMs - a.newestMs);
+}
+
+/** Pure, never throws: the facts of a chat whose stored rows broke the normal path. It SHOWS (fail open); every
+ *  message is OTHER unless it is explicitly `fromOwner: true`, and owner-mentioned is unknown. */
+function malformedChatFacts(chatId: string, list: readonly { id: string; c: TeamsContent }[]): TeamsChatFacts {
+  const kind = teamsChatKind(String(chatId ?? ""));
+  const s = (v: unknown): string => (typeof v === "string" ? v : "");
+  const messages: TeamsThreadMessage[] = list.map((x) => ({
+    id: s(x?.id),
+    at: s(x?.c?.at),
+    speaker: x?.c?.fromOwner === true ? "OWNER" : "OTHER",
+    name: (s(x?.c?.sender?.name) || "unknown").slice(0, 120),
+    text: s(x?.c?.text).slice(0, 4000),
+  }));
+  messages.sort((a, b) => (ms(a.at) || 0) - (ms(b.at) || 0));
+  const others = messages.filter((m) => m.speaker === "OTHER");
+  const newestMs = Math.max(...messages.map((m) => ms(m.at)).filter(Number.isFinite), -Infinity);
+  return { chatId, chatName: null, kind, messages, latestOther: others[others.length - 1] ?? null, settled: false, ownerMentioned: null, involvement: { hide: false, kind, reason: "cant_tell_malformed" }, webUrl: null, newestMs };
+}
+
+function chatFacts(chatId: string, list: readonly { id: string; c: TeamsContent }[], configuredOwnerIds: readonly string[]): TeamsChatFacts {
+  {
     const sorted = [...list].sort((a, b) => (ms(a.c.at) || 0) - (ms(b.c.at) || 0));
     const contents = sorted.map((x) => x.c);
     const involvement = chatInvolvement(chatId, contents, configuredOwnerIds);
-    const ownerIds = new Set([...configuredOwnerIds.map((x) => x.toLowerCase()), ...contents.map((c) => c.ownerUserId ?? "").filter(Boolean)]);
-    const isOwner = (c: TeamsContent) => c.fromOwner === true || (!!c.sender?.id && ownerIds.has(c.sender.id.toLowerCase()));
+    // Finding 5: the SAME owner-id set and normaliser as chatInvolvement (teamsOwnerIds / normTeamsId).
+    const ownerIds = teamsOwnerIds(contents, configuredOwnerIds);
+    const isOwner = (c: TeamsContent) => isOwnerMessage(c, ownerIds);
     const messages: TeamsThreadMessage[] = sorted.map((x) => ({
       id: x.id,
       at: x.c.at,
@@ -236,13 +322,13 @@ export function teamsChatsFromLedger(rows: readonly LedgerReportRow[], configure
     const lo = latestOther ? ms(latestOther.at) : NaN;
     const settled = !!latestOther && messages.some((m) => m.speaker === "OWNER" && ms(m.at) > lo);
     const anyMentionData = contents.some((c) => Array.isArray(c.mentionedUserIds));
-    const mentioned = contents.some((c) => (c.mentionedUserIds ?? []).some((id) => ownerIds.has(id.toLowerCase())));
+    const mentioned = contents.some((c) => c.mentionsOwner === true || mentionsOwnerId(c, ownerIds));
+    const maybe = contents.some(maybeMentionsOwner);
     const newestMs = Math.max(...sorted.map((x) => ms(x.c.at)).filter(Number.isFinite), -Infinity);
     const named = [...contents].reverse().find((c) => c.chatName)?.chatName ?? null;
     const link = [...contents].reverse().find((c) => c.webUrl)?.webUrl ?? null;
-    out.push({ chatId, chatName: named, kind: involvement.kind, messages, latestOther, settled, ownerMentioned: mentioned ? true : anyMentionData ? false : null, involvement, webUrl: link, newestMs });
+    return { chatId, chatName: named, kind: involvement.kind, messages, latestOther, settled, ownerMentioned: mentioned ? true : maybe ? null : anyMentionData ? false : null, involvement, webUrl: link, newestMs };
   }
-  return out.sort((a, b) => b.newestMs - a.newestMs);
 }
 
 // ── RESOLUTION: what the owner already dealt with ───────────────────────────────────────────────────
@@ -412,7 +498,8 @@ export interface LedgerReportPlan {
     /** UNINVOLVED_CHAT_RULE: set aside BEFORE any AI step (owner decision 2026-11-16). */
     hiddenUninvolved: TeamsChatFacts[];
     resolved: { c: TeamsChatFacts; via: ResolutionSignal }[];
-    /** Group / meeting chats shown only because the rule could not tell (missing owner id or mention data). */
+    /** Group / meeting chats shown only because the rule could not tell (missing owner id or mention data, or a
+     *  mention that names no comparable user, e.g. @Everyone). */
     cantTell: number;
     outOfWindow: number;
   };
@@ -456,7 +543,7 @@ export function planLedgerReport(a: {
       plan.teams.hiddenUninvolved.push(c);
       continue;
     }
-    if (c.involvement.reason === "cant_tell_owner_unknown" || c.involvement.reason === "cant_tell_no_mention_data") plan.teams.cantTell++;
+    if (c.involvement.reason === "cant_tell_owner_unknown" || c.involvement.reason === "cant_tell_no_mention_data" || c.involvement.reason === "owner_maybe_mentioned" || c.involvement.reason === "cant_tell_malformed") plan.teams.cantTell++;
     const via = c.latestOther ? threadResolution(teamsThreadKey(c.chatId), ms(c.latestOther.at), a.signals) : null;
     if (via) plan.teams.resolved.push({ c, via });
     else plan.teams.scan.push(c);

@@ -66,18 +66,31 @@ export function inListWindow(m: ListedMeeting, fromMs: number, toMs: number): bo
   return m.atMs === null || (m.atMs >= fromMs && m.atMs <= toMs);
 }
 
-/** Pure: the meetings to fetch = the webhook's known meetings UNION the listed ones, each once, known first. */
+/** Pure: the ONE meeting-id normaliser, used on BOTH sides of the union (verifier finding 6: the listed id was
+ *  trimmed by parseListPage and the known id was not, so " k1 " and "k1" became two meetings). Trim only -- Fireflies
+ *  ids are opaque, so case is kept. A non-string id normalises to "" and is skipped (it cannot be fetched). */
+export function normMeetingId(id: unknown): string {
+  return typeof id === "string" ? id.trim() : "";
+}
+
+/** Pure: the meetings to fetch = the webhook's known meetings UNION the listed ones, each once, known first.
+ *  Ids are compared AND emitted in their normalised form (normMeetingId). */
 export function unionMeetings(
   known: readonly { meeting_id: string; owner_email: string }[],
   listed: readonly ListedMeeting[],
   defaultOwner: string,
 ): { id: string; owner: string; from: "known" | "listed" | "both" }[] {
   const out = new Map<string, { id: string; owner: string; from: "known" | "listed" | "both" }>();
-  for (const k of known) if (k.meeting_id && !out.has(k.meeting_id)) out.set(k.meeting_id, { id: k.meeting_id, owner: k.owner_email || defaultOwner, from: "known" });
+  for (const k of known) {
+    const id = normMeetingId(k.meeting_id);
+    if (id && !out.has(id)) out.set(id, { id, owner: k.owner_email || defaultOwner, from: "known" });
+  }
   for (const l of listed) {
-    const hit = out.get(l.id);
+    const id = normMeetingId(l.id);
+    if (!id) continue;
+    const hit = out.get(id);
     if (hit) hit.from = hit.from === "known" ? "both" : hit.from;
-    else out.set(l.id, { id: l.id, owner: defaultOwner, from: "listed" });
+    else out.set(id, { id, owner: defaultOwner, from: "listed" });
   }
   return [...out.values()];
 }
