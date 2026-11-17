@@ -92,3 +92,27 @@ Residual risk (inference): the action does not touch tasks.task_engagement_state
 survive. If the owner later re-assigns the task to an agent, a stale live marker would let the next approach
 approval live-start it past the caps without a fresh live confirm.
 
+## C8 row 7 one-request-one-task -- REFUTED on over-match (distinct tasks silently dropped)
+Wiring CONFIRMED on all 4 create paths: create_huddle_task (huddle.functions.ts:3198), create_huddle_tasks (:3473),
+raw journey creates via create-task-core.ts:215 (guardRawJourneyCreate), voice (realtime-tools.server.ts:759).
+Key and open set both normalizeTaskTitle (huddle.functions.ts:2044 `const normTitle = normalizeTaskTitle`).
+Mutation: word floor `>= 3` -> `>= 1`: FIRED (control EQUIVALENT) on '"Call mom about Sunday dinner" -> false'.
+Probe (docs/qc-evidence/verify-handoff-confirm-flow-4-c8-probe.ts, real normalizer) -- every one of these is a
+DIFFERENT task the owner asked for, and each is blocked as "an open task with this title already exists":
+| open on board | new request | matchesOpenTitle |
+|---|---|---|
+| Draft blog post | Draft blog post on onboarding | true (blocked) |
+| Buy birthday gift | Buy birthday gift for Sarah | true (blocked) |
+| Research AI tools | Research AI tools for legal contract review | true (blocked) |
+| Book flight to Denver | Book flight to Denver for the June wedding | true (blocked) |
+| Pay the bill | Pay the bill for the dentist | true (blocked) |
+| Email John Smith | Email John Smith the signed lease | true (blocked) |
+| Schedule a meeting | Schedule a meeting with the landlord | true (blocked) |
+| Write a review | Write a review of Q3 sales numbers | true (blocked) |
+Any >=3-word generic open title swallows every more specific request that starts with it. The cross-turn skip
+returns `{ok, deduped, task:{title}}` with NO existing task_id (huddle.functions.ts:3206), so the agent cannot even
+point at which open task it matched. Under-match (minor): the reverse case (new title shorter than the open long
+one, e.g. open "Transcribe the call recording and send it directly to um-flint", new "Transcribe the call
+recording") is NOT a dup. Whether a prefix rule is an acceptable trade is an owner call; as an implementation of
+"one request makes one task" without dropping distinct requests, it fails.
+
