@@ -143,3 +143,49 @@ Reading of it:
   Kept `concurrency` in runClassify, `CLASSIFY_PARALLEL`, `pendingUnitCount` and the `unchecked`/`preview` fields
   (the parallel catch-up branch uses them). tsc 0 errors; actions-view 96/0, actions-accuracy 60/0, report 19/0.
 - **Fix 6 (ledgers):** `.claude/memory.md` entry + `.claude/actions.md` row ACT:report-saves-verdicts.
+- **Fix 1 (sorting off):** `runReportClassify` takes `sortingOn` (= `classifyEnabled(settings, true)`, the heartbeat's
+  own switch, required parameter). Off -> no `runClassify` at all: 0 model calls, 0 attempts, 0 proposals, 0 meeting
+  rows; the report renders only the verdicts already stored and says so (log + HTML). Tests RS-1..RS-3.
+- **Fix 2 (save-off wording):** workflow input, log line and HTML now say "verdicts are not saved; AI calls still count
+  toward today's limit". Attempts are still recorded. Comments in action-scan-steps.ts / reply-scan-preview.ts and the
+  Design section above corrected the same way.
+- **Fix 4 (maxCalls guard):** a non-finite or non-positive `maxCalls` is 0 in `runReportClassify`; `runClassify` also
+  treats a non-finite allowance as 0 (NaN used to make every batch empty and loop forever). Tests RM-1 (NaN, -3,
+  +Infinity, -Infinity -> callsLeft 0, 0 calls, returns) and RM-2 (runClassify with NaN returns).
+- **Fix 3 (AC8, one proposal per thread):** `ClassifyDeps.lockThread` (optional). The real one (`withThreadLock`,
+  actions.server.ts) opens a transaction, takes `pg_advisory_xact_lock(hashtextextended('actions-thread:'||itemKey, 0))`,
+  re-reads the thread's stored verdict INSIDE that transaction (`tx.current()`), and stores there (`tx.store()`).
+  `runClassify` runs propose + store inside it; a pass that finds a CURRENT verdict already stored (the other pass won
+  while it waited) writes nothing and counts the thread as already judged. Lock holders per process are capped at
+  `SHARED_POOL_MAX - 3` (5), because each holds one pooled connection while its proposal write needs another: the
+  pool can never be filled with lock holders waiting on themselves. Save-off (`inMemoryWrites`) drops the lock, since
+  `tx.store` writes the real store. Tests: AC8-S1 (real local PostgreSQL, real deps, model faked, both answers
+  released together: 2 calls, 1 proposal, 1 open + 1 adopted, the stored verdict points at that proposal, 0 failures),
+  RL-1 (offline lock, 1 proposal), RL-2 (save off never enters the lock).
+- Cost of the adopt path: the second pass's model call is still spent (it was made before the lock); only its
+  duplicate proposal and verdict are avoided.
+
+### Mutation proofs, loop-1 fixes (mutate.sh, anchors in files, every restore asserted against HEAD)
+
+| guard | test | mutation | verdict |
+|---|---|---|---|
+| sorting off stops the report | RS-1 | `if (!a.sortingOn)` -> `if (false && !a.sortingOn)` | FIRED (control EQUIVALENT), exit 0 |
+| maxCalls sanitised | RM-1 (NaN) | finite check removed (`Math.max(0, Math.floor(maxCalls))`) | FIRED (control EQUIVALENT), exit 0 |
+| runClassify never loops on NaN | RM-2 | `limit = callsLeft` | FIRED (control EQUIVALENT), exit 0 (the hang is caught by a 60 s timeout wrapper that names RM-2) |
+| the lock is used | AC8-S1 (real PG) | `lockThread ? lockThread(u, finish) : finish()` -> `finish()` | FIRED (control EQUIVALENT), exit 0 |
+| the in-transaction check | AC8-S1 (real PG) | `if (cur && verdictIsCurrent(...)) return "adopted"` removed | FIRED (control EQUIVALENT), exit 0 |
+| the DB advisory lock itself | AC8-S1 (real PG) | `pg_advisory_xact_lock(...)` -> `SELECT 1` | FIRED (control EQUIVALENT), exit 0 |
+| save off drops the lock | RL-2 | `lockThread: undefined` removed | FIRED (control EQUIVALENT), exit 0 |
+| the lock is used (offline) | RL-1 | as AC8-S1 row 1 | FIRED (control EQUIVALENT), exit 0 |
+
+### Suites after the loop-1 fixes
+
+| suite | result |
+|---|---|
+| `bun scripts/report-saves-verdicts.test.ts` | 29 passed, 0 failed |
+| `bun scripts/actions-accuracy.test.ts` | 60 passed, 0 failed |
+| `bun scripts/actions-view.test.ts` | 96 passed, 0 failed |
+| `bun scripts/actions-view-server.test.ts` (real local PostgreSQL) | 29 passed, 0 failed |
+| verifier's adversarial file (VERIFY-...-1.adversarial, `sortingOn: true` added to its calls; path pointed here) | 22 passed, 0 failed; its V5-4 NaN probe now returns ("done calls=0") instead of hanging |
+| `npx tsc --noEmit` | exit 0 |
+| tsc with a temporary config adding the touched scripts | exit 0 |
