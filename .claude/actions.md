@@ -5396,3 +5396,7 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 ## ACT:uninvolved-chat-findings — fix #257 verifier findings 1,2,4,5,6 (@Everyone hid a chat; malformed mention crashed report) — branch, NOT live
 ## ACT:correspondence-tuning — forwarded part lost for ~3/5 forwards; preview defaults; firewall rule; UAT stand-up opt-in — branch, NOT live
 - [ ] Owner (2026-11-17) challenged 60/90-min agent budgets: measured machine work <1 min/job; budgets cut to 15/25 min.
+- [x] ACT:actions-view merged #259 efb7e41c, deploy success, live UAT 32/32 run 44008473254 (screenshots sent). NOT owner-confirmed.
+- [x] ACT:uninvolved-chat-findings merged #262 (verify loop 2 MERGE). ACT:correspondence-tuning merged #261, forward refill applied: 7 re-written, 0 failed.
+- [x] Owner 2026-11-17 "tracking able to detect what is taking so long each step": eds-agent-steps.py live (eds-claude-skills #140, v80); judge-failure kinds logged (#263).
+- [ ] Owner decision: rule change for background agents (session idle freezes them). [ ] OpenAI quota top-up (owner).

@@ -1,5 +1,18 @@
 # Project Memory — huddle-extension-app
 
+## Agent pace ROOT CAUSE (2026-11-17, measured) -- background agents FREEZE while the main session is idle
+- eds-agent-steps.py (eds-claude-skills #140, live v80) split 5 transcripts: model 1-10% of wall; 73-96% was steps in
+  different agents ending within 1-33 s of each other. Every freeze window = main session had ZERO events; each ended
+  within ~1 min of the session waking (owner message / notification). Agents run at 10-12 s/call while the session is
+  kept awake (waitagent loop): Actions fix 23 min, loop-3 verifier 47 min, no freezes.
+- So "spawn then END THE TURN" (global rule) freezes the work. Interim: keep the turn alive with a foreground wait
+  loop. Rule change pending owner decision. Separate, NOT yet explained: some in-agent `git commit && git push` steps
+  took 12-20 min with the session awake (git itself ~2 s; hooks <0.1 s). git trace2 perf logging now on
+  (/root/.claude/git-trace2/) to catch the next one.
+- OpenAI account is OUT OF QUOTA (429 insufficient_quota, 35/35 judge calls, run 43999529369) -- affects agents,
+  router, report and Actions classifier. Owner must top up billing.
+- Actions view #259 MERGED + DEPLOYED (efb7e41c), live UAT 32/32 (run 44008473254). NOT owner-confirmed.
+
 ## Actions view + report-from-Azure lanes (2026-11-17) -- Actions NOT live (PR #259 under verify loop 2)
 - LIVE (#252-#257, deployed): correspondence content in Azure (email/teams/sent/transcript), 25s barge cap,
   stand-up auto toggle (owner set OFF), report runs from Azure since Monday with resolved + uninvolved chats excluded.
