@@ -362,7 +362,9 @@ const ms = (iso: string | null) => {
 
 /**
  * Pure, THE SELECTION (Tier 1). In this order, each candidate is:
- *   not_checked (or open with no backing row)            -> counted notChecked AND listed in `unchecked` (2026-11-17:
+ *   not_checked (or open with no backing row)            -> hidden by a What-shows switch (the same switches, same
+ *                                                           order, as a judged row) -> counted in hidden; otherwise
+ *                                                           counted notChecked AND listed in `unchecked` (2026-11-17:
  *                                                           it used to be counted only, so "All time" added nothing
  *                                                           visible while the backlog was being judged);
  *   none + answered by the owner's reply                 -> the "Answered by your reply" group (never counted);
@@ -400,9 +402,30 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     fromList: !!c.listSender,
     listSender: c.listSender,
   });
+  /** The What-shows switches, in ONE order for judged and not-checked items alike: a switch that hides an item hides
+   *  it whether or not it has been judged yet (2026-11-17). Counts it in `hidden` and returns true when it hides. */
+  const hiddenBySettings = (c: ActionCandidate): boolean => {
+    if (c.uninvolved && s.hideUninvolvedChats) {
+      out.hidden.uninvolved++;
+    } else if (!s.sources[c.source]) {
+      out.hidden.sources++;
+    } else if (c.category && hiddenCats.has(c.category)) {
+      const k = c.category as HideableCategory;
+      out.hidden.categories[k] = (out.hidden.categories[k] ?? 0) + 1;
+    } else if (c.listSender && hiddenSenders.has(c.listSender)) {
+      out.hidden.senders++;
+    } else {
+      return false;
+    }
+    out.hidden.total++;
+    return true;
+  };
+  const pushUnchecked = (c: ActionCandidate) => {
+    if (!hiddenBySettings(c)) out.unchecked.push(toRow(c, c.section ?? "needs_reply"));
+  };
   for (const c of cands) {
     if (c.status === "not_checked") {
-      out.unchecked.push(toRow(c, c.section ?? "needs_reply"));
+      pushUnchecked(c);
       continue;
     }
     if (c.status === "none") {
@@ -412,7 +435,7 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     }
     if (c.onBoard) continue;
     if (!c.proposalId || !c.section) {
-      out.unchecked.push(toRow(c, c.section ?? "needs_reply"));
+      pushUnchecked(c);
       continue;
     }
     if (!LISTED_STATES.has(c.proposalState ?? "")) continue;
@@ -420,27 +443,7 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
       out.corrected.push(toRow(c, c.section));
       continue;
     }
-    if (c.uninvolved && s.hideUninvolvedChats) {
-      out.hidden.uninvolved++;
-      out.hidden.total++;
-      continue;
-    }
-    if (!s.sources[c.source]) {
-      out.hidden.sources++;
-      out.hidden.total++;
-      continue;
-    }
-    if (c.category && hiddenCats.has(c.category)) {
-      const k = c.category as HideableCategory;
-      out.hidden.categories[k] = (out.hidden.categories[k] ?? 0) + 1;
-      out.hidden.total++;
-      continue;
-    }
-    if (c.listSender && hiddenSenders.has(c.listSender)) {
-      out.hidden.senders++;
-      out.hidden.total++;
-      continue;
-    }
+    if (hiddenBySettings(c)) continue;
     out.rows.push(toRow(c, c.section));
   }
   const order = new Map(ACTION_SECTION_ORDER.map((x, i) => [x, i]));
@@ -472,6 +475,17 @@ export function plainPreview(text: string | null | undefined): string | null {
   const t = String(text ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   if (!t) return null;
   return t.length > PREVIEW_MAX ? `${t.slice(0, PREVIEW_MAX - 1).trimEnd()}…` : t;
+}
+
+/** Pure (2026-11-17): the type-tab counts. A tab counts the open judged rows AND the not-checked items of that type,
+ *  so a tab never reads 0 while the "Not checked yet" section under it lists items. */
+export function tabCounts(open: readonly ActionRow[], unchecked: readonly ActionRow[]): Record<"all" | ActionSource, number> {
+  const c: Record<"all" | ActionSource, number> = { all: 0, email: 0, teams: 0, meeting: 0 };
+  for (const r of [...open, ...unchecked]) {
+    c.all++;
+    c[r.source]++;
+  }
+  return c;
 }
 
 /** Pure: the counts of the rows a source filter leaves visible (AC-D-1..D-3). */

@@ -49,6 +49,9 @@ import {
   DAILY_CAP_MAX,
   HIDEABLE_CATEGORIES,
   HIDEABLE_CATEGORY_LABEL,
+  filterRows,
+  tabAfterRangeChange,
+  tabCounts,
   type ActionRow,
   type ActionSource,
   type ActionsSettings,
@@ -142,15 +145,12 @@ export function ActionsView() {
 
   // Rows still open (a row the owner just acted on stays, marked, until the next load; it no longer counts).
   const openRows = useMemo(() => (ok ? ok.rows.filter((r) => LISTED.has(local[r.id]?.state ?? r.state)) : []), [ok, local]);
-  const counts = useMemo(() => {
-    const c: Record<Filter, number> = { all: 0, email: 0, teams: 0, meeting: 0 };
-    for (const r of openRows) {
-      c.all++;
-      c[r.source]++;
-    }
-    return c;
-  }, [openRows]);
+  // 2026-11-17: the tabs count the not-checked items too (owner: All time showed "120 not checked yet" while every
+  // tab still read the This-week numbers). The selection already applied the What-shows switches to both lists.
+  const unchecked = useMemo(() => (ok ? ok.unchecked.filter((r) => ok.settings.sources[r.source]) : []), [ok]);
+  const counts = useMemo(() => tabCounts(openRows, unchecked), [openRows, unchecked]);
   const visible = ok ? ok.rows.filter((r) => (filter === "all" || r.source === filter) && ok.settings.sources[r.source]) : [];
+  const visibleUnchecked = filterRows(unchecked, filter);
 
   async function saveSettings(next: ActionsSettings) {
     if (!ok || !caller) return;
@@ -220,7 +220,13 @@ export function ActionsView() {
               <button
                 key={r}
                 type="button"
-                onClick={() => (ok.settings.range === r ? undefined : void saveSettings({ ...ok.settings, range: r }))}
+                onClick={() => {
+                  if (ok.settings.range === r) return;
+                  // 2026-11-17: a range change resets the type tab to All, so the owner never lands on a tab that is
+                  // empty in the new range.
+                  setFilter((f) => tabAfterRangeChange(f, ok.settings.range, r));
+                  void saveSettings({ ...ok.settings, range: r });
+                }}
                 aria-pressed={ok.settings.range === r}
                 data-testid={`actions-range-${r}`}
                 className={cn(
@@ -266,6 +272,7 @@ export function ActionsView() {
         <ActionsBody
           page={ok!}
           visible={visible}
+          unchecked={visibleUnchecked}
           openCount={openRows.length}
           local={local}
           patch={patch}
@@ -281,6 +288,7 @@ export function ActionsView() {
 function ActionsBody({
   page,
   visible,
+  unchecked,
   openCount,
   local,
   patch,
@@ -290,6 +298,8 @@ function ActionsBody({
 }: {
   page: OkPage;
   visible: ActionRow[];
+  /** The not-checked items under the current type tab (already through the What-shows switches). */
+  unchecked: ActionRow[];
   openCount: number;
   local: Record<string, RowLocal>;
   patch: (id: string, p: RowLocal) => void;
@@ -298,10 +308,28 @@ function ActionsBody({
   reload: () => Promise<void>;
 }) {
   const bySection = (s: ActionSection) => visible.filter((r) => r.section === s);
+  // 2026-11-17 (owner: "All time" showed only "120 not checked yet"): the items are LISTED, not just counted, in a
+  // collapsed section. They have no AI verdict, so they carry no row actions that would claim they were judged:
+  // who, what, when, a short preview and an Open link only.
   const notChecked = page.notChecked ? (
-    <p className="px-3 pb-3 pt-1 text-[11px] text-muted-foreground sm:px-6" data-testid="actions-not-checked">
-      {page.notChecked} not checked yet{page.classifyOn ? "" : " (sorting is switched off in What shows)"}.
-    </p>
+    <div data-testid="actions-not-checked" data-count={page.notChecked}>
+      <CollapsibleSection id="actions-not-checked" label="Not checked yet" count={unchecked.length} defaultOpen={false}>
+        <p className="px-3 pb-1 pt-1 text-[11px] text-muted-foreground sm:px-6" data-testid="actions-not-checked-note">
+          {page.classifyOn
+            ? "Huddle hasn’t sorted these yet, so they may or may not need you. They are checked a few at a time."
+            : "Sorting is switched off in What shows, so these haven’t been checked."}
+        </p>
+        {unchecked.length ? (
+          <ul className="divide-y divide-hairline" data-testid="actions-not-checked-list">
+            {unchecked.map((r) => (
+              <UncheckedRowItem key={r.itemKey} row={r} tz={tz} />
+            ))}
+          </ul>
+        ) : (
+          <p className="px-3 pb-2 text-[11px] text-muted-foreground sm:px-6">None of this type.</p>
+        )}
+      </CollapsibleSection>
+    </div>
   ) : null;
   // AC-B-7: never "caught up" when nothing was ever sorted.
   if (!page.rows.length && page.neverClassified) {
@@ -316,11 +344,16 @@ function ActionsBody({
   }
   return (
     <div className="pb-4">
-      {openCount === 0 && (
-        <p className="px-3 py-4 text-[12px] text-muted-foreground sm:px-6" data-testid="actions-caught-up">
-          You’re all caught up.
-        </p>
-      )}
+      {openCount === 0 &&
+        (page.notChecked ? (
+          <p className="px-3 py-4 text-[12px] text-muted-foreground sm:px-6" data-testid="actions-nothing-sorted-open">
+            Nothing checked so far needs you. {page.notChecked} {page.notChecked === 1 ? "item hasn’t" : "items haven’t"} been checked yet (below).
+          </p>
+        ) : (
+          <p className="px-3 py-4 text-[12px] text-muted-foreground sm:px-6" data-testid="actions-caught-up">
+            You’re all caught up.
+          </p>
+        ))}
       {ACTION_SECTION_ORDER.map((s) => {
         const rows = bySection(s);
         const open = rows.filter((r) => LISTED.has(local[r.id]?.state ?? r.state)).length;
@@ -385,6 +418,52 @@ function ActionsBody({
       )}
       {notChecked}
     </div>
+  );
+}
+
+/** A not-checked item (no AI verdict yet). Read-only on purpose: no Add as task / Done / Dismiss / Wrong?, which
+ *  would act on a judgement that was never made. Open goes to the source (Teams: the chat link; email: Outlook, where
+ *  the subject finds it -- the same link the suggested-reply card uses). */
+function UncheckedRowItem({ row, tz }: { row: ActionRow; tz: string }) {
+  const Icon = SOURCE_ICON[row.source];
+  const [expanded, setExpanded] = useState(false);
+  const meta = [row.who, row.sourceLabel, when(row.at, tz)].filter(Boolean).join(" · ");
+  const link = row.source === "teams" ? row.teamsLink : row.source === "email" ? "https://outlook.office.com/mail/" : null;
+  return (
+    <li className="px-3 py-2 sm:px-6" data-testid="actions-not-checked-row" data-source={row.source}>
+      <div className="flex items-start gap-2">
+        <Icon size={14} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className={cn("text-[13px] leading-snug text-foreground", expanded ? "whitespace-pre-wrap break-words" : "truncate")} title={row.title} onClick={() => setExpanded((x) => !x)}>
+            {row.title || "(no subject)"}
+          </p>
+          <p className={cn("text-[11px] text-muted-foreground", expanded ? "break-words" : "truncate")} title={meta}>
+            {meta}
+          </p>
+          {row.preview && (
+            <p
+              className={cn("mt-0.5 text-[12px] text-foreground/80", expanded ? "whitespace-pre-wrap break-words" : "line-clamp-2")}
+              onClick={() => setExpanded((x) => !x)}
+              data-testid="actions-not-checked-preview"
+            >
+              {row.preview}
+            </p>
+          )}
+        </div>
+        {link && (
+          <a
+            href={link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(ROW_BTN, "min-h-11 md:min-h-0")}
+            title={row.source === "email" ? "Opens Outlook; find the email by its subject" : "Opens the chat in Teams"}
+            data-testid="actions-not-checked-open"
+          >
+            <ExternalLink size={11} aria-hidden /> Open
+          </a>
+        )}
+      </div>
+    </li>
   );
 }
 

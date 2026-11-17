@@ -40,6 +40,11 @@ import {
   resolveActionsSettings,
   selectActionItems,
   sinceMondayMs,
+  filterRows,
+  plainPreview,
+  PREVIEW_MAX,
+  tabAfterRangeChange,
+  tabCounts,
   type ActionCandidate,
   type ActionsSettings,
 } from "../src/features/huddle/lib/actions/actions";
@@ -446,6 +451,54 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   t("D4-E1 two threads share one proposal (setup)", [open.length, !!ka && !!kb && ka !== kb, listed(null).rows.length], [2, true, 2]);
   t("D4-E2 GUARD: Wrong? on thread A then thread B -> BOTH in Corrected, neither listed", listed(st2), { rows: [], corrected: [ka, kb].sort() });
   t("D4-E3 GUARD: Undo on B -> B listed again, A stays in Corrected", listed(withItemUndo(st2, kb, NOW).stored), { rows: [kb], corrected: [ka] });
+}
+
+// ── UNCHECKED (owner 2026-11-17: "All time" showed only "120 not checked yet"; tabs/counts did not change) ──────
+{
+  const at = (d: number) => `2026-11-${String(d).padStart(2, "0")}T10:00:00Z`;
+  const nc = (o: Partial<ActionCandidate>) => cand({ status: "not_checked", proposalId: null, proposalState: null, section: null, category: null, kind: null, ...o });
+  const cs: ActionCandidate[] = [
+    cand({ itemKey: "judged|1" }),
+    nc({ itemKey: "u-email-old", at: at(2) }),
+    nc({ itemKey: "u-teams-new", source: "teams", at: at(11) }),
+    cand({ itemKey: "u-nobacking", proposalId: null, at: at(5) }), // admitted, nothing backs it
+    nc({ itemKey: "u-uninv", source: "teams", uninvolved: true, at: at(6) }),
+    nc({ itemKey: "u-list", listSender: "ops-list@work.example", at: at(7) }),
+  ];
+  const listedKeys = (sel: ReturnType<typeof selectActionItems>) => sel.unchecked.map((r) => r.itemKey);
+  const allOn = selectActionItems(cs, S({ hideUninvolvedChats: false }));
+  t("U-1 GUARD: not-checked items are LISTED, not only counted (notChecked === unchecked.length), newest first", [allOn.notChecked, allOn.unchecked.length, listedKeys(allOn)], [5, 5, ["u-teams-new", "u-list", "u-uninv", "u-nobacking", "u-email-old"]]);
+  t("U-2 per-source unchecked counts reconcile with the list", [allOn.uncheckedCounts, allOn.uncheckedCounts.email + allOn.uncheckedCounts.teams + allOn.uncheckedCounts.meeting === allOn.uncheckedCounts.all], [{ all: 5, email: 3, teams: 2, meeting: 0 }, true]);
+  const uninvHidden = selectActionItems(cs, S({ hideUninvolvedChats: true }));
+  t("U-3 GUARD: hide uninvolved chats hides a not-checked uninvolved chat too (counted in hidden, not listed)", [listedKeys(uninvHidden).includes("u-uninv"), uninvHidden.hidden.uninvolved, uninvHidden.notChecked], [false, 1, 4]);
+  const teamsOff = selectActionItems(cs, S({ hideUninvolvedChats: false, sources: { email: true, teams: false, meeting: true } }));
+  t("U-4 GUARD: a source switched off hides its not-checked items (counted in hidden.sources)", [teamsOff.unchecked.some((r) => r.source === "teams"), teamsOff.hidden.sources, teamsOff.uncheckedCounts.teams], [false, 2, 0]);
+  const senderOff = selectActionItems(cs, S({ hideUninvolvedChats: false, hiddenSenders: ["ops-list@work.example"] }));
+  t("U-5 GUARD: a stopped list sender hides its not-checked email (counted in hidden.senders)", [listedKeys(senderOff).includes("u-list"), senderOff.hidden.senders], [false, 1]);
+  t("U-6 judged rows are unaffected by the unchecked list (still counted only from rows)", [allOn.rows.map((r) => r.itemKey), allOn.counts.all], [["judged|1"], 1]);
+  const tc = tabCounts(allOn.rows, allOn.unchecked);
+  t("U-7 GUARD: the type tabs count the not-checked items too (a tab never reads 0 over a listed item)", tc, { all: 6, email: 4, teams: 2, meeting: 0 });
+  t("U-8 a tab filter lists only that type's not-checked items", filterRows(allOn.unchecked, "teams").map((r) => r.itemKey), ["u-teams-new", "u-uninv"]);
+  t("U-9 GUARD: changing the range resets the tab to All; the same range keeps it", [tabAfterRangeChange("teams", "week", "all"), tabAfterRangeChange("email", "all", "week"), tabAfterRangeChange("teams", "all", "all"), tabAfterRangeChange("all", "week", "all")], ["all", "all", "teams", "all"]);
+  t("U-10 the preview is plain text: tags dropped, whitespace collapsed, bounded", [plainPreview("<p>Hi  <b>there</b></p>\n\nthanks"), plainPreview("   "), plainPreview(null), (plainPreview("x".repeat(400)) ?? "").length], ["Hi there thanks", null, null, PREVIEW_MAX]);
+  // End to end: nothing judged yet (the All time backlog). Every in-scope thread is LISTED, with a preview.
+  const b = buildCandidates({ assembled: asm, rows, settings: S(), verdicts: new Map(), proposals: new Map(), meetingProposals: [], replies: [], isDraftable: () => false });
+  const sel = selectActionItems(b.candidates, S());
+  const units = threadUnits(asm, S()).units.length;
+  t("U-11 PARITY: with no verdicts, every in-scope thread is listed as not checked, each with a preview", [sel.notChecked === units, sel.unchecked.length === units, units > 0, sel.unchecked.every((r) => typeof r.preview === "string" && r.preview.length > 0), sel.rows.length], [true, true, true, true, 0]);
+  // runClassify's concurrency option (kept for the daily-report path) still never starts more calls than allowed.
+  const sc = stub(answerFor);
+  const rc = await runClassify(asm, S({ hideUninvolvedChats: false }), new Set(), 2, { ...sc.deps, concurrency: 5 });
+  t("U-12 GUARD: runClassify with concurrency 5 and 2 calls left starts exactly 2 calls", [rc.calls, rc.overCap > 0], [2, true]);
+  const { readFileSync } = await import("node:fs");
+  const view = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
+  t(
+    "U-13 the view lists the not-checked items (read-only rows), feeds unchecked into the tab counts, and resets the tab on a range change",
+    [view.includes('data-testid="actions-not-checked-row"'), view.includes("tabCounts(openRows, unchecked)"), view.includes("setFilter((f) => tabAfterRangeChange(f, ok.settings.range, r))"), (/function UncheckedRowItem\([\s\S]*?\n}\n/.exec(view)?.[0] ?? "act(").match(/act\(|Add as task|Dismiss|Wrong\?|actOnProposalFn|correctActionFn/)?.[0] ?? null],
+    [true, true, true, null],
+  );
+  const pipe = readFileSync(new URL("../src/features/huddle/lib/actions/pipeline.ts", import.meta.url), "utf8");
+  t("U-14 the heartbeat backlog sizing is NOT on this branch (another branch owns AI-call volume)", ["heartbeatPassShape", "HEARTBEAT_BACKLOG_PER_PASS", "CATCHUP_", "catchUpStopReason", "catchUpContinue"].filter((n) => pipe.includes(n)), []);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

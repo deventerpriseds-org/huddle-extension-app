@@ -5445,3 +5445,5 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
       fixes: sorting-off respected, save-off texts reworded, per-thread advisory lock (one proposal per thread),
       maxCalls guard, unused WIP exports removed. OPEN: verifier loop 2, merge. Evidence:
       docs/qc-evidence/BUILD-report-saves-verdicts.md.
+
+- [x] Branch claude_actions-all-time-catchup: unchecked items LISTED (collapsed "Not checked yet"), tabs count them, range change resets the tab, UAT clicks All time + parity line. "Check now" dropped: the report now saves its verdicts (#273), so the backlog is judged once. Suites 29/60/110/30, tsc + build clean. Merging; NOT owner-confirmed live.

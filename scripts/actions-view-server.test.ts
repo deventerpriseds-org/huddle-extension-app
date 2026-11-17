@@ -267,6 +267,17 @@ try {
     [capPage.status, cp?.capUsedToday, cp?.capNotice, await A.usedTodayFor([O], Date.now(), "America/New_York")],
     ["ok", 5, "Daily AI check limit reached (5 of 5 used today). Remaining items wait until tomorrow. To change the limit, open What shows → Sorting → Daily limit on this page.", 5],
   );
+  // 2026-11-17 (owner: All time showed only "N not checked yet"): through the REAL page read, the model-failed chats
+  // (no verdict stored) are LISTED in `unchecked`, not only counted, each with a plain preview.
+  // The item key is `teams:<chat>|<ledger id of the latest message>` (threadUnits).
+  const keyOf = (c: string) => `teams:${c}|${teamsSourceItemId(c, "1")}`;
+  const listedKeys = new Set((cp?.unchecked ?? []).map((r) => r.itemKey));
+  const mine = (cp?.unchecked ?? []).filter((r) => chats.some((c) => r.itemKey === keyOf(c)));
+  t(
+    "UNCHECKED-S1 GUARD (real page read + SQL): every unjudged chat is listed, notChecked === unchecked.length, previews present",
+    [cp?.notChecked === cp?.unchecked.length, chats.every((c) => listedKeys.has(keyOf(c))), mine.length, mine.every((r) => r.preview === "Could you please send the synthetic deck today?"), (cp?.uncheckedCounts.teams ?? 0) >= chats.length],
+    [true, true, chats.length, true, true],
+  );
   await setActionsSettingsRaw(O, resolveActionsSettings({ dailyCap: 6 }));
   const capPage2 = await A.getActionsPage({ entra_email: O });
   t("CAP-S2 GUARD: the owner raises the limit to 6 -> no notice, used still 5", capPage2.status === "ok" ? [capPage2.capUsedToday, capPage2.capNotice] : capPage2.status, [5, null]);
