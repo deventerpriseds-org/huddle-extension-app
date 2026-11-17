@@ -116,3 +116,24 @@ one, e.g. open "Transcribe the call recording and send it directly to um-flint",
 recording") is NOT a dup. Whether a prefix rule is an acceptable trade is an owner call; as an implementation of
 "one request makes one task" without dropping distinct requests, it fails.
 
+## C2 urgency -- REFUTED a 4th time (8 unsafe, 5 over-match)
+Earlier-loop probes now pass ("not now", "don't do it right away", "it doesn't need to be done right away",
+"leave it for now", "busy right now, do it later" -> default; "I want it now", "why don't you do it right now",
+"I don't care, just do it now" -> now). Mutation: `if (URGENT_DESPITE_NEGATOR_RE.test(t)) return true;` -> `if (false)`:
+FIRED (control EQUIVALENT) on 'v3-O: "why don't you do it right now" -> now'.
+NEW UNSAFE (deferral classified `now`, i.e. the agent may skip the confirm step) -- probe
+docs/qc-evidence/verify-handoff-confirm-flow-4-c2-probe.ts:
+- URGENT_DESPITE_NEGATOR_RE short-circuits BEFORE every veto, so a polite/rhetorical lead-in overrides an explicit
+  refusal: "Why don't you do it tomorrow instead of right now?", "I don't care, just not right now",
+  "Can't you wait? Not right now.", "Won't you hold off for now." -> all `now`.
+- "right now" describing the OWNER's state, with a deferral word not in the closed list: "Do it on Friday, right now
+  I'm slammed", "Right now I'm swamped, get to it Monday", "Get to it next month; right now there's too much going
+  on", "Do it after lunch, I'm on a call right now" -> all `now` (weekday names, "next month", "after lunch",
+  "slammed/swamped/on a call" are not vetoes).
+OVER-MATCH (real urgent ask -> `default`; safe direction but the owner's explicit "now" is ignored): the deferral
+veto fires anywhere in the message: "Do it right now so it's ready for tomorrow's meeting", "I need it now, I'm busy
+later", "ASAP please, I'm in a meeting at 3", "Do it right now before my flight tonight", "Start it immediately, I
+don't want to wait until Friday".
+Structural observation: four loops of regex patching have each closed the listed spellings and opened adjacent ones;
+the despite-negator precedence is a new unsafe class introduced by the loop-3 fix.
+
