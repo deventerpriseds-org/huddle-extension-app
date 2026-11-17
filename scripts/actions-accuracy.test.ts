@@ -65,9 +65,13 @@ const row = (o: Partial<TeamsContent>): LedgerReportRow => {
 // ── R1. SENDER: owner ids across ALL rows, never per chat ────────────────────────────────────────────
 // Live shape (probe 2026-11-17): recent rows carry NO ownerUserId and fromOwner null; the owner id is on OTHER rows.
 const older = row({ chatId: ONE2, messageId: "o1", at: "2026-11-10T10:00:00Z", ownerUserId: OWNER_ID, text: "Synthetic older chat" });
+// Loop-2 D-4: a row id is taken across chats only when it is on rows of 2+ chats, so the fixture carries the
+// owner's id on a second older chat (his own line there, so that chat has nothing to classify).
+const ONE3 = `19:e_f${AT}unq.gbl.spaces`;
+const older2 = row({ chatId: ONE3, messageId: "o2", at: "2026-11-11T10:00:00Z", sender: { id: OWNER_ID, name: "Example, Owen", isApp: false }, ownerUserId: OWNER_ID, text: "Synthetic older owner line" });
 const ask = row({ chatId: ONE, messageId: "q1", at: "2026-11-16T12:00:00Z", text: "Synthetic: can we meet weekly?" });
 const own = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: OWNER_ID, name: "Example, Owen", isApp: false }, text: "Hey, when you're back, please let me know how often you want our synthetic 1:1." });
-const chats = teamsChatsFromLedger([older, ask, own]);
+const chats = teamsChatsFromLedger([older, older2, ask, own]);
 const c1 = chats.find((c) => c.chatId === ONE)!;
 t(
   "R1-1 GUARD: owner id seen on another chat's row labels the owner's own message OWNER (sender not reversed)",
@@ -75,13 +79,13 @@ t(
   [["OTHER", "OWNER"], ask.sourceItemId, true],
 );
 t("R1-2 the owner's own sentence is never in the quote haystack", teamsQuoteHaystack(c1).some((s) => s.includes("when you're back")), false);
-const ownOnly = teamsChatsFromLedger([older, row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: OWNER_ID, name: "x", isApp: false }, text: "Synthetic owner-only note" })]);
+const ownOnly = teamsChatsFromLedger([older, older2, row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: OWNER_ID, name: "x", isApp: false }, text: "Synthetic owner-only note" })]);
 t("R1-3 a chat holding only the owner's message has no latest OTHER (nothing to classify)", ownOnly.find((c) => c.chatId === ONE)!.latestOther, null);
-t("R1-4 ownerTeamsIdsAcross: configured + every row's ownerUserId, normalised", ownerTeamsIdsAcross([older, ask], [" CFG-ID "]).sort(), ["cfg-id", OWNER_ID].sort());
+t("R1-4 ownerTeamsIdsAcross: configured + every row's ownerUserId, normalised", ownerTeamsIdsAcross([older, older2, ask], [" CFG-ID "]).sort(), ["cfg-id", OWNER_ID].sort());
 
 // Through the real assembly (config WITHOUT teams.ownerSenderIds, as live), and into the Actions units.
 const cfgNoIds = parseFeedsConfig(JSON.stringify({ enabled: true, synthetic: false, driveUser: MAILBOX, mailbox: MAILBOX, ownerLogins: ["owner@huddle.example"], teams: {}, correspondence: { ownerNames: ["Owen Example"] } }))!;
-const asm = assembleLedgerPlan({ rows: [older, ask, own], proposals: [], bell: [] }, cfgNoIds, Date.parse("2026-11-09T05:00:00Z"));
+const asm = assembleLedgerPlan({ rows: [older, older2, ask, own], proposals: [], bell: [] }, cfgNoIds, Date.parse("2026-11-09T05:00:00Z"));
 const unit = threadUnits(asm, ACTIONS_SETTINGS_DEFAULT).units.find((u) => u.teams?.chatId === ONE);
 t("R1-5 end to end (assembleLedgerPlan -> threadUnits): the unit's latest OTHER is the other person's message and it is settled", [unit?.refItemId, unit?.teams?.settled], [ask.sourceItemId, true]);
 
@@ -90,7 +94,7 @@ const noIdOwn = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", 
 t("R1-6 GUARD: no id anywhere -> a sender named as the owner ('Last, First' folded) contributes its id", teamsChatsFromLedger([ask, noIdOwn], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER"]);
 t("R1-7 without owner names the same chat stays as stored (no guessing)", teamsChatsFromLedger([ask, noIdOwn]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OTHER"]);
 const twin = row({ chatId: ONE, messageId: "q2", at: "2026-11-16T13:00:00Z", sender: { id: "namesake-guid", name: "Owen Example", isApp: false } });
-t("R1-8 GUARD: once an id is known, a NAMESAKE with another id stays OTHER", teamsChatsFromLedger([older, ask, twin, own], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER", "OTHER"]);
+t("R1-8 GUARD: once an id is known, a NAMESAKE with another id stays OTHER", teamsChatsFromLedger([older, older2, ask, twin, own], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER", "OTHER"]);
 t("R1-9 an app sender with the owner's name never counts", ownerTeamsIdsAcross([row({ sender: { id: "app-guid", name: "Owen Example", isApp: true } })], [], ["Owen Example"]), []);
 t("R1-10 foldPersonName: 'Last, First' -> 'first last'; plain kept", [foldPersonName("Example,  Owen"), foldPersonName(" Owen  Example "), foldPersonName(null)], ["owen example", "owen example", ""]);
 
@@ -182,7 +186,7 @@ t("R6-7 two open items from the SAME chat -> one row, the newest", collapseDupli
   const r1 = row({ chatId: ONE, messageId: "a1", at: "2026-11-16T10:00:00Z", text: LONG });
   const r2 = row({ chatId: GRP, chatName: "Synthetic squad", messageId: "a2", at: "2026-11-16T11:00:00Z", text: LONG, mentionedUserIds: [OWNER_ID] });
   const r3 = row({ chatId: ONE2, messageId: "a3", at: "2026-11-16T12:00:00Z", sender: { id: "sam-guid", name: "Sam Example", isApp: false }, text: LONG });
-  const rs = [older, r1, r2, r3];
+  const rs = [older, older2, r1, r2, r3];
   const asmD2 = assembleLedgerPlan({ rows: rs, proposals: [], bell: [] }, cfgNoIds, Date.parse("2026-11-09T05:00:00Z"));
   const us = threadUnits(asmD2, ACTIONS_SETTINGS_DEFAULT).units.filter((x) => x.source === "teams");
   const vs = new Map<string, ActionVerdict>(us.map((x) => [`${x.storeAt.source}\u0000${x.storeAt.sourceItemId}`, { v: 1, key: x.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "open", kind: "reply", category: "person_request", confidence: "high", todo: "Send the form", due: null, quote: "please send me the signed vendor form by Friday", reason: "Asked.", answeredByReply: false, proposalId: "prop-shared", at: NOW } as ActionVerdict]));
@@ -200,7 +204,7 @@ void GRP;
 // The chat's LAST message is the owner's own (so the item key is the same before and after the fix). The verdict
 // the old code stored for that key took the owner's sentence as an ask from someone else.
 {
-  const rowsD1 = [older, ask, own];
+  const rowsD1 = [older, older2, ask, own];
   const u = threadUnits(asm, ACTIONS_SETTINGS_DEFAULT).units.find((x) => x.teams?.chatId === ONE)!;
   const storeKey = `${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`;
   const stale: ActionVerdict = { v: 1, key: u.itemKey, status: "open", kind: "action", category: "person_request", confidence: "high", todo: "Tell them how often", due: null, quote: "please let me know how often you want our synthetic 1:1", reason: "Asked directly.", answeredByReply: false, proposalId: "p-stale", at: NOW };
@@ -235,6 +239,19 @@ void GRP;
   t("R7-7 email verdicts without inputVersion stay current (email version not bumped)", verdictIsCurrent({ key: "e|1" }, "e|1", "email"), true);
 }
 
+// ── R9. LOOP-2 D-4: one bad ownerUserId row cannot promote a sender everywhere ─────────────────────
+{
+  const SAM = "sam-guid-0003";
+  const realA = row({ chatId: ONE2, messageId: "r1", at: "2026-11-10T10:00:00Z", ownerUserId: OWNER_ID });
+  const realB = row({ chatId: GRP, messageId: "r2", at: "2026-11-10T11:00:00Z", ownerUserId: OWNER_ID, mentionedUserIds: [OWNER_ID] });
+  const bad = row({ chatId: `19:bad${AT}thread.v2`, messageId: "b1", at: "2026-11-10T12:00:00Z", ownerUserId: SAM });
+  const samAsk = row({ chatId: ONE, messageId: "s1", at: "2026-11-16T12:00:00Z", sender: { id: SAM, name: "Sam Example", isApp: false }, text: "Synthetic: can you send the report?" });
+  t("R9-1 GUARD: an id on ONE chat's row is not taken across chats when the owner's id is on 2+ chats", ownerTeamsIdsAcross([realA, realB, bad, samAsk]), [OWNER_ID]);
+  t("R9-2 so the sender of that bad row stays OTHER in every other chat (his ask still shows)", teamsChatsFromLedger([realA, realB, bad, samAsk]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER"]);
+  t("R9-3 one chat only: the most frequent id (2+ rows, strictly ahead) is taken; a 1-row id is not; a tie takes neither", [ownerTeamsIdsAcross([realA, row({ chatId: ONE2, messageId: "r3", ownerUserId: OWNER_ID })]), ownerTeamsIdsAcross([realA]), ownerTeamsIdsAcross([realA, row({ chatId: ONE2, messageId: "r3", ownerUserId: OWNER_ID }), row({ chatId: ONE2, messageId: "r4", ownerUserId: SAM }), row({ chatId: ONE2, messageId: "r5", ownerUserId: SAM })])], [[OWNER_ID], [], []]);
+  t("R9-4 a configured id always counts; within its OWN chat a row's ownerUserId still labels the owner", [ownerTeamsIdsAcross([bad], ["CFG-1"]), teamsChatsFromLedger([row({ chatId: ONE2, messageId: "x1", sender: { id: OWNER_ID, name: "x", isApp: false }, ownerUserId: OWNER_ID })]).find((c) => c.chatId === ONE2)!.messages.map((m) => m.speaker)], [["cfg-1"], ["OWNER"]]);
+}
+
 // ── R8. LOOP-2 D-3: owner FULL names from config, never a bare first name ──────────────────────────
 {
   const full = ownerFullNames({ mailbox: "owen.example@work.example", ownerLogins: ["owen.example@huddle.example"] });
@@ -257,8 +274,8 @@ void GRP;
     ["Teams group chat", "Teams, Owen"],
   );
   const grpRow = row({ chatId: GRP, chatName: "Example, Owen", messageId: "g1", at: "2026-11-16T11:00:00Z", text: "Synthetic group line", mentionedUserIds: [OWNER_ID] });
-  const asm4 = assembleLedgerPlan({ rows: [older, grpRow], proposals: [], bell: [] }, cfgDefault, Date.parse("2026-11-09T05:00:00Z"));
-  const g = buildCandidates({ assembled: asm4, rows: [older, grpRow], settings: { ...ACTIONS_SETTINGS_DEFAULT, hideUninvolvedChats: false }, verdicts: new Map(), proposals: new Map(), meetingProposals: [], replies: [], isDraftable: () => false }).candidates.find((c) => c.itemKey.startsWith(`teams:${GRP}`));
+  const asm4 = assembleLedgerPlan({ rows: [older, older2, grpRow], proposals: [], bell: [] }, cfgDefault, Date.parse("2026-11-09T05:00:00Z"));
+  const g = buildCandidates({ assembled: asm4, rows: [older, older2, grpRow], settings: { ...ACTIONS_SETTINGS_DEFAULT, hideUninvolvedChats: false }, verdicts: new Map(), proposals: new Map(), meetingProposals: [], replies: [], isDraftable: () => false }).candidates.find((c) => c.itemKey.startsWith(`teams:${GRP}`));
   t("R8-5 end to end with the default config: the group chat named after the owner is labelled 'Teams group chat'", g?.display.sourceLabel, "Teams group chat");
 }
 

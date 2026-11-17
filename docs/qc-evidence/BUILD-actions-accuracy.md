@@ -117,3 +117,15 @@ Source of the defects: `docs/qc-evidence/VERIFY-actions-accuracy-2.md` on `claud
   named after a bare first name keeps its name. `effectiveOwnerNames` (model context, meeting headings) unchanged.
 - TESTS: R8-1..R8-5 (derivation; default config recognises "Last, First"; bare / same-first-name never owner;
   label; label end to end with the default config).
+
+### D-4 (MEDIUM, latent): one bad `ownerUserId` row can no longer promote a sender everywhere
+
+- CHANGE: `ownerTeamsIdsAcross` takes a row's `ownerUserId` ACROSS chats only when that id is on rows of 2+
+  different chats; when none is, the single most frequent id (2+ rows, strictly ahead, no tie) is taken.
+  Configured ids always count; within its own chat a row's `ownerUserId` still counts (unchanged from main).
+- BEHAVIOUR: a one-off wrong id affects at most its own chat (as before this branch), never every chat. Risk kept:
+  if the owner's id were on exactly one stored row, it is no longer taken across chats (the name fallback, D-3,
+  then applies). The probe (counts only) saw one distinct id on the older rows; not re-measured here. The real fix
+  is the capture flow writing `ownerUserId` again (owner is on it) or `teams.ownerSenderIds` configured.
+- TESTS: R9-1..R9-4. Fixture change: the R1 fixture now carries the owner's id on a second older chat (`older2`),
+  because one row in one chat is by design no longer enough.
