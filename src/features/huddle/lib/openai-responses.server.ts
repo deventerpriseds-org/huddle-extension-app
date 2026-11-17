@@ -8,6 +8,10 @@
 // Reads OPENAI_API_KEY at call time (never at module scope — this file is
 // imported dynamically inside a server-function handler).
 
+// 2026-11-17: every call reports its outcome to the background-job quota alert (lib/ai-quota). Outside a background
+// job (an interactive chat turn) the hooks are no-ops; inside one they never throw and never delay the call.
+import { noteAiFailure, noteAiSuccess } from "./ai-quota/ai-quota.server";
+
 const OPENAI_URL = "https://api.openai.com/v1/responses";
 
 export interface OpenAIRouterInput {
@@ -20,6 +24,17 @@ export interface OpenAIRouterInput {
 }
 
 export async function callOpenAIRouter<T>(input: OpenAIRouterInput): Promise<T> {
+  try {
+    const out = await callOpenAIRouterInner<T>(input);
+    noteAiSuccess();
+    return out;
+  } catch (e) {
+    noteAiFailure(e);
+    throw e;
+  }
+}
+
+async function callOpenAIRouterInner<T>(input: OpenAIRouterInput): Promise<T> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY not configured");
 
@@ -368,6 +383,17 @@ export interface OpenAIPersonaResult {
 }
 
 export async function callOpenAIResponses(input: OpenAIPersonaInput): Promise<OpenAIPersonaResult> {
+  try {
+    const out = await callOpenAIResponsesInner(input);
+    noteAiSuccess();
+    return out;
+  } catch (e) {
+    noteAiFailure(e);
+    throw e;
+  }
+}
+
+async function callOpenAIResponsesInner(input: OpenAIPersonaInput): Promise<OpenAIPersonaResult> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY not configured");
 
