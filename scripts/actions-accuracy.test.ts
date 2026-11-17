@@ -11,6 +11,7 @@
 // THIS REPO IS PUBLIC: every name, id and sentence below is invented.
 import {
   admitActionVerdict,
+  scrubOwnerStateTodo,
   GROUNDED,
   STEP2_INSTRUCTIONS,
   STEP3_INSTRUCTIONS,
@@ -262,6 +263,23 @@ void GRP;
   t("R10-2 unchanged: with a configured owner id the same chat is uninvolved (hidden)", [inv([g1, g2], [OWNER_ID]).reason, inv([g1, g2], [OWNER_ID]).hide], ["uninvolved", true]);
   const gOwn = row({ chatId: G2, messageId: "g3", at: "2026-11-16T12:00:00Z", sender: { id: OWNER_ID, name: "x", isApp: false }, fromOwner: null, mentionedUserIds: [] });
   t("R10-3 the cross-chat ids may still make a chat SHOW: the owner's own message there -> owner_sent", inv([older, older2, g1, gOwn]).reason, "owner_sent");
+}
+
+// ── R11. LOOP-2 D-6: the settled guard scrubs the to-do too ──────────────────────────────────────────
+{
+  const act = (o: Record<string, unknown>, settled = true) => adm({ ...good, kind: "action", ...o }, settled);
+  t(
+    "R11-1 GUARD: settled -> a to-do claiming he has not replied keeps only its action; a pure claim is dropped",
+    ["You have not replied to Pat: send the deck", "You haven't replied yet.", "You still need to resubmit the form", "Reply to Pat - you have not responded"].map((todo) => act({ todo }).todo),
+    ["Send the deck", null, "Resubmit the form", "Reply to Pat"],
+  );
+  t("R11-2 GUARD: settled -> a reason asserting 'you still need to ...' is dropped", act({ reason: "You still need to resubmit the form." }).reason, null);
+  t(
+    "R11-3 no over-reach: normal to-dos and someone else's state are kept; NOT settled is unchanged",
+    [act({ todo: "Send the deck to Pat" }).todo, act({ todo: "Pat still needs the signed form" }).todo, act({ reason: "Pat still needs the form." }).reason, act({ todo: "You have not replied to Pat: send the deck" }, false).todo],
+    ["Send the deck to Pat", "Pat still needs the signed form", "Pat still needs the form.", "You have not replied to Pat: send the deck"],
+  );
+  t("R11-4 scrubOwnerStateTodo leaves null / claim-free input as is", [scrubOwnerStateTodo(null), scrubOwnerStateTodo("Book the room")], [null, "Book the room"]);
 }
 
 // ── R8. LOOP-2 D-3: owner FULL names from config, never a bare first name ──────────────────────────

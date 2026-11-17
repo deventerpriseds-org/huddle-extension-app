@@ -138,3 +138,14 @@ Source of the defects: `docs/qc-evidence/VERIFY-actions-accuracy-2.md` on `claud
   `cant_tell_owner_unknown` (shown) even when its rows carry `fromOwner: false`.
 - BEHAVIOUR: hides exactly what main hid; can additionally SHOW a chat where the owner's id (learned elsewhere) sent.
 - TESTS: R10-1 (the verifier's A5 shape -> shown), R10-2 (configured id -> uninvolved, unchanged), R10-3.
+
+### D-6 (LOW): the settled guard scrubs the to-do as well as the reason
+
+- CHANGE (settled threads only, action-classify.ts): `scrubOwnerStateTodo` removes a to-do clause that only claims
+  the owner has not replied / "you still ..." and keeps the action part; nothing left -> null (the proposal then
+  uses the verbatim quote as its title, the existing path). "You still ..." in `reason` is now dropped like
+  "you have not replied".
+- BEHAVIOUR: "You have not replied to Pat: send the deck" -> "Send the deck"; "You still need to resubmit the
+  form" -> "Resubmit the form"; a pure claim -> null. Someone else's state ("Pat still needs ...") and unsettled
+  threads are unchanged. Applies to verdicts judged from now on (Teams re-judges via D-1; email verdicts do not).
+- TESTS: R11-1..R11-4.

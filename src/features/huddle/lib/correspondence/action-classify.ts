@@ -284,9 +284,44 @@ const NOT_REPLIED = /\byou\b[^.;]{0,20}(?:\bnot\b|n['’]t\b|\bnever\b|\byet to\
  *  - kind `both`  -> admitted as `action` only (the reply half is already done);
  *  - a `reason` that claims he has not replied contradicts the code fact -> dropped (null), never shown.
  * `action` stays open: a settled chat can still carry something to DO (e.g. a form), and recall matters there.
+ * Loop-2 D-6: the SAME applies to `todo` (scrubOwnerStateTodo), and "you still ..." (the owner's state asserted,
+ * e.g. "You still need to resubmit the form") is treated like "you have not replied" in both fields.
  */
 function settledGuard(v: Omit<ActionVerdict, "notCheckedReason">): ActionVerdict {
-  const reason = v.reason && NOT_REPLIED.test(v.reason) ? null : v.reason;
+  const reason = v.reason && claimsOwnerState(v.reason) ? null : v.reason;
+  const todo = scrubOwnerStateTodo(v.todo);
+  return settledGuardKinds({ ...v, todo }, reason);
+}
+
+/** A clause asserting the owner's own outstanding state: "you still need to ...", "you have still not ...". */
+const STILL_OWED = /\byou\b[^.;:]{0,12}\bstill\b/i;
+const claimsOwnerState = (s: string) => NOT_REPLIED.test(s) || STILL_OWED.test(s);
+const STILL_PREFIX = /^\s*you\b[^.;:]{0,12}\bstill\s+(?:need|have|got)\s+to\s+/i;
+
+/**
+ * Pure (loop-2 D-6, settled threads only): a to-do clause that only claims the owner has not replied / still owes
+ * something is removed; the ACTION part is kept ("You have not replied to Pat: send the deck" -> "Send the deck";
+ * "You still need to resubmit the form" -> "Resubmit the form"). Nothing left -> null (the backing proposal then
+ * takes the verbatim quote as its title, as for any to-do that is not usable). A to-do with no such claim is
+ * returned unchanged.
+ */
+export function scrubOwnerStateTodo(todo: string | null): string | null {
+  if (!todo || !claimsOwnerState(todo)) return todo;
+  const kept: string[] = [];
+  for (const part of todo.split(/\s*[:;—–]\s*|\s+-\s+/)) {
+    const p = part.trim();
+    if (!p) continue;
+    if (!claimsOwnerState(p)) kept.push(p);
+    else if (STILL_PREFIX.test(p) && !NOT_REPLIED.test(p)) {
+      const rest = p.replace(STILL_PREFIX, "").trim();
+      if (rest && !claimsOwnerState(rest)) kept.push(rest);
+    }
+  }
+  const out = kept.join("; ").replace(/[.\s]+$/, "").trim();
+  return out ? out[0].toUpperCase() + out.slice(1) : null;
+}
+
+function settledGuardKinds(v: Omit<ActionVerdict, "notCheckedReason">, reason: string | null): ActionVerdict {
   if (v.kind === "reply") return { ...v, reason, status: "none", answeredByReply: true };
   if (v.kind === "both") return { ...v, reason, kind: "action", status: "open" };
   return { ...v, reason, status: "open" };
