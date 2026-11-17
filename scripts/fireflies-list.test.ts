@@ -5,7 +5,7 @@
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   docs/qc-evidence/BUILD-report-from-ledger.md (piece 2).
 // Run: bun scripts/fireflies-list.test.ts
-import { dateArgsRefused, dayCounts, inListWindow, meetingMs, parseListPage, unionMeetings } from "../src/features/huddle/lib/fireflies/fireflies-list";
+import { dateArgsRefused, dayCounts, inListWindow, meetingMs, normMeetingId, parseListPage, unionMeetings } from "../src/features/huddle/lib/fireflies/fireflies-list";
 
 let fail = 0;
 let pass = 0;
@@ -30,6 +30,17 @@ t("FL-6 union: each meeting once, known first, provenance known/both/listed, own
   { id: "k2", owner: "default@work.example", from: "both" },
   { id: "l1", owner: "default@work.example", from: "listed" },
 ]);
+const u6 = unionMeetings(
+  [{ meeting_id: " k1 ", owner_email: "owner@work.example" }, { meeting_id: "k2\t", owner_email: "" }, { meeting_id: "   ", owner_email: "" }, { meeting_id: null as unknown as string, owner_email: "" }],
+  [{ id: "k1", atMs: 1 }, { id: " k2", atMs: 2 }, { id: "  ", atMs: 3 }, { id: " l1 ", atMs: 4 }],
+  "default@work.example",
+);
+t("VF6-1 union trims ids on BOTH sides: a known ' k1 ' and a listed 'k1' are ONE meeting (both), ids emitted trimmed, blank / non-string ids skipped", u6, [
+  { id: "k1", owner: "owner@work.example", from: "both" },
+  { id: "k2", owner: "default@work.example", from: "both" },
+  { id: "l1", owner: "default@work.example", from: "listed" },
+]);
+t("VF6-2 normMeetingId: trim only, case kept, non-string -> ''", [normMeetingId(" AbC "), normMeetingId("x"), normMeetingId(undefined), normMeetingId(7)], ["AbC", "x", "", ""]);
 t("FL-7 per-day counts by the ET calendar date (a 01:00 UTC meeting is the previous ET day)", dayCounts([Date.parse("2026-11-11T01:00:00Z"), Date.parse("2026-11-10T15:00:00Z"), Date.parse("2026-11-12T15:00:00Z"), null]), { "2026-11-10": 2, "2026-11-12": 1, unknown: 1 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

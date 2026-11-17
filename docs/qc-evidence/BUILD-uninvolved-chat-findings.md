@@ -84,3 +84,14 @@ Public repo: synthetic ids and text only. No message bodies are logged by any ch
 - Tests: VF5-1 (normaliser), VF5-2 (stored ownerUserId upper-case: reply labelled OWNER, settled=true), VF5-3
   (configured id with whitespace), VF5-4 (sender / mention ids with whitespace + case), VF5-5 (mentionsOwner alone),
   VF5-6 (a null stored mention entry goes through the normal path, shows). Suite 55 -> 61 passed, 0 failed. tsc rc=0.
+
+### Finding 6 (LOW) -- the Fireflies union did not trim the known meeting ids: FIXED
+
+- `fireflies-list.ts`: new exported `normMeetingId` (trim only -- Fireflies ids are opaque, so case is kept; a
+  non-string id -> "" and is skipped). `unionMeetings` now normalises BOTH sides (known `meeting_id` and listed `id`)
+  with it, compares on the normalised id and emits the normalised id (so the back-fill fetches a trimmed id). A blank
+  id on either side is skipped (it cannot be fetched). `parseListPage` already trimmed listed ids; the union no
+  longer relies on that.
+- Tests: VF6-1 (known " k1 " + listed "k1" -> ONE meeting, `both`; known "k2\t" + listed " k2" -> one; blank and
+  null known ids and a blank listed id skipped; listed " l1 " emitted as "l1"), VF6-2 (normaliser). fireflies-list
+  7 -> 9 passed, 0 failed. `npx tsc --noEmit` rc=0.
