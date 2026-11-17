@@ -11,7 +11,7 @@
 // Harness copied from scripts/feed-staleness-sql.test.ts. All data synthetic (.example).
 // Harness copied from scripts/correspondence-ledger-sql.test.ts. All data synthetic (.example).
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -95,6 +95,8 @@ try {
   console.log("FAIL harness:", e instanceof Error ? e.message : e);
 } finally {
   stop();
+  // Remove the throwaway cluster (~40 MB): mutation runs repeat this suite, and leaked dirs filled /tmp once.
+  rmSync(dir, { recursive: true, force: true });
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
