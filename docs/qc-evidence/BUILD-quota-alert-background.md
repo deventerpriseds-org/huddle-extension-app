@@ -58,3 +58,7 @@ NOT wrapped (interactive, unchanged): the user's own `u-`/`xapp-` turns -- they 
 ## Step 3 -- offline suite
 
 `bun scripts/ai-quota-alert.test.ts`: **44 passed, 0 failed** (Q1 one row + one notice, Q2 no duplicate, Q3 concurrent -> one, Q4 success clears + recovery, Q5 non-quota logs kind only, Q6 throttle, Q7 no owner, N1 zero fetch while raising/clearing, N2 notice payload, N3 source-order guard, B1 bell, K1 kind helper, J1, C1 job context).
+
+## Step 4 -- real SQL suite
+
+`bun scripts/ai-quota-alert-sql.test.ts` (local PostgreSQL 16): **12 passed, 0 failed** -- D1 four concurrent "instances" -> one row, one notice; D3 no duplicate; D4 listed first; D5 talking to Iris does not clear; D6 dismiss holds for the outage; D7 concurrent successes clear once; D8 next outage reopens; D9/D10 kind + owner isolation.
