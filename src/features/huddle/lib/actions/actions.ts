@@ -41,7 +41,14 @@ export interface ActionsSettings {
   dailyCap: number;
   /** The owner's zone for "since Monday" and the daily cap's day. */
   timeZone: string;
+  /** Which correspondence the page lists AND the classifier judges (owner 2026-11-17: "an option for all time vs this
+   *  week"). "week" = since Monday 00:00 (the original behaviour, default); "all" = everything still stored. */
+  range: ActionsRange;
 }
+
+export type ActionsRange = "week" | "all";
+export const ACTIONS_RANGES: readonly ActionsRange[] = ["week", "all"];
+export const ACTIONS_RANGE_LABEL: Record<ActionsRange, string> = { week: "This week", all: "All time" };
 
 /** Owner decision 2026-11-17: 150 -> 500 (150 ran out mid-day). The owner changes it in DAILY_CAP_SETTING_PATH. */
 export const DAILY_CAP_DEFAULT = 500;
@@ -71,6 +78,7 @@ export const ACTIONS_SETTINGS_DEFAULT: ActionsSettings = {
   classify: null,
   dailyCap: DAILY_CAP_DEFAULT,
   timeZone: "America/New_York",
+  range: "week",
 };
 
 const isZone = (z: unknown): z is string => {
@@ -103,6 +111,7 @@ export function resolveActionsSettings(raw: unknown): ActionsSettings {
     classify: typeof o.classify === "boolean" ? o.classify : null,
     dailyCap: cap,
     timeZone: isZone(o.timeZone) ? o.timeZone : d.timeZone,
+    range: (ACTIONS_RANGES as readonly unknown[]).includes(o.range) ? (o.range as ActionsRange) : d.range,
   };
 }
 
@@ -145,6 +154,14 @@ export function sinceMondayMs(nowMs: number, tz: string): number {
   // Step back by whole days from local noon, so a DST change never lands on the wrong calendar day.
   const noon = localMidnightMs(nowMs, tz) + 12 * 3600_000;
   return localMidnightMs(noon - back * 86_400_000, tz);
+}
+
+/** Pure: the ONE window start that both the page read (getActionsPage) and the heartbeat classify pass
+ *  (runActionsClassify) use, so what the owner sees and what gets judged never differ. "week" -> since Monday 00:00 in
+ *  the owner's zone; "all" -> 0, i.e. every item still stored (correspondence content is kept 90 days, so this is
+ *  "from the earliest stored item"). */
+export function actionsWindowStartMs(nowMs: number, s: Pick<ActionsSettings, "range" | "timeZone">): number {
+  return s.range === "all" ? 0 : sinceMondayMs(nowMs, s.timeZone);
 }
 
 // ── CORRECTIONS (Wrong?) ─────────────────────────────────────────────────────────────────────────────

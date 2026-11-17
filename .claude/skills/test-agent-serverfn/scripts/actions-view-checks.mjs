@@ -59,6 +59,17 @@ export const checks = [
       ["actions-section-needs_reply", "actions-caught-up", "actions-not-sorted", "actions-off", "actions-error"].filter((id) => document.querySelector(`[data-testid="${id}"]`)),
     );
     check("B-7/B-8/B-9 Actions shows a definite state (rows, caught up, not sorted, off or error)", state.length > 0 || (await page.locator('[data-testid="actions-row"]').count()) > 0, state.join(","));
+    // 2026-11-17 range toggle (BUILD-actions-all-time.md). READ-ONLY: never clicked, so the saved range is untouched.
+    const range = page.locator('[data-testid="actions-range"]').first();
+    if (await range.count()) {
+      const labels = (await range.locator("button").allTextContents()).map((x) => x.trim());
+      const pressed = await range.locator('button[aria-pressed="true"]').count();
+      check("RANGE-UI the range toggle shows This week / All time, exactly one selected", labels.join(",") === "This week,All time" && pressed === 1, labels.join(","));
+    } else if (state.some((s) => s === "actions-off" || s === "actions-error")) {
+      check("RANGE-UI range toggle not expected (page off / error)", true);
+    } else {
+      check("RANGE-UI the range toggle exists on the Actions page", false);
+    }
     // 2026-11-17 accuracy fixes (BUILD-actions-accuracy.md). READ-ONLY: More / Less and opening + closing Wrong?
     // change nothing stored; Send is never pressed.
     const rowsN = await page.locator('[data-testid="actions-row"]').count();

@@ -21,7 +21,9 @@ import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/oned
 import type { EmailContent, TeamsContent, TranscriptContent } from "../src/features/huddle/lib/correspondence/source-item";
 import { teamsSourceItemId } from "../src/features/huddle/lib/correspondence/source-item";
 import {
+  ACTIONS_RANGE_LABEL,
   ACTIONS_SETTINGS_DEFAULT,
+  actionsWindowStartMs,
   bellTargetsFor,
   capNotice,
   chatIdOfTeamsItem,
@@ -361,6 +363,36 @@ t(
   );
 }
 t("H-4 settings: junk falls back field by field; cap clamped", [resolveActionsSettings({ hideCategories: ["spam", "timekeeping"], dailyCap: 99999, timeZone: "Mars/Base" }).hideCategories, resolveActionsSettings({ dailyCap: 99999 }).dailyCap, resolveActionsSettings({ timeZone: "Mars/Base" }).timeZone], [["timekeeping"], 2000, "America/New_York"]);
+// ── RANGE (owner 2026-11-17: "an option for all time vs this week") ─────────────────────────────────
+t("RANGE-1 default range is this week; junk falls back to week; 'all' is kept", [ACTIONS_SETTINGS_DEFAULT.range, resolveActionsSettings(null).range, resolveActionsSettings({ range: "forever" }).range, resolveActionsSettings({ range: "all" }).range], ["week", "week", "week", "all"]);
+t("RANGE-2 week window = since Monday 00:00 (unchanged behaviour)", actionsWindowStartMs(Date.parse(NOW), S()), SINCE);
+{
+  const earliest = Math.min(...rows.map((r) => Date.parse(r.at)));
+  const allStart = actionsWindowStartMs(Date.parse(NOW), S({ range: "all" }));
+  t("RANGE-3 all-time window starts at or before the earliest stored item", allStart <= earliest, true);
+  const convs = (start: number) => assembleLedgerPlan(data, cfg, start).plan.email.scan.map((f) => f.conversationId).sort();
+  t("RANGE-4 the pre-Monday email is out of the week window and in the all-time window", [convs(actionsWindowStartMs(Date.parse(NOW), S())).includes("conv-old"), convs(allStart).includes("conv-old")], [false, true]);
+}
+{
+  // RANGE-5 GUARD: the page read and the heartbeat classify pass take their window from the SAME function and the SAME
+  // settings object, so what is listed and what is judged can never differ (and "All time" reaches the classifier).
+  const { readFileSync } = await import("node:fs");
+  const srv = readFileSync(new URL("../src/features/huddle/lib/actions/actions.server.ts", import.meta.url), "utf8");
+  const body = (start: string) => {
+    const i = srv.indexOf(start);
+    const j = srv.indexOf("\nexport ", i + start.length);
+    return i < 0 ? "" : srv.slice(i, j < 0 ? undefined : j);
+  };
+  const classify = body("export function runActionsClassify(");
+  const pageRead = body("export async function getActionsPage(");
+  t(
+    "RANGE-5 GUARD: page read and classify pass both window with actionsWindowStartMs(now, s), neither with a bare sinceMondayMs",
+    [classify.includes("assembleLedgerPlan(data, cfg, actionsWindowStartMs(now, s))"), pageRead.includes("const sinceMs = actionsWindowStartMs(now, s);") && pageRead.includes("assembleLedgerPlan(data, cfg, sinceMs)"), /sinceMondayMs\(/.test(srv)],
+    [true, true, false],
+  );
+  const view = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
+  t("RANGE-6 the view has the This week / All time toggle and the header follows the range", [view.includes('data-testid="actions-range"'), view.includes("ACTIONS_RANGES.map"), view.includes("sinceLabel(ok.sinceIso, tz, true, ok.settings.range)"), ACTIONS_RANGE_LABEL.week, ACTIONS_RANGE_LABEL.all], [true, true, true, "This week", "All time"]);
+}
 t("H-5 classify ON by default for the configured owner only; explicit wins", [classifyEnabled(S(), true), classifyEnabled(S(), false), classifyEnabled(S({ classify: false }), true)], [true, false, false]);
 {
   const s1 = stub(answerFor);
