@@ -108,3 +108,26 @@ Fixes for the defects in `VERIFY-actions-view-2.md` (verifier probes copied to
   Mutations (all `FIRED (control EQUIVALENT)`, exit 0, restored to HEAD): d4a `withItemCorrection` starts from an
   empty map -> D4-1; d4b `withItemUndo` withdraws every entry -> D4-2; d4c candidates read the last-written entry
   instead of this item's -> D4-E2; d4d `FOR UPDATE` removed -> D4-S5.
+- **D2 FIXED** (05579da0): every model call ATTEMPT is recorded BEFORE the call (`ClassifyDeps.recordCall`, now
+  required), as an ISO instant appended in one atomic UPDATE to the thread's latest ledger row,
+  `result_ids.action_calls` (existing JSONB column; entries older than 48h pruned on append). If it cannot be
+  recorded, the pass stops and makes no call. The cap reads `actionCallsToday` = attempts since the owner's local
+  midnight, never fewer than verdicts stored today (covers the deploy day), through the pure
+  `classifyCallsLeft(used, cap)` (pipeline.ts; `CLASSIFY_PER_PASS` moved there, re-exported by the server).
+  `markProcessed` keeps `action_calls` next to `action`. So a timeout (Promise.race does not abort the request),
+  a failed proposal write and a failed verdict write all spend the cap. The "hard ceiling is the daily cap" line above
+  now holds.
+  Tests: `actions-view` 82/82 (D2-1: cap 5, model failing, 10 passes -> exactly 5 model calls, where the verifier's
+  probe A gave 50; D2-2: the same for timeout / propose failure / store failure; D2-3: record fails -> 0 calls; D2-4
+  `classifyCallsLeft` table incl. a junk count failing closed; D2-5 per local day). `actions-view-server` (real PG)
+  13/13: D2-S1..S6 (attempts counted with no verdict; survive `markProcessed`; a missing row throws; owner and day
+  scoping; 48h prune; max with verdicts) and **D2-E1: the REAL heartbeat `runActionsClassify` on real SQL, 8 waiting
+  Teams chats, model mocked to fail, cap 5, 10 passes 10 min apart (bun `setSystemTime`) -> 5 model calls, 5
+  counted**. `correspondence-ledger-sql` 79/79. `tsc` exit 0. (The verifier's probe `caps.ts` predates
+  `recordCall` and now stops at the first unit; it is kept as the record of the defect.)
+  Mutations: d2a drop `await deps.recordCall(...)` -> D2-1 **FIRED (control EQUIVALENT)**, exit 0; d2a2 the same
+  mutation against D2-E1: first run **NOT-APPLIED** (exit 3, my script ran it before writing its anchor file, so
+  nothing was tested), re-run -> **FIRED (control EQUIVALENT)**, exit 0; d2b the server passes a no-op `recordCall` ->
+  D2-E1 FIRED (control EQUIVALENT); d2c the count reads verdicts only -> D2-S1 FIRED (control EQUIVALENT); d2d
+  `markProcessed` drops `action_calls` -> D2-S2 FIRED (control EQUIVALENT); d2e a failed record falls through to
+  the call -> D2-3 FIRED (control EQUIVALENT). All exit 0, tree clean afterwards.
