@@ -5400,3 +5400,6 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [x] ACT:uninvolved-chat-findings merged #262 (verify loop 2 MERGE). ACT:correspondence-tuning merged #261, forward refill applied: 7 re-written, 0 failed.
 - [x] Owner 2026-11-17 "tracking able to detect what is taking so long each step": eds-agent-steps.py live (eds-claude-skills #140, v80); judge-failure kinds logged (#263).
 - [ ] Owner decision: rule change for background agents (session idle freezes them). [ ] OpenAI quota top-up (owner).
+## ACT:quota-alert-background — background AI jobs raise ONE "OpenAI is out of credit" bell item + Iris notice, auto-clear on success (owner 2026-11-17) — branch claude_quota-alert-background, NOT live
+- [ ] Build + tests + mutation proofs: docs/qc-evidence/BUILD-quota-alert-background.md.
+- [ ] Merge + deploy (not in this lane's brief: no PR, no merge, no dispatch).
