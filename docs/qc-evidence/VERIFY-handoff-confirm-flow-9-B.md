@@ -34,3 +34,16 @@ create path, not the confirm/approach/not-ai paths of C4/C5/C9/C10, so the exclu
   still require confirmed + approved).
 - **C5 verdict: CONFIRMED** (gate FIRED); risk 2 = REACHABLE (inference, confidence medium-high), not a gate defect.
 
+## C10 -- Not an AI task
+- `npm run -s test:not-ai-task`: 6 pass / 0 fail.
+- Code read (confirm-ask.functions.ts:667-708): ownership via `getOwnedTaskForConfirmAsk(data.taskId, email)` -> "Task not
+  found" for a non-owner; `update_task` with `status:"BACKLOG", assigned_agent:"", tags: withMyTaskTag(existingTags, ...)`;
+  `resetEngagementOnReassignment(taskId)` on success; `withMyTaskTag` (667-669) appends without dropping existing tags.
+- Mutation `withMyTaskTag` body -> `return [tag];` (drops every existing tag; update_task REPLACES tags, so this would wipe
+  e.g. `parking-lot`/`finance`), test `the action: Backlog, agent cleared, my-task ADDED to the existing tags`: **INERT**.
+  Not behaviourally equivalent. The test only asserts the call-site string, so the "ADDED to the existing tags" property
+  it is named for is UNGUARDED. Production code is correct today by reading.
+- **C10 verdict: CONFIRMED (behaviour, by code read + string tests); guard gap: tag-preservation test INERT** -- a one-line
+  behavioural test `expect(withMyTaskTag(["finance"],"my-task")).toEqual(["finance","my-task"])` would close it (observation
+  of the gap; the fix wording is a suggestion, not a design).
+

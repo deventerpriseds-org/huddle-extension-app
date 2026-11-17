@@ -1,0 +1,1 @@
+  return existing.includes(tag) ? [...existing] : [...existing, tag];
