@@ -131,3 +131,18 @@ Fixes for the defects in `VERIFY-actions-view-2.md` (verifier probes copied to
   D2-E1 FIRED (control EQUIVALENT); d2c the count reads verdicts only -> D2-S1 FIRED (control EQUIVALENT); d2d
   `markProcessed` drops `action_calls` -> D2-S2 FIRED (control EQUIVALENT); d2e a failed record falls through to
   the call -> D2-3 FIRED (control EQUIVALENT). All exit 0, tree clean afterwards.
+- **D6 FIXED** (0b259794): `correctItemFor` first calls `itemBacking(owners, ledgerOwners, proposalId, itemKey)`. A
+  thread item is backed only by a stored verdict (`result_ids.action`) whose `key` IS the itemKey AND whose
+  `proposalId` IS this proposal, and that verdict's row is the ledger row the mirror is written to (the old code took
+  the last `|` segment of the client's string). A meeting item is backed only by THIS proposal's own transcript ref
+  (`meeting:<source_item_id>|<norm_title>`). Owner-scoped; a read error refuses (fail closed). It applies to Undo too.
+  Tests: `actions-view-server` (real PG) 20/20, new D6-S1..S7: another proposal's itemKey refused; a made-up key
+  ending in a real ledger id (the verifier's stamp-any-row path) refused; Undo with an unbacked key refused; the
+  refused calls wrote nothing (both proposals + the ledger row byte-identical); the item's own key still works and
+  mirrors onto the verdict's row; meeting own-key accepted / sibling-item key refused; another owner sees no backing.
+  `tsc` exit 0.
+  Mutations: d6a the refusal turned into "treat as backed" -> D6-S1 **FIRED (control EQUIVALENT)**, exit 0; d6a2 the
+  same against D6-S2: first run **NOT-APPLIED** (exit 3, my script again ran before writing the anchor file; nothing
+  tested), re-run -> **FIRED (control EQUIVALENT)**, exit 0; d6b the verdict query drops the `proposalId` match ->
+  D6-S1 FIRED (control EQUIVALENT); d6c the meeting query drops the item match -> D6-S6 FIRED (control EQUIVALENT).
+  Tree clean afterwards.
