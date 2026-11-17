@@ -161,3 +161,13 @@ Source of the defects: `docs/qc-evidence/VERIFY-actions-accuracy-2.md` on `claud
   stated.", "Timestamp: (01:01-01:32).", "Timing: Beyond two weeks, inferred because ...") still attach.
   An unindented "Notes:" alone is a heading again (as on main).
 - TESTS: R12-1..R12-3; R4-1..R4-4 unchanged and green; meeting-triage 69 / -sql 34 / -server 7 green.
+
+### UI (minor): the "More" control
+
+- CHANGE (ActionsView.tsx): "More" is a 44px touch target (`-my-2.5 inline-flex min-h-11 items-center`, the
+  existing pattern in ProposalChecklistItem / JourneyWidgets; negative margins keep the row's look). It shows only
+  when the title, meta line or summary is actually cut off (scroll size > box, re-measured by a ResizeObserver),
+  and stays while expanded so "Less" folds it back. Tokens only (no new colours).
+- UAT (actions-view-checks.mjs ACC-5, updated, NOT run here: no dispatch allowed): a row without More shows its
+  whole title; the More control is >= 44px tall; expanded rows wrap / unclamp as before.
+- Verification here: tsc + build only. Rendered result is MERGE-PENDING-UAT.
