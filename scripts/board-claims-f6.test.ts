@@ -56,3 +56,27 @@ describe("F6 wiring", () => {
     expect(hf).toContain("presentBoardClaims(presentNexusWriteTurn(list, turnNexusWriteUses) as Reply[], toolUses)");
   });
 });
+
+// Verify loop 4 (VERIFY-handoff-confirm-flow-4.md, C7): never rewrite a TRUE statement; catch passive claims.
+describe("F6 loop-4 rows", () => {
+  const W = (tool: string, summary: string): ToolUseLike => ({ agentId: A, tool, summary, ok: true });
+  const keep: [string, ToolUseLike[]][] = [
+    ["I moved the task to Thursday.", [W("move_task_to_day", "move_task_to_day → journey-voice · ok")]],
+    ["I moved that task to 3pm tomorrow.", [W("reschedule_task", "reschedule_task → journey-voice · ok")]],
+    ["I set a reminder for that task at 3pm.", [W("schedule_reminder", "reminder set")]],
+    ["I created a research brief for the task.", [W("create_artifact", "saved")]],
+    ["I completed the research for that task — the brief is attached.", [W("create_artifact", "saved")]],
+  ];
+  for (const [text, uses] of keep) test(`true statement kept: ${JSON.stringify(text)}`, () => expect(SHOW(text, uses)).toBe(text));
+  const fix: [string, string][] = [
+    ["All set — it's marked as complete.", L.notChanged],
+    ["Task moved to Done.", L.notChanged],
+    ["✅ Marked done.", L.notChanged],
+    ["I've gone ahead and marked it done.", L.notChanged],
+    ["I went ahead and moved it to Done.", L.notChanged],
+    ["I've now added it to your board.", L.notAdded],
+    ["It's been added to your board.", L.notAdded],
+    ["We marked it done.", L.notChanged],
+  ];
+  for (const [text, want] of fix) test(`unbacked claim corrected: ${JSON.stringify(text)}`, () => expect(SHOW(text)).toBe(want));
+});

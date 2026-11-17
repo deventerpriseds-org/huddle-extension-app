@@ -34,6 +34,14 @@ export type ToolUseLike = {
 const RAW_CREATE_TOOLS = new Set(["quick_create_task", "parse_and_create_tasks", "create_task"]);
 /** journey catalog tools that CHANGE an existing task. */
 const STATUS_TOOLS = new Set(["update_task", "batch_update_tasks"]);
+// Every journey tool that WRITES a task (journey-voice supabase/functions/_shared/tool-definitions.ts). A
+// successful one backs a "moved / set / completed" claim. Verify loop 4 (C7): with only the two status tools,
+// "I moved the task to Thursday" after a real move_task_to_day was rewritten to "Nothing was changed".
+const TASK_WRITE_TOOLS = new Set([
+  ...STATUS_TOOLS,
+  "reschedule_task", "schedule_task", "unschedule_task", "move_task_to_day", "swap_task_order",
+  "set_priority_rank", "rebuild_schedule", "focus_on",
+]);
 const DELETE_TOOLS = new Set(["delete_task"]);
 
 /** Summaries the dispatcher writes for a call that did NOT perform a write, although it records ok=true. */
@@ -64,7 +72,7 @@ export function isPerformedCreate(u: ToolUseLike): boolean {
 /** A status/tag change (or delete) that really wrote this turn. */
 export function isPerformedTaskChange(u: ToolUseLike): boolean {
   if (!u.ok || NOT_PERFORMED_RE.test(u.summary)) return false;
-  if (STATUS_TOOLS.has(u.tool) || DELETE_TOOLS.has(u.tool)) return /journey-voice · ok/.test(u.summary);
+  if (TASK_WRITE_TOOLS.has(u.tool) || DELETE_TOOLS.has(u.tool)) return /journey-voice · ok/.test(u.summary) || u.tool === "focus_on";
   return false;
 }
 
@@ -94,13 +102,17 @@ const SENTENCE_SPLIT = /((?<=[.!?])\s+|\n+)/;
 const NOT_A_CLAIM_RE =
   /\b(?:I'll|I’ll|I will|I can|I could|I'd|I’d|want me to|shall I|should I|let me|going to|once you|if you)\b|\?\s*$/i;
 // Non-board objects (S-B8..S-B10): email read state, notes, "noted".
-const OFF_BOARD_RE = /\bas (?:read|unread)\b|\bemails?\b|\binbox\b|\bnotes?\b|\bnoted\b/i;
+const OFF_BOARD_RE =
+  /\bas (?:read|unread)\b|\bemails?\b|\binbox\b|\bnotes?\b|\bnoted\b|\breminders?\b|\balarms?\b|\bcalendar\b|\bevents?\b|\bmeetings?\b|\bbrief\b|\bdocument\b|\bdoc\b|\bdraft\b|\breport\b|\bresearch\b|\bartifact\b/i;
 // A quoted request echoed back ("You asked me to "mark it done"") is not a claim (S-B13).
 const QUOTED_RE = /["“][^"”]*\b(?:mark|move|add|archive)\w*\b[^"”]*["”]/i;
 const BOARD_WORD_RE = /\b(?:done|complete(?:d)?|review|up next|backlog|doing|board|task|card|archived?|deleted)\b/i;
-const STATUS_CLAIM_RE =
-  /(?:^|\b(?:I|I've|I’ve|I have|I just|just)\s+)(?:marked|moved|set|put|archived|deleted|removed|closed|completed)\b/i;
-const CREATE_CLAIM_RE = /(?:^|\b(?:I|I've|I’ve|I have|I just|just)\s+)(?:added|created)\b/i;
+// Subject forms (verify loop 4 under-matches): I / we, optionally "just|now|already|gone ahead and|went ahead
+// and"; passive "it's (been) marked", "task moved to Done"; or the verb opening the sentence ("Marked done").
+const CLAIM_SUBJECT =
+  "(?:^|\\b(?:I|we|I've|I’ve|I have|we've|we’ve|we have)\\s+(?:(?:just|now|already|gone ahead and|went ahead and)\\s+)?|\\b(?:it's|it’s|it is|it has|it's been|it’s been|it has been|task|that's|that’s)\\s+(?:been\\s+)?)";
+const STATUS_CLAIM_RE = new RegExp(`${CLAIM_SUBJECT}(?:marked|moved|set|put|archived|deleted|removed|closed|completed)\\b`, "i");
+const CREATE_CLAIM_RE = new RegExp(`${CLAIM_SUBJECT}(?:added|created)\\b`, "i");
 const STARTED_CLAIM_RE =
   /\b(?:I'm|I’m|I am)\s+(?:now\s+)?(?:proceeding|starting on|working on it|getting started)\b|\bI(?:'ve|’ve| have)\s+started\b/i;
 
@@ -116,9 +128,15 @@ export const BOARD_CLAIM_LINES = {
 type ClaimKind = "status" | "create" | "started";
 
 function claimKind(sentence: string): ClaimKind | null {
-  const s = sentence.trim().replace(/^(?:done|ok(?:ay)?|sure|great)\s*[—–\-:,!.]\s*/i, "");
-  if (!s || NOT_A_CLAIM_RE.test(s) || OFF_BOARD_RE.test(s) || QUOTED_RE.test(s)) return null;
+  const s = sentence
+    .trim()
+    .replace(/^[\s✅☑️✔️👍]+/u, "")
+    .replace(/^(?:done|ok(?:ay)?|sure|great|all set)\s*[—–\-:,!.]\s*/i, "");
+  if (!s || NOT_A_CLAIM_RE.test(s) || QUOTED_RE.test(s)) return null;
+  // A "started work" claim is about the WORK, not a board object, so it is judged before the off-board words
+  // ("research", "brief" ...) — otherwise "I'm proceeding with the research" (S-B12) slips through.
   if (STARTED_CLAIM_RE.test(s)) return "started";
+  if (OFF_BOARD_RE.test(s)) return null;
   if (CREATE_CLAIM_RE.test(s) && BOARD_WORD_RE.test(s)) return "create";
   if (STATUS_CLAIM_RE.test(s) && (BOARD_WORD_RE.test(s) || /^(?:archived|deleted)\b/i.test(s))) return "status";
   return null;
