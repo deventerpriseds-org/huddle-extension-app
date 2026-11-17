@@ -1,7 +1,8 @@
 // WHAT:       Offline tests (synthetic data only, fake model + fake store) for the action-scan REPORT saving its verdicts
 //             into the Actions view's store: (a) report-path verdicts go through the SAME admission guard (a quote that
 //             is not verbatim is never stored as open), (b) a second run over unchanged threads makes 0 model calls,
-//             the cap and the attempt record are the app's, and save OFF writes nothing, (c) the HTML is rendered FROM
+//             the cap and the attempt record are the app's, and save OFF writes no verdict, proposal or meeting row (attempts are still
+//             recorded toward the daily limit), (c) the HTML is rendered FROM
 //             the stored verdicts (an item stored open appears; one stored none does not appear as open; a stale or
 //             not-admitted verdict is listed as not checked).
 // WHY:        Owner-approved 2026-11-17 (report saves verdicts). Tier 1: this path admits model output into stored

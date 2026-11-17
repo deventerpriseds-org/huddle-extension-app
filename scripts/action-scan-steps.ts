@@ -249,11 +249,11 @@ export async function runStoredActionScan(a: { cfg: OneDriveFeedsConfig; token: 
   const rowsNotChecked = rows.notCheckedEmail.length + rows.notCheckedTeams.length;
   console.log(
     `report pass: save ${a.save ? "ON" : "OFF (verdicts are not saved; AI calls still count toward today's limit)"}${p.sortingOff ? " | AI sorting is OFF in Huddle: no AI calls, stored verdicts only" : ""} | model calls ${r.calls} | already judged (0 calls) ${r.alreadyJudged} | ` +
-      `verdicts stored this run: open ${r.open} none ${r.none} not_checked ${r.notChecked} | failures ${r.failures} | over cap ${r.overCap} | ` +
+      `verdicts ${a.save ? "stored" : "judged (not saved)"} this run: open ${r.open} none ${r.none} not_checked ${r.notChecked} | failures ${r.failures} | over cap ${r.overCap} | ` +
       `meeting rows ${r.meetingRows} | uninvolved skipped ${r.uninvolvedSkipped} | calls allowed ${p.callsLeft} | used today before ${p.usedBefore}, after ${p.usedBefore + r.calls} of cap ${p.settings.dailyCap} | ` +
       `in-app sorting ${p.classifyOn ? "on" : "off"} | sources email ${p.settings.sources.email} teams ${p.settings.sources.teams} meeting ${p.settings.sources.meeting}`,
   );
-  console.log(`report rows from the store: open ${rowsOpen} | none ${rowsNone} | not checked ${rowsNotChecked} (of which AI answer not admitted ${rows.notAdmitted})`);
+  console.log(`report rows ${a.save ? "from the store" : "(stored verdicts + this run's unsaved ones)"}: open ${rowsOpen} | none ${rowsNone} | not checked ${rowsNotChecked} (of which AI answer not admitted ${rows.notAdmitted})`);
   const ledger: LedgerScanPart = { plan: p.assembled.plan, forwards: p.assembled.forwards, forwardsMissing: p.assembled.forwardsMissing, forwardsTotal: p.assembled.forwardsTotal, unavailable: p.unavailable };
   console.log(`forwards (ledger): Fw emails ${ledger.forwardsTotal} | forwarded text read ${ledger.forwards.size} | forwarded part not stored ${ledger.forwardsMissing}`);
   const { html, logLines } = renderActionReportHtml({

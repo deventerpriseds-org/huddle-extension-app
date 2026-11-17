@@ -95,7 +95,7 @@ Behaviour differences vs the old report, all because it now IS the app's pass:
 | not-admitted answers never rendered as rows | RC-6 | status filter -> bad_shape only | FIRED (control EQUIVALENT), exit 0 |
 | only stored `open` is a YES | RC-2 | `yes: v.status === "open"` -> `yes: true` | FIRED (control EQUIVALENT), exit 0 |
 | report-path verdicts go through the verbatim guard | RA-1 | haystack widened to include the model's own quote | FIRED (control EQUIVALENT), exit 0 |
-| save OFF writes nothing to the store | RB-6 | in-memory `storeVerdict` -> real `storeVerdict` | FIRED (control EQUIVALENT), exit 0 |
+| save OFF writes no verdict, proposal or meeting row (attempts still recorded) | RB-6 | in-memory `storeVerdict` -> real `storeVerdict` | FIRED (control EQUIVALENT), exit 0 |
 
 All seven restores asserted against HEAD by mutate.sh.
 
