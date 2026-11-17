@@ -165,3 +165,11 @@ Fixes for the defects in `VERIFY-actions-view-2.md` (verifier probes copied to
 - **D3 ACCEPTED, not built (no lease):** with D2 each attempt is recorded at call time, so only passes that START
   on two instances in the same moment overrun; measured (`actions-view` D3-MEASURE: 2 instances, cap 5, 3 used) 4
   calls -> 7 for the day, bound = (instances - 1) x min(6, cap - used) extra calls per overlapping 10-minute pass.
+- **Final checks** (head 7d945237, 2026-11-17): actions-view 82/82; actions-view-server (real PG) 26/26;
+  correspondence-ledger-sql 79/79; task-proposals 199; task-proposals-sql 45; meeting-triage 69; meeting-triage-sql
+  34; meeting-triage-server 7; attention 16 / attention-focus 27 (all passed); needs-you 77; correspondence-ingest 186;
+  onedrive-feed 61 (all passed); report-from-ledger 62/62; feed-staleness 98; feed-staleness-sql 23;
+  redteam-correspondence 77; onedrive-feed-truth 11; fireflies-queue-sql 14; fireflies-minutes 72 PASS + the same 3
+  FAIL as on main (G3, G5, G8; the verifier's baseline, section 9). `npx tsc --noEmit` exit 0; `npm run build` exit 0
+  (nitro "You can deploy this build"); tree clean afterwards. No `console.` line added under `src` since a434a54c.
+  `origin/main` has moved one commit (9c1859e1, #263) since the last merge; not merged here (out of this task's scope).
