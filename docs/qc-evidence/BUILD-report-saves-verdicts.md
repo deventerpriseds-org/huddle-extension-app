@@ -102,3 +102,35 @@ Suites after the change: actions-accuracy 60/0, actions-view 96/0, actions-view-
 28/0, report-saves-verdicts 19/0. `npx tsc --noEmit`: 0 errors (src). The touched scripts (outside tsconfig's
 include) type-checked with a temporary config that adds them: 0 errors.
 
+
+### Live runs (proposals-preview.yml, ref = this branch @ 3931449c, step=action, since 2026-11-09T05:00Z, email off, save on)
+
+Counts read from the job logs (public-safe lines only).
+
+| | run 1 (44092073096) | run 2 (44092659832) |
+|---|---|---|
+| conclusion | success | success |
+| model calls | **0** | **0** |
+| already judged (0 calls) | 139 | 140 |
+| verdicts stored this run (open / none / not_checked) | 0 / 0 / 0 | 0 / 0 / 0 |
+| failures / over cap | 0 / 0 | 0 / 0 |
+| report rows read FROM THE STORE: open / none / not checked | 73 / 55 / 11 | 73 / 56 / 11 |
+| of the not checked: AI answer not admitted (quote not found) | 11 | 11 |
+| used today (owner's daily cap 500): before -> after | 127 -> 127 | 128 -> 128 |
+| uninvolved chats skipped / meeting rows added | 9 / 0 | 9 / 0 |
+| OneDrive file | HTTP 201 | HTTP 201 |
+
+Reading of it:
+- **Run 1 already cost 0 calls.** By the time it ran, the in-app heartbeat (127 attempts recorded today) had judged
+  every in-scope thread, so the report's pass skipped all 139 through the SAME `currentlyJudgedKeys` rule. That is
+  goal (2) observed live: no AI call spent twice. The "first run makes ~144 calls" picture from the old report did not
+  occur, because the old report never read the store.
+- **Run 2: 0 calls again.** One more thread appeared between the runs; it was judged by the heartbeat (used today
+  127 -> 128), not by the report, and the report then read its verdict from the store (140 judged, none 55 -> 56).
+- The report's rows are the store's: 73 open + 55/56 none + 11 not admitted = the units the Actions view covers.
+- **Not exercised live:** a report run that actually WRITES verdicts (there was nothing unjudged to write). The write
+  path is the heartbeat's own `storeVerdict` / `recordActionCall` / `proposeFromSource`, unchanged and already in
+  production, and the report-path wiring around it is covered offline (RA-*, RB-*). The first live write will happen
+  on the first report run that finds a thread the heartbeat has not judged yet.
+- Observation for the owner (not changed here): the 11 "not admitted" verdicts are stored `not_checked` and count as
+  judged, so neither the heartbeat nor the report re-asks them -- that is the app's existing rule.
