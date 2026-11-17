@@ -134,3 +134,11 @@ Reading of it:
   on the first report run that finds a thread the heartbeat has not judged yet.
 - Observation for the owner (not changed here): the 11 "not admitted" verdicts are stored `not_checked` and count as
   judged, so neither the heartbeat nor the report re-asks them -- that is the app's existing rule.
+
+## Verifier loop 1 (VERIFY-report-saves-verdicts-1 on claude_verify-report-saves-verdicts-a5d3: FIX FIRST) -- fixes
+
+- **Fix 5 (unused WIP exports):** removed `heartbeatPassShape`, `HEARTBEAT_BACKLOG_PER_PASS`, `CATCHUP_CHUNK_BUDGET_MS`,
+  `CATCHUP_TOTAL_MS`, `CatchUpStop`, `catchUpStopReason`, `catchUpContinue` from pipeline.ts (grep: no consumer).
+  Kept `concurrency` in runClassify, `CLASSIFY_PARALLEL`, `pendingUnitCount` and the `unchecked`/`preview` fields
+  (the parallel catch-up branch uses them). tsc 0 errors; actions-view 96/0, actions-accuracy 60/0, report 19/0.
+- **Fix 6 (ledgers):** `.claude/memory.md` entry + `.claude/actions.md` row ACT:report-saves-verdicts.

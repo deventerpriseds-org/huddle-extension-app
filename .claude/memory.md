@@ -1,5 +1,16 @@
 # Project Memory — huddle-extension-app
 
+## Report saves verdicts (2026-11-17, branch claude_report-saves-verdicts, NOT merged, NOT live) -- ACT:report-saves-verdicts
+- The step=action report (proposals-preview.yml) now runs the Actions view's OWN pass (runReportPassFor ->
+  runReportClassify -> runClassify) and renders FROM the stored verdicts (scripts/action-report-html.ts). One guard,
+  one key scheme, one store; a thread with a current verdict costs 0 calls. Input save_verdicts (default on).
+- Report calls count toward the owner's daily AI limit (save off too: attempts still recorded). Sorting OFF in the
+  app (classify === false) -> the report makes 0 calls and shows only stored verdicts.
+- Two passes on one thread (heartbeat + report) are serialised by a transaction advisory lock on the item key; the
+  stored-verdict check runs inside it, so one proposal per thread.
+- Live 2026-11-17: two runs, 0 model calls each (the in-app pass had already judged all 139/140 threads).
+- Build/verify: docs/qc-evidence/BUILD-report-saves-verdicts.md; VERIFY-report-saves-verdicts-1 (FIX FIRST, fixed).
+
 ## Actions accuracy (2026-11-17, branch claude_actions-accuracy, NOT live) -- owner Teams ids are GLOBAL, not per chat
 - Live probe (counts only): 69 recent Teams rows, 0 carry `ownerUserId`, all `fromOwner` null; 37 were the owner's own id (seen on OLDER rows).
   `teamsOwnerIds` was per chat, so those chats had no owner id and his own message read as OTHER ("X asks you...").

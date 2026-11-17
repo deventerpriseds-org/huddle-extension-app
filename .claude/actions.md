@@ -5437,3 +5437,9 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
 - [x] 10/10 new guards mutation-proved FIRED, control EQUIVALENT (Step 5).
 - [x] Build caught node:async_hooks in a client chunk; fixed via hooks.ts registry; suite now 49/49, tsc + build clean (Steps 6-7).
 - [ ] Merge + deploy (not in this lane's brief: no PR, no merge, no dispatch).
+- [ ] 2026-11-17 ACT:report-saves-verdicts (owner-approved): the step=action report saves its AI verdicts into the
+      Actions view's store by running the app's own classify pass, and renders from the stored verdicts; no AI call
+      twice on a thread with a current verdict. Branch claude_report-saves-verdicts. Verifier loop 1 FIX FIRST ->
+      fixes: sorting-off respected, save-off texts reworded, per-thread advisory lock (one proposal per thread),
+      maxCalls guard, unused WIP exports removed. OPEN: verifier loop 2, merge. Evidence:
+      docs/qc-evidence/BUILD-report-saves-verdicts.md.

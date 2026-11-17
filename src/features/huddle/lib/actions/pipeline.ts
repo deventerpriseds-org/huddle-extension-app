@@ -34,7 +34,7 @@ import { FEED_ID_PREFIX } from "../external-feeds/onedrive-feed";
 import { meetingItemIsOwnersOrUnassigned } from "../proposals/meeting-triage";
 import { titleKey } from "../proposals/proposals";
 import { safeLink } from "../attention/attention";
-import { correctionFor, plainPreview, type ActionCandidate, type ActionsRange, type ActionsSettings } from "./actions";
+import { correctionFor, plainPreview, type ActionCandidate, type ActionsSettings } from "./actions";
 
 const stripFeed = (id: string) => (id.startsWith(FEED_ID_PREFIX) ? id.slice(FEED_ID_PREFIX.length) : id);
 
@@ -115,46 +115,15 @@ export function classifyCallsLeft(attemptsToday: number, dailyCap: number, perPa
 }
 
 // ── 2026-11-17 catch-up (owner: "All time shows 120 not checked ... fix it") ─────────────────────────────────────
-// At CLASSIFY_PER_PASS (6) every ~10 min a 120-item backlog takes over 3 hours. Two ways to drain it, both through the
-// SAME runClassify (no second classifier) and both bounded by the daily cap and the D2 attempt record:
+// runClassify can start its model calls in parallel batches (deps.concurrency), still bounded by the daily cap and the
+// D2 attempt record. 2026-11-17 (verifier VERIFY-report-saves-verdicts-1): the unused heartbeat / "Check now" helpers
+// of the WIP base were removed from THIS branch; the all-time catch-up branch carries its own.
 
 /** Model calls started together (one batch). Each call is bounded by the 15s model timeout, so a batch is too. */
 export const CLASSIFY_PARALLEL = 5;
-/** The heartbeat's per-pass limit while the range is All time and the backlog is larger than CLASSIFY_PER_PASS. */
-export const HEARTBEAT_BACKLOG_PER_PASS = 20;
-/** One "Check now" server call: no new batch starts after this much wall time (+ one 15s batch = 40s, under the
- *  ~45s hosting ceiling of a server function). */
-export const CATCHUP_CHUNK_BUDGET_MS = 25_000;
-/** The whole "Check now": the page repeats chunks until about this much wall time has passed. */
-export const CATCHUP_TOTAL_MS = 120_000;
-
 /** Pure: how many in-scope threads have no current verdict (what a pass would still judge). */
 export function pendingUnitCount(a: AssembledLedgerPlan, s: ActionsSettings, judged: ReadonlySet<string>): number {
   return threadUnits(a, s).units.filter((u) => !judged.has(u.itemKey)).length;
-}
-
-/** Pure: the heartbeat pass's limit and parallelism. All time with a backlog larger than one ordinary pass ->
- *  HEARTBEAT_BACKLOG_PER_PASS calls in parallel batches of CLASSIFY_PARALLEL; otherwise exactly as before. */
-export function heartbeatPassShape(range: ActionsRange, pending: number): { perPass: number; concurrency: number } {
-  return range === "all" && pending > CLASSIFY_PER_PASS ? { perPass: HEARTBEAT_BACKLOG_PER_PASS, concurrency: CLASSIFY_PARALLEL } : { perPass: CLASSIFY_PER_PASS, concurrency: 1 };
-}
-
-export type CatchUpStop = "done" | "cap" | "time" | "failed";
-
-/** Pure: why a catch-up chunk stopped. Every call failed -> "failed" (never retried in a loop: a quota outage must
- *  not burn the cap); the cap ran out with items left -> "cap"; items left otherwise -> "time"; nothing left -> "done". */
-export function catchUpStopReason(r: Pick<ClassifyResult, "calls" | "open" | "none" | "notChecked" | "failures" | "overCap">, callsLeft: number): CatchUpStop {
-  const judged = r.open + r.none + r.notChecked;
-  if (r.failures > 0 && judged === 0) return "failed";
-  if (r.overCap > 0 && r.calls >= callsLeft) return "cap";
-  if (r.overCap > 0) return "time";
-  return "done";
-}
-
-/** Pure: does the page start another chunk? Only when the last one stopped on time AND another full chunk still
- *  fits inside CATCHUP_TOTAL_MS. */
-export function catchUpContinue(stopped: CatchUpStop | "busy" | "off", elapsedMs: number): boolean {
-  return stopped === "time" && elapsedMs + CATCHUP_CHUNK_BUDGET_MS <= CATCHUP_TOTAL_MS;
 }
 
 export interface ClassifyDeps {
