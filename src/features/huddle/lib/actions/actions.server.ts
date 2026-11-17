@@ -360,6 +360,10 @@ export async function correctItemFor(
   const notListed = { ok: false as const, error: "That item isn't in your list." };
   if (typeof input.itemKey !== "string" || !input.itemKey || input.itemKey.length > 600) return notListed;
   const itemKey = input.itemKey;
+  // D6: the item must back THIS proposal on the server's own records, and the ledger row comes from that record,
+  // never from the client's string.
+  const backing = await itemBacking(owners, ledgerOwners, input.proposalId, itemKey);
+  if (!backing) return notListed;
   const client = await getSharedPool().connect();
   let correction: OwnerCorrection | null = null;
   try {
@@ -399,15 +403,50 @@ export async function correctItemFor(
   } finally {
     client.release();
   }
-  // The classifier's record: this version's correction on the thread's latest message row (best-effort). The ledger
-  // row is per version already, so it holds a single correction.
-  const latest = itemKey.split("|").pop() ?? "";
-  const ledgerId = latest.startsWith("feed:") ? latest.slice(5) : latest;
-  if (ledgerId && correction)
+  // The classifier's record: this version's correction on the row its verdict is stored on (best-effort). The ledger
+  // row is per version already, so it holds a single correction. Meeting items have no ledger verdict row.
+  if (backing.ledger && correction)
     await getSharedPool()
-      .query(`UPDATE chat.correspondence_ledger SET owner_correction = $3::jsonb WHERE source_item_id = $2 AND owner_email = ANY($1::text[]) AND source IN ('email','teams')`, [ledgerOwners, ledgerId, JSON.stringify(correction)])
+      .query(`UPDATE chat.correspondence_ledger SET owner_correction = $4::jsonb WHERE source = $2 AND source_item_id = $3 AND owner_email = ANY($1::text[])`, [ledgerOwners, backing.ledger.source, backing.ledger.sourceItemId, JSON.stringify(correction)])
       .catch(() => null);
   return { ok: true, correction };
+}
+
+/**
+ * Loop-2 D6: does `itemKey` back `proposalId`, by the server's own records? A thread item: the stored verdict
+ * (result_ids.action) whose key IS `itemKey` and whose proposalId IS this proposal; its row is returned as the ledger
+ * row to mirror onto. A meeting item: a transcript ref of THIS proposal whose meeting id + item make `itemKey`.
+ * null = not backed (or the read failed): the caller refuses. Exported for the real-PostgreSQL test.
+ */
+export async function itemBacking(
+  owners: string[],
+  ledgerOwners: string[],
+  proposalId: string,
+  itemKey: string,
+): Promise<{ ledger: { source: "email" | "teams"; sourceItemId: string } | null } | null> {
+  try {
+    const pool = getSharedPool();
+    if (itemKey.startsWith("meeting:")) {
+      const r = await pool.query(
+        `SELECT 1 FROM chat.task_proposal_refs rf JOIN chat.task_proposals p ON p.id = rf.proposal_id
+          WHERE rf.proposal_id = $1 AND p.owner_email = ANY($2::text[]) AND rf.owner_email = ANY($2::text[])
+            AND rf.source = 'transcript' AND ('meeting:' || rf.source_item_id || '|' || rf.norm_title) = $3
+          LIMIT 1`,
+        [proposalId, owners, itemKey],
+      );
+      return r.rows.length ? { ledger: null } : null;
+    }
+    const r = await pool.query<{ source: "email" | "teams"; source_item_id: string }>(
+      `SELECT source, source_item_id FROM chat.correspondence_ledger
+        WHERE owner_email = ANY($1::text[]) AND source IN ('email','teams') AND result_ids ? 'action'
+          AND result_ids->'action'->>'key' = $2 AND result_ids->'action'->>'proposalId' = $3
+        LIMIT 1`,
+      [ledgerOwners, itemKey, proposalId],
+    );
+    return r.rows[0] ? { ledger: { source: r.rows[0].source, sourceItemId: r.rows[0].source_item_id } } : null;
+  } catch {
+    return null; // fail closed: an unverifiable item is not written
+  }
 }
 
 /** X-6: the bell rows behind a decided proposal's refs. */

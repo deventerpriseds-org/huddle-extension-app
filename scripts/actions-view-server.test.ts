@@ -151,6 +151,26 @@ try {
   const c4 = await column(shared);
   t("D4-S5 GUARD: two concurrent corrections on two chats both survive (row lock, no lost update)", [hides(c4, "teams:chatC|chatC:m1"), hides(c4, KB), hides(c4, KA)], [true, true, true]);
 
+  // ── D6: the itemKey must back THIS proposal on the server's records; the ledger row comes from that record ──
+  await L.observe(O, [item("chatD:m1")]);
+  const pd = cand("Test-Book the room", "test-book the room", "teams", "chatD:m1");
+  await P.upsert(pd);
+  const KD = "teams:chatD|chatD:m1";
+  await verdict("chatD:m1", KD, pd.id);
+  const before = JSON.stringify([await column(shared), await column(pd.id), await ledgerCorr("chatD:m1")]);
+  const notListed = { ok: false, error: "That item isn't in your list." };
+  t("D6-S1 GUARD: an itemKey that backs ANOTHER proposal is refused", await A.correctItemFor(owners, lo, { proposalId: shared, reason: "not_mine", itemKey: KD }, "2026-11-16T11:00:00.000Z"), notListed);
+  t("D6-S2 GUARD: a made-up itemKey ending in a real ledger id (the verifier's stamp-any-row path) is refused", await A.correctItemFor(owners, lo, { proposalId: shared, reason: "not_mine", itemKey: "teams:anything|chatD:m1" }, "2026-11-16T11:00:00.000Z"), notListed);
+  t("D6-S3 Undo with an itemKey that does not back the proposal is refused too", await A.correctItemFor(owners, lo, { proposalId: shared, itemKey: KD, undo: true }, "2026-11-16T11:00:00.000Z"), notListed);
+  t("D6-S4 GUARD: nothing was written by the refused calls (both proposals and the ledger row unchanged)", JSON.stringify([await column(shared), await column(pd.id), await ledgerCorr("chatD:m1")]) === before, true);
+  t("D6-S5 the item's OWN key still works, and its ledger mirror lands on the verdict's row", [(await A.correctItemFor(owners, lo, { proposalId: pd.id, reason: "not_mine", itemKey: KD }, "2026-11-16T11:01:00.000Z")).ok, (await ledgerCorr("chatD:m1"))?.itemKey], [true, KD]);
+  const { triageRowsFor } = await import("../src/features/huddle/lib/proposals/meeting-triage");
+  const tri = triageRowsFor(O, { meetingId: "mtg-1", title: "Test-Sync", meetingAt: "2026-11-16T09:00:00.000Z" }, ["Test-Share the wireframes", "Test-Book the hall"]);
+  await P.addTriageRows(tri);
+  const MK = `meeting:mtg-1|${tri[0].normTitle}`;
+  t("D6-S6 meeting item: its own key is accepted; another item's key of the same meeting is refused", [(await A.correctItemFor(owners, lo, { proposalId: tri[0].id, reason: "not_mine", itemKey: MK }, "2026-11-16T11:02:00.000Z")).ok, await A.correctItemFor(owners, lo, { proposalId: tri[0].id, reason: "not_mine", itemKey: `meeting:mtg-1|${tri[1].normTitle}` }, "2026-11-16T11:02:00.000Z")], [true, notListed]);
+  t("D6-S7 itemBacking is owner-scoped (another owner's scope sees no backing)", [await A.itemBacking([OTHER], [OTHER], pd.id, KD), await A.itemBacking([OTHER], [OTHER], tri[0].id, MK)], [null, null]);
+
   // ── D2: every model call ATTEMPT is recorded before the call and counted by the daily cap ─────────
   // Day used here: 2026-11-10 (New York midnight = 05:00Z).
   const D10 = "2026-11-10T05:00:00.000Z";
