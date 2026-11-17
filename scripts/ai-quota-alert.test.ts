@@ -185,6 +185,7 @@ function harness(opts: { throttleMs?: number } = {}) {
   const iParse = body.indexOf("Input.parse(record.payload)");
   const iRun = body.indexOf("runHuddleTurn(");
   t("N3 notice branch exists", iNotice > 0, true);
+  t("N3 the branch is driven by systemNoticeResult(record.payload)", /const notice = systemNoticeResult\(record\.payload\);/.test(body.slice(0, iNotice)), true);
   t("N3 notice branch precedes Input.parse and runHuddleTurn", iNotice > 0 && iNotice < iParse && iNotice < iRun, true);
   const branch = body.slice(iNotice, iParse);
   t("N3 notice branch never calls a model helper", /runHuddleTurn|callOpenAI|generateText|fetch\(/.test(branch), false);
