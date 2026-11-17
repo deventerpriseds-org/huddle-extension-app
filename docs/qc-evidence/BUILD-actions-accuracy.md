@@ -129,3 +129,12 @@ Source of the defects: `docs/qc-evidence/VERIFY-actions-accuracy-2.md` on `claud
   is the capture flow writing `ownerUserId` again (owner is on it) or `teams.ownerSenderIds` configured.
 - TESTS: R9-1..R9-4. Fixture change: the R1 fixture now carries the owner's id on a second older chat (`older2`),
   because one row in one chat is by design no longer enough.
+
+### D-5 (LOW): the uninvolved-chat rule hides no more than before the cross-chat lookup
+
+- CHANGE: `chatInvolvement(chatId, messages, configuredOwnerIds, crossChatOwnerIds)`. The cross-chat ids (D-4
+  filtered) are used only to SHOW (owner sent / owner mentioned). "Owner ids known" for HIDING is the configured
+  ids plus the chat's own rows only, as on main, so a chat with no owner id of its own stays
+  `cant_tell_owner_unknown` (shown) even when its rows carry `fromOwner: false`.
+- BEHAVIOUR: hides exactly what main hid; can additionally SHOW a chat where the owner's id (learned elsewhere) sent.
+- TESTS: R10-1 (the verifier's A5 shape -> shown), R10-2 (configured id -> uninvolved, unchanged), R10-3.

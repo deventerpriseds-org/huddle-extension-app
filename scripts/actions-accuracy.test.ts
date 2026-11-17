@@ -252,6 +252,18 @@ void GRP;
   t("R9-4 a configured id always counts; within its OWN chat a row's ownerUserId still labels the owner", [ownerTeamsIdsAcross([bad], ["CFG-1"]), teamsChatsFromLedger([row({ chatId: ONE2, messageId: "x1", sender: { id: OWNER_ID, name: "x", isApp: false }, ownerUserId: OWNER_ID })]).find((c) => c.chatId === ONE2)!.messages.map((m) => m.speaker)], [["cfg-1"], ["OWNER"]]);
 }
 
+// ── R10. LOOP-2 D-5: the uninvolved rule keeps its pre-fix fail-open ─────────────────────────────────
+{
+  const G2 = `19:grp2${AT}thread.v2`;
+  const g1 = row({ chatId: G2, messageId: "g1", at: "2026-11-16T10:00:00Z", fromOwner: false, mentionedUserIds: [] });
+  const g2 = row({ chatId: G2, messageId: "g2", at: "2026-11-16T11:00:00Z", fromOwner: false, mentionedUserIds: [] });
+  const inv = (rs: LedgerReportRow[], cfg: string[] = []) => teamsChatsFromLedger(rs, cfg).find((c) => c.chatId === G2)!.involvement;
+  t("R10-1 GUARD: rows fromOwner:false + mention arrays, NO owner id of the chat's own (ids only on other chats) -> cant_tell_owner_unknown, SHOWN", [inv([older, older2, g1, g2]).reason, inv([older, older2, g1, g2]).hide], ["cant_tell_owner_unknown", false]);
+  t("R10-2 unchanged: with a configured owner id the same chat is uninvolved (hidden)", [inv([g1, g2], [OWNER_ID]).reason, inv([g1, g2], [OWNER_ID]).hide], ["uninvolved", true]);
+  const gOwn = row({ chatId: G2, messageId: "g3", at: "2026-11-16T12:00:00Z", sender: { id: OWNER_ID, name: "x", isApp: false }, fromOwner: null, mentionedUserIds: [] });
+  t("R10-3 the cross-chat ids may still make a chat SHOW: the owner's own message there -> owner_sent", inv([older, older2, g1, gOwn]).reason, "owner_sent");
+}
+
 // ── R8. LOOP-2 D-3: owner FULL names from config, never a bare first name ──────────────────────────
 {
   const full = ownerFullNames({ mailbox: "owen.example@work.example", ownerLogins: ["owen.example@huddle.example"] });

@@ -5403,5 +5403,5 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 ## ACT:actions-accuracy — owner 2026-11-17 phone report: sender reversed, hallucinated "you have not replied", no AI-inaccuracy reason, meeting label lines as rows, text cut off, one ask twice — branch claude_actions-accuracy, NOT merged, NOT live
 - [x] Root causes + fixes + tests (actions-accuracy 25/25, 7 guards FIRED with control): docs/qc-evidence/BUILD-actions-accuracy.md.
 - [ ] Merge + deploy + live UAT (actions-view-checks.mjs ACC-3/4/5) + owner confirms on his phone.
-- [ ] Loop-2 fixes from VERIFY-actions-accuracy-2 (D-1..D-7 + UI): docs/qc-evidence/BUILD-actions-accuracy.md "## Loop-2 fixes". D-1 done (re-judge old verdicts), D-2 done (de-dup tightened), D-3 done (full names from config), D-4 done (id needs 2+ chats or clear majority); rest in progress.
+- [ ] Loop-2 fixes from VERIFY-actions-accuracy-2 (D-1..D-7 + UI): docs/qc-evidence/BUILD-actions-accuracy.md "## Loop-2 fixes". D-1 done (re-judge old verdicts), D-2 done (de-dup tightened), D-3 done (full names from config), D-4 done (id needs 2+ chats or clear majority), D-5 done (uninvolved fail-open kept); rest in progress.
 - [ ] Owner: set `teams.ownerSenderIds` in HUDDLE_ONEDRIVE_FEEDS (fixes the ingest-time bell path too) -- or check why recent Teams log lines carry no `ownerUserId`.
