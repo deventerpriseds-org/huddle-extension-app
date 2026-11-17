@@ -303,7 +303,14 @@ const safeInv = (ms: TeamsContent[]) => {
   }
 };
 t("VF2-1 mentionedUserIds stored as a string or an object -> no throw, can't tell -> SHOWS", [safeInv([bad(OWNER)]), safeInv([bad({ 0: "x" })]), safeInv([bad(7)])], ["cant_tell_no_mention_data", "cant_tell_no_mention_data", "cant_tell_no_mention_data"]);
-t("VF2-2 anything that would throw inside the rule -> cant_tell_malformed, shows", [safeInv([null as unknown as TeamsContent]), chatInvolvement(CHAT_G, [null as unknown as TeamsContent]).hide], ["cant_tell_malformed", false]);
+const safeHide = (ms: TeamsContent[]) => {
+  try {
+    return chatInvolvement(CHAT_G, ms).hide;
+  } catch (e) {
+    return `THREW ${(e as Error).name}`;
+  }
+};
+t("VF2-2 anything that would throw inside the rule -> cant_tell_malformed, shows", [safeInv([null as unknown as TeamsContent]), safeHide([null as unknown as TeamsContent])], ["cant_tell_malformed", false]);
 const CHAT_B = "19:group03@thread.v2";
 const throwingText = { toString: () => { throw new Error("synthetic"); } } as unknown as string;
 const mixedRows: LedgerReportRow[] = [
@@ -323,6 +330,11 @@ t(
   "VF2-3 one bad row never aborts the report: every chat comes back; the bad ones SHOW, the good uninvolved one is still hidden",
   typeof safeChats === "string" ? safeChats : [safeChats.map((c) => [c.chatId, c.involvement.reason]).sort(), mixedPlan!.teams.hiddenUninvolved.map((c) => c.chatId), mixedPlan!.teams.scan.length],
   [[[CHAT_G, "uninvolved"], [CHAT_B, "cant_tell_no_mention_data"], ["19:group04@thread.v2", "cant_tell_malformed"]].sort(), [CHAT_G], 2],
+);
+t(
+  "VF2-4 a malformed chat is counted as can't-tell in the plan (alongside the no-mention-data one)",
+  mixedPlan ? mixedPlan.teams.cantTell : "no plan",
+  2,
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);
