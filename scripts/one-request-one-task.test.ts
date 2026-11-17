@@ -126,6 +126,20 @@ describe("row 7: a description that draws a contrast never proves a duplicate (v
       expect(matchesOpenTitle(n(next), new Set([n(open)]), new Map([[n(open), desc]]))).toBe(false));
 });
 
+describe("row 7: names and numbers must match exactly (verify loop 9 C8)", () => {
+  const rows: [string, string, string][] = [
+    ["Buy birthday gift", "Buy a birthday gift for grandma.", "Buy birthday gift for grandpa"],
+    ["Send invoice", "Send the invoice to Christina.", "Send invoice to Christopher"],
+    ["Call Daniel", "Call Daniel about the lease.", "Call Daniel about the lease for Danielle"],
+    ["Schedule dentist", "Schedule the dentist on Dec 12.", "Schedule dentist Dec 5"],
+    ["Book table", "Book a table at Nobu for 4.", "Book table for 2 at Nobu"],
+    ["Email the team", "Email the management team.", "Email the team and my manager"],
+  ];
+  for (const [open, desc, next] of rows)
+    test(`${JSON.stringify(next)} -> new task`, () =>
+      expect(matchesOpenTitle(n(next), new Set([n(open)]), new Map([[n(open), desc]]))).toBe(false));
+});
+
 describe("row 7: without descriptions only an exact title matches", () => {
   test("prefix + no description map -> new task", () =>
     expect(matchesOpenTitle(n("Obtain official transcript and send it directly to UM-Flint"), titles)).toBe(false));

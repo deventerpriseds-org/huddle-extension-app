@@ -39,7 +39,7 @@ import { buildRoster } from "./roster";
 // Pure -- out-of-lane wording: group unchanged, 1:1 answers first (owner-approved 2026-11-03).
 import { outOfLaneSceneLine, laneAnswerFirstDirective } from "./lane-handoff";
 // Pure (no server imports) -- the 1:1 owner hand-off directive (F1-3 / F2).
-import {
+import { isTestThread,
   buildFollowupDirective,
   buildHandoffConfirmRetry,
   handoffRetryOutcome,
@@ -2091,6 +2091,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       const owner = AGENT_BY_ID[ownerId];
       if (!owner) return; // caller already guards ownerId !== the deferring agent
       const cleanAsk = ask.replace(/\s+/g, " ").trim().slice(0, 240);
+      // Never from a test-harness thread into a real one (verify loop 9, C9): no real dm turn, no phone push.
+      if (isTestThread(data.huddleId)) {
+        console.info(`[handoff] test thread ${String(data.huddleId)}: not queuing a turn in a real dm`);
+        return;
+      }
       const ownerHuddle = `dm-${ownerId}`;
       // Store under the CANONICAL journey email — the same value the client's cross-huddle back-fill
       // (getAllTurnUpdates → getUserTurnsSince) queries with. The raw sign-in `entra_email` can differ
@@ -2175,6 +2180,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       if (!agent) return;
       const cleanReason = (reason ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
       const cleanTitle = (taskTitle ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+      // Never from a test-harness thread into a real one (verify loop 9, C9): no real dm turn, no phone push.
+      if (isTestThread(data.huddleId)) {
+        console.info(`[handoff] test thread ${String(data.huddleId)}: not queuing a turn in a real dm`);
+        return;
+      }
       const agentHuddle = `dm-${agentId}`;
       // Canonical journey email (see deliverOwnerFollowup) so the finished turn is matchable by the
       // client's cross-huddle back-fill — the raw login can resolve to a different address.
@@ -2271,6 +2281,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
         email = data.caller?.entra_email ?? null;
       }
       const say = userSay.replace(/\s+/g, " ").trim().slice(0, 160);
+      // Never from a test-harness thread into a real one (verify loop 9, C9): no real dm turn, no phone push.
+      if (isTestThread(data.huddleId)) {
+        console.info(`[handoff] test thread ${String(data.huddleId)}: not queuing a turn in a real dm`);
+        return;
+      }
       const ownerHuddle = `dm-${ownerId}`;
       const directive =
         `You are ${owner.name}. Your task "${task.title}" (task_id ${task.taskId}) is BLOCKED — reason: ` +

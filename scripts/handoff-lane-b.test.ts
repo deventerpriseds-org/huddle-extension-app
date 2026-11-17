@@ -292,3 +292,15 @@ test("F3 wiring", () => {
   check("AC-F3-9 no DOING writer outside autowork.server.ts in the files this lane touched", writers.length === 0, writers.join(","));
   expect(failures).toEqual([]);
 });
+
+// Verify loop 9 (9-B, C5 risk 2): a live start that TIMES OUT is still running, so the general auto-work kick must not
+// run on top of it (it could queue a second work turn for the same task).
+import { readFileSync as readFileSync9 } from "node:fs";
+test("C5: a timed-out live start does not also kick the general auto-work pass", () => {
+  const src = readFileSync9(`${import.meta.dir}/../src/features/huddle/lib/tasks/approach-gate.server.ts`, "utf8").replace(
+    /(^|[^:"'`\\])\/\/[^\n]*/g,
+    "$1",
+  );
+  expect(src).toContain('liveStillRunning = "timedOut" in r && r.timedOut === true;');
+  expect(src).toContain("const kicked = liveStarted || liveStillRunning || (await kickAutoWorkAfterApproval(opts.email));");
+});

@@ -262,17 +262,24 @@ export async function runApproachGate(opts: {
       // Doing first (owner Option A: past the one-at-a-time cap). It is a no-op without the server-written
       // live marker, so background-confirmed tasks fall through to the general kick, unchanged.
       let liveStarted = false;
+      // A TIMEOUT means the live start is slow, not that it failed: it keeps running. Kicking the general pass on
+      // top of it could queue a SECOND work turn for the same task (verify loop 9, 9-B C5 risk 2: autowork-<run>-<id>
+      // beside live-work-<id>, no in-flight check). So the general kick runs only when the live path declined.
+      let liveStillRunning = false;
       try {
         const { advanceLiveConfirmedTask } = await import("./autowork.server");
         const r = await Promise.race([
           advanceLiveConfirmedTask({ taskId: opts.taskId, email: opts.email }),
-          new Promise<{ started: boolean }>((res) => setTimeout(() => res({ started: false }), 8_000)),
+          new Promise<{ started: boolean; timedOut: true }>((res) =>
+            setTimeout(() => res({ started: false, timedOut: true }), 8_000),
+          ),
         ]);
         liveStarted = r.started === true;
+        liveStillRunning = "timedOut" in r && r.timedOut === true;
       } catch {
         liveStarted = false;
       }
-      const kicked = liveStarted || (await kickAutoWorkAfterApproval(opts.email));
+      const kicked = liveStarted || liveStillRunning || (await kickAutoWorkAfterApproval(opts.email));
       return {
         gated: true,
         approved: true,

@@ -181,3 +181,16 @@ describe("F6 loop-8 rows", () => {
     expect(SHOW("I've added it to your board.", [real])).toBe("I've added it to your board.");
   });
 });
+
+// Verify loop 9 (VERIFY-handoff-confirm-flow-9-C27.md): the agent's own free text inside a summary never decides it.
+describe("F6 loop-9 rows", () => {
+  const W = (tool: string, summary: string): ToolUseLike => ({ agentId: A, tool, summary, ok: true });
+  test("U9-1 kept: a real block whose reason ends in 'skipped duplicate'", () =>
+    expect(SHOW("I've marked it blocked.", [W("flag_blocker", "blocked: Vendor import keeps reporting skipped duplicate")])).toBe(
+      "I've marked it blocked.",
+    ));
+  test("the real duplicate summaries still do not back a claim", () => {
+    expect(SHOW("I've marked it blocked.", [W("flag_blocker", "already flagged this turn — skipped duplicate")])).toBe(L.notChanged);
+    expect(SHOW("I've moved it to Doing.", [W("delegate_to_specialist", "already delegated Researcher this turn — skipped duplicate")])).toBe(L.notChanged);
+  });
+});

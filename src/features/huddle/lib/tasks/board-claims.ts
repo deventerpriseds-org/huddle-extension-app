@@ -169,7 +169,11 @@ const HUDDLE_TASK_TOOLS = new Set([
  */
 function huddleToolChangedTask(u: ToolUseLike): boolean {
   if (!u.ok || !HUDDLE_TASK_TOOLS.has(u.tool)) return false;
-  if (/skipped duplicate$/i.test(u.summary)) return false;
+  // The duplicate summaries are fixed strings written by huddle.functions.ts ("already saved / confirmed / flagged
+  // this turn — skipped duplicate", "already delegated <role> this turn — skipped duplicate"). Match only those: the
+  // free text after "blocked: " or "tasked <role>: " is the agent's own words (verify loop 9 U9-1: a block reason
+  // ending "…reporting skipped duplicate" made a real block read as not performed).
+  if (/^already (?:saved|confirmed|flagged|delegated [^:]{1,60}) this turn — skipped duplicate$/i.test(u.summary)) return false;
   if (u.tool === "confirm_task_intent") return /^DoD confirmed$/.test(u.summary.trim());
   if (u.tool === "override_approach_gate") return !/^not approved\b/i.test(u.summary);
   return true;

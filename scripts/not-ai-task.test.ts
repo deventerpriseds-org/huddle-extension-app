@@ -41,3 +41,13 @@ describe("Not an AI task", () => {
     expect(v).toContain("Not an AI task");
   });
 });
+
+// Verify loop 9 (9-B, C10): the source-text check above was INERT for `return [tag]` (existing tags wiped). Behaviour test.
+describe("Not an AI task keeps the task's existing tags", () => {
+  test("withMyTaskTag adds my-task to the existing tags, once", async () => {
+    const { withMyTaskTag } = await import("../src/features/huddle/lib/tasks/confirm-ask.functions.ts");
+    expect(withMyTaskTag(["finance", "q4"], MY_TASK_TAG)).toEqual(["finance", "q4", "my-task"]);
+    expect(withMyTaskTag(["my-task", "finance"], MY_TASK_TAG)).toEqual(["my-task", "finance"]);
+    expect(withMyTaskTag([], MY_TASK_TAG)).toEqual(["my-task"]);
+  });
+});

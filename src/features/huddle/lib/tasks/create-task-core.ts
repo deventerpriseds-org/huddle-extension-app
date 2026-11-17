@@ -37,7 +37,11 @@ const EXTENSION_FILLER = new Set([
   "onto", "about", "make", "sure",
 ]);
 const meaningWords = (s: string): string[] =>
-  s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3 && !EXTENSION_FILLER.has(w));
+  s
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    // Numbers always count, however short ("Dec 5" vs "Dec 12", "table for 2" vs "for 4": verify loop 9 C8).
+    .filter((w) => (w.length >= 3 || /\d/.test(w)) && !EXTENSION_FILLER.has(w));
 /**
  * Does `w` appear among the description's words — the same word, give or take its ending?
  *  - A short word (4 letters or fewer on either side) matches only itself plus a plain ending: +s, +es, +ed, +ing,
@@ -63,13 +67,10 @@ const plainForm = (short: string, long: string) =>
 function sameWordIn(w: string, desc: readonly string[]): boolean {
   return desc.some((d) => {
     if ((IRREGULAR[w] ?? []).includes(d) || (IRREGULAR[d] ?? []).includes(w)) return true;
-    if (Math.min(w.length, d.length) <= 4) {
-      const [short, long] = w.length <= d.length ? [w, d] : [d, w];
-      return plainForm(short, long);
-    }
-    let i = 0;
-    while (i < w.length && i < d.length && w[i] === d[i]) i++;
-    return i >= 5;
+    // Every word, any length: itself or a plain ending only. Verify loop 9 C8: a 5-letter shared beginning made
+    // "grandpa" = "grandma", "Christopher" = "Christina", "Danielle" = "Daniel", "manager" = "management".
+    const [short, long] = w.length <= d.length ? [w, d] : [d, w];
+    return plainForm(short, long) || (short.endsWith("y") && long === `${short.slice(0, -1)}ies`);
   });
 }
 

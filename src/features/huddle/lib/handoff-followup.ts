@@ -168,3 +168,12 @@ export function handoffRetryOutcome(
   const useOutcomeOf = first.kind !== "skip" ? "first" : "second";
   return { useOutcomeOf, flagMissing: !second.proposed };
 }
+
+/**
+ * A test-harness thread (qa-plan-and-answer-first.mjs uses `test-dm-<agent>-<MARK>` / `test-group-<MARK>`). A turn
+ * there must never queue a turn into a REAL thread (`dm-<agent>`) or send a phone push. Verify loop 9 (9-B, C9): the
+ * harness's 1:1 hand-off case made a real follow-up in the owner's real DM, with a push, before cleanup ran.
+ */
+export function isTestThread(huddleId: unknown): boolean {
+  return typeof huddleId === "string" && /^test-/i.test(huddleId);
+}

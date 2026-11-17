@@ -26,6 +26,9 @@ import {
 } from "../src/features/huddle/lib/handoff-followup.ts";
 
 const HF = readFileSync(`${import.meta.dir}/../src/features/huddle/lib/huddle.functions.ts`, "utf8");
+// The whole file with // comments removed, for wiring checks that do not use between() (verify loop 9, 9-A MP:
+// a commented-out copy of the runHandoffAware call satisfied the raw-file check).
+const HF_CODE = HF.replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1");
 const between = (a: string, b: string) => {
   const i = HF.indexOf(a);
   const j = HF.indexOf(b, i + a.length);
@@ -365,7 +368,7 @@ describe("F1 x #131: the owner follow-up is told what the addressed agent alread
     const block = between("// 1:1 owner follow-up (AC-4)", "// The frozen anti-repetition anchor");
     expect(block).toContain("replies[replies.length - 1].agentId === nextId");
     expect(block).toContain("deliverOwnerFollowup(ownerId, winner.name, data.text, followupMode, addressedReply)");
-    expect(HF).toContain("addressedReply,\n      });");
+    expect(HF_CODE).toContain("addressedReply,\n      });");
   });
   test("#131 answer-first wording is stripped when no hand-off happens (F1-4)", () => {
     const t = "A Roth is after-tax. Finn knows this area best — I'm looping them in if you want to dig deeper.";
@@ -480,7 +483,7 @@ describe("F2 wiring in huddle.functions.ts (source assertions)", () => {
     expect(fn).toContain("ownerId,\n        fromName,");
   });
   test("the primary (1:1) run goes through runHandoffAware", () => {
-    expect(HF).toContain("const r = await runHandoffAware(primaryId);");
+    expect(HF_CODE).toContain("const r = await runHandoffAware(primaryId);");
   });
   test("runHandoffAware retries once, merges BOTH attempts' toolUses, and flags a still-missing proposal", () => {
     const fn = between("const runHandoffAware = async", "// Serialize the exact mid-turn position");
@@ -499,5 +502,30 @@ describe("F2 wiring in huddle.functions.ts (source assertions)", () => {
     expect(fn).toContain("if ((r.tasks ?? [])[0]?.id) createdTaskIdByTitle.set(titleKey, (r.tasks ?? [])[0].id);");
     expect(fn).toContain("const sameTurnId = createdTaskIdByTitle.get(titleKey);");
     expect(fn).toContain("...(sameTurnId ? { task_id: sameTurnId } : {}),");
+  });
+});
+
+// Verify loop 9 (9-B, C9): a test-harness thread never queues a turn into a real dm thread or sends a phone push.
+import { isTestThread } from "../src/features/huddle/lib/handoff-followup.ts";
+describe("C9 test threads stay test threads", () => {
+  test("isTestThread", () => {
+    expect(isTestThread("test-dm-iris-chase-abc")).toBe(true);
+    expect(isTestThread("test-group-abc")).toBe(true);
+    expect(isTestThread("dm-iris-chase")).toBe(false);
+    expect(isTestThread("all-members")).toBe(false);
+    expect(isTestThread(undefined)).toBe(false);
+  });
+  test("all three real-dm enqueue sites return early for a test thread", () => {
+    const src = readFileSync(`${import.meta.dir}/../src/features/huddle/lib/huddle.functions.ts`, "utf8").replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1");
+    for (const site of ["const ownerHuddle = `dm-${ownerId}`;", "const agentHuddle = `dm-${agentId}`;"]) {
+      let from = 0;
+      for (;;) {
+        const at = src.indexOf(site, from);
+        if (at < 0) break;
+        expect(src.slice(Math.max(0, at - 400), at)).toContain("if (isTestThread(data.huddleId)) {");
+        from = at + site.length;
+      }
+    }
+    expect((src.match(/if \(isTestThread\(data\.huddleId\)\) \{/g) ?? []).length).toBe(3);
   });
 });
