@@ -5447,3 +5447,10 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
       docs/qc-evidence/BUILD-report-saves-verdicts.md.
 
 - [x] Branch claude_actions-all-time-catchup: unchecked items LISTED (collapsed "Not checked yet"), tabs count them, range change resets the tab, UAT clicks All time + parity line. "Check now" dropped: the report now saves its verdicts (#273), so the backlog is judged once. Suites 29/60/110/30, tsc + build clean. Merging; NOT owner-confirmed live.
+
+## ACT:report-saves-verdicts — report saves verdicts, one judge one store (owner 2026-11-17) — LIVE, NOT owner-confirmed
+- [x] #273 a6c48114; verify loops 1+2 docs/qc-evidence/VERIFY-report-saves-verdicts-{1,2}.md; deploy 44102932824.
+## ACT:actions-false-positives — automated invites/notices listed as actions (owner screenshots 2026-11-17) — OPEN
+- [ ] Find why; propose fix (changes existing behaviour -> owner thumbs-up first).
+## ACT:actions-missing-yesterday — owner expects action items from yesterday's emails that are not listed (2026-11-17) — OPEN
+- [ ] Ground-truth: ingest vs verdict vs hidden vs answered.
