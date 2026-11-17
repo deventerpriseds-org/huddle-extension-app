@@ -136,4 +136,30 @@ later", "ASAP please, I'm in a meeting at 3", "Do it right now before my flight 
 don't want to wait until Friday".
 Structural observation: four loops of regex patching have each closed the listed spellings and opened adjacent ones;
 the despite-negator precedence is a new unsafe class introduced by the loop-3 fix.
+Consequence (read huddle.functions.ts:7403-7420 + handoff-followup.ts:73-79): `followupMode = urgency==="now" ?
+"now" : "confirm"`, and the "now" directive says "that is their go-ahead, so do NOT ask them to confirm first. Do the
+work in THIS turn". So every UNSAFE row above, in a 1:1 hand-off, makes the owner agent do the work unconfirmed.
+This "now" mode is NOT behind HANDOFF_TASK_AND_BUTTONS (main's directive had no now mode).
+
+## C6 regression -- CONFIRMED (reduced depth)
+- 1:1 follow-up gate `if (data.scope !== "group" && !data.internal && followupTurnIntent === "perform")`
+  (huddle.functions.ts:7403); oneToOneNowKeeps returns false for group/internal (:2075); follow-up/notice turns are
+  enqueued with internal:true (:2137, :2207, :2295). Mutation: drop `!data.internal &&` from the :7403 gate ->
+  FIRED (control EQUIVALENT) on 'AC-F1-7/F1-8: group and internal turns never reach the follow-up path (gate intact)'.
+- Columns: tasks.server.ts:237-239 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS live_start_at TIMESTAMPTZ` /
+  live_start_via TEXT / live_started_at TIMESTAMPTZ -- nullable, no default, additive.
+- Group behaviour change not exhaustively diffed (238-line huddle.functions diff); the group branches I read
+  (:551, :1271, :2398, :2706, :2735) carry no new code. NOT PROVEN beyond that.
+
+## C3 F2 switch OFF -- CONFIRMED
+HANDOFF_TASK_AND_BUTTONS = false (handoff-followup.ts:48) is read by BOTH consumers as the default
+(buildFollowupDirective :66, needsHandoffConfirmRetry :144); the only caller of the retry (huddle.functions.ts:7570)
+passes no `enabled`, and the directive caller passes no `taskAndButtons` -> flipping the one constant turns both on.
+OFF wording vs origin/main (git show origin/main huddle.functions.ts:2056-2062): same instructions (greet, say X
+passed it, reference the ask, offer to take it, ask to confirm, do not perform yet); reordered, plus the
+"no at-sign handle" sentence and the #131 alreadySaidClause. Retry never fires with the switch off (returns false
+first line). Same-turn dedup returns the first create's id (huddle.functions.ts:3188-3194 `task_id: sameTurnId`).
+Mutation: `if (!taskAndButtons) {` -> `if (false) {` : FIRED (control EQUIVALENT) on 'row 2 held back (owner
+2026-11-17): the switch is OFF, so the live wording ships and nothing retries'.
+Caveat: the F1-3 "now" hand-off mode is live regardless of the switch (see C2 consequence).
 
