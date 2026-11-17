@@ -602,7 +602,9 @@ export async function getTasksForUser(
   const { resolveScopeByEmail } = await import("../identity/identity.server");
   const { emails } = await resolveScopeByEmail(userEmail);
   const params: unknown[] = [emails];
-  let sql = `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,pushed_count,created_at,completed_at,assigned_agent,tags,is_scheduled,start_time
+  // `description` rides along only for the create-dedup read (matchOpenTitle compares a long new title's
+  // extra words against it); the scorer's rows are unchanged.
+  let sql = `SELECT id,title,status,priority,category,is_priority,priority_rank,due_date,pushed_count,created_at,completed_at,assigned_agent,tags,is_scheduled,start_time${opts?.includeBlocked ? ",description" : ""}
              FROM tasks.journey_tasks WHERE lower(user_email) = ANY($1)`;
   if (category) {
     params.push(category.toUpperCase());

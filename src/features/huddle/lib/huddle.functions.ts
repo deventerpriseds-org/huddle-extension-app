@@ -87,6 +87,7 @@ import {
   journeyCreateContext,
   loadOpenTaskTitles,
   matchesOpenTitle,
+  matchOpenTitle,
   normalizeJourneyDate,
   normalizeTaskTitle,
   screenCapabilityMetaTask,
@@ -3195,7 +3196,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       }
       // Cross-turn dedup: skip if an open task with this title already exists on the board.
       const existing = await openTitlesForCreate("create_huddle_task");
-      if (matchesOpenTitle(titleKey, existing)) {
+      const matchedOpen = matchOpenTitle(titleKey, existing, existingOpenTitles?.descriptions);
+      if (matchedOpen !== null) {
         createdTaskTitles.add(titleKey);
         recordToolUse(
           winner.id,
@@ -3203,7 +3205,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           "an open task with this title already exists — skipped duplicate",
           true,
         );
-        return { ok: true, deduped: true, task: { title: title.slice(0, 160) } };
+        // Name the task it matched (verify loop 4 C8: the agent could not point at which open task it was).
+        const openId = existingOpenTitles?.ids?.get(matchedOpen);
+        return { ok: true, deduped: true, task: { title: title.slice(0, 160) }, ...(openId ? { task_id: openId } : {}) };
       }
       createdTaskTitles.add(titleKey);
       // Did the agent actually NAME an owner? Kept separate from the card's ownerId because that
@@ -3470,7 +3474,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           continue;
         }
         const key = normTitle(entry);
-        if (createdTaskTitles.has(key) || matchesOpenTitle(key, existing)) {
+        if (createdTaskTitles.has(key) || matchesOpenTitle(key, existing, existingOpenTitles?.descriptions)) {
           createdTaskTitles.add(key);
           skipped.push({ title: entry, reason: "an open task with this title already exists" });
           continue;

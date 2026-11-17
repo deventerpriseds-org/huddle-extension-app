@@ -31,20 +31,59 @@ import { capabilityOwnerFor } from "../capabilities";
 import { normalizeTaskTitle } from "./scoring";
 export { normalizeTaskTitle };
 
+// Grammatical filler only, so the comparison below is about the words that carry meaning.
+const EXTENSION_FILLER = new Set([
+  "the", "and", "for", "you", "your", "with", "this", "that", "its", "please", "then", "also", "from", "into",
+  "onto", "about", "make", "sure",
+]);
+const meaningWords = (s: string): string[] =>
+  s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3 && !EXTENSION_FILLER.has(w));
+// A 4-letter stem, so "send"/"sending" and "registration"/"register" meet; "send"/"sent" do not, which only
+// makes the rule stricter.
+const stem4 = (w: string) => w.slice(0, 4);
+
 /**
- * Is `key` (a normalized title about to be created) already open on the board? An exact match, OR an open
- * title of 3+ words that the new title merely extends ("obtain official transcript" vs "obtain official
- * transcript and send it directly to um-flint ..."). journey's create keeps a SHORT title and moves the rest
- * to the description, so the board holds the short form while the next request arrives long: on 2026-10-30
- * two identical asks two minutes apart both passed an exact-match check and made duplicate rows. 3 words
- * minimum keeps a short generic title ("call mom") from swallowing a different task.
+ * Which open title (normalized) is `key` (a normalized title about to be created) a duplicate of, or null?
+ *
+ *  1. An exact match.
+ *  2. journey's shortened form of the SAME request. journey's create keeps a SHORT title and moves the rest of
+ *     the text into the description (live 2026-10-30: "Obtain official transcript and send it directly to
+ *     UM-Flint ..." was stored as title "Obtain official transcript", description "Request the official
+ *     transcript and ensure it is sent directly to UM-Flint to remove the registration hold."), so the next
+ *     identical ask arrives long and an exact check misses it. It counts as the same task only when the new
+ *     title starts with the open one AND at least 60% of the extra words appear in that task's DESCRIPTION.
+ *
+ * SUPERSEDES the 12e49afa rule (any 3+-word open title the new one extends). Verify loop 4 C8 refuted it: it
+ * silently blocked DISTINCT asks — open "Buy birthday gift" swallowed "Buy birthday gift for Sarah". The
+ * description test is what tells "journey moved my words there" from "a more specific, different task".
+ * Without descriptions (`descriptions` omitted, or the open task has none) only rule 1 applies.
  */
-export function matchesOpenTitle(key: string, titles: ReadonlySet<string>): boolean {
-  if (titles.has(key)) return true;
+export function matchOpenTitle(
+  key: string,
+  titles: ReadonlySet<string>,
+  descriptions?: ReadonlyMap<string, string>,
+): string | null {
+  if (titles.has(key)) return key;
+  if (!descriptions) return null;
   for (const t of titles) {
-    if (t.split(" ").length >= 3 && key.length > t.length && key.startsWith(`${t} `)) return true;
+    if (t.split(" ").length < 2 || !key.startsWith(`${t} `)) continue;
+    const desc = descriptions.get(t);
+    if (!desc) continue;
+    const extra = meaningWords(key.slice(t.length));
+    if (extra.length === 0) continue;
+    const inDesc = new Set(meaningWords(desc).map(stem4));
+    const found = extra.filter((w) => inDesc.has(stem4(w))).length;
+    if (found / extra.length >= 0.6) return t;
   }
-  return false;
+  return null;
+}
+
+export function matchesOpenTitle(
+  key: string,
+  titles: ReadonlySet<string>,
+  descriptions?: ReadonlyMap<string, string>,
+): boolean {
+  return matchOpenTitle(key, titles, descriptions) !== null;
 }
 
 export interface TaskCaller {
@@ -106,6 +145,10 @@ export function screenCapabilityMetaTask(
  *  "no duplicates". */
 export interface OpenTitleLoad {
   titles: Set<string>;
+  /** normalized title → that open task's description (journey keeps the rest of a long ask there). */
+  descriptions?: Map<string, string>;
+  /** normalized title → that open task's id, so a skipped duplicate can name the task it matched. */
+  ids?: Map<string, string>;
   unavailable: string | null;
 }
 
@@ -132,10 +175,17 @@ export async function loadOpenTaskTitles(caller: TaskCaller | undefined): Promis
     const { resolveTaskEmail } = await import("../journey/identity");
     const resolved = (await resolveTaskEmail(caller ?? {})) ?? email;
     const { getTasksForUser } = await import("./tasks.server");
+    const descriptions = new Map<string, string>();
+    const ids = new Map<string, string>();
     for (const t of await getTasksForUser(resolved, undefined, { includeBlocked: true })) {
-      if (t.title) titles.add(normalizeTaskTitle(t.title));
+      if (!t.title) continue;
+      const k = normalizeTaskTitle(t.title);
+      titles.add(k);
+      const d = (t as { description?: string | null }).description;
+      if (d && !descriptions.has(k)) descriptions.set(k, d);
+      if (t.id && !ids.has(k)) ids.set(k, String(t.id));
     }
-    return { titles, unavailable: null };
+    return { titles, descriptions, ids, unavailable: null };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     console.warn(`[task-dedup] open-title read failed — creating WITHOUT a duplicate check: ${reason}`);
@@ -212,7 +262,7 @@ export async function screenRawJourneyCreate(
       skipped.push({ title: entry, reason: DUP_THIS_TURN });
       continue;
     }
-    if (matchesOpenTitle(key, load.titles)) {
+    if (matchesOpenTitle(key, load.titles, load.descriptions)) {
       deps.ledger.add(key);
       skipped.push({ title: entry, reason: DUP_ON_BOARD });
       continue;

@@ -756,7 +756,7 @@ export async function executeRealtimeTool(
           continue;
         }
         const key = normalizeTaskTitle(entry);
-        if (matchesOpenTitle(key, seen)) {
+        if (matchesOpenTitle(key, seen, load.descriptions)) {
           skipped.push({ title: entry, reason: "an open task with this title already exists" });
           continue;
         }
