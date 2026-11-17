@@ -161,6 +161,70 @@ export function correctionHides(c: OwnerCorrection | null | undefined, currentIt
   return !!c && !c.withdrawnAt && c.itemKey === currentItemKey;
 }
 
+/**
+ * What chat.task_proposals.owner_correction holds (loop-2 D4, 2026-11-17): ONE correction PER ITEM VERSION, keyed by
+ * the classification key (thread key + latest message id; meeting id + item). One proposal can back two threads
+ * (the store attaches a second source with the same to-do), and the column used to hold ONE correction, so Wrong?
+ * on thread B overwrote thread A's and brought A back. Now each item version keeps its own entry; Wrong? / Undo on B
+ * never touch A. The pre-D4 single-object shape is read as a map of its one item (no migration needed).
+ */
+export interface OwnerCorrections {
+  v: 2;
+  items: Record<string, OwnerCorrection>;
+}
+/** Bound on entries kept per proposal (oldest dropped first). One proposal backing this many thread versions does
+ *  not happen in practice; the bound only keeps a pathological row small. */
+export const CORRECTION_ITEMS_MAX = 200;
+
+const isCorrection = (x: unknown): x is OwnerCorrection =>
+  !!x && typeof x === "object" && typeof (x as OwnerCorrection).itemKey === "string" && typeof (x as OwnerCorrection).reason === "string";
+
+/** Pure: the stored column (either shape, or anything malformed) -> a Map of item key -> correction. */
+export function correctionsOf(stored: unknown): Map<string, OwnerCorrection> {
+  const m = new Map<string, OwnerCorrection>();
+  if (!stored || typeof stored !== "object") return m;
+  const s = stored as { v?: unknown; items?: unknown };
+  if (s.v === 2 && s.items && typeof s.items === "object") {
+    for (const [k, c] of Object.entries(s.items as Record<string, unknown>)) if (isCorrection(c) && c.itemKey === k) m.set(k, c);
+    return m;
+  }
+  if (isCorrection(stored)) m.set(stored.itemKey, stored); // the pre-D4 single-correction shape
+  return m;
+}
+
+/** Pure: the correction of THIS item version only (never another thread's that shares the proposal). */
+export function correctionFor(stored: unknown, itemKey: string): OwnerCorrection | null {
+  return correctionsOf(stored).get(itemKey) ?? null;
+}
+
+const toStored = (m: Map<string, OwnerCorrection>): OwnerCorrections => {
+  const entries = [...m.entries()].sort((a, b) => String(a[1].at).localeCompare(String(b[1].at))).slice(-CORRECTION_ITEMS_MAX);
+  return { v: 2, items: Object.fromEntries(entries) };
+};
+
+/** Pure: Wrong? on ONE item version. Every other item's entry is carried over untouched. */
+export function withItemCorrection(
+  stored: unknown,
+  input: { reason: unknown; text?: unknown; itemKey: unknown },
+  nowIso: string,
+): { ok: true; stored: OwnerCorrections; correction: OwnerCorrection } | { ok: false; error: string } {
+  const m = correctionsOf(stored);
+  const made = makeCorrection(input, typeof input.itemKey === "string" ? m.get(input.itemKey) ?? null : null, nowIso);
+  if (!made.ok) return made;
+  m.set(made.correction.itemKey, made.correction);
+  return { ok: true, stored: toStored(m), correction: made.correction };
+}
+
+/** Pure: Undo on ONE item version (marks it withdrawn, keeps the record). No entry / already withdrawn -> unchanged. */
+export function withItemUndo(stored: unknown, itemKey: string, nowIso: string): { changed: boolean; stored: OwnerCorrections; correction: OwnerCorrection | null } {
+  const m = correctionsOf(stored);
+  const prev = m.get(itemKey) ?? null;
+  if (!prev || prev.withdrawnAt) return { changed: false, stored: toStored(m), correction: prev };
+  const next = { ...prev, withdrawnAt: nowIso };
+  m.set(itemKey, next);
+  return { changed: true, stored: toStored(m), correction: next };
+}
+
 /** Pure: a validated correction from client input, or an error. Text is data: trimmed, bounded, never interpreted. */
 export function makeCorrection(
   input: { reason: unknown; text?: unknown; itemKey: unknown },
@@ -191,6 +255,7 @@ export interface ActionCandidate {
   category: ActionCategory | null;
   kind: ActionKind | null;
   itemKey: string;
+  /** The correction of THIS item version (correctionFor), never another thread's sharing the proposal. */
   correction: OwnerCorrection | null;
   /** Lower-cased latest-OTHER sender address of a CC / list email (Stop flagging this list); null otherwise. */
   listSender: string | null;

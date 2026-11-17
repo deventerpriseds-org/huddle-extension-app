@@ -334,7 +334,7 @@ function ActionsBody({
                   className={cn(ROW_BTN, "min-h-11 md:min-h-0")}
                   disabled={!caller?.entra_email}
                   onClick={async () => {
-                    const res = await correctActionFn({ data: { caller, proposalId: r.id, undo: true, listSender: r.listSender } }).catch(() => null);
+                    const res = await correctActionFn({ data: { caller, proposalId: r.id, itemKey: r.itemKey, undo: true, listSender: r.listSender } }).catch(() => null);
                     if (!res?.ok) toast.error(res?.error ?? "Couldn't undo that.");
                     else void reload();
                   }}
@@ -678,7 +678,7 @@ function WrongPanel({ row, caller, onClose, onSent, onUndone }: { row: ActionRow
       action: {
         label: "Undo",
         onClick: () =>
-          void correctActionFn({ data: { caller, proposalId: row.id, undo: true, listSender: row.listSender } }).then((u) => (u.ok ? onUndone() : toast.error(u.error ?? "Couldn't undo that."))),
+          void correctActionFn({ data: { caller, proposalId: row.id, itemKey: row.itemKey, undo: true, listSender: row.listSender } }).then((u) => (u.ok ? onUndone() : toast.error(u.error ?? "Couldn't undo that."))),
       },
     });
   }

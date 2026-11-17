@@ -25,8 +25,12 @@ import {
   bellTargetsFor,
   chatIdOfTeamsItem,
   classifyEnabled,
+  correctionFor,
   correctionHides,
+  correctionsOf,
   makeCorrection,
+  withItemCorrection,
+  withItemUndo,
   resolveActionsSettings,
   selectActionItems,
   sinceMondayMs,
@@ -255,6 +259,49 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   const sel = selectActionItems(b.candidates, S());
   t("H-6 end to end: 2 email + 1 Teams 1:1 + 1 meeting (owner's) listed; the 2 items under another attendee's heading not", [sel.counts.email, sel.counts.teams, sel.counts.meeting, b.meetingOthersHidden], [2, 1, 1, 2]);
   t("H-7 the CC/list email lands in FYI and carries its list sender", sel.rows.filter((r) => r.section === "fyi").map((r) => r.listSender), ["ops-list@work.example"]);
+}
+
+// ── D4 (loop 2, Tier 1): corrections are kept PER ITEM VERSION; two threads sharing ONE proposal never affect
+//    each other (VERIFY-actions-view-2 D4: Wrong? on B used to overwrite A's single correction and bring A back) ──
+{
+  const A = "teams:chatA|msgA1";
+  const B = "teams:chatB|msgB1";
+  const hides = (stored: unknown, k: string) => correctionHides(correctionFor(stored, k), k);
+  const w1 = withItemCorrection(null, { reason: "not_mine", itemKey: A }, "2026-11-16T10:00:00Z");
+  const w2 = w1.ok ? withItemCorrection(w1.stored, { reason: "not_mine", itemKey: B }, "2026-11-16T10:05:00Z") : null;
+  const s2 = w2 && w2.ok ? w2.stored : null;
+  t("D4-1 GUARD: verifier repro -- Wrong? on A, then Wrong? on B: A stays hidden AND B is hidden", [hides(s2, A), hides(s2, B)], [true, true]);
+  const u = withItemUndo(s2, B, "2026-11-16T10:06:00Z");
+  t("D4-2 GUARD: Undo on B shows B again and leaves A's correction byte-identical", [hides(u.stored, A), hides(u.stored, B), JSON.stringify(correctionFor(u.stored, A)) === JSON.stringify(correctionFor(s2, A))], [true, false, true]);
+  t("D4-3 Undo on an item with no correction (or already withdrawn) changes nothing", [withItemUndo(w1.ok ? w1.stored : null, B, NOW).changed, withItemUndo(u.stored, B, NOW).changed], [false, false]);
+  const legacy = w1.ok ? w1.correction : null; // the pre-D4 single-object column value
+  t("D4-4 the pre-D4 single shape is read as its one item (still hides A, not B)", [hides(legacy, A), hides(legacy, B)], [true, false]);
+  const fromLegacy = withItemCorrection(legacy, { reason: "wrong_section", itemKey: B }, NOW);
+  t("D4-5 a correction on B over a pre-D4 value keeps A", fromLegacy.ok && [hides(fromLegacy.stored, A), hides(fromLegacy.stored, B)], [true, true]);
+  t("D4-6 a newer version of A (new key) is judged again", hides(s2, "teams:chatA|msgA2"), false);
+  t("D4-7 malformed column values and entries filed under the wrong key are ignored (never hide)", [correctionsOf("junk").size, correctionsOf({ v: 2, items: { X: { ...(legacy ?? {}), itemKey: "Y" } } }).size, correctionsOf({ v: 2, items: null }).size], [0, 0, 0]);
+  t("D4-8 history is per item: B's second correction keeps B's history only", (() => {
+    const again = s2 ? withItemCorrection(s2, { reason: "wrong_section", itemKey: B }, NOW) : null;
+    return again && again.ok ? [again.correction.history?.length ?? 0, correctionFor(again.stored, A)?.history?.length ?? 0] : null;
+  })(), [1, 0]);
+  // End to end through buildCandidates + the selection: two threads whose verdicts point at ONE shared proposal.
+  const s = stub(answerFor);
+  await runClassify(asm, S(), new Set(), 10, s.deps);
+  const open = [...s.stored.entries()].filter(([, v]) => v.status === "open" && v.proposalId).slice(0, 2);
+  const shared = new Map(s.stored);
+  for (const [k, v] of open) shared.set(k, { ...v, proposalId: "prop-shared" });
+  const [ka, kb] = open.map(([, v]) => v.key);
+  const listed = (stored: unknown) => {
+    const props = new Map([...shared.values()].filter((v) => v.proposalId).map((v) => [v.proposalId!, { id: v.proposalId!, state: "proposed", title: v.todo ?? "", assignee: null, correction: v.proposalId === "prop-shared" ? stored : null }]));
+    const sel = selectActionItems(buildCandidates({ assembled: asm, rows, settings: S(), verdicts: shared, proposals: props, meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
+    return { rows: sel.rows.map((r) => r.itemKey).filter((k) => k === ka || k === kb).sort(), corrected: sel.corrected.map((r) => r.itemKey).sort() };
+  };
+  const e1 = withItemCorrection(null, { reason: "not_mine", itemKey: ka }, "2026-11-16T10:00:00Z");
+  const e2 = e1.ok ? withItemCorrection(e1.stored, { reason: "not_mine", itemKey: kb }, "2026-11-16T10:05:00Z") : null;
+  const st2 = e2 && e2.ok ? e2.stored : null;
+  t("D4-E1 two threads share one proposal (setup)", [open.length, !!ka && !!kb && ka !== kb, listed(null).rows.length], [2, true, 2]);
+  t("D4-E2 GUARD: Wrong? on thread A then thread B -> BOTH in Corrected, neither listed", listed(st2), { rows: [], corrected: [ka, kb].sort() });
+  t("D4-E3 GUARD: Undo on B -> B listed again, A stays in Corrected", listed(withItemUndo(st2, kb, NOW).stored), { rows: [kb], corrected: [ka] });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

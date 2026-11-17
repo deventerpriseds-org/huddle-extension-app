@@ -31,7 +31,7 @@ import { FEED_ID_PREFIX } from "../external-feeds/onedrive-feed";
 import { meetingItemIsOwnersOrUnassigned } from "../proposals/meeting-triage";
 import { titleKey } from "../proposals/proposals";
 import { safeLink } from "../attention/attention";
-import type { ActionCandidate, ActionsSettings, OwnerCorrection } from "./actions";
+import { correctionFor, type ActionCandidate, type ActionsSettings } from "./actions";
 
 const stripFeed = (id: string) => (id.startsWith(FEED_ID_PREFIX) ? id.slice(FEED_ID_PREFIX.length) : id);
 
@@ -188,7 +188,8 @@ export interface ProposalLite {
   state: string;
   title: string;
   assignee: string | null;
-  correction: OwnerCorrection | null;
+  /** The stored owner_correction column as read (per-item map, or the pre-D4 single shape); read with correctionFor. */
+  correction: unknown;
 }
 
 export interface MeetingProposalLite extends ProposalLite {
@@ -236,7 +237,8 @@ export function buildCandidates(a: {
       category: current?.category ?? null,
       kind: current?.kind ?? null,
       itemKey: u.itemKey,
-      correction: p?.correction ?? null,
+      // D4: only THIS item version's correction; another thread sharing the proposal never hides or un-hides it.
+      correction: p ? correctionFor(p.correction, u.itemKey) : null,
       uninvolved: u.uninvolved,
       at: u.at,
     };
@@ -311,7 +313,7 @@ export function buildCandidates(a: {
         category: null,
         kind: "action",
         itemKey: `meeting:${p.meetingId}|${p.normTitle}`,
-        correction: p.correction,
+        correction: correctionFor(p.correction, `meeting:${p.meetingId}|${p.normTitle}`),
         listSender: null,
         uninvolved: false,
         at: m.meetingAt,

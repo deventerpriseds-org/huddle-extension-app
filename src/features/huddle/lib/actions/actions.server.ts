@@ -19,8 +19,9 @@ import type { ProposalSourceRef } from "../proposals/proposals";
 import {
   bellTargetsFor,
   classifyEnabled,
-  makeCorrection,
   resolveActionsSettings,
+  withItemCorrection,
+  withItemUndo,
   selectActionItems,
   sinceMondayMs,
   localMidnightMs,
@@ -298,29 +299,10 @@ export async function correctActionItem(
   if (!cfg) return { ok: false, error: "Actions is not switched on." };
   const owners = await ownedScope(caller, cfg);
   if (!owners?.length) return { ok: false, error: "Sign-in required." };
-  const pool = getSharedPool();
-  const cur = await pool.query<{ owner_correction: OwnerCorrection | null }>(
-    `SELECT owner_correction FROM chat.task_proposals WHERE id = $2 AND owner_email = ANY($1::text[])`,
-    [owners, input.proposalId],
-  );
-  if (!cur.rows[0]) return { ok: false, error: "That item isn't in your list." };
-  const prev = cur.rows[0].owner_correction ?? null;
-  const nowIso = new Date().toISOString();
-  let next: OwnerCorrection;
-  if (input.undo) {
-    if (!prev || prev.withdrawnAt) return { ok: true };
-    next = { ...prev, withdrawnAt: nowIso };
-  } else {
-    const made = makeCorrection({ reason: input.reason, text: input.text, itemKey: input.itemKey }, prev, nowIso);
-    if (!made.ok) return made;
-    next = made.correction;
-  }
-  await pool.query(`UPDATE chat.task_proposals SET owner_correction = $3::jsonb, updated_at = now() WHERE id = $2 AND owner_email = ANY($1::text[])`, [owners, input.proposalId, JSON.stringify(next)]);
-  // The classifier's record: the same correction on the thread's latest message row (best-effort).
-  const latest = String(next.itemKey).split("|").pop() ?? "";
-  const ledgerId = latest.startsWith("feed:") ? latest.slice(5) : latest;
-  if (ledgerId) await pool.query(`UPDATE chat.correspondence_ledger SET owner_correction = $3::jsonb WHERE source_item_id = $2 AND owner_email = ANY($1::text[]) AND source IN ('email','teams')`, [lower(cfg.ownerLogins), ledgerId, JSON.stringify(next)]).catch(() => null);
-  if (next.reason === "stop_list" && input.listSender) {
+  const r = await correctItemFor(owners, lower(cfg.ownerLogins), input, new Date().toISOString());
+  if (!r.ok) return r;
+  const next = r.correction;
+  if (next && next.reason === "stop_list" && input.listSender) {
     const s = await settingsFor(cfg.owner);
     const sender = input.listSender.trim().toLowerCase();
     const hiddenSenders = input.undo ? s.hiddenSenders.filter((x) => x !== sender) : [...new Set([...s.hiddenSenders, sender])];
@@ -328,6 +310,71 @@ export async function correctActionItem(
     await setActionsSettingsRaw(cfg.owner, { ...s, hiddenSenders });
   }
   return { ok: true };
+}
+
+/**
+ * The owner-scoped core of Wrong? / Undo (exported for the real-PostgreSQL test, scripts/actions-view-server.test.ts).
+ * Loop-2 D4 (2026-11-17): the correction is written for ONE item version (`itemKey`) inside the proposal's per-item
+ * map, under a row lock, so Wrong? / Undo on one thread never changes another thread that shares the proposal, and
+ * two concurrent corrections on two threads both survive.
+ */
+export async function correctItemFor(
+  owners: string[],
+  ledgerOwners: string[],
+  input: { proposalId: string; reason?: unknown; text?: unknown; itemKey?: unknown; undo?: boolean },
+  nowIso: string,
+): Promise<{ ok: true; correction: OwnerCorrection | null } | { ok: false; error: string }> {
+  const notListed = { ok: false as const, error: "That item isn't in your list." };
+  if (typeof input.itemKey !== "string" || !input.itemKey || input.itemKey.length > 600) return notListed;
+  const itemKey = input.itemKey;
+  const client = await getSharedPool().connect();
+  let correction: OwnerCorrection | null = null;
+  try {
+    await client.query("BEGIN");
+    const cur = await client.query<{ owner_correction: unknown }>(
+      `SELECT owner_correction FROM chat.task_proposals WHERE id = $2 AND owner_email = ANY($1::text[]) FOR UPDATE`,
+      [owners, input.proposalId],
+    );
+    if (!cur.rows[0]) {
+      await client.query("ROLLBACK");
+      return notListed;
+    }
+    const prev = cur.rows[0].owner_correction ?? null;
+    let stored: unknown;
+    if (input.undo) {
+      const u = withItemUndo(prev, itemKey, nowIso);
+      if (!u.changed) {
+        await client.query("ROLLBACK");
+        return { ok: true, correction: null };
+      }
+      stored = u.stored;
+      correction = u.correction;
+    } else {
+      const w = withItemCorrection(prev, { reason: input.reason, text: input.text, itemKey }, nowIso);
+      if (!w.ok) {
+        await client.query("ROLLBACK");
+        return w;
+      }
+      stored = w.stored;
+      correction = w.correction;
+    }
+    await client.query(`UPDATE chat.task_proposals SET owner_correction = $3::jsonb, updated_at = now() WHERE id = $2 AND owner_email = ANY($1::text[])`, [owners, input.proposalId, JSON.stringify(stored)]);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => null);
+    throw e;
+  } finally {
+    client.release();
+  }
+  // The classifier's record: this version's correction on the thread's latest message row (best-effort). The ledger
+  // row is per version already, so it holds a single correction.
+  const latest = itemKey.split("|").pop() ?? "";
+  const ledgerId = latest.startsWith("feed:") ? latest.slice(5) : latest;
+  if (ledgerId && correction)
+    await getSharedPool()
+      .query(`UPDATE chat.correspondence_ledger SET owner_correction = $3::jsonb WHERE source_item_id = $2 AND owner_email = ANY($1::text[]) AND source IN ('email','teams')`, [ledgerOwners, ledgerId, JSON.stringify(correction)])
+      .catch(() => null);
+  return { ok: true, correction };
 }
 
 /** X-6: the bell rows behind a decided proposal's refs. */
