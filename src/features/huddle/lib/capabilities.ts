@@ -219,6 +219,12 @@ const DEFERRAL_RE = new RegExp(
       "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
       "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
       "next", "quarter", "sprint", "tmrw", "tmr", "tomorow", "tommorow", "tommorrow", "meh", "can keep", "maybe", "eventually",
+      // verify loop 9 C2: conditions, reported speech, questions, more take-backs / time words / refusals
+      "if", "assuming", "provided", "providing", "whether", "should", "think", "thoughts", "wonder",
+      "says", "said", "texted", "wrote", "told", "mentioned",
+      "belay", "disregard", "strike that", "psych", "messing", "hard pass", "na", "no+",
+      "eod", "eow", "2moro", "2morrow", "ma[nñ]ana", "in the (?:am|pm|morning|evening)",
+      "in (?:a|an|one|two|three|a few|a couple of|few|couple|\\\\d+) (?:minute|min|hour|hr|day|week)s?", "afterwards", "someday", "a sec", "a moment",
     ].join("|") +
     ")\\b",
   "i",
@@ -227,7 +233,7 @@ const DEFERRAL_RE = new RegExp(
 /** Is this ask an explicit "do it now"? ONE classifier for urgency — consumers read `classifyAsk().urgency`. */
 function askIsUrgentNow(text: string): boolean {
   // Quoted speech is someone else's words ("Sam texted me: \"book it asap\". Ignore that.") -> never "now".
-  if (/["“”«»]/.test(text)) return false;
+  if (/["“”«»„‟「」『』‹›″〝〞＂]/.test(text)) return false;
   const t = normalizeApostrophes(text).trim().toLowerCase();
   const rest = t.replace(URGENT_IDIOMS_RE, " ");
   // Second layer: any negation or time/busy word anywhere still means not now.
@@ -291,7 +297,7 @@ function deferralPatterns(name: string): RegExp[] {
     // verify loop 8 (8-rest C1): eleven more ways of promising a teammate
     new RegExp(`\\b${n}(?:\\s+will|\\s+can|\\s+should|'ll|’ll)\\s+(?:take\\s+care\\s+of|sort(?:\\s+out)?|pick\\s+(?:that|this|it)\\s+up|review|cover|own|run\\s+with|take\\s+(?:the|that|this))\\b`, "i"),
     new RegExp(`\\bget\\s+${n}\\s+to\\b|\\bask(?:ed)?\\s+${n}\\s*[.!]|\\bleav(?:e|ing)\\s+(?:it|this|that|the\\s+\\w+)\\s+with\\s+${n}\\b`, "i"),
-    new RegExp(`\\bover\\s+to\\s+${n}\\b|\\bflag(?:ged|ging)?\\s+(?:it|this|that)\\s+(?:for|to)\\s+${n}\\b|\\b${n}(?:'s|’s)\\s+your\\s+(?:guy|gal|person|go-?to)\\b`, "i"),
+    new RegExp(`\\bover\\s+to\\s+${n}\\b(?!\\s+(?:is|are|was|were|has|have|had|got|gets)\\b)|\\bflag(?:ged|ging)?\\s+(?:it|this|that)\\s+(?:for|to)\\s+${n}\\b|\\b${n}(?:'s|’s)\\s+your\\s+(?:guy|gal|person|go-?to)\\b`, "i"),
     new RegExp(`\\bloop(?:ing)?\\s+(?:in\\s+)?${n}\\b|\\bloop\\s+${n}\\s+in\\b`, "i"),
     new RegExp(`\\bpass(?:ed|ing)?\\s+(?:(?:this|it|that)\\s+)?(?:(?:along|over)\\s+)?to\\s+${n}\\b`, "i"),
     new RegExp(`\\bhand(?:ed|ing)?\\s+(?:(?:this|it|that)\\s+)?(?:(?:off|over)\\s+)?to\\s+${n}\\b`, "i"),
@@ -309,9 +315,11 @@ function deferralPatterns(name: string): RegExp[] {
     // #131 answer-first wording (lane-handoff.ts laneAnswerFirstDirective): "<Name> knows this area best —
     // I'm looping them in". A sentence that names the teammate AND loops a pronoun in is a deferral.
     // Verify loop 7 (7-rest C1): "Finn's got this one", "Finn is on it", "I'll let Finn know".
-    new RegExp(`\\b${n}(?:'s|’s|\\s+has)\\s+got\\s+(?:this|it|that)\\b`, "i"),
-    new RegExp(`\\b${n}(?:'s|’s|\\s+is)\\s+(?:already\\s+)?on\\s+(?:it|this|that)\\b`, "i"),
-    new RegExp(`\\b(?:let|tell|update)\\s+${n}\\s+know\\b`, "i"),
+    // "got this" / "on it" only at the end of the clause: "Finn's got this week off" is not a hand-off (loop 9).
+    new RegExp(`\\b${n}(?:'s|’s|\\s+has)\\s+got\\s+(?:this|it|that)(?:\\s+one)?\\s*(?:[.!,;—–-]|$)`, "i"),
+    new RegExp(`\\b${n}(?:'s|’s|\\s+is)\\s+(?:already\\s+)?on\\s+(?:it|this|that)(?:\\s+one)?\\s*(?:[.!,;—–-]|$)`, "i"),
+    // "Don't let Finn know about the party" is not a hand-off (loop 9).
+    new RegExp(`(?<!\\b(?:don['’]?t|do not|never|not)\\s+)\\b(?:let|tell|update)\\s+${n}\\s+know\\b`, "i"),
     new RegExp(`\\b${n}\\s+knows\\s+(?:this|that|the)?\\s*(?:area|stuff|lane|space|topic|subject)?\\s*best\\b`, "i"),
     new RegExp(`\\b${n}\\b.*\\bloop(?:ing)?\\s+(?:them|him|her)\\s+in\\b|\\bloop(?:ing)?\\s+(?:them|him|her)\\s+in\\b.*\\b${n}\\b`, "i"),
   ];

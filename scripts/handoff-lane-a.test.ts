@@ -175,6 +175,15 @@ describe("F1 urgency: classifyAsk().urgency spelling table", () => {
       "Do it right away? Meh, it can keep.", 'Sam texted me: "book it asap". Ignore that.', 'Finn said: "do it now". I think it can keep.',
       "draft it now, just kidding",
     ].map((t) => ["v8-U", t, "default"] as [string, string, "now" | "default"])),
+    // verify loop 9 C2 (VERIFY-handoff-confirm-flow-9-C27.md)
+    ...([
+      "If Sam agrees, do it now.", "Assuming the budget clears, book it asap.", "Provided it's under $500, book it right away.",
+      "Do it now. Actually, in two hours.", "Do it now. In a few hours.", "Do it now. EOD is fine.", "Do it now. 2moro.",
+      "Do it now. Mañana.", "Do it now. In the AM.", "Do it now. Belay that.", "Do it now. Disregard.", "Do it now. Strike that.",
+      "Do it now. Psych!", "Do it now. Haha just messing with you", "Do it now? Nooo.", "Do it now. Na.", "Do it now. Hard pass.",
+      "Sam: „book it asap‟", "Sam: 「book it asap」", "Finn's note says, book it asap. Thoughts?",
+      "Do you think I should do it now?", "Check whether we should do it now",
+    ].map((t) => ["v9-U", t, "default"] as [string, string, "now" | "default"])),
     ["pos", "do it right away", "now"],
     ["pos", "don't wait, do it immediately", "now"],
   ];
@@ -278,7 +287,9 @@ describe("F1-4 stripTeammateDeferral", () => {
     test(`a comma/semicolon/hyphen-joined deferral clause is dropped (verify loop 8): ${joined}`, () =>
       expect(stripTeammateDeferral(joined, A)).toBe(kept));
   test("mentions that are not deferrals are kept", () => {
-    for (const t of ["Finn's numbers look great, so I kept them.", "I checked with Finn's notes and it's done.", "I used Finn's template, and it's ready."])
+    for (const t of ["Done. Flights over to Charleston are booked for Friday.", "I booked the venue. Don't let Finn know about the surprise party.",
+      "Finn's got this week off, so I booked it myself.", "Finn is on that trip too, so I booked two seats.",
+      "Finn's numbers look great, so I kept them.", "I checked with Finn's notes and it's done.", "I used Finn's template, and it's ready."])
       expect(stripTeammateDeferral(t, A)).toBe(t);
   });
   test("a non-deferral mention of a teammate's brief is kept", () => {
