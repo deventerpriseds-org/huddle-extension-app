@@ -31,6 +31,22 @@ import { capabilityOwnerFor } from "../capabilities";
 import { normalizeTaskTitle } from "./scoring";
 export { normalizeTaskTitle };
 
+/**
+ * Is `key` (a normalized title about to be created) already open on the board? An exact match, OR an open
+ * title of 3+ words that the new title merely extends ("obtain official transcript" vs "obtain official
+ * transcript and send it directly to um-flint ..."). journey's create keeps a SHORT title and moves the rest
+ * to the description, so the board holds the short form while the next request arrives long: on 2026-10-30
+ * two identical asks two minutes apart both passed an exact-match check and made duplicate rows. 3 words
+ * minimum keeps a short generic title ("call mom") from swallowing a different task.
+ */
+export function matchesOpenTitle(key: string, titles: ReadonlySet<string>): boolean {
+  if (titles.has(key)) return true;
+  for (const t of titles) {
+    if (t.split(" ").length >= 3 && key.length > t.length && key.startsWith(`${t} `)) return true;
+  }
+  return false;
+}
+
 export interface TaskCaller {
   entra_object_id?: string;
   entra_email?: string;
@@ -196,7 +212,7 @@ export async function screenRawJourneyCreate(
       skipped.push({ title: entry, reason: DUP_THIS_TURN });
       continue;
     }
-    if (load.titles.has(key)) {
+    if (matchesOpenTitle(key, load.titles)) {
       deps.ledger.add(key);
       skipped.push({ title: entry, reason: DUP_ON_BOARD });
       continue;

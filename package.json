@@ -84,6 +84,7 @@
     "test:handoff-lane-b": "bun test scripts/handoff-lane-b.test.ts",
     "test:board-claims": "bun test scripts/board-claims-f6.test.ts",
     "test:not-ai-task": "bun test scripts/not-ai-task.test.ts",
+    "test:one-request-one-task": "bun test scripts/one-request-one-task.test.ts",
     "test:shared-pool": "bun scripts/shared-pool.test.ts",
     "test:fireflies-minutes": "bun scripts/fireflies-minutes.test.ts",
     "test:fireflies-queue-sql": "bun scripts/fireflies-queue-sql.test.ts"

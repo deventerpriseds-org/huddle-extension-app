@@ -86,6 +86,7 @@ import {
   dispatchedToolUses,
   journeyCreateContext,
   loadOpenTaskTitles,
+  matchesOpenTitle,
   normalizeJourneyDate,
   normalizeTaskTitle,
   screenCapabilityMetaTask,
@@ -3194,7 +3195,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
       }
       // Cross-turn dedup: skip if an open task with this title already exists on the board.
       const existing = await openTitlesForCreate("create_huddle_task");
-      if (existing.has(titleKey)) {
+      if (matchesOpenTitle(titleKey, existing)) {
         createdTaskTitles.add(titleKey);
         recordToolUse(
           winner.id,
@@ -3469,7 +3470,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           continue;
         }
         const key = normTitle(entry);
-        if (createdTaskTitles.has(key) || existing.has(key)) {
+        if (createdTaskTitles.has(key) || matchesOpenTitle(key, existing)) {
           createdTaskTitles.add(key);
           skipped.push({ title: entry, reason: "an open task with this title already exists" });
           continue;

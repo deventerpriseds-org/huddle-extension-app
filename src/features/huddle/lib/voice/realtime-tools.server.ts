@@ -77,6 +77,7 @@ import {
   loadOpenTaskTitles,
   normalizeJourneyDate,
   normalizeTaskTitle,
+  matchesOpenTitle,
   screenCapabilityMetaTask,
   screenRawJourneyCreate,
   splitTaskEntries,
@@ -755,7 +756,7 @@ export async function executeRealtimeTool(
           continue;
         }
         const key = normalizeTaskTitle(entry);
-        if (seen.has(key)) {
+        if (matchesOpenTitle(key, seen)) {
           skipped.push({ title: entry, reason: "an open task with this title already exists" });
           continue;
         }
