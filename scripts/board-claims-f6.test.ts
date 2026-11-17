@@ -69,13 +69,10 @@ describe("F6 loop-4 rows", () => {
   ];
   for (const [text, uses] of keep) test(`true statement kept: ${JSON.stringify(text)}`, () => expect(SHOW(text, uses)).toBe(text));
   const fix: [string, string][] = [
-    ["All set — it's marked as complete.", L.notChanged],
-    ["Task moved to Done.", L.notChanged],
     ["✅ Marked done.", L.notChanged],
     ["I've gone ahead and marked it done.", L.notChanged],
     ["I went ahead and moved it to Done.", L.notChanged],
     ["I've now added it to your board.", L.notAdded],
-    ["It's been added to your board.", L.notAdded],
     ["We marked it done.", L.notChanged],
   ];
   for (const [text, want] of fix) test(`unbacked claim corrected: ${JSON.stringify(text)}`, () => expect(SHOW(text)).toBe(want));
@@ -111,11 +108,53 @@ describe("F6 loop-5 rows", () => {
     ["N-M1", "I've marked it done, let me know if you need anything else.", L.notChanged],
     ["N-M2", "I moved it to Done so it's off your plate if you were worried.", L.notChanged],
     ["N-M3", "I've updated the task to Done.", L.notChanged],
-    ["N-M4", "Your task is now marked done.", L.notChanged],
     ["N-M5", "I marked the task done and set a reminder for Friday.", L.notChanged],
     ["N-M6", "I've checked that task off.", L.notChanged],
     ["N-M7", "That one's handled — marked it complete.", L.notChanged],
     ["N-M8", "I've scheduled the task for 3pm tomorrow.", L.notChanged],
   ];
   for (const [id, text, want] of fix) test(`${id} corrected: ${JSON.stringify(text)}`, () => expect(SHOW(text)).toBe(want));
+});
+
+// Verify loop 7 (VERIFY-handoff-confirm-flow-7-C7.md on claude_verify-handoff-confirm-flow-7-c7): the matcher is an
+// ALLOWLIST of first-person claims about the task itself. Passive statements describe STATE (maybe already true, maybe
+// a teammate's doing) and are never rewritten -- accepted safe-direction misses, formerly loop-4/5 "corrected" rows.
+describe("F6 loop-7 rows", () => {
+  const W = (tool: string, summary: string, agentId = A): ToolUseLike => ({ agentId, tool, summary, ok: true });
+  const REMINDER = W("schedule_reminder", "reminder scheduled");
+  const CAL = W("create_calendar_event", "create_calendar_event → journey-voice · ok");
+  const DRAFT = W("create_email_draft", "draft saved in Outlook");
+  const SEARCH = W("tavily_web_search", "searched");
+  const keep: [string, string, ToolUseLike[]][] = [
+    ["U7-1", "I set a reminder for the review at 3pm.", [REMINDER]],
+    ["U7-2", "I've set a reminder for when you're done.", [REMINDER]],
+    ["U7-3", "I've set aside an hour for the review.", [CAL]],
+    ["U7-4", "I've marked 2-4pm as blocked on your calendar.", [CAL]],
+    ["U7-5", "I've put it in drafts for your review.", [DRAFT]],
+    ["U7-6", "I've started a draft for you.", [DRAFT]],
+    ["U7-7", "I've started the email to Sam — it's in your drafts.", [DRAFT]],
+    ["U7-9", "It's been moved to Done by Finn.", [W("update_task", "update_task → journey-voice · ok", "finn-reid")]],
+    ["U7-10", "That task is marked done already — since Sept 1.", []],
+    ["U7-15", "I updated the doc to complete the analysis.", []],
+    ["U7-16", "I'm working on it — here's what I found so far.", [SEARCH]],
+    ["passive-1", "All set — it's marked as complete.", []],
+    ["passive-2", "Task moved to Done.", []],
+    ["passive-3", "It's been added to your board.", []],
+    ["passive-4", "Your task is now marked done.", []],
+  ];
+  for (const [id, text, uses] of keep) test(`${id} kept: ${JSON.stringify(text)}`, () => expect(SHOW(text, uses)).toBe(text));
+  const fix: [string, string, string][] = [
+    ["M7-1", "I wrapped it up and marked it done.", L.notChanged],
+    ["M7-2", "Just marked it done!", L.notChanged],
+    ["M7-3", "Got it, marked it done.", L.notChanged],
+    ["M7-4", "Happy to help, I've marked it done.", L.notChanged],
+    ["M7-6", "Once you confirmed, I marked it done.", L.notChanged],
+    ["M7-8", "I've archived both.", L.notChanged],
+    ["M7-10", "Sure thing, moved it to Review.", L.notChanged],
+  ];
+  for (const [id, text, want] of fix) test(`${id} corrected: ${JSON.stringify(text)}`, () => expect(SHOW(text)).toBe(want));
+  test("a create whose TITLE contains a not-performed word still counts as performed (7-rest C1)", () => {
+    const real = W("create_huddle_task", "“Test-set Huddle-only mode” → Huddle board + journey");
+    expect(SHOW("I've added 'Test-set Huddle-only mode' to your board.", [real])).toBe("I've added 'Test-set Huddle-only mode' to your board.");
+  });
 });
