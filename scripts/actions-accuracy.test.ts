@@ -164,9 +164,30 @@ const dupB = cand({ itemKey: "b", at: "2026-11-16T15:04:00Z", quote: "please let
 const other = cand({ itemKey: "c", at: "2026-11-16T16:00:00Z", quote: "please let me know how often", who: "Sam Example" });
 const email = cand({ itemKey: "e", source: "email", at: "2026-11-16T10:00:00Z", quote: "please let me know how often" });
 const closed = cand({ itemKey: "n", status: "none", at: "2026-11-16T09:00:00Z", quote: "please let me know how often" });
-t("R6-1 GUARD: same sender + same quote in two chats -> ONE row, the newest", collapseDuplicateTeamsItems([dupA, dupB, other, email, closed]).map((c) => c.itemKey), ["b", "c", "e", "n"]);
-t("R6-2 same backing proposal -> one row, the newest", collapseDuplicateTeamsItems([cand({ itemKey: "p1", proposalId: "prop-1", at: "2026-11-16T10:00:00Z" }), cand({ itemKey: "p2", proposalId: "prop-1", at: "2026-11-16T11:00:00Z" })]).map((c) => c.itemKey), ["p2"]);
+// Loop-2 D-2: the same-sender test is by SENDER ID (senderIdOf), never by display name; a long quote is required.
+const sidOf = (m: Record<string, string>) => (c: ActionCandidate) => m[c.itemKey] ?? null;
+const SIDS = { a: "pat-guid", b: "pat-guid", c: "sam-guid", e: "pat-guid", n: "pat-guid" };
+t("R6-1 GUARD: same sender id + same long quote in two chats -> ONE row, the newest", collapseDuplicateTeamsItems([dupA, dupB, other, email, closed], sidOf(SIDS)).map((c) => c.itemKey), ["b", "c", "e", "n"]);
+t("R6-2 GUARD (loop-2 D-2): a shared backing proposal alone never collapses (different senders, different quotes)", collapseDuplicateTeamsItems([cand({ itemKey: "p1", proposalId: "prop-1", at: "2026-11-16T10:00:00Z", quote: "review the synthetic document for the board pack" }), cand({ itemKey: "p2", proposalId: "prop-1", who: "Sam Example", at: "2026-11-16T11:00:00Z", quote: "please review the synthetic document before Monday" })], sidOf({ p1: "pat-guid", p2: "sam-guid" })).map((c) => c.itemKey), ["p1", "p2"]);
 t("R6-3 different asks are untouched", collapseDuplicateTeamsItems([cand({ itemKey: "x1", quote: "send the synthetic deck" }), cand({ itemKey: "x2", quote: "book the synthetic room" })]).map((c) => c.itemKey), ["x1", "x2"]);
+const shortQ = "Can you take a look at this?";
+t("R6-5 GUARD (loop-2 D-2): same sender, the SAME SHORT generic sentence in two chats -> TWO rows", collapseDuplicateTeamsItems([cand({ itemKey: `teams:${ONE}|m1`, at: "2026-11-16T10:00:00Z", quote: "take a look at this?" }), cand({ itemKey: `teams:${GRP}|m2`, at: "2026-11-16T11:00:00Z", quote: shortQ })], () => "pat-guid").length, 2);
+t("R6-6 the same long quote under the same display NAME but no known sender id -> TWO rows (a name is not an id)", collapseDuplicateTeamsItems([dupA, dupB]).map((c) => c.itemKey), ["a", "b"]);
+t("R6-7 two open items from the SAME chat -> one row, the newest", collapseDuplicateTeamsItems([cand({ itemKey: `teams:${ONE}|m1`, at: "2026-11-16T10:00:00Z", quote: "send the synthetic deck" }), cand({ itemKey: `teams:${ONE}|m2`, at: "2026-11-16T11:00:00Z", quote: "book the synthetic room" })]).map((c) => c.itemKey), [`teams:${ONE}|m2`]);
+{
+  // Through buildCandidates: the same long ask from the same person in the 1:1 and in a group chat -> one row; the
+  // sender id comes from the stored rows.
+  const LONG = "Synthetic: please send me the signed vendor form by Friday";
+  const r1 = row({ chatId: ONE, messageId: "a1", at: "2026-11-16T10:00:00Z", text: LONG });
+  const r2 = row({ chatId: GRP, chatName: "Synthetic squad", messageId: "a2", at: "2026-11-16T11:00:00Z", text: LONG, mentionedUserIds: [OWNER_ID] });
+  const r3 = row({ chatId: ONE2, messageId: "a3", at: "2026-11-16T12:00:00Z", sender: { id: "sam-guid", name: "Sam Example", isApp: false }, text: LONG });
+  const rs = [older, r1, r2, r3];
+  const asmD2 = assembleLedgerPlan({ rows: rs, proposals: [], bell: [] }, cfgNoIds, Date.parse("2026-11-09T05:00:00Z"));
+  const us = threadUnits(asmD2, ACTIONS_SETTINGS_DEFAULT).units.filter((x) => x.source === "teams");
+  const vs = new Map<string, ActionVerdict>(us.map((x) => [`${x.storeAt.source}\u0000${x.storeAt.sourceItemId}`, { v: 1, key: x.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "open", kind: "reply", category: "person_request", confidence: "high", todo: "Send the form", due: null, quote: "please send me the signed vendor form by Friday", reason: "Asked.", answeredByReply: false, proposalId: "prop-shared", at: NOW } as ActionVerdict]));
+  const got = buildCandidates({ assembled: asmD2, rows: rs, settings: ACTIONS_SETTINGS_DEFAULT, verdicts: vs, proposals: new Map([["prop-shared", { id: "prop-shared", state: "proposed", title: "Send the form", assignee: null, correction: null }]]), meetingProposals: [], replies: [], isDraftable: () => false }).candidates.filter((c) => c.source === "teams" && c.status === "open");
+  t("R6-8 end to end: Pat's 1:1 + group copy collapse to the newest; Sam's identical ask (other id, same proposal) stays", got.map((c) => [c.display.who, c.at]).sort(), [["Pat Example", "2026-11-16T11:00:00Z"], ["Sam Example", "2026-11-16T12:00:00Z"]]);
+}
 t(
   "R6-4 label: 1:1; a group chat named only after the owner -> 'Teams group chat'; another name kept; no name -> 'Teams'",
   [teamsSourceLabel({ kind: "one_on_one", chatName: null }, ["Owen Example"]), teamsSourceLabel({ kind: "group", chatName: "Example, Owen" }, ["Owen Example"]), teamsSourceLabel({ kind: "group", chatName: "Synthetic squad" }, ["Owen Example"]), teamsSourceLabel({ kind: "group", chatName: null }, [])],

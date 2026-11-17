@@ -90,3 +90,16 @@ Source of the defects: `docs/qc-evidence/VERIFY-actions-accuracy-2.md` on `claud
   by a current verdict, so Actions never shows it).
 - TESTS: actions-accuracy R7-1..R7-7 (stale not judged; stale not shown; re-judged at the current version; the
   corrected sender and the OTHER person's quote win; settled guard on the re-judge; current reused; email kept).
+
+### D-2 (MEDIUM): different asks no longer collapse into one row
+
+- CHANGE: `collapseDuplicateTeamsItems(cands, senderIdOf)` treats two OPEN Teams items as the same ask ONLY when
+  (a) they come from the same chat (chat id parsed from the item key), or (b) the same sender ID quoted the same
+  folded sentence of at least `DEDUP_MIN_QUOTE_CHARS` = 25 characters. A shared backing proposal is no longer a
+  key (the store attaches different senders' to-dos to one proposal by title). A display name is never an id; an
+  unknown sender id never matches. `buildCandidates` supplies the latest OTHER sender's id from the stored rows.
+- BEHAVIOUR: the verifier's two counter-examples now give two rows (F2 short generic sentence; F4 shared
+  proposal). The real duplicate (same person, same long ask, 1:1 + group chat) still gives one row, the newest.
+- TESTS: R6-1 (rewritten: sender id instead of name), R6-2 (expectation REVERSED by this defect: shared proposal
+  -> two rows), R6-5 short generic quote -> two rows, R6-6 name without id -> two rows, R6-7 same chat -> one,
+  R6-8 end to end through buildCandidates (Pat's two copies -> one; Sam's identical ask on the same proposal stays).
