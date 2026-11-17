@@ -95,3 +95,41 @@ Reading:
 
 Verdict claim 1 (quote guard): **REFUTED in part** -- the 8-char floor, empty / null / short / non-verbatim cases
 hold; cross-message stitched quotes pass (D1).
+
+### 2. Daily and per-pass caps (`actions.server.ts:101-167`, `pipeline.ts:116-182`)
+
+Probe: `bun probes/caps.ts` drives the PR's `runClassify` with the SERVER's own cap formula
+(`used` = stored verdicts with `at >= localMidnight`, `left = min(6, dailyCap - used)`, lines 129-130). Output:
+
+```
+A. model failing (e.g. 429 / 15s timeout that still bills), dailyCap=5, 10 passes in one day:
+   total model calls = 50 (cap 5); stored verdicts today = 0
+B. two concurrent passes (two instances: per-process guard only), cap 5, used 3:
+   instance1 left=2 calls=2; instance2 left=2 calls=2; stored today now 5 (cap 5)
+C. America/New_York 2026-03-08 / 2026-11-01 / 04:59:59Z / 05:00:00Z -> correct local 00:00
+   America/Santiago 2026-09-06 -> local 2026-09-05 23:00 ; America/Havana 2026-03-08 -> local 2026-03-07 23:00
+   Lord_Howe, Kolkata, Kiritimati -> correct local 00:00
+```
+
+- Per-pass cap of 6 and the 20 s start budget: `left = min(CLASSIFY_PER_PASS, ...)`. `runClassify` stops at
+  `res.calls >= callsLeft` and counts the rest as `overCap`. **CONFIRMED** (code, plus probe B: left=2 gave 2 calls).
+- Within ONE process, two heartbeats share the in-flight promise (`if (classifying) return classifying`, line 113)
+  and the 10-minute throttle. **CONFIRMED** by reading the code.
+- **DEFECT D2 (MEDIUM, cost; AC-H-3 "at most N model calls per owner per day")**. The daily cap counts STORED
+  verdicts, not model calls (`callsToday`, lines 69-76). None of these is counted, because none stores anything:
+  a call that throws (a timeout at 15 s, where `Promise.race` does not abort the HTTP request, so the provider
+  still bills it), a `propose` failure, or a `storeVerdict` failure. Probe A: cap 5, model failing, 10 passes ->
+  **50 model calls, 0 counted**. The worst case is the throughput ceiling of 6 per 10 minutes, which is 864 a day
+  whatever the cap is. The BUILD log's "the hard ceiling is the daily cap (150)" does not hold when calls fail.
+- **DEFECT D3 (LOW, cost; race)**. Across instances there is no lease: `lastClassifyMs` and `classifying` are
+  module variables. Two instances read the same `used` and `judged`, both get `left`, and both call the model for
+  the SAME first threads. Probe B: cap 5, used 3 -> 4 calls, so 7 for the day against a cap of 5, and the
+  duplicate pair classified the same two chats. The ingest pass itself is safe across instances through the ledger
+  claim; this step is not.
+- Midnight rollover: the day boundary is `localMidnightMs(now, tz)`, recomputed each pass. New York DST days and the
+  04:59:59Z / 05:00:00Z boundary are exact. **CONFIRMED.** INFO: in zones whose DST change happens AT midnight
+  (Santiago, Havana), the "day" starts at 23:00 the evening before, so one extra hour is counted. The owner's zone
+  is New York, but `resolveActionsSettings` accepts any IANA zone.
+
+Verdict claim 2: **REFUTED** for the daily cap as a hard ceiling (D2) and for concurrency across instances (D3).
+The per-pass cap and in-process concurrency are CONFIRMED.
