@@ -138,7 +138,7 @@ Statement (BUILD log line 165-167): "only passes that START on two instances in 
 (instances - 1) x min(6, cap - used) extra calls per overlapping 10-minute pass". Code: each instance reads `used`
 ONCE at the start of its pass (`actions.server.ts:164-165`) and may start up to `left` calls within its 20 s budget
 (`CLASSIFY_BUDGET_MS`). Derivation: instance B starting while A is mid-pass reads `used` after A's first records, so
-it overruns by LESS but still overruns (example: cap 5, used 3; A reads 3 -> left 2, records 1; B starts, reads 4
+it overruns by LESS but still overruns (derived from the code, NOT run: cap 5, used 3; A reads 3 -> left 2, records 1; B starts, reads 4
 -> left 1; total 3 calls -> 6 for the day). So "START in the same moment" is imprecise: any two passes whose 20 s
 windows overlap can overrun. The BOUND itself holds, because each extra instance's `left` <= min(6, cap - used at
 the earliest start). D3-MEASURE (`actions-view` suite) reproduces the simultaneous case: 4 calls -> 7.
@@ -165,7 +165,7 @@ PostgreSQL 16, model mocked to ADMIT the ask. Observed (`v3-probe.out.txt`):
 - Dismiss the proposal -> page `counts.all = 0`.
 - Follow-up message 2 in chat F, same ask -> pass 2 makes 1 model call; stored verdict
   `{"status":"open","onBoard":true,"proposalId":null}` (suppressed by F15, mapped to onBoard at
-  `actions.server.ts:180`); page `counts.all = 0`, `hidden.total = 0`, `notChecked` unchanged (=1, the other chat).
+  `actions.server.ts:182`); page `counts.all = 0`, `hidden.total = 0`, `notChecked` unchanged (=1, the other chat).
 So the follow-up is in no list and no count. This MATCHES AC-C-6 ("Dismiss ... the same normalised to-do is not
 proposed again from any source") and AC-E-10, so it is not a defect against the ACs.
 - **O1 (LOW, record accuracy)**: the stored verdict says `onBoard: true` although the to-do is NOT on the board; it
@@ -186,3 +186,69 @@ message arrives (new latest id)").
   re-judged unless a newer message arrives. Repro: V3-O2.
 
 Verdict O2: **CONFIRMED** as described (LOW, outside the ACs).
+
+### 10. Mutation proofs run by this verifier (`mutate.sh` on PATH, anchors extracted from the source into files, exact test names)
+
+Run in a git snapshot of 5a21fc7b (scratch repo, tree clean before and after; `git status` shows only my untracked
+probe). Anchors/replacements are one line each, shown as before -> after.
+
+| id | file | mutation | test cmd / pattern | outcome | exit |
+|---|---|---|---|---|---|
+| D6-M | actions.server.ts `itemBacking` | `AND result_ids->'action'->>'key' = $2 AND` -> `AND $2::text IS NOT NULL AND` (any verdict row of the proposal backs any key) | actions-view-server / `D6-S2 GUARD: a made-up itemKey ending in a real ledger id` | **FIRED (control EQUIVALENT)** | 0 |
+| D2-M | actions.server.ts `recordActionCall` | `if ((r.rowCount ?? 0) !== 1) throw ...` -> `void r;` (a missing row no longer stops the call) | actions-view-server / `D2-S3 recording on a row that is not there throws` | **FIRED (control EQUIVALENT)** | 0 |
+| D4-M | actions.ts `correctionsOf` | pre-D4 single-shape line -> comment (old stored corrections ignored -> un-hidden) | actions-view / `D4-4 the pre-D4 single shape is read as its one item` | **FIRED (control EQUIVALENT)** | 0 |
+| D1-M | action-classify.ts `teamsQuoteHaystack` | `c.messages.filter((m) => m.speaker === "OTHER").map` -> `c.messages.map` (the OWNER's own messages become quote pieces) | actions-view (whole suite) | **INERT** | 1 |
+| D5-M | actions.server.ts `proposalBacksActionsRow` | drop `AND result_ids->'action'->>'status' = 'open'` | actions-view-server (whole suite) | **INERT** | 1 |
+
+Reading the two INERT results:
+- **D1-M INERT = test gap (LOW).** The code is right (probe d1.ts P2: a quote found only in the owner's message ->
+  not_checked), but no test locks "the owner's own words are not a quote source". If someone widened the haystack,
+  the model could cite the owner's own sentence as the ask and it would be admitted. Repro: apply D1-M, run
+  `bun scripts/actions-view.test.ts` -> 82/82 still pass.
+- **D5-M INERT = behaviourally equivalent in reachable states, so NOT PROVEN rather than broken.** A verdict only
+  carries a `proposalId` when it is `open` (`admitActionVerdict` builds every verdict with `proposalId: null`;
+  `runClassify` sets it only inside `if (v.status === "open")`, `pipeline.ts:172-176`). So no stored verdict can be
+  non-open AND point at a proposal, and the clause cannot change an outcome today.
+
+Totals: 3 FIRED (all controlled), 2 INERT (one test gap, one equivalent), 0 NOT-APPLIED. With loop 2's M1-M3 and the
+builder's d1a-d6c, the D1, D2, D4 and D6 guards each have at least one FIRED proof by someone other than the builder
+(D1 by loop-2 M1 on the length clause; the piece-split itself only by the builder's d1a-d1c).
+
+### 11. E-U spelling table (AC-EU-1), row by row
+
+`verify-actions-view-3-probes/eu.ts` calls the ONE rule `chatInvolvement` (main's #262 body; the only change on this
+branch is `&& kind !== "channel"`, confirmed by `git diff 9c1859e1 5a21fc7b -- .../report-from-ledger.ts`: one hunk
+inside `chatInvolvementOf`) with stored-message shapes exactly as `external-feeds/teams-log.ts:282-311` writes them.
+
+| row | expected (AC) | observed | verdict |
+|---|---|---|---|
+| S-1 1:1 | show | hide=false one_on_one | CONFIRMED |
+| S-2 group, never wrote, empty mentions | HIDE | hide=true uninvolved | CONFIRMED |
+| S-3 meeting chat | HIDE | hide=true uninvolved | CONFIRMED |
+| S-4 channel `thread.tacv2` | HIDE | hide=true kind=channel | CONFIRMED |
+| S-5 upper-case id | as S-2 | hide=true | CONFIRMED |
+| S-6 fromOwner true | show | owner_sent | CONFIRMED |
+| S-7 sender id = owner id other case | show | owner_sent | CONFIRMED |
+| S-8 owner @mentioned | show | owner_mentioned | CONFIRMED |
+| **S-9 team / tag mention only** | **HIDE** | **hide=false, reason owner_maybe_mentioned** (ingest shape: `mentionedUserIds: []`, `unresolvedMention: true`) | **REFUTED (D7)** |
+| S-10 one message lacks mention data | show | cant_tell_no_mention_data | CONFIRMED |
+| S-11 no owner id anywhere | show | cant_tell_owner_unknown | CONFIRMED (id only in config: hide, as designed) |
+| S-12 fromOwner null | show | cant_tell_owner_unknown | CONFIRMED |
+| S-13 unknown suffix | show | not_group_or_meeting | CONFIRMED |
+| S-14 owner wrote only before the window | show | owner_sent | CONFIRMED |
+| S-15 switch OFF -> classified | show + classified | suite S-15 and E-1 PASS; loop-2 M2 FIRED on `pipeline.ts` | CONFIRMED |
+
+Extra: a null stored message -> `cant_tell_malformed`, no throw; a non-string chat id -> unknown, show.
+
+**DEFECT D7 (LOW, spec vs. merged rule; fails toward SHOWING).** AC row S-9 says a chat whose only mention is a team /
+tag / @Everyone mention is HIDDEN. The ingest (`teams-log.ts:99-123` `mentionFacts`) marks exactly that mention
+`unresolvedMention: true`, and main's merged rule (`report-from-ledger.ts:196`, `maybeMentionsOwner` at `:230-238`,
+main's #262 "finding 1") then SHOWS the chat as `owner_maybe_mentioned`. The suite's S-9 test
+(`scripts/actions-view.test.ts:107`) passes only because its fixture omits `unresolvedMention`, a shape the ingest
+never writes for a mention. Repro: `CODE=<checkout> bun docs/qc-evidence/verify-actions-view-3-probes/eu.ts`, row
+S-9a. Impact: such chats are shown and sent to the model (one call each, within the cap), never wrongly hidden. The
+AC and main's rule disagree; the owner decides: keep main's fail-open behaviour (then fix the S-9 row and the fixture)
+or hide tag-only mentions (then change main's rule).
+
+AC-EU-2 (switch ON -> hidden chats never reach the model, counted in N hidden): `pipeline.ts:69-73` plus suite E-1 and
+S-15 -> CONFIRMED. AC-EU-3 (one rule): one `chatInvolvement` definition in `src` + `scripts` -> CONFIRMED.
