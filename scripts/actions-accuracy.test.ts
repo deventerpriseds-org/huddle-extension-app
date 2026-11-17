@@ -337,5 +337,15 @@ void GRP;
   t("R8-5 end to end with the default config: the group chat named after the owner is labelled 'Teams group chat'", g?.display.sourceLabel, "Teams group chat");
 }
 
+// R13 role labels never reach the owner (2026-11-17 owner screenshot: "OTHER asked ..., and OWNER said ...")
+{
+  const { plainRoles, GROUNDED } = await import("../src/features/huddle/lib/correspondence/action-classify");
+  t("R13-1 OTHER/OWNER labels become plain words", plainRoles("OTHER asked how to handle PTO, and OWNER said they would circle back."), "They asked how to handle PTO, and you said they would circle back.");
+  t("R13-2 the OWNER's -> your", plainRoles("Send the OWNER's timesheet."), "Send your timesheet.");
+  t("R13-3 ordinary lowercase 'other' is untouched", plainRoles("Review the other draft."), "Review the other draft.");
+  t("R13-4 null stays null", plainRoles(null), null);
+  t("R13-5 the instructions tell the model not to write the labels", GROUNDED.includes("Never write the words OWNER or OTHER"), true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
