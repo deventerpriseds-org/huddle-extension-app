@@ -171,3 +171,33 @@ Source of the defects: `docs/qc-evidence/VERIFY-actions-accuracy-2.md` on `claud
 - UAT (actions-view-checks.mjs ACC-5, updated, NOT run here: no dispatch allowed): a row without More shows its
   whole title; the More control is >= 44px tall; expanded rows wrap / unclamp as before.
 - Verification here: tsc + build only. Rendered result is MERGE-PENDING-UAT.
+
+### Loop-2 mutation proofs (`mutate.sh`, anchors in files, exit code read)
+
+| # | file | mutation (defect reinstated) | test | outcome | exit |
+|---|---|---|---|---|---|
+| L2-M1 | pipeline.ts | `verdictIsCurrent` ignores the version | R7-1 | FIRED (control EQUIVALENT) | 0 |
+| L2-M2 | pipeline.ts | `buildCandidates` shows any verdict with the same key | R7-2 | FIRED (control EQUIVALENT) | 0 |
+| L2-M3 | pipeline.ts | min quote length 1 (was 40) | R6-5 | first run INERT (the test used two different sentences: test bug, fixed); then PRE-DIRTY at 25 (the constant was too low: raised to 40); then FIRED (control EQUIVALENT) | 1, 5, 0 |
+| L2-M4 | pipeline.ts | shared proposal is a de-dup key again | R6-2 | FIRED (control EQUIVALENT) | 0 |
+| L2-M5 | pipeline.ts | display name used when no sender id | R6-6 | FIRED (control EQUIVALENT) | 0 |
+| L2-M6 | report-from-ledger.ts | name fallback accepts one-word names | R8-3 | FIRED (control EQUIVALENT) | 0 |
+| L2-M7 | report-from-ledger.ts | Teams name fallback reads `ctx.ownerNames` (first name) | R8-2 | FIRED (control EQUIVALENT) | 0 |
+| L2-M8 | report-from-ledger.ts | an id on one chat is taken across chats | R9-1 | FIRED (control EQUIVALENT) | 0 |
+| L2-M9 | report-from-ledger.ts | hiding uses the cross-chat ids | R10-1 | FIRED (control EQUIVALENT) | 0 |
+| L2-M10 | action-classify.ts | settled guard leaves `todo` as is | R11-1 | FIRED (control EQUIVALENT) | 0 |
+| L2-M11 | action-classify.ts | "you still ..." not treated as an owner-state claim | R11-2 | FIRED (control EQUIVALENT) | 0 |
+| L2-M12 | meeting-triage.ts | every labelled line is a detail again | R12-1 | FIRED (control EQUIVALENT) | 0 |
+
+One D-4 attempt first reported NOT-APPLIED (exit 3) because the file was uncommitted; re-run after the commit: FIRED.
+
+### Loop-2 final runs (after merging origin/main 9bc4c4fb, #267)
+
+actions-accuracy 55/55 (was 25), actions-view 90/90, actions-view-server 28/28, report-from-ledger 103/103,
+correspondence-ingest 186/186, meeting-triage 69/69, meeting-triage-sql 34/34, meeting-triage-server 7/7,
+task-proposals 199/199, task-proposals-sql 45/45, needs-you 77/77, ai-quota-alert 50/50, ai-quota-alert-sql 12/12;
+tsc rc=0 (no output); vite build rc=0. Merge conflict: `.claude/actions.md` only (both ACT sections kept);
+`actions.server.ts` auto-merged with `currentlyJudgedKeys` intact.
+
+Open / not done here: UAT (ACC-3/4/5) not run (no dispatch in this brief); live effect of D-1 needs the deploy
+(Teams rows judged before it show as "not checked yet" until the heartbeat re-judges them, ~36 an hour).
