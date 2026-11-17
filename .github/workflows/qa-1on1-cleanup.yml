@@ -77,9 +77,10 @@ jobs:
           IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
           RULE="qaclean-${IP//./-}"
           echo "FW_RULE=$RULE" >> "$GITHUB_ENV"
-          az postgres flexible-server firewall-rule create -g "$PG_RG" -s "$PG_SRV" \
-            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
-            && echo "Opened firewall rule $RULE for $IP." || echo "firewall-rule create skipped (existing rules)."
+          # 2026-11-16: the rule is --name/-n, the server --server-name/-s (`--rule-name` failed every run, hidden by 2>&1).
+          az postgres flexible-server firewall-rule create -g "$PG_RG" --server-name "$PG_SRV" \
+            --name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null \
+            && echo "Opened firewall rule $RULE for $IP." || echo "::warning::firewall-rule create failed (existing rules)."
           sleep 8
 
       - name: Delete this run's rows + verify zero
@@ -109,5 +110,7 @@ jobs:
       - name: Remove the runner firewall rule
         if: always() && env.FW_RULE != ''
         run: |
-          az postgres flexible-server firewall-rule delete -g "$PG_RG" -s "$PG_SRV" \
-            --rule-name "$FW_RULE" --yes --only-show-errors >/dev/null 2>&1 && echo "Removed $FW_RULE." || echo "Cleanup skipped."
+          # --name is the RULE (see the create step). A failure is shown and flagged, never silent.
+          az postgres flexible-server firewall-rule delete -g "$PG_RG" --server-name "$PG_SRV" \
+            --name "$FW_RULE" --yes --only-show-errors \
+            && echo "Removed $FW_RULE." || echo "::warning::firewall rule $FW_RULE was NOT removed -- delete it by hand."

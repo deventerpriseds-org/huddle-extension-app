@@ -120,8 +120,10 @@ jobs:
             HOST=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query fullyQualifiedDomainName -o tsv 2>/dev/null || echo "")
             ADMIN=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query administratorLogin -o tsv 2>/dev/null || echo "")
             RULE="ghq-${IP//./-}"
-            az postgres flexible-server firewall-rule create -g "$RG" -s "$SRV" \
-              --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 || true
+            # 2026-11-16: the rule is --name/-n, the server --server-name/-s (`--rule-name` failed silently every run).
+            az postgres flexible-server firewall-rule create -g "$RG" --server-name "$SRV" \
+              --name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null \
+              || echo "::warning::firewall-rule create failed on $SRV (relying on existing server rules)."
             sleep 8
             EADMIN=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$ADMIN")
             EPW=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$PG_PW")
@@ -131,8 +133,9 @@ jobs:
             echo "################## $SRV / $DB ##################"
             psql "$URL" -v ON_ERROR_STOP=0 --pset pager=off -c "$INTRO" -c "$ROWS" 2>&1 | sed 's/^/    /' \
               || echo "    (could not connect/query — see error above)"
-            az postgres flexible-server firewall-rule delete -g "$RG" -s "$SRV" \
-              --rule-name "$RULE" --yes --only-show-errors >/dev/null 2>&1 || true
+            az postgres flexible-server firewall-rule delete -g "$RG" --server-name "$SRV" \
+              --name "$RULE" --yes --only-show-errors \
+              || echo "::warning::firewall rule $RULE on $SRV was NOT removed -- delete it by hand."
           }
           inspect eds-postgresql RAG_AI_Agents
           inspect ux-design-pg postgres

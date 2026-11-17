@@ -1,3 +1,9 @@
+- [ ] 2026-11-16 Owner tuning batch ("about 3 of 5 forwarded emails lost the forwarded part ... handle now along with anything
+      else noticed besides the meetings action items"): branch claude_correspondence-tuning-fixes -- forwarded part stored
+      (EmailContent.forwarded) + back-fill refill, proposals-preview defaults, DB firewall rule really created/removed,
+      default verify-uat suite starts no stand-up. Mutation-proved (18 FIRED, controlled), suites green, tsc clean.
+      OPEN: merge, then dispatch correspondence-backfill.yml (dry run, then apply) to refill stored forwards.
+      Evidence: docs/qc-evidence/BUILD-correspondence-tuning-fixes.md.
 - [x] 2026-11-16 Meeting menu: stand-up title on one line + muted "Daily at 8:00" line (the single label wrapped mid-phrase in UAT run 43796721000 screenshot); UAT asserts one-line title.
 - [x] 2026-11-16 Meeting menu: "Automatic stand-up" is now a real Switch on a plain menu row aligned with "Daily stand-up" (owner: did not look like a toggle, not aligned); meeting-menu-checks.mjs UAT measures alignment + screenshots both themes.
 - [x] 2026-11-16 Loop 12 verifier (claude_verify-correspondence-proposals-12 @ 9d6c3889): PASS 6, FAIL 0, UI-UNVERIFIED 1; minor: "teams=scheduled | email=throttled" logged every minute before 6pm -> quiet-log check now includes scheduled (TL-10).
