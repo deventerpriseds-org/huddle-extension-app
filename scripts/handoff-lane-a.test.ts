@@ -231,11 +231,21 @@ describe("F1-4 stripTeammateDeferral", () => {
     "I'll ping Finn about it.",
     "I'm putting this in Finn's hands.",
     "I'm sending this over to Finn.",
+    // verify loop 7 (7-rest C1)
+    "Finn's got this one.",
+    "Finn is on it.",
+    "I'll let Finn know.",
   ]) {
     test(`removes: ${phrase}`, () => {
       expect(stripTeammateDeferral(`Done — research is underway. ${phrase}`, A)).toBe("Done — research is underway.");
     });
   }
+  test("a dash-joined deferral clause is dropped and the rest kept (verify loop 7, 7-rest C1)", () => {
+    expect(stripTeammateDeferral("I booked it — Finn will handle the receipts.", A)).toBe("I booked it.");
+  });
+  test("a non-deferral mention of a teammate's brief is kept", () => {
+    expect(stripTeammateDeferral("I read the brief Finn wrote last week.", A)).toBe("I read the brief Finn wrote last week.");
+  });
   test("never strips the addressed agent's own name, nor a non-deferral mention", () => {
     expect(stripTeammateDeferral("Iris will follow up with the brief.", A)).toBe("Iris will follow up with the brief.");
     expect(stripTeammateDeferral("Finn mentioned the budget last week; I've started the research.", A)).toBe(

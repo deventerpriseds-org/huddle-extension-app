@@ -293,6 +293,10 @@ function deferralPatterns(name: string): RegExp[] {
     new RegExp(`\\b${n}(?:'s|’s)\\s+(?:area|lane|domain|wheelhouse)\\b`, "i"),
     // #131 answer-first wording (lane-handoff.ts laneAnswerFirstDirective): "<Name> knows this area best —
     // I'm looping them in". A sentence that names the teammate AND loops a pronoun in is a deferral.
+    // Verify loop 7 (7-rest C1): "Finn's got this one", "Finn is on it", "I'll let Finn know".
+    new RegExp(`\\b${n}(?:'s|’s|\\s+has)\\s+got\\s+(?:this|it|that)\\b`, "i"),
+    new RegExp(`\\b${n}(?:'s|’s|\\s+is)\\s+(?:already\\s+)?on\\s+(?:it|this|that)\\b`, "i"),
+    new RegExp(`\\b(?:let|tell|update)\\s+${n}\\s+know\\b`, "i"),
     new RegExp(`\\b${n}\\s+knows\\s+(?:this|that|the)?\\s*(?:area|stuff|lane|space|topic|subject)?\\s*best\\b`, "i"),
     new RegExp(`\\b${n}\\b.*\\bloop(?:ing)?\\s+(?:them|him|her)\\s+in\\b|\\bloop(?:ing)?\\s+(?:them|him|her)\\s+in\\b.*\\b${n}\\b`, "i"),
   ];
@@ -316,6 +320,13 @@ export function stripTeammateDeferral(text: string, addressedId: string): string
     const sep = parts[i + 1] ?? "";
     if (sentence.trim() && pats.some((re) => re.test(sentence))) {
       changed = true;
+      // A dash-joined sentence keeps its other clauses: "I booked it — Finn will handle the receipts" -> "I booked
+      // it." (verify loop 7, 7-rest C1: the whole one-sentence reply used to be kept because dropping it left nothing).
+      const clauses = sentence.split(/\s+[—–]\s+/);
+      // A clause that hands off by PRONOUN ("I'm looping them in") refers back to the named teammate, so it goes too.
+      const pronounHandoff = /\b(?:loop(?:ing)?\s+(?:them|him|her)\s+in|(?:they|he|she)(?:'ll|’ll|\s+will)\s+(?:reach\s+out|follow\s+up|handle|take\s+(?:it|this|over)|get\s+back))\b/i;
+      const rest = clauses.filter((c) => !pats.some((re) => re.test(c)) && !pronounHandoff.test(c)).join(" — ").trim();
+      if (clauses.length > 1 && rest) kept.push((/[.!?]$/.test(rest) ? rest : `${rest}.`) + sep);
       continue;
     }
     kept.push(sentence + sep);
