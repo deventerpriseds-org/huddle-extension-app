@@ -26,7 +26,8 @@ Every row below returns classifyAsk(text).urgency === "now" while the message de
 | quote chars NOT in /["“”«»]/ | "Sam: „book it asap‟" / "Sam: 「book it asap」" / "Sam: ‹book it asap›" / "Sam: ″book it asap″" -- the fix's "any quote character means not now" is false for these |
 | unmarked reported speech | "Finn's note says, book it asap. Thoughts?" |
 | question | "Do you think I should do it now?" (type quick-verbal) / "Check whether we should do it now" |
-Correct: "As soon as Sam replies, ..." (once/when not hit, but "as soon as"? -> default via "soon"), "Do it now /s", "Sam said: book it asap. I think it can wait a bit".
+Correctly default: "As soon as Sam replies, send it right away." (vetoed by the listed word "soon"), "Do it now /s", "Sam said: book it asap. I think it can wait a bit" (vetoed by "wait").
+Consumers reached by these inputs (observed): huddle.functions.ts:2077 (`urgency !== "now"` gate), :7413 (followupMode now vs confirm), capabilities.ts:280.
 Root cause (observed, capabilities.ts:228-241): urgency is decided by a closed allowlist of "now" clauses, but the vetoes are an OPEN denylist of words; any
 retraction/condition/time phrase not on the list leaves the "do it now" clause intact. Same shape as loops 1-8.
 

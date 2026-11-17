@@ -1,0 +1,1 @@
+if (u.tool === "confirm_task_intent") return /^DoD confirmed$/.test(u.summary.trim());
