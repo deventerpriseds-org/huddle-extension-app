@@ -16,7 +16,7 @@
 // THIS REPO IS PUBLIC: no names, ids, addresses or content here. Nothing in this module logs.
 
 import { FEED_ID_PREFIX, latestSentByConversation, type FeedInboundMessage, type OneDriveFeedsConfig, type SentMessage } from "../external-feeds/onedrive-feed";
-import { forwardedText } from "./forwarded";
+import { forwardedPartText, forwardedText } from "./forwarded";
 import {
   conversationFacts,
   effectiveOwnerNames,
@@ -101,9 +101,11 @@ export function sentFromLedger(rows: readonly LedgerReportRow[]): SentMessage[] 
   return out;
 }
 
-/** Pure: the forwarded part of each stored "Fw:" email (by feed id). The stored text is htmlToText output, which
- *  already cut an Outlook-marker forward block, so only a plain-text forward header can be recovered; the rest are
- *  counted in `missing`. */
+/** Pure: the forwarded part of each stored "Fw:" email (by feed id). 2026-11-16: the STORED forwarded part
+ *  (EmailContent.forwarded, read from the raw body at store time) is used first. A row stored before that field
+ *  existed falls back to the stored bodyText, which is htmlToText output that already cut an Outlook-marker forward
+ *  block, so only a plain-text forward header can be recovered there; the rest are counted in `missing` (the
+ *  back-fill with apply re-writes those rows' content). */
 export function forwardsFromLedger(rows: readonly LedgerReportRow[]): { forwards: Map<string, string>; isForward: number; missing: number } {
   const forwards = new Map<string, string>();
   let isForward = 0;
@@ -113,7 +115,8 @@ export function forwardsFromLedger(rows: readonly LedgerReportRow[]): { forwards
     const c = r.content as EmailContent;
     if (!c.isForward) continue;
     isForward++;
-    const t = forwardedText(c.subject, c.bodyText, false);
+    const stored = c.forwarded && (c.forwarded.body || c.forwarded.from) ? forwardedPartText(c.forwarded) : "";
+    const t = stored || forwardedText(c.subject, c.bodyText, false);
     if (t) forwards.set(`${FEED_ID_PREFIX}${r.sourceItemId}`, t);
     else missing++;
   }

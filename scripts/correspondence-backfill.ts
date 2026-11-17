@@ -17,15 +17,22 @@
 //             Fireflies API (fireflies.server listTranscriptsInRange) and fetches the union with chat.fireflies_meetings;
 //             (b) on apply, each Teams version's items have their stored CONTENT re-written (storeContent, content only)
 //             so rows stored earlier gain mention ids / owner id / mentionsOwner. Dry run writes nothing either way.
+//             2026-11-16 (tuning fixes, owner: "about 3 of 5 forwarded emails lost the forwarded part when they were
+//             stored"): stored email content now carries `forwarded` (the forwarded email, read from the raw body).
+//             The hash is unchanged, so observe never rewrites an existing row: after the version loops the ledger's
+//             FLAGS for stored forwards are read (never their content), planForwardRefill picks the rows that would
+//             gain a forwarded part, the log prints the counts, and on apply those rows' CONTENT is re-written
+//             (storeContent, content only). A dry run reads the flags and counts; it writes nothing.
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
-// EVIDENCE:   .claude/actions.md 2026-11-15; correspondence-probes.ts P-7; docs/qc-evidence/BUILD-correspondence-content.md.
+// EVIDENCE:   .claude/actions.md 2026-11-15; correspondence-probes.ts P-7; docs/qc-evidence/BUILD-correspondence-content.md;
+//             docs/qc-evidence/BUILD-correspondence-tuning-fixes.md.
 // Env: TOKEN (app-only Graph), HUDDLE_ONEDRIVE_FEEDS, AZURE_PG_URL, BACKFILL_SINCE (ISO, default Monday 2026-11-09 00:00 ET),
 //      FIREFLIES_API_KEY (optional: without it the Fireflies pass is skipped and says so),
 //      BACKFILL_APPLY=1 to write (otherwise a DRY RUN that only reads and counts; nothing is written anywhere).
 import { ledgerEmailItems } from "../src/features/huddle/lib/correspondence/ingest-pass";
-import { firefliesTranscriptItem, sentSourceItems, teamsSourceItem, transcriptContent } from "../src/features/huddle/lib/correspondence/source-item";
-import type { ObserveResult, SourceItem } from "../src/features/huddle/lib/correspondence/source-item";
-import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
+import { firefliesTranscriptItem, planForwardRefill, sentSourceItems, teamsSourceItem, transcriptContent } from "../src/features/huddle/lib/correspondence/source-item";
+import type { ObserveResult, SourceItem, StoredForwardFlags } from "../src/features/huddle/lib/correspondence/source-item";
+import { feedRecordBody, htmlToText, parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { parseTeamsLog } from "../src/features/huddle/lib/external-feeds/teams-log";
 
 const token = process.env.TOKEN ?? "";
@@ -80,7 +87,12 @@ type Src = "email" | "teams" | "sent" | "transcript";
 const zero = () => ({ versions: 0, items: 0, unique: 0, inserted: 0, contentFilled: 0, changed: 0, unchanged: 0, updated: 0, failed: 0, refreshed: 0 });
 const totals: Record<Src, ReturnType<typeof zero>> = { email: zero(), teams: zero(), sent: zero(), transcript: zero() };
 const seen = new Set<string>();
+// Every email / Sent Items item read, oldest version first, for the forwarded-part refill plan below.
+const mailItems: SourceItem[] = [];
+// The newest raw inbox record per ledger key -- only to COUNT why a forward has no readable forwarded part.
+const rawById = new Map<string, Record<string, unknown>>();
 const store = async (source: Exclude<Src, "transcript">, items: SourceItem[]) => {
+  if (source === "email" || source === "sent") mailItems.push(...items);
   const fresh = items.filter((it) => {
     const k = `${it.source}:${it.sourceItemId}`;
     if (seen.has(k)) return false;
@@ -121,6 +133,7 @@ for (const v of await versions(cfg.email.path)) {
   totals.email.versions++;
   const records = snapshotRecords(v.text);
   const { items } = ledgerEmailItems(records, cfg, { path: cfg.email.path, etag: `version:${v.id}` });
+  for (const r of records) if (typeof r.id === "string" && r.id) rawById.set(`email\u0000${cfg.mailbox}:${r.id.trim()}`, r);
   console.log(`email version ${v.at}: records ${records.length} | items ${items.length}`);
   await store("email", items);
 }
@@ -145,10 +158,73 @@ if (cfg.sent.enabled) {
     totals.sent.versions++;
     const records = snapshotRecords(v.text);
     const { items, skipped } = sentSourceItems(records, cfg, { path: cfg.sent.path, etag: `version:${v.id}` });
+    for (const r of records) if (typeof r.id === "string" && r.id) rawById.set(`sent\u0000${cfg.mailbox}:${r.id.trim()}`, r);
     console.log(`sent version ${v.at}: records ${records.length} | items ${items.length} | skipped ${skipped}`);
     await store("sent", items);
   }
 } else console.log("sent: not configured (sent entry absent or off) -- skipped");
+
+// Forwarded-part refill (2026-11-16). FLAGS only are read -- no subject, body or address leaves the database.
+{
+  let stored: StoredForwardFlags[] = [];
+  let readOk = true;
+  try {
+    const { getSharedPool } = await import("../src/features/huddle/lib/db/shared-pool.server");
+    stored = (
+      await getSharedPool().query<StoredForwardFlags>(
+        `SELECT source, source_item_id AS "sourceItemId", (content IS NOT NULL) AS "hasContent",
+                COALESCE(content ? 'forwarded', false) AS "hasForwarded", (content_purged_at IS NOT NULL) AS "purged"
+           FROM chat.correspondence_ledger
+          WHERE source IN ('email', 'sent') AND lower(owner_email) = lower($1)
+            AND (content IS NULL OR content->>'isForward' = 'true')`,
+        [owner],
+      )
+    ).rows;
+  } catch {
+    readOk = false;
+    console.log("forwards: could not read the ledger flags -- refill skipped");
+  }
+  if (readOk) {
+    // A NULL-content row is only a forward if a version says so: keep it only when the items read mark it isForward.
+    const fwdKeys = new Set(mailItems.filter((it) => (it.content as { isForward?: boolean } | undefined)?.isForward).map((it) => `${it.source}\u0000${it.sourceItemId}`));
+    const flags = stored.filter((s) => s.hasContent || fwdKeys.has(`${s.source}\u0000${s.sourceItemId}`));
+    const plan = planForwardRefill(mailItems, flags);
+    let refilled = 0;
+    let refillFailed = 0;
+    if (apply && plan.refill.length) {
+      try {
+        refilled = (await pgLedger.storeContent(owner, plan.refill)).updated;
+      } catch {
+        refillFailed = plan.refill.length;
+      }
+    }
+    console.log(
+      `forwards: read ${plan.forwardsRead} (with forwarded part ${plan.forwardsWithPart}) | stored ${plan.storedForwards}, ` +
+        `stored without forwarded part ${plan.storedMissing} | would gain it ${plan.wouldGain} | still missing ${plan.stillMissing} | ` +
+        `purged ${plan.purged}${apply ? ` | content re-written ${refilled}, failed ${refillFailed}` : " | DRY RUN: nothing written"}`,
+    );
+    // Why the rest have no forwarded part -- SHAPE counts only (no text): an attachment-only forward, an empty body,
+    // or a body whose header we cannot read.
+    const gained = new Set(plan.refill.map((it) => `${it.source}\u0000${it.sourceItemId}`));
+    const why: Record<string, number> = {};
+    for (const s of flags) {
+      const k = `${s.source}\u0000${s.sourceItemId}`;
+      if (s.hasForwarded || s.purged || gained.has(k)) continue;
+      const r = rawById.get(k);
+      const { raw, isHtml } = r ? feedRecordBody(r) : { raw: "", isHtml: false };
+      const reason = !r
+        ? "not_in_any_version"
+        : !raw.trim() ? "empty_body"
+        : /id=["']?(?:divRplyFwdMsg|appendonsend)/i.test(raw) ? "outlook_marker_unread"
+        : /<blockquote\b/i.test(raw) ? "blockquote_unread"
+        : /^\s*(?:From|De|Von)\s*:/im.test(isHtml ? htmlToText(raw) : raw) ? "header_unread"
+        : r.hasAttachments === true ? "no_header_has_attachments"
+        : "no_header";
+      why[`${s.source}:${reason}`] = (why[`${s.source}:${reason}`] ?? 0) + 1;
+    }
+    console.log(`forwards still missing by shape: ${JSON.stringify(why)}`);
+  }
+}
 
 // Fireflies: every meeting the minutes flow knows (chat.fireflies_meetings, the webhook's record) UNION every meeting
 // the Fireflies API lists in [BACKFILL_SINCE, now] (2026-11-16: the webhook record starts 2026-11-10, so a meeting it

@@ -519,6 +519,17 @@ export interface FeedInboundMessage extends InboundMessage {
   contentClass?: string | null;
 }
 
+/** Pure: the RAW body of one Outlook feed record and whether it is HTML -- exactly the read mapFeedMessage does
+ *  (moved here 2026-11-16 so the correspondence store can read the forwarded part from the same raw body). */
+export function feedRecordBody(rec: Record<string, unknown>): { raw: string; isHtml: boolean } {
+  const body = rec.body as unknown;
+  const raw = typeof body === "string" ? body : body && typeof body === "object" ? str((body as Record<string, unknown>).content) : "";
+  const isHtml =
+    rec.isHtml === true ||
+    (!!body && typeof body === "object" && str((body as Record<string, unknown>).contentType).toLowerCase() === "html");
+  return { raw, isHtml };
+}
+
 export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): FeedInboundMessage {
   // Outlook connectors write header items as {name,value} or {Name,Value}; accept both.
   const headers = (Array.isArray(rec.internetMessageHeaders) ? rec.internetMessageHeaders : []).map((h) => {
@@ -530,12 +541,7 @@ export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): F
   // Display name: the connector's From is often a bare address; the original From header has the name.
   const fromHeader = header("from");
   const name = from.name || (fromHeader ? parseAddress(fromHeader.value).name : "");
-  const body = rec.body as unknown;
-  const bodyRaw =
-    typeof body === "string" ? body : body && typeof body === "object" ? str((body as Record<string, unknown>).content) : "";
-  const isHtml =
-    rec.isHtml === true ||
-    (body && typeof body === "object" && str((body as Record<string, unknown>).contentType).toLowerCase() === "html");
+  const { raw: bodyRaw, isHtml } = feedRecordBody(rec);
   const val = (n: string) => {
     const h = header(n);
     return h ? str(h.value).toLowerCase() || null : null;

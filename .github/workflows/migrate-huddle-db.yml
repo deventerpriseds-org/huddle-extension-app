@@ -48,13 +48,23 @@ jobs:
           IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
           echo "Runner IP: $IP"
           RULE="ghmig-${IP//./-}"
+          # 2026-11-16: remove the rule on EVERY exit (set -e used to skip the inline delete on any failure).
+          cleanup_fw() {
+            for SRV in "$SRC_SERVER" "$TGT_SERVER"; do
+              az postgres flexible-server firewall-rule delete -g "$RG" --server-name "$SRV" --name "$RULE" --yes --only-show-errors \
+                || echo "::warning::firewall rule $RULE on $SRV was NOT removed -- delete it by hand."
+            done
+          }
+          trap cleanup_fw EXIT
 
           url_for() {
             local SRV="$1" DB="$2" HOST ADMIN EADMIN EPW
             HOST=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query fullyQualifiedDomainName -o tsv)
             ADMIN=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query administratorLogin -o tsv)
-            az postgres flexible-server firewall-rule create -g "$RG" -s "$SRV" \
-              --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 || true
+            # 2026-11-16: the rule is --name/-n, the server --server-name/-s (`--rule-name` failed silently every run).
+            az postgres flexible-server firewall-rule create -g "$RG" --server-name "$SRV" \
+              --name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null \
+              || echo "::warning::firewall-rule create failed on $SRV." >&2
             EADMIN=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$ADMIN")
             EPW=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$PG_PW")
             printf 'postgresql://%s:%s@%s:5432/%s?sslmode=require' "$EADMIN" "$EPW" "$HOST" "$DB"
@@ -124,7 +134,4 @@ jobs:
           psql "$TGT_URL" -c "SELECT user_id, entra_object_id, email FROM identity.profiles;" 2>&1 | sed 's/^/    /' || true
           psql "$TGT_URL" -c "SELECT user_id, length(state::text) AS state_bytes FROM identity.workspace_state;" 2>&1 | sed 's/^/    /' || true
 
-          for SRV in "$SRC_SERVER" "$TGT_SERVER"; do
-            az postgres flexible-server firewall-rule delete -g "$RG" -s "$SRV" --rule-name "$RULE" --yes --only-show-errors >/dev/null 2>&1 || true
-          done
           echo "Migration complete."

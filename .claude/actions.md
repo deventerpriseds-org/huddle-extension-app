@@ -1,3 +1,9 @@
+- [ ] 2026-11-16 Owner tuning batch ("about 3 of 5 forwarded emails lost the forwarded part ... handle now along with anything
+      else noticed besides the meetings action items"): branch claude_correspondence-tuning-fixes -- forwarded part stored
+      (EmailContent.forwarded) + back-fill refill, proposals-preview defaults, DB firewall rule really created/removed,
+      default verify-uat suite starts no stand-up. Mutation-proved (18 FIRED, controlled), suites green, tsc clean.
+      OPEN: merge, then dispatch correspondence-backfill.yml (dry run, then apply) to refill stored forwards.
+      Evidence: docs/qc-evidence/BUILD-correspondence-tuning-fixes.md.
 - [x] 2026-11-16 Meeting menu: stand-up title on one line + muted "Daily at 8:00" line (the single label wrapped mid-phrase in UAT run 43796721000 screenshot); UAT asserts one-line title.
 - [x] 2026-11-16 Meeting menu: "Automatic stand-up" is now a real Switch on a plain menu row aligned with "Daily stand-up" (owner: did not look like a toggle, not aligned); meeting-menu-checks.mjs UAT measures alignment + screenshots both themes.
 - [x] 2026-11-16 Loop 12 verifier (claude_verify-correspondence-proposals-12 @ 9d6c3889): PASS 6, FAIL 0, UI-UNVERIFIED 1; minor: "teams=scheduled | email=throttled" logged every minute before 6pm -> quiet-log check now includes scheduled (TL-10).
@@ -5382,3 +5388,11 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
       Report: OneDrive /automation/Huddle Preview/reply-scan-2026-11-14T04-33-28.html (+ emailed). Waiting on the
       owner to mark wrong YES / missed NO before tuning further.
 - [x] graph-permission-check: `feed_links` input prints OneDrive web links for report files in /automation/Huddle Preview only (owner 2026-11-14: "You have to provide links I can click").
+
+## ACT:actions-view — Actions view in a Modules launcher (owner 2026-11-15/16: 1A, Add as task/Done, 4A, copy-paste drafts) — PR #259, NOT live
+- [x] Built: branch claude_actions-view 50063519, BUILD-actions-view.md (62 tests, 11 guards mutation-proved).
+- [ ] Independent verify loop 2 (VERIFY-actions-view-2.md on claude_verify-actions-view-1); D1 cross-message quote found.
+- [ ] Merge + deploy + live UAT (actions-view-checks.mjs, desktop + 390px, both themes) + screenshots to owner.
+## ACT:uninvolved-chat-findings — fix #257 verifier findings 1,2,4,5,6 (@Everyone hid a chat; malformed mention crashed report) — branch, NOT live
+## ACT:correspondence-tuning — forwarded part lost for ~3/5 forwards; preview defaults; firewall rule; UAT stand-up opt-in — branch, NOT live
+- [ ] Owner (2026-11-17) challenged 60/90-min agent budgets: measured machine work <1 min/job; budgets cut to 15/25 min.
