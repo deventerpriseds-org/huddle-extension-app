@@ -23,8 +23,11 @@ import { teamsSourceItemId } from "../src/features/huddle/lib/correspondence/sou
 import {
   ACTIONS_SETTINGS_DEFAULT,
   bellTargetsFor,
+  capNotice,
   chatIdOfTeamsItem,
   classifyEnabled,
+  DAILY_CAP_DEFAULT,
+  DAILY_CAP_SETTING_PATH,
   localMidnightMs,
   correctionFor,
   correctionHides,
@@ -328,7 +331,35 @@ const cand = (o: Partial<ActionCandidate>): ActionCandidate => ({ proposalId: `p
 // ── H. Bell targets (X-6, AC-I-8) + settings + candidates ────────────────────────────────────────────
 t("H-1 bell targets from refs: email -> feed id; teams -> decoded chat id; meetings none", bellTargetsFor([{ source: "email", sourceItemId: `${MAILBOX}:m1` }, { source: "teams", sourceItemId: teamsSourceItemId(ONE, "1") }, { source: "transcript", sourceItemId: "mtg-1" }]), { emailGraphIds: [`feed:${MAILBOX}:m1`], chatIds: [ONE] });
 t("H-2 chat id decoded from a ledger id", chatIdOfTeamsItem(teamsSourceItemId(UNINV, "17")), UNINV);
-t("H-3 settings defaults: three noise categories, uninvolved ON, all sources, cap 150", [resolveActionsSettings(null).hideCategories, resolveActionsSettings(null).hideUninvolvedChats, resolveActionsSettings(null).dailyCap], [["meeting_invite", "timekeeping", "verification_code"], true, 150]);
+t("H-3 settings defaults: three noise categories, uninvolved ON, all sources, cap 500 (owner 2026-11-17, was 150)", [resolveActionsSettings(null).hideCategories, resolveActionsSettings(null).hideUninvolvedChats, resolveActionsSettings(null).dailyCap], [["meeting_invite", "timekeeping", "verification_code"], true, 500]);
+
+// ── Owner 2026-11-17: the daily-cap notice. Same count and same condition as the heartbeat's cap (classifyCallsLeft).
+t("CAP-1 default cap is 500; an explicitly stored 150 is the owner's value and is kept", [DAILY_CAP_DEFAULT, resolveActionsSettings({}).dailyCap, resolveActionsSettings({ dailyCap: 150 }).dailyCap], [500, 500, 150]);
+t(
+  "CAP-2 at the cap: the exact notice, naming where to change it",
+  capNotice(500, 500, true),
+  "Daily AI check limit reached (500 of 500 used today). Remaining items wait until tomorrow. To change the limit, open What shows → Sorting → Daily limit on this page.",
+);
+t(
+  "CAP-3 below the cap / sorting off / count unreadable -> no notice; over the cap (limit lowered) -> notice with the real count",
+  [capNotice(499, 500, true), capNotice(500, 500, false), capNotice(null, 500, true), capNotice(Number.NaN, 500, true), capNotice(undefined, 500, true), capNotice(520, 500, true)?.includes("(520 of 500 used today)")],
+  [null, null, null, null, null, true],
+);
+{
+  const pairs: [number, number][] = [];
+  for (const cap of [0, 1, 5, 150, 500, 2000]) for (const used of [0, cap - 1, cap, cap + 1, cap + 50]) if (used >= 0) pairs.push([used, cap]);
+  t("CAP-4 GUARD: notice shown EXACTLY when the heartbeat has no calls left (classifyCallsLeft = 0)", pairs.filter(([u, c]) => (capNotice(u, c, true) !== null) !== (classifyCallsLeft(u, c) === 0)), []);
+}
+{
+  const { readFileSync } = await import("node:fs");
+  const view = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
+  const [panel, heading, field] = DAILY_CAP_SETTING_PATH.split(" → ");
+  t(
+    "CAP-5 GUARD: the place the notice names exists in the Actions view (What shows button, Sorting heading, Daily limit field) and the notice is rendered",
+    [view.includes(`\`${panel}\${ok.hidden.total`), view.includes(`>${heading}</p>`), view.includes(`${field}\n`), view.includes("ok?.capNotice") && view.includes('data-testid="actions-cap-notice"')],
+    [true, true, true, true],
+  );
+}
 t("H-4 settings: junk falls back field by field; cap clamped", [resolveActionsSettings({ hideCategories: ["spam", "timekeeping"], dailyCap: 99999, timeZone: "Mars/Base" }).hideCategories, resolveActionsSettings({ dailyCap: 99999 }).dailyCap, resolveActionsSettings({ timeZone: "Mars/Base" }).timeZone], [["timekeeping"], 2000, "America/New_York"]);
 t("H-5 classify ON by default for the configured owner only; explicit wins", [classifyEnabled(S(), true), classifyEnabled(S(), false), classifyEnabled(S({ classify: false }), true)], [true, false, false]);
 {

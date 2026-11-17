@@ -143,3 +143,28 @@ Counts after step 3: report-from-ledger 103 pass / 0 fail (was 62); actions-view
   content hash changes, and the hash deliberately excludes these flags. So tag-only chats stored before deploy keep
   SHOWING (fail open, row S1); the new rule applies to messages first stored after deploy. A backfill is not part
   of this change.
+
+## Step 4 -- the daily cap (code)
+
+- `actions.ts`: `DAILY_CAP_DEFAULT` 150 -> 500. New `DAILY_CAP_SETTING_PATH` ("What shows → Sorting → Daily limit",
+  the existing labels in `WhatShows`) and pure `capNotice(usedToday, dailyCap, classifyOn)`:
+  `Daily AI check limit reached (N of M used today). Remaining items wait until tomorrow. To change the limit, open
+  What shows → Sorting → Daily limit on this page.` Shown iff sorting is on, the count was read, and
+  `usedToday >= dailyCap` -- the exact condition under which `classifyCallsLeft` returns 0 (CAP-4).
+- `actions.server.ts`: new `usedTodayFor(ownerLogins, nowMs, timeZone)` -- THE count (actionCallsToday = recorded
+  attempts since local midnight, D2) used by BOTH the heartbeat cap and the page. `getActionsPage` returns
+  `capUsedToday` (null if the read fails) and `capNotice`.
+- `ActionsView.tsx`: the notice renders at the top of the page (above the filter bar), `role="status"`, using the
+  existing PolishView notice band tokens (`border-warning/40 bg-band-cream`), with a "Change limit" button (the
+  existing `ROW_BTN` anatomy) that opens What shows. Text is `text-foreground` instead of PolishView's
+  `text-warning-foreground`, because in `.dark` `--warning-foreground` (L 0.20) sits on `--band-cream` (L 0.255):
+  unreadable. The Daily limit field's max now reads `DAILY_CAP_MAX` instead of a literal 2000.
+- No new setting or table: the field already existed (`actions_settings.dailyCap` on `chat.attention_settings`).
+
+Tests: actions-view H-3 (changed: expected default 150 -> 500), CAP-1..CAP-5; actions-view-server CAP-S1, CAP-S2
+(real page read + real SQL after the real heartbeat spent the cap).
+
+**Behaviour to know about:** `saveActionsSettings` stores the WHOLE resolved settings object on any What-shows
+change, so if the owner ever saved a What-shows setting before this deploy, his row holds `dailyCap: 150`
+explicitly and he stays at 150 (CAP-1 pins that a stored value wins). It cannot be told apart from a 150 he chose.
+The notice tells him where to change it; the live row was not read (no DB access from this session).

@@ -43,8 +43,25 @@ export interface ActionsSettings {
   timeZone: string;
 }
 
-export const DAILY_CAP_DEFAULT = 150;
+/** Owner decision 2026-11-17: 150 -> 500 (150 ran out mid-day). The owner changes it in DAILY_CAP_SETTING_PATH. */
+export const DAILY_CAP_DEFAULT = 500;
 export const DAILY_CAP_MAX = 2000;
+/** Where the owner changes the daily limit: the Actions page's "What shows" panel, "Sorting" heading, "Daily limit"
+ *  field (WhatShows in ActionsView.tsx). Named in the cap notice, so it must match those labels. */
+export const DAILY_CAP_SETTING_PATH = "What shows → Sorting → Daily limit";
+
+/**
+ * Pure (owner 2026-11-17): the notice shown at the top of the Actions page when today's AI checks are used up, or
+ * null. `usedToday` is the SAME count the heartbeat caps on (actionCallsToday: every recorded attempt since the
+ * owner's local midnight, loop-2 D2), and the condition is the one that makes classifyCallsLeft return 0, so the
+ * page says "limit reached" exactly when the heartbeat stops calling the model. No notice when sorting is off (the
+ * cap is not the reason) or the count could not be read.
+ */
+export function capNotice(usedToday: number | null | undefined, dailyCap: number, classifyOn: boolean): string | null {
+  if (!classifyOn || typeof usedToday !== "number" || !Number.isFinite(usedToday)) return null;
+  if (usedToday < dailyCap) return null;
+  return `Daily AI check limit reached (${usedToday} of ${dailyCap} used today). Remaining items wait until tomorrow. To change the limit, open ${DAILY_CAP_SETTING_PATH} on this page.`;
+}
 
 export const ACTIONS_SETTINGS_DEFAULT: ActionsSettings = {
   hideCategories: [...HIDEABLE_CATEGORIES],
