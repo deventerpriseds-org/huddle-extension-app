@@ -31,6 +31,10 @@ describe("Not an AI task", () => {
     expect(f).toContain('args: { task_id: data.taskId, status: "BACKLOG", assigned_agent: "", tags: withMyTaskTag(existingTags, MY_TASK_TAG) }');
     expect(f).toContain("getOwnedTaskForConfirmAsk(data.taskId, email)");
   });
+  test("the action clears agent-earned confirm/live-start state (verify loop 4 C10)", () => {
+    const f = code("lib/tasks/confirm-ask.functions.ts");
+    expect(f).toContain("await resetEngagementOnReassignment(data.taskId);");
+  });
   test("the button is on the confirm-ask row and calls the action", () => {
     const v = code("components/HuddleView.tsx");
     expect(v).toContain("notAiTaskFromButtonFn({ data: { caller, taskId: ask.taskId } })");

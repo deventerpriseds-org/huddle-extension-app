@@ -691,6 +691,17 @@ export const notAiTaskFromButtonFn = createServerFn({ method: "POST" })
         caller: data.caller ?? {},
         context: { source: "huddle" },
       });
+      // Taking the task OFF its agent is a reassignment: clear the agent-earned confirm/approach state and the
+      // live-start marker, so a later hand-back can never start it past the caps on a stale confirm (verify
+      // loop 4, C10 residual risk). The existing reassignment reset, not a second one. Non-fatal.
+      if (r.ok) {
+        try {
+          const { resetEngagementOnReassignment } = await import("./tasks.server");
+          await resetEngagementOnReassignment(data.taskId);
+        } catch {
+          /* the task is already back with the owner; a stale row is caught by the next reassignment reset */
+        }
+      }
       return { ok: r.ok, error: r.error ?? undefined };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
