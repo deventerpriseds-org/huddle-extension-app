@@ -7,14 +7,14 @@ EVIDENCE:   this file + docs/qc-evidence/verify-handoff-confirm-flow-7-c7-probe.
 -->
 # VERIFY handoff-confirm-flow loop 7 -- C7
 
-**VERDICT: REFUTED.** 12 true statements are rewritten (the unsafe direction). 7 false claims get through.
+**VERDICT: REFUTED.** 11 true statements are rewritten (the unsafe direction). 7 false claims get through.
 Wall-clock budget overran (setup plus reading took most of it). Everything below was observed by running it.
 
 ## 1. Loop-5 probe re-run at 28d0ab3b
 `bun docs/qc-evidence/verify-handoff-confirm-flow-5-c7-probe.ts` gives `misses: 0`, so 37/37 rows pass (19 loop-4 rows plus 18 loop-5 rows).
 `npm run -s test:board-claims` gives 53 pass, 0 fail.
 
-## 2. NEW false rewrites (the UNSAFE direction): 12 of 16 probes
+## 2. NEW false rewrites (the UNSAFE direction): 11 of 16 probes
 Each tool summary is the real string recorded in `huddle.functions.ts`:
 - `schedule_reminder` records "reminder scheduled" (:4712).
 - Every journey proxy tool records "journey-voice · ok" (:5233). That includes create_calendar_event.
