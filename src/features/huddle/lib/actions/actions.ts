@@ -320,6 +320,10 @@ export interface ActionDisplay {
   /** Meeting rows: the meeting title. */
   meetingTitle: string | null;
   assignee: string | null;
+  /** 2026-11-17 (owner: "All time ... the tabs aren't unfiltered"): a short PLAIN-TEXT preview of the latest message
+   *  from the other person, set only on items with no current verdict (the "Not checked yet" section). Display only;
+   *  never logged. Optional so older candidates stay valid. */
+  preview?: string | null;
 }
 
 export interface ActionRow extends ActionDisplay {
@@ -343,6 +347,11 @@ export interface ActionsSelection {
   sectionCounts: Record<ActionSection, number>;
   hidden: { total: number; categories: Partial<Record<HideableCategory, number>>; uninvolved: number; sources: number; senders: number };
   notChecked: number;
+  /** 2026-11-17: the not-checked items themselves (newest first), listed in a collapsed "Not checked yet" section.
+   *  notChecked === unchecked.length always. */
+  unchecked: ActionRow[];
+  /** Per-source counts of `unchecked`; the type tabs show counts.x + uncheckedCounts.x. */
+  uncheckedCounts: { all: number; email: number; teams: number; meeting: number };
 }
 
 const LISTED_STATES = new Set(["proposed", "untriaged"]);
@@ -353,7 +362,9 @@ const ms = (iso: string | null) => {
 
 /**
  * Pure, THE SELECTION (Tier 1). In this order, each candidate is:
- *   not_checked (or open with no backing row)            -> counted notChecked, never listed;
+ *   not_checked (or open with no backing row)            -> counted notChecked AND listed in `unchecked` (2026-11-17:
+ *                                                           it used to be counted only, so "All time" added nothing
+ *                                                           visible while the backlog was being judged);
  *   none + answered by the owner's reply                 -> the "Answered by your reply" group (never counted);
  *   none                                                 -> dropped;
  *   on the board already / backing proposal decided     -> resolved, dropped;
@@ -371,6 +382,8 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     sectionCounts: { needs_reply: 0, todo: 0, fyi: 0, meetings: 0 },
     hidden: { total: 0, categories: {}, uninvolved: 0, sources: 0, senders: 0 },
     notChecked: 0,
+    unchecked: [],
+    uncheckedCounts: { all: 0, email: 0, teams: 0, meeting: 0 },
   };
   const hiddenCats = new Set<string>(s.hideCategories);
   const hiddenSenders = new Set(s.hiddenSenders);
@@ -389,7 +402,7 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
   });
   for (const c of cands) {
     if (c.status === "not_checked") {
-      out.notChecked++;
+      out.unchecked.push(toRow(c, c.section ?? "needs_reply"));
       continue;
     }
     if (c.status === "none") {
@@ -399,7 +412,7 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     }
     if (c.onBoard) continue;
     if (!c.proposalId || !c.section) {
-      out.notChecked++;
+      out.unchecked.push(toRow(c, c.section ?? "needs_reply"));
       continue;
     }
     if (!LISTED_STATES.has(c.proposalState ?? "")) continue;
@@ -433,12 +446,32 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
   const order = new Map(ACTION_SECTION_ORDER.map((x, i) => [x, i]));
   out.rows.sort((a, b) => (order.get(a.section) ?? 9) - (order.get(b.section) ?? 9) || ms(b.at) - ms(a.at));
   out.answered.sort((a, b) => ms(b.at) - ms(a.at));
+  out.unchecked.sort((a, b) => ms(b.at) - ms(a.at));
+  for (const r of out.unchecked) {
+    out.notChecked++;
+    out.uncheckedCounts.all++;
+    out.uncheckedCounts[r.source]++;
+  }
   for (const r of out.rows) {
     out.counts.all++;
     out.counts[r.source]++;
     out.sectionCounts[r.section]++;
   }
   return out;
+}
+
+/** Pure (2026-11-17): the type tab after a range change. Changing the range resets it to "All", so the owner is never
+ *  left filtered to a tab that is empty in the new range; any other re-render keeps the tab. */
+export function tabAfterRangeChange<T extends string>(tab: T | "all", prevRange: ActionsRange, nextRange: ActionsRange): T | "all" {
+  return prevRange === nextRange ? tab : "all";
+}
+
+/** Pure (2026-11-17): a short plain-text preview of a message (tags dropped, whitespace collapsed, bounded). */
+export const PREVIEW_MAX = 280;
+export function plainPreview(text: string | null | undefined): string | null {
+  const t = String(text ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  return t.length > PREVIEW_MAX ? `${t.slice(0, PREVIEW_MAX - 1).trimEnd()}…` : t;
 }
 
 /** Pure: the counts of the rows a source filter leaves visible (AC-D-1..D-3). */
