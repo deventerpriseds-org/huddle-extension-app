@@ -34,7 +34,7 @@ import { FEED_ID_PREFIX } from "../external-feeds/onedrive-feed";
 import { meetingItemIsOwnersOrUnassigned } from "../proposals/meeting-triage";
 import { titleKey } from "../proposals/proposals";
 import { safeLink } from "../attention/attention";
-import { correctionFor, type ActionCandidate, type ActionsSettings } from "./actions";
+import { correctionFor, plainPreview, type ActionCandidate, type ActionsRange, type ActionsSettings } from "./actions";
 
 const stripFeed = (id: string) => (id.startsWith(FEED_ID_PREFIX) ? id.slice(FEED_ID_PREFIX.length) : id);
 
@@ -107,9 +107,54 @@ export function currentlyJudgedKeys(verdicts: ReadonlyMap<string, ActionVerdict>
 export const CLASSIFY_PER_PASS = 6;
 
 /** Pure (AC-H-3, loop-2 D2): how many model calls this pass may START. `attemptsToday` is every model call ATTEMPT
- *  made since the owner's local midnight (recorded at the moment of the call, whatever happened after it). */
-export function classifyCallsLeft(attemptsToday: number, dailyCap: number): number {
-  return Math.max(0, Math.min(CLASSIFY_PER_PASS, dailyCap - (Number.isFinite(attemptsToday) ? attemptsToday : dailyCap)));
+ *  made since the owner's local midnight (recorded at the moment of the call, whatever happened after it).
+ *  `perPass` (2026-11-17) is this pass's own limit: CLASSIFY_PER_PASS for the ordinary heartbeat pass, larger for a
+ *  backlog pass or the owner's "Check now". The daily cap bounds every one of them. */
+export function classifyCallsLeft(attemptsToday: number, dailyCap: number, perPass: number = CLASSIFY_PER_PASS): number {
+  return Math.max(0, Math.min(perPass, dailyCap - (Number.isFinite(attemptsToday) ? attemptsToday : dailyCap)));
+}
+
+// ── 2026-11-17 catch-up (owner: "All time shows 120 not checked ... fix it") ─────────────────────────────────────
+// At CLASSIFY_PER_PASS (6) every ~10 min a 120-item backlog takes over 3 hours. Two ways to drain it, both through the
+// SAME runClassify (no second classifier) and both bounded by the daily cap and the D2 attempt record:
+
+/** Model calls started together (one batch). Each call is bounded by the 15s model timeout, so a batch is too. */
+export const CLASSIFY_PARALLEL = 5;
+/** The heartbeat's per-pass limit while the range is All time and the backlog is larger than CLASSIFY_PER_PASS. */
+export const HEARTBEAT_BACKLOG_PER_PASS = 20;
+/** One "Check now" server call: no new batch starts after this much wall time (+ one 15s batch = 40s, under the
+ *  ~45s hosting ceiling of a server function). */
+export const CATCHUP_CHUNK_BUDGET_MS = 25_000;
+/** The whole "Check now": the page repeats chunks until about this much wall time has passed. */
+export const CATCHUP_TOTAL_MS = 120_000;
+
+/** Pure: how many in-scope threads have no current verdict (what a pass would still judge). */
+export function pendingUnitCount(a: AssembledLedgerPlan, s: ActionsSettings, judged: ReadonlySet<string>): number {
+  return threadUnits(a, s).units.filter((u) => !judged.has(u.itemKey)).length;
+}
+
+/** Pure: the heartbeat pass's limit and parallelism. All time with a backlog larger than one ordinary pass ->
+ *  HEARTBEAT_BACKLOG_PER_PASS calls in parallel batches of CLASSIFY_PARALLEL; otherwise exactly as before. */
+export function heartbeatPassShape(range: ActionsRange, pending: number): { perPass: number; concurrency: number } {
+  return range === "all" && pending > CLASSIFY_PER_PASS ? { perPass: HEARTBEAT_BACKLOG_PER_PASS, concurrency: CLASSIFY_PARALLEL } : { perPass: CLASSIFY_PER_PASS, concurrency: 1 };
+}
+
+export type CatchUpStop = "done" | "cap" | "time" | "failed";
+
+/** Pure: why a catch-up chunk stopped. Every call failed -> "failed" (never retried in a loop: a quota outage must
+ *  not burn the cap); the cap ran out with items left -> "cap"; items left otherwise -> "time"; nothing left -> "done". */
+export function catchUpStopReason(r: Pick<ClassifyResult, "calls" | "open" | "none" | "notChecked" | "failures" | "overCap">, callsLeft: number): CatchUpStop {
+  const judged = r.open + r.none + r.notChecked;
+  if (r.failures > 0 && judged === 0) return "failed";
+  if (r.overCap > 0 && r.calls >= callsLeft) return "cap";
+  if (r.overCap > 0) return "time";
+  return "done";
+}
+
+/** Pure: does the page start another chunk? Only when the last one stopped on time AND another full chunk still
+ *  fits inside CATCHUP_TOTAL_MS. */
+export function catchUpContinue(stopped: CatchUpStop | "busy" | "off", elapsedMs: number): boolean {
+  return stopped === "time" && elapsedMs + CATCHUP_CHUNK_BUDGET_MS <= CATCHUP_TOTAL_MS;
 }
 
 export interface ClassifyDeps {
@@ -128,6 +173,8 @@ export interface ClassifyDeps {
   /** Wall-clock guard: no new model call starts after this (the pass rides the ~45s heartbeat). */
   nowMs?(): number;
   deadlineMs?: number;
+  /** 2026-11-17: model calls started together per batch (default 1 = the original one-at-a-time pass). */
+  concurrency?: number;
 }
 
 export interface ClassifyResult {
@@ -157,21 +204,22 @@ export async function runClassify(
   const res: ClassifyResult = { calls: 0, open: 0, none: 0, notChecked: 0, failures: 0, overCap: 0, alreadyJudged: 0, meetingRows: 0, uninvolvedSkipped: 0 };
   const { units, uninvolvedHidden } = threadUnits(a, s);
   res.uninvolvedSkipped = uninvolvedHidden;
+  const pending: ThreadUnit[] = [];
   for (const u of units) {
-    if (judged.has(u.itemKey)) {
-      res.alreadyJudged++;
-      continue;
-    }
-    if (res.calls >= callsLeft || (deps.deadlineMs !== undefined && deps.nowMs && deps.nowMs() >= deps.deadlineMs)) {
-      res.overCap++;
-      continue;
-    }
+    if (judged.has(u.itemKey)) res.alreadyJudged++;
+    else pending.push(u);
+  }
+  const conc = Math.max(1, Math.floor(deps.concurrency ?? 1));
+  let stop = false;
+  /** One unit, start to stored verdict. Returns false when its attempt could not be recorded (then nothing more
+   *  starts). JS is single-threaded, so the shared counters stay exact across a parallel batch. */
+  const judgeOne = async (u: ThreadUnit): Promise<boolean> => {
     // D2: the attempt is counted BEFORE the call. No record, no call (the store is what the cap reads).
     try {
       await deps.recordCall(u.storeAt);
     } catch {
       res.failures++;
-      break;
+      return false;
     }
     res.calls++;
     let raw: unknown;
@@ -184,7 +232,7 @@ export async function runClassify(
       }
     } catch {
       res.failures++;
-      continue;
+      return true;
     }
     const haystack = u.email ? emailQuoteHaystack(u.email, a.forwards) : teamsQuoteHaystack(u.teams!);
     const settled = u.email ? u.email.settled : u.teams!.settled;
@@ -196,18 +244,31 @@ export async function runClassify(
         v = { ...v, proposalId: p.id, ...(p.onBoard ? { onBoard: true } : {}) };
       } catch {
         res.failures++;
-        continue; // nothing stored: retried next pass
+        return true; // nothing stored: retried next pass
       }
     }
     try {
       await deps.storeVerdict(u.storeAt, v);
     } catch {
       res.failures++;
-      continue;
+      return true;
     }
     if (v.status === "open") res.open++;
     else if (v.status === "none") res.none++;
     else res.notChecked++;
+    return true;
+  };
+  let i = 0;
+  while (i < pending.length && !stop) {
+    if (res.calls >= callsLeft || (deps.deadlineMs !== undefined && deps.nowMs && deps.nowMs() >= deps.deadlineMs)) {
+      res.overCap += pending.length - i;
+      break;
+    }
+    // Never start more calls than the cap has left: the batch is sized by the remaining allowance.
+    const batch = pending.slice(i, i + Math.min(conc, callsLeft - res.calls));
+    i += batch.length;
+    const recorded = await Promise.all(batch.map(judgeOne));
+    if (recorded.includes(false)) stop = true;
   }
   if (s.sources.meeting) {
     for (const mu of meetingUnits(a.plan.meetings.inWindow, a.ctx.ownerNames)) {
@@ -287,6 +348,9 @@ export function buildCandidates(a: {
       uninvolved: u.uninvolved,
       at: u.at,
     };
+    // 2026-11-17: an item with no current verdict is listed under "Not checked yet" with a plain preview of the
+    // latest message from the other person (display only).
+    const preview = current ? null : plainPreview((u.email ?? u.teams)?.latestOther?.text ?? null);
     if (u.email) {
       const f = u.email;
       const lo = f.latestOther!;
@@ -311,6 +375,7 @@ export function buildCandidates(a: {
           teamsLink: null,
           meetingTitle: null,
           assignee: null,
+          preview,
         },
       });
     } else {
@@ -335,6 +400,7 @@ export function buildCandidates(a: {
           teamsLink: safeLink(c.webUrl) ?? null,
           meetingTitle: null,
           assignee: null,
+          preview,
         },
       });
     }
