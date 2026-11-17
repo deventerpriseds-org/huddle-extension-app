@@ -72,8 +72,9 @@ D3e "Example, Pat" sender vs "Pat Example" -> ["s-pat"]
 D3f "Pat Exampleson" vs "Pat Example"      -> []
 ```
 `git show 30898bae -- src | grep '^+' | grep -ciE 'von|ellis|vonda|enterpriseds'` -> 2 lines, both COMMENTS in
-`meeting-triage.ts` (lines 80 and 89 region: `"- Note: Von to send pricing"`). No identity in matching logic.
-**LOW (D4-L1):** the owner's first name is quoted in two comments of a public repo; replace with "Pat".
+`meeting-triage.ts` (the two `"- Note: <owner first name> to send pricing"` examples at lines 80 and 85). No
+identity in matching logic. **LOW (D4-L1):** the owner's first name is quoted in two comments of a public repo;
+replace it with a placeholder such as "Pat".
 
 ## D-4 cross-chat id needs 2+ chats or a clear majority -- CONFIRMED
 ```
@@ -114,3 +115,50 @@ D7e "Deadline: Friday" with no item above               -> dropped, counted (det
 D7f "Context: the client wants it soon" (not indented)  -> ITEM
 ```
 INFO: D7f makes a junk row from a non-metadata label line. That is the stated trade-off ("never drop content").
+(The previous commit of THIS file, 4310c5b9, quoted that comment verbatim, name included. Corrected here; it
+is still in that commit's history on this branch.)
+
+## Mutation proofs (mutate.sh, exact test name, anchors in files under v4/mut/) -- 4/4 FIRED, controls EQUIVALENT
+| # | guard | file:line | mutation | test (must fail) | exit | verdict |
+|---|---|---|---|---|---|---|
+| M1 | D-1 version check | pipeline.ts:91 | drop `&& (v.inputVersion ?? 1) === CLASSIFIER_INPUT_VERSION[source]` | R7-1 GUARD: a stored Teams verdict from before the version (no inputVersion) is NOT counted as judged | 0 | FIRED (control EQUIVALENT) |
+| M2 | D-4 two-chat rule | report-from-ledger.ts:313 | `e.chats.size >= 2` -> `>= 1` | R9-1 GUARD: an id on ONE chat's row is not taken across chats when the owner's id is on 2+ chats | 0 | FIRED (control EQUIVALENT) |
+| M3 | D-2 40-char floor | pipeline.ts:427 | `q.length >= DEDUP_MIN_QUOTE_CHARS` -> `>= 20` | R6-5 GUARD (loop-2 D-2): same sender, the SAME SHORT generic sentence in two chats -> TWO rows | 0 | FIRED (control EQUIVALENT) |
+| M4 | D-7 metadata-or-indented | meeting-triage.ts:135 | `isMetadataDetail(detail) \|\|` -> `true \|\|` | R12-1 GUARD: '- Note: <action>' and '- **Deadline**: <action>' stay ITEMS (content never dropped) | 0 | FIRED (control EQUIVALENT) |
+
+Each run ended "restored ... matches HEAD" and "tree clean: ... passes again on the restored tree".
+
+## Previously confirmed, re-checked at reduced depth on main
+- **C1 owner recognition -- CONFIRMED.** Suite R1-1..R1-10 pass. `bun v4/c14.ts`, owner name "Pat Example":
+  `"Example, Pat"`, `"Pat Example"`, `"PAT  EXAMPLE"` -> match; `"Example, Patricia"`, `"Pat Exampleson"`,
+  `"Example, Pat (Contractor)"`, `"Pat Example (Contractor)"` -> no match. No real names in the four test files
+  (`grep -niE 'ellis|vonda'` -> nothing).
+- **C2 settled-guard ordering -- CONFIRMED.** R2-1..R2-4, R7-5 pass; D-6 probe above.
+- **C3 GROUNDED is additive -- CONFIRMED.** R2-5 (rule in Teams, step-2 and step-3 instructions), R3-1 (new reason
+  added, earlier reasons all still there) pass.
+- **C4 quote must sit in one message -- CONFIRMED.** `quoteIsVerbatim(quote spanning msg1+msg2, [msg1,msg2])` ->
+  false; inside msg1 -> true; `teamsQuoteHaystack` returns per-message OTHER texts (action-classify.ts:180-182).
+- **C5 meeting-splitter negatives -- CONFIRMED.** R4-1..R4-4 (incl. "not a sentence that merely contains a
+  colon"), R12-1 pass; D-7 probe above.
+- **C9 merge -- CONFIRMED.** `git log --oneline -1 origin/main` -> `30898bae ... (#268)`; tree identical to the
+  verified head 7561f19a.
+
+## Regressions / UI
+- NOT REACHED: browser golden path. This verifier did not run Playwright against the Huddle SWA. The work carries UI
+  claims (ActionsView row UI, expandable "More" text, "AI misread" option, meeting rows), and each needs a
+  `verify-uat.yml` run on the deployed build after 30898bae.
+- Pure-logic regression net: all 13 suites + tsc + build green on main (C0).
+
+## Defects
+| id | severity | file:line | what | repro |
+|---|---|---|---|---|
+| D4-L1 | LOW | src/features/huddle/lib/proposals/meeting-triage.ts:80, :85 | the owner's first name sits in two comments of a public repo | `grep -n "to send pricing" src/features/huddle/lib/proposals/meeting-triage.ts` |
+| D4-L2 | LOW (carried from loop 3) | pipeline.ts:166-182 + actions.server.ts:143 | an all-day OpenAI outage spends the daily cap on failed attempts (36/h), so re-judged v1 Teams chats stay "not checked yet" until the next local day | `bun v4/d1.ts`: OUTAGE pass calls 1 failures 1, attempt counted |
+
+INFO: D2g transitive de-dup (not reachable as built); D7f a "Context:" line becomes an item (the stated trade-off).
+
+## Verdict
+CONFIRMED: C0, D-1..D-7, C1-C5, C9. REFUTED: 0. UNPROVEN: 0. NOT REACHED: UI golden path (browser).
+**MERGE-PENDING-UAT** (already on main: OK). No blocking defect. D4-L1 is a one-line comment fix for a follow-up.
+UI claims owed a browser run: ActionsView row UI, expandable text, AI-misread correction, clean meeting rows.
+Finished 2026-11-17 ~06:04 UTC, inside the 25-minute budget.
