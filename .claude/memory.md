@@ -7,6 +7,10 @@
   saves verdicts, HTML from the store; 0 calls for already-judged threads; advisory lock per thread) and #274 (not-checked
   items listed, tabs count them, range change resets the tab). Deploy 44103197599; UAT 56/56 run 44103650857:
   All time 168 = email 43 + teams 6 + meetings 119, 9 not checked, 43 hidden.
+- Earlier the same day: #268 sender fix + accuracy, #269 This week / All time toggle, #270 OWNER/OTHER labels never shown.
+  The owner saw the toggle missing because his app had the pre-deploy bundle loaded: a full reload is needed after a deploy.
+- Hardening: a UAT check that only asserts a control EXISTS proves nothing. A range/filter control's UAT must click it,
+  assert the visible result changes, then restore the saved setting (actions-view-checks.mjs AT-1..AT-P6 now do).
 - Mechanism added org-wide: eds-claude-skills #146 (parity AC: one store, same-window count comparison, no silent backlog).
 - Open quality observation (not yet raised as a fix): automated notices (sheet-share invites, safety-alert polls) still
   land in "Needs your reply".
