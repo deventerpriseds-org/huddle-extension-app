@@ -64,3 +64,22 @@ Note N1 (spec interpretation, not a code defect): the owner's decision text name
 also hides CHANNEL mentions (MK-R7, MK-R26, RT20). In a channel post, `@<channel>` notifies every channel member, the
 same way @Everyone does in a group chat, yet @Everyone SHOWS and @channel HIDES. Consistent with "team mention hides"
 (a team mention also notifies him), but it is a reading the owner did not state. Flag for the owner.
+
+## Claim 2 -- the cap and the "limit reached" notice
+
+| sub-claim | status | observed |
+|---|---|---|
+| default is 500 | CONFIRMED | `bun -e`: `DAILY_CAP_DEFAULT` 500, `resolveActionsSettings(null).dailyCap` 500 |
+| the OWNER's live cap becomes 500 | UNPROVEN (see D1) | `resolveActionsSettings({dailyCap:150}).dailyCap` = 150; live row not read (no DB access by brief) |
+| `usedTodayFor` is the single count | CONFIRMED (read) | `actions.server.ts:115` defines it; heartbeat `:169` and page `:320` both call `usedTodayFor(cfg.ownerLogins, now, s.timeZone)`; both read `settingsFor(cfg.owner)` |
+| notice exactly at cap, only then | CONFIRMED | used 499/500 -> null (left 1); 500/500 -> shown (left 0); 501/500 -> shown; 0/0 -> shown (left 0); sorting off -> null; count unreadable (null) -> null |
+| notice names the real setting | CONFIRMED (read) | text "... open What shows → Sorting → Daily limit on this page."; `ActionsView.tsx:219` button "What shows", `:794` heading "Sorting", `:800` label "Daily limit", input `onBlur -> onChange=saveSettings (:223) -> setActionsSettingsFn (:155) -> load()` refetch, so the notice recomputes after a save |
+| tokens only | CONFIRMED | added lines grep for `#hex / rgb( / hsl( / oklch( / text|bg|border-<palette>` -> none; `border-warning/40 bg-band-cream text-foreground` all map to `--color-*` in `src/styles.css:45,53` |
+
+D1 (MEDIUM, disclosed by the builder at BUILD doc L167-170): `saveActionsSettings` (`actions.server.ts:336-345`) and the
+"stop flagging this list" path (`:362-366`) store the WHOLE resolved settings object, so any What-shows change or
+list-stop made before this deploy wrote `dailyCap: 150` into `chat.attention_settings.actions_settings`, and
+`resolveActionsSettings` keeps that 150. Repro: `resolveActionsSettings({dailyCap:150, hiddenSenders:["x@example.com"]}).dailyCap`
+-> 150. Effect: the owner's decision "150 -> 500" may not reach him; the new notice would then say "150 of 150" and
+point him at the field. Not fixable in code without a one-off data change or treating a stored 150 as "default";
+needs the owner's call or a read of the live row.
