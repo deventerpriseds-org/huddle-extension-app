@@ -145,7 +145,9 @@ const CREATE_CLAIM_RES = [
   // "I've added a task for the dentist", "created 3 new tasks"
   new RegExp(`^${SUBJ}(?:added|created)\\s+(?:(?:a|an|the|that|this|\\d+|two|three|four|five)\\s+)?(?:new\\s+)?(?:tasks?|cards?|to-?dos?)\\b[^,;]{0,60}${END}`, "i"),
   // "I added it to your board", "added 'Test-walk the dog' to your board"
-  new RegExp(`^${SUBJ}(?:added|created)\\s+${OBJ}\\s+(?:to|on)\\s+(?:your|the)\\s+(?:board|backlog|task list|to-?do list)${END}`, "i"),
+  // "I added all 4 activities to your board" (live 2026-11-17, nothing was added): "to your board" names the board
+  // itself, so whatever was added (up to 6 words) is a board claim.
+  new RegExp(`^${SUBJ}(?:added|created|put)\\s+(?:[\\w'’"“”-]+\\s+){0,6}?(?:to|on|onto)\\s+(?:your|the)\\s+(?:board|backlog|task list|to-?do list)\\b`, "i"),
 ];
 const STARTED_CLAIM_RES = [
   /^(?:i'm|i am)\s+(?:now\s+)?(?:proceeding with (?:it|that|this|the task|that task|this task|the work|the research)|working on it|starting on it|getting started(?: on it)?)[.!]*$/i,

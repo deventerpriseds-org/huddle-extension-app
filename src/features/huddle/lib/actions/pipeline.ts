@@ -108,19 +108,23 @@ export const CLASSIFY_PER_PASS = 6;
 
 /** Pure (AC-H-3, loop-2 D2): how many model calls this pass may START. `attemptsToday` is every model call ATTEMPT
  *  made since the owner's local midnight (recorded at the moment of the call, whatever happened after it).
- *  `perPass` (2026-11-17) is the caller's own per-pass limit (default CLASSIFY_PER_PASS, which the heartbeat uses).
- *  The daily cap bounds every caller. */
+ *  `perPass` (2026-11-17) is this pass's own limit: CLASSIFY_PER_PASS for the ordinary heartbeat pass, larger for a
+ *  backlog pass or the owner's "Check now". The daily cap bounds every one of them. */
 export function classifyCallsLeft(attemptsToday: number, dailyCap: number, perPass: number = CLASSIFY_PER_PASS): number {
   return Math.max(0, Math.min(perPass, dailyCap - (Number.isFinite(attemptsToday) ? attemptsToday : dailyCap)));
 }
 
-// ── 2026-11-17: runClassify may start several model calls together (`ClassifyDeps.concurrency`), through the SAME
-// pass and still bounded by the daily cap and the D2 attempt record. The heartbeat's own pass is unchanged
-// (CLASSIFY_PER_PASS, one at a time); the option exists for the daily-report path.
+// ── 2026-11-17 catch-up (owner: "All time shows 120 not checked ... fix it") ─────────────────────────────────────
+// runClassify can start its model calls in parallel batches (deps.concurrency), still bounded by the daily cap and the
+// D2 attempt record. 2026-11-17 (verifier VERIFY-report-saves-verdicts-1): the unused heartbeat / "Check now" helpers
+// of the WIP base were removed from THIS branch; the all-time catch-up branch carries its own.
 
-/** Model calls started together (one batch) when a caller asks for parallelism. Each call is bounded by the 15s
- *  model timeout, so a batch is too. */
+/** Model calls started together (one batch). Each call is bounded by the 15s model timeout, so a batch is too. */
 export const CLASSIFY_PARALLEL = 5;
+/** Pure: how many in-scope threads have no current verdict (what a pass would still judge). */
+export function pendingUnitCount(a: AssembledLedgerPlan, s: ActionsSettings, judged: ReadonlySet<string>): number {
+  return threadUnits(a, s).units.filter((u) => !judged.has(u.itemKey)).length;
+}
 
 export interface ClassifyDeps {
   /** Loop-2 D2: record ONE model call attempt (durably, on the thread's ledger row) BEFORE the call is made, so a
@@ -140,6 +144,19 @@ export interface ClassifyDeps {
   deadlineMs?: number;
   /** 2026-11-17: model calls started together per batch (default 1 = the original one-at-a-time pass). */
   concurrency?: number;
+  /**
+   * AC8 (verifier VERIFY-report-saves-verdicts-1): serialise the propose + store step of ONE thread across passes
+   * running at the same time (the heartbeat and the report). Runs `fn` inside a transaction that holds a lock keyed
+   * on the thread's item key; `tx.current()` reads the thread's stored verdict INSIDE that transaction and
+   * `tx.store(v)` writes it there. Absent = no lock (offline tests; the report with saving off).
+   */
+  lockThread?<T>(u: ThreadUnit, fn: (tx: ThreadTx) => Promise<T>): Promise<T>;
+}
+
+/** The thread-locked transaction handed to ClassifyDeps.lockThread's callback. */
+export interface ThreadTx {
+  current(): Promise<ActionVerdict | null>;
+  store(v: ActionVerdict): Promise<void>;
 }
 
 export interface ClassifyResult {
@@ -202,35 +219,52 @@ export async function runClassify(
     const haystack = u.email ? emailQuoteHaystack(u.email, a.forwards) : teamsQuoteHaystack(u.teams!);
     const settled = u.email ? u.email.settled : u.teams!.settled;
     let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source] });
-    if (v.status === "open") {
-      const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");
-      try {
-        const p = await deps.propose(u, v, text);
-        v = { ...v, proposalId: p.id, ...(p.onBoard ? { onBoard: true } : {}) };
-      } catch {
-        res.failures++;
-        return true; // nothing stored: retried next pass
+    /** Propose (when open) then store. Inside the thread lock (AC8) it first re-reads the thread's stored verdict:
+     *  another pass that judged this version while we waited wins, and this one writes nothing (no 2nd proposal). */
+    const finish = async (tx?: ThreadTx): Promise<"stored" | "adopted" | "failed"> => {
+      if (tx) {
+        const cur = await tx.current();
+        if (cur && verdictIsCurrent(cur, u.itemKey, u.source)) return "adopted";
       }
-    }
+      if (v.status === "open") {
+        const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");
+        try {
+          const p = await deps.propose(u, v, text);
+          v = { ...v, proposalId: p.id, ...(p.onBoard ? { onBoard: true } : {}) };
+        } catch {
+          return "failed"; // nothing stored: retried next pass
+        }
+      }
+      try {
+        await (tx ? tx.store(v) : deps.storeVerdict(u.storeAt, v));
+      } catch {
+        return "failed";
+      }
+      return "stored";
+    };
+    let outcome: "stored" | "adopted" | "failed";
     try {
-      await deps.storeVerdict(u.storeAt, v);
+      outcome = deps.lockThread ? await deps.lockThread(u, finish) : await finish();
     } catch {
-      res.failures++;
-      return true;
+      outcome = "failed"; // the lock or its transaction failed: nothing counted as stored, retried next pass
     }
-    if (v.status === "open") res.open++;
+    if (outcome === "failed") res.failures++;
+    else if (outcome === "adopted") res.alreadyJudged++;
+    else if (v.status === "open") res.open++;
     else if (v.status === "none") res.none++;
     else res.notChecked++;
     return true;
   };
+  // A non-finite allowance is 0 (verifier loop 1: NaN made every batch empty and the loop never advanced).
+  const limit = Number.isFinite(callsLeft) ? Math.max(0, Math.floor(callsLeft)) : 0;
   let i = 0;
   while (i < pending.length && !stop) {
-    if (res.calls >= callsLeft || (deps.deadlineMs !== undefined && deps.nowMs && deps.nowMs() >= deps.deadlineMs)) {
+    if (res.calls >= limit || (deps.deadlineMs !== undefined && deps.nowMs && deps.nowMs() >= deps.deadlineMs)) {
       res.overCap += pending.length - i;
       break;
     }
     // Never start more calls than the cap has left: the batch is sized by the remaining allowance.
-    const batch = pending.slice(i, i + Math.min(conc, callsLeft - res.calls));
+    const batch = pending.slice(i, i + Math.min(conc, limit - res.calls));
     i += batch.length;
     const recorded = await Promise.all(batch.map(judgeOne));
     if (recorded.includes(false)) stop = true;
@@ -246,6 +280,68 @@ export async function runClassify(
     }
   }
   return res;
+}
+
+// ── REPORT PASS (2026-11-17, owner: "the report must save its verdicts into the Actions view's store") ──────────
+// The action-scan HTML report (scripts/action-scan-steps.ts, step=action) runs THIS, not a classify loop of its own:
+// the same skip rule (currentlyJudgedKeys), the same cap rule (classifyCallsLeft), the same pass (runClassify: one
+// admission guard, one key scheme, one store), and its rows are then read BACK from the store.
+
+/** Model calls the report starts together (owner brief 2026-11-17). */
+export const REPORT_CONCURRENCY = CLASSIFY_PARALLEL;
+
+export interface ReportPassResult {
+  res: ClassifyResult;
+  /** Calls the pass was allowed to start: min(maxCalls, what the daily cap has left); 0 when sorting is off. */
+  callsLeft: number;
+  /** The owner switched AI sorting off (settings.classify === false): no model call, nothing written. */
+  sortingOff: boolean;
+  /** The stored verdicts AFTER the pass (re-read from the store): what the report renders. */
+  verdicts: Map<string, ActionVerdict>;
+}
+
+/**
+ * Pure orchestration of the report's pass (all I/O injected). `loadVerdicts` reads the store (the same map the page
+ * reads: "<source>\u0000<ledger id>" -> verdict); it is read BEFORE the pass (what is already judged costs 0 calls)
+ * and AFTER it (the report renders what was stored, never what the model said). `usedToday` = the daily cap's own
+ * count (attempts since the owner's local midnight).
+ */
+export async function runReportClassify(a: {
+  assembled: AssembledLedgerPlan;
+  settings: ActionsSettings;
+  /** classifyEnabled(settings, isConfiguredOwner): the SAME switch the heartbeat obeys. */
+  sortingOn: boolean;
+  usedToday: number;
+  maxCalls: number;
+  concurrency?: number;
+  loadVerdicts(): Promise<Map<string, ActionVerdict>>;
+  deps: ClassifyDeps;
+}): Promise<ReportPassResult> {
+  const before = await a.loadVerdicts();
+  const judged = currentlyJudgedKeys(before);
+  // Verifier loop 1, finding 1: the owner's "AI sorting off" switch stops the report too (the heartbeat returns early
+  // on it). No model call, no attempt, no proposal, no meeting row: the report shows only what is already stored.
+  if (!a.sortingOn) {
+    const res: ClassifyResult = { calls: 0, open: 0, none: 0, notChecked: 0, failures: 0, overCap: 0, alreadyJudged: judged.size, meetingRows: 0, uninvolvedSkipped: 0 };
+    return { res, callsLeft: 0, sortingOff: true, verdicts: before };
+  }
+  // Verifier loop 1, finding 3: a non-finite or negative max_sources is 0 calls, never NaN (NaN once hung the pass).
+  const maxCalls = Number.isFinite(a.maxCalls) && a.maxCalls > 0 ? Math.floor(a.maxCalls) : 0;
+  const callsLeft = classifyCallsLeft(a.usedToday, a.settings.dailyCap, maxCalls);
+  const res = await runClassify(a.assembled, a.settings, judged, callsLeft, { ...a.deps, concurrency: a.concurrency ?? REPORT_CONCURRENCY });
+  return { res, callsLeft, sortingOff: false, verdicts: await a.loadVerdicts() };
+}
+
+/** Pure: the report's deps when saving is switched OFF. The SAME pass runs, but its results (proposal, verdict,
+ *  meeting rows) land in memory only, and the verdicts it reads are the stored ones overlaid with these. The ATTEMPT
+ *  is still recorded (base.recordCall): spend is spend, so it counts toward the daily cap either way. */
+export function inMemoryWrites(base: ClassifyDeps, stored: () => Promise<Map<string, ActionVerdict>>): { deps: ClassifyDeps; loadVerdicts(): Promise<Map<string, ActionVerdict>> } {
+  const mem = new Map<string, ActionVerdict>();
+  return {
+    // lockThread is dropped: its tx.store writes the real store, and nothing here may.
+    deps: { ...base, lockThread: undefined, propose: async () => ({ id: null, onBoard: false }), storeVerdict: async (at, v) => void mem.set(`${at.source}\u0000${at.sourceItemId}`, v), addMeetingRows: async () => 0 },
+    loadVerdicts: async () => new Map([...(await stored()), ...mem]),
+  };
 }
 
 // ── CANDIDATES (page read) ──────────────────────────────────────────────────────────────────────────

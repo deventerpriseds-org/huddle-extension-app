@@ -282,6 +282,57 @@ try {
   const capPage2 = await A.getActionsPage({ entra_email: O });
   t("CAP-S2 GUARD: the owner raises the limit to 6 -> no notice, used still 5", capPage2.status === "ok" ? [capPage2.capUsedToday, capPage2.capNotice] : capPage2.status, [5, null]);
   setSystemTime();
+
+  // ── AC8 (verifier VERIFY-report-saves-verdicts-1): two passes (heartbeat + report) judge the SAME unjudged thread
+  // at the same moment and the model words the to-do differently. Real deps (classifyDepsFor: real attempt record,
+  // real proposeFromSource + proposal store, real verdict store, real thread lock), real SQL; only the model is faked,
+  // and both answers are released together so both passes reach the propose step at once.
+  {
+    const { assembleLedgerPlan } = await import("../src/features/huddle/lib/correspondence/report-from-ledger");
+    const { loadLedgerReportData } = await import("../src/features/huddle/lib/correspondence/report-from-ledger.server");
+    const { parseFeedsConfig } = await import("../src/features/huddle/lib/external-feeds/onedrive-feed");
+    const { runClassify, threadUnits } = await import("../src/features/huddle/lib/actions/pipeline");
+    const { ACTIONS_SETTINGS_DEFAULT } = await import("../src/features/huddle/lib/actions/actions");
+    const ACHAT = `19:ac8_x${"@"}unq.gbl.spaces`;
+    const ASK = "Could you please send the synthetic budget sheet by Friday?";
+    await L.storeContent(O, [
+      {
+        ...item(teamsSourceItemId(ACHAT, "1")),
+        threadId: ACHAT,
+        at: "2026-11-16T16:00:00.000Z",
+        content: { kind: "teams", chatId: ACHAT, chatName: null, messageId: "1", at: "2026-11-16T16:00:00.000Z", sender: { id: "other-guid", name: "Pat Example", isApp: false }, fromOwner: false, text: ASK, webUrl: null, mentionedUserIds: [], ownerUserId: "owner-guid-0001" },
+      },
+    ] as never);
+    const asm = assembleLedgerPlan(await loadLedgerReportData([O]), parseFeedsConfig(process.env.HUDDLE_ONEDRIVE_FEEDS)!, Date.parse("2026-11-09T05:00:00.000Z"));
+    const S8 = { ...ACTIONS_SETTINGS_DEFAULT, sources: { email: false, teams: true, meeting: false } };
+    const units = threadUnits(asm, S8).units;
+    const target = units.find((x) => x.teams?.chatId === ACHAT)!;
+    // Every OTHER thread counts as judged, so each pass makes exactly one call: this thread.
+    const judged = new Set(units.filter((x) => x !== target).map((x) => x.itemKey));
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let arrived = 0;
+    const answer = (todo: string) => async () => {
+      if (++arrived === 2) release();
+      await gate;
+      return { open_item: true, kind: "action", todo, due: "Friday", quote: ASK, confidence: "high", reason: "Asked directly.", category: "person_request" };
+    };
+    const base = await A.classifyDepsFor(O, [O]);
+    const [r1, r2] = await Promise.all([
+      runClassify(asm, S8, judged, 5, { ...base, model: answer("Test-Send the synthetic budget sheet") }),
+      runClassify(asm, S8, judged, 5, { ...base, model: answer("Test-Email Pat the spreadsheet with the numbers") }),
+    ]);
+    const props = await pool.query<{ proposal_id: string }>(
+      `SELECT DISTINCT proposal_id FROM chat.task_proposal_refs WHERE owner_email = $1 AND source = 'teams' AND source_item_id = $2`,
+      [O, target.refItemId],
+    );
+    const stored = await pool.query<{ p: string | null }>(`SELECT result_ids->'action'->>'proposalId' AS p FROM chat.correspondence_ledger WHERE source = 'teams' AND source_item_id = $1`, [target.storeAt.sourceItemId]);
+    t(
+      "AC8-S1 GUARD (real SQL): two passes at once, same thread, differently worded to-dos -> ONE proposal; the second pass adopts the first's verdict",
+      [r1.calls + r2.calls, props.rows.length, r1.open + r2.open, r1.alreadyJudged + r2.alreadyJudged - 2 * judged.size, stored.rows[0]?.p === props.rows[0]?.proposal_id, r1.failures + r2.failures],
+      [2, 1, 1, 1, true, 0],
+    );
+  }
 } catch (e) {
   fail++;
   console.log(`FAIL harness: ${e instanceof Error ? `${e.name}: ${e.message}` : "error"}`);

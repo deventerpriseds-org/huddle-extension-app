@@ -217,7 +217,7 @@ if (GH) {
     "https://api.github.com/repos/deventerpriseds-org/huddle-extension-app/actions/workflows/azure-pg-query.yml/dispatches",
     {
       method: "POST",
-      headers: { Authorization: `Bearer ${GH}`, Accept: "application/vnd.github+json" },
+      headers: { Authorization: `Bearer ${GH}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
       body: JSON.stringify({ ref: "main", inputs: { sql: CLEANUP_SQL } }),
     },
   ).catch((e) => ({ status: 0, statusText: String(e) }));

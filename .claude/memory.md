@@ -1,5 +1,16 @@
 # Project Memory — huddle-extension-app
 
+## Report saves verdicts (2026-11-17, branch claude_report-saves-verdicts, NOT merged, NOT live) -- ACT:report-saves-verdicts
+- The step=action report (proposals-preview.yml) now runs the Actions view's OWN pass (runReportPassFor ->
+  runReportClassify -> runClassify) and renders FROM the stored verdicts (scripts/action-report-html.ts). One guard,
+  one key scheme, one store; a thread with a current verdict costs 0 calls. Input save_verdicts (default on).
+- Report calls count toward the owner's daily AI limit (save off too: attempts still recorded). Sorting OFF in the
+  app (classify === false) -> the report makes 0 calls and shows only stored verdicts.
+- Two passes on one thread (heartbeat + report) are serialised by a transaction advisory lock on the item key; the
+  stored-verdict check runs inside it, so one proposal per thread.
+- Live 2026-11-17: two runs, 0 model calls each (the in-app pass had already judged all 139/140 threads).
+- Build/verify: docs/qc-evidence/BUILD-report-saves-verdicts.md; VERIFY-report-saves-verdicts-1 (FIX FIRST, fixed).
+
 ## Actions accuracy (2026-11-17, branch claude_actions-accuracy, NOT live) -- owner Teams ids are GLOBAL, not per chat
 - Live probe (counts only): 69 recent Teams rows, 0 carry `ownerUserId`, all `fromOwner` null; 37 were the owner's own id (seen on OLDER rows).
   `teamsOwnerIds` was per chat, so those chats had no owner id and his own message read as OTHER ("X asks you...").
@@ -11,6 +22,21 @@
   (action-classify.ts, teams 2 / email 1) MUST be bumped for a source whenever its OWNER/OTHER labelling, input
   text or instructions change, or old verdicts stay listed until the thread gets a new message. Teams de-dup
   (`collapseDuplicateTeamsItems`) = same chat, or same sender ID + same quote >= 40 chars; never a shared proposal.
+
+## Hand-off / confirm flow DEPLOYED (2026-11-17, #265 -> main 9982fc62, deploy-swa run 44031158506 SUCCESS) -- NOT owner-confirmed live
+- Feature status: rows 1-9 + "Not an AI task" button are LIVE. Row 2 (hand-off creates the task + Confirm buttons) is ON;
+  rollback = `HANDOFF_TASK_AND_BUTTONS = false` in `lib/handoff-followup.ts`. Owner chose option A: ship, then tune the
+  free-text checks ("do it now" urgency, teammate-deferral strip) from real use.
+- Verified: independent verifier loops 1-9 (branches `claude_verify-handoff-confirm-flow-*`): C3/C4/C5/C6/C10 CONFIRMED;
+  C1/C2/C7/C8 redesigned as fail-safe allowlists, every found defect fixed + mutation-proved; C9 harness can no longer
+  write into real threads (`isTestThread` guard at all 3 real-dm enqueue sites).
+- Active work: browser UAT verify-uat run 44031523267 PASSED on 9982fc62 (layout checks; the Not-an-AI-task button is not
+  reached by that suite). Live harness qa-paf-a342b6: 14/17 (see actions.md). Owner live confirmation pending.
+- Hardening: "OpenAI out of quota" was repeated to the owner from another session's note without a check; the owner
+  corrected it. A live capability claim needs a live probe (one harness call) before it is reported.
+- Root causes found this round: (1) free-text matchers listed unsafe spellings (open set) -- fixed by flipping to
+  allowlists; (2) a tool's own free text (flag_blocker "blocked: <reason>") was scanned for "not performed" words --
+  now per-tool fixed strings; (3) background agents freeze while the main session is idle (other session's finding).
 
 ## Agent pace ROOT CAUSE (2026-11-17, measured) -- background agents FREEZE while the main session is idle
 - eds-agent-steps.py (eds-claude-skills #140, live v80) split 5 transcripts: model 1-10% of wall; 73-96% was steps in
