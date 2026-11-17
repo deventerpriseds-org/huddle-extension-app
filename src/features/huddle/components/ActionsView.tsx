@@ -41,6 +41,8 @@ import { actOnProposalFn } from "../lib/proposals/proposals.functions";
 import { saveEmailReplyDraftFn } from "../lib/email/email-replies.functions";
 import { ACTION_SECTION_LABEL, ACTION_SECTION_ORDER, type ActionSection } from "../lib/correspondence/action-classify";
 import {
+  ACTIONS_RANGE_LABEL,
+  ACTIONS_RANGES,
   CORRECTION_LABEL,
   CORRECTION_REASONS,
   CORRECTION_TEXT_MAX,
@@ -91,7 +93,9 @@ function when(iso: string | null, tz: string): string {
   }
 }
 
-function sinceLabel(iso: string, tz: string, short: boolean): string {
+function sinceLabel(iso: string, tz: string, short: boolean, range: ActionsSettings["range"] = "week"): string {
+  // Owner 2026-11-17: the header names the chosen range ("Since Mon" or "All time").
+  if (range === "all") return ACTIONS_RANGE_LABEL.all;
   try {
     return short
       ? `Since ${new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(new Date(iso))}`
@@ -168,8 +172,8 @@ export function ActionsView() {
         ok ? (
           <>
             {/* `app-hidden`, never Tailwind's `hidden`: an extension's injected `.hidden` rule once collided with it. */}
-            <span className="md:app-hidden">{sinceLabel(ok.sinceIso, tz, true)}</span>
-            <span className="app-hidden md:inline">{sinceLabel(ok.sinceIso, tz, false)}</span>
+            <span className="md:app-hidden">{sinceLabel(ok.sinceIso, tz, true, ok.settings.range)}</span>
+            <span className="app-hidden md:inline">{sinceLabel(ok.sinceIso, tz, false, ok.settings.range)}</span>
           </>
         ) : null
       }
@@ -188,7 +192,7 @@ export function ActionsView() {
         </div>
       )}
       {ok && (
-        <div className="flex items-center gap-2 border-b border-hairline bg-surface px-3 py-2 sm:px-6">
+        <div className="flex flex-wrap items-center gap-2 border-b border-hairline bg-surface px-3 py-2 sm:px-6">
           {/* The ViewSwitcher inline pill anatomy; scrolls sideways inside itself on a phone (AC-G-2). */}
           <div className="min-w-0 overflow-x-auto">
             <div className="inline-flex rounded-lg border border-hairline bg-surface p-0.5" role="group" aria-label="Show">
@@ -208,6 +212,25 @@ export function ActionsView() {
                 </button>
               ))}
             </div>
+          </div>
+          {/* Range (owner 2026-11-17: "all time vs this week"): the same pill anatomy as the filter group. Saved in the
+              Actions settings, so the page AND the heartbeat classify pass both use it (actionsWindowStartMs). */}
+          <div className="inline-flex shrink-0 rounded-lg border border-hairline bg-surface p-0.5" role="group" aria-label="Range" data-testid="actions-range">
+            {ACTIONS_RANGES.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => (ok.settings.range === r ? undefined : void saveSettings({ ...ok.settings, range: r }))}
+                aria-pressed={ok.settings.range === r}
+                data-testid={`actions-range-${r}`}
+                className={cn(
+                  "whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium transition",
+                  ok.settings.range === r ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {ACTIONS_RANGE_LABEL[r]}
+              </button>
+            ))}
           </div>
           <button
             type="button"

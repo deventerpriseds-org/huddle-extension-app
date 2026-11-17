@@ -24,7 +24,7 @@ import {
   withItemCorrection,
   withItemUndo,
   selectActionItems,
-  sinceMondayMs,
+  actionsWindowStartMs,
   localMidnightMs,
   type ActionsSelection,
   type ActionsSettings,
@@ -163,7 +163,7 @@ export function runActionsClassify(): Promise<ClassifyResult | null> {
       const owners = lower(cfg.ownerLogins);
       const { loadLedgerReportData } = await import("../correspondence/report-from-ledger.server");
       const data = await loadLedgerReportData(cfg.ownerLogins);
-      const assembled = assembleLedgerPlan(data, cfg, sinceMondayMs(now, s.timeZone));
+      const assembled = assembleLedgerPlan(data, cfg, actionsWindowStartMs(now, s));
       const verdicts = await loadVerdicts(owners);
       // Loop-2 D-1: only verdicts judged at the current classifier-input version are skipped; older ones re-judge.
       const judged = currentlyJudgedKeys(verdicts);
@@ -297,7 +297,7 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
   if (!owners.length) return { status: "off" };
   const now = Date.now();
   const s = await settingsFor(cfg.owner);
-  const sinceMs = sinceMondayMs(now, s.timeZone);
+  const sinceMs = actionsWindowStartMs(now, s);
   const { loadLedgerReportData } = await import("../correspondence/report-from-ledger.server");
   const data = await loadLedgerReportData(cfg.ownerLogins);
   const assembled = assembleLedgerPlan(data, cfg, sinceMs);
