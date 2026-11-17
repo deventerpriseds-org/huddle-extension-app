@@ -5402,5 +5402,6 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [ ] Owner decision: rule change for background agents (session idle freezes them). [ ] OpenAI quota top-up (owner).
 ## ACT:quota-alert-background — background AI jobs raise ONE "OpenAI is out of credit" bell item + Iris notice, auto-clear on success (owner 2026-11-17) — branch claude_quota-alert-background, NOT live
 - [ ] Build + tests + mutation proofs: docs/qc-evidence/BUILD-quota-alert-background.md.
-- [x] Offline suite scripts/ai-quota-alert.test.ts 44/44 (Step 3); SQL suite scripts/ai-quota-alert-sql.test.ts 12/12 (Step 4).
+- [x] Offline suite scripts/ai-quota-alert.test.ts 45/45 (Step 3); SQL suite scripts/ai-quota-alert-sql.test.ts 12/12 (Step 4).
+- [x] 10/10 new guards mutation-proved FIRED, control EQUIVALENT (Step 5).
 - [ ] Merge + deploy (not in this lane's brief: no PR, no merge, no dispatch).
