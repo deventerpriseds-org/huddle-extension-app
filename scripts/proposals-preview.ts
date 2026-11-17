@@ -115,6 +115,15 @@ const judgeCache = { get: (k: string) => cache.get(k), set: (k: string, j: Judge
 const judged: { f: (typeof facts)[number]; o: JudgeOutcome }[] = [];
 let judgeCalls = 0;
 let judgeFailures = 0;
+const judgeFailureKinds: Record<string, number> = {};
+function judgeFailureKind(e: unknown): string {
+  const m = String((e as { message?: unknown })?.message ?? e ?? "");
+  const code = m.match(/\b(insufficient_quota|rate_limit_exceeded|invalid_api_key|model_not_found|context_length_exceeded|invalid_request_error|server_error)\b/)?.[1];
+  const status = m.match(/\b([45]\d\d)\b/)?.[1];
+  if (/timeout/i.test(m)) return "timeout";
+  if (status || code) return [status, code].filter(Boolean).join(" ");
+  return (e as { name?: string })?.name || "Error";
+}
 for (const f of facts) {
   // Cap the MODEL calls, not the conversations: settled / owner-only ones cost nothing and are still counted.
   const needsModel = !!f.latestOther && !f.settled;
@@ -125,11 +134,17 @@ for (const f of facts) {
   try {
     if (needsModel) judgeCalls++;
     judged.push({ f, o: await judgeConversation(f, nyCtx.ownerNames, judge, judgeCache) });
-  } catch {
+  } catch (e) {
     judgeFailures++;
+    const why = judgeFailureKind(e);
+    judgeFailureKinds[why] = (judgeFailureKinds[why] ?? 0) + 1;
     judged.push({ f, o: { status: "needs_context", reason: "judge_failed" } });
   }
 }
+// WHY the model calls failed, as a KIND only (HTTP status, a known error code, timeout, or the error class) --
+// never the message text, which can echo input. 2026-11-17: a run showed "model calls 35 | failures 35" and
+// nothing else, so the cause (quota? key? model name? timeout?) was invisible.
+if (judgeFailures) console.log(`judge failures by kind: ${JSON.stringify(judgeFailureKinds)}`);
 const buckets: Record<string, number> = {};
 for (const { f, o } of judged) {
   const b = reportBucket(f, o);

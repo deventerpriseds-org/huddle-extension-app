@@ -80,6 +80,15 @@ BEGIN
   END IF;
 END
 $mig$;
+-- 2026-11-16 (Actions view, Wrong?): the owner's correction of an item, nullable, reversible (Undo sets withdrawnAt and
+-- keeps the record + history). Added only when missing, so a migrated table takes no ALTER lock on later bootstraps.
+DO $corr$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'chat.task_proposals'::regclass AND attname = 'owner_correction' AND NOT attisdropped) THEN
+    ALTER TABLE chat.task_proposals ADD COLUMN IF NOT EXISTS owner_correction JSONB;
+  END IF;
+END
+$corr$;
 `;
 
 let bootstrapped: Promise<void> | null = null;

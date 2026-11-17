@@ -1,5 +1,32 @@
 # Project Memory — huddle-extension-app
 
+## Agent pace ROOT CAUSE (2026-11-17, measured) -- background agents FREEZE while the main session is idle
+- eds-agent-steps.py (eds-claude-skills #140, live v80) split 5 transcripts: model 1-10% of wall; 73-96% was steps in
+  different agents ending within 1-33 s of each other. Every freeze window = main session had ZERO events; each ended
+  within ~1 min of the session waking (owner message / notification). Agents run at 10-12 s/call while the session is
+  kept awake (waitagent loop): Actions fix 23 min, loop-3 verifier 47 min, no freezes.
+- So "spawn then END THE TURN" (global rule) freezes the work. Interim: keep the turn alive with a foreground wait
+  loop. Rule change pending owner decision. Separate, NOT yet explained: some in-agent `git commit && git push` steps
+  took 12-20 min with the session awake (git itself ~2 s; hooks <0.1 s). git trace2 perf logging now on
+  (/root/.claude/git-trace2/) to catch the next one.
+- OpenAI account is OUT OF QUOTA (429 insufficient_quota, 35/35 judge calls, run 43999529369) -- affects agents,
+  router, report and Actions classifier. Owner must top up billing.
+- Actions view #259 MERGED + DEPLOYED (efb7e41c), live UAT 32/32 (run 44008473254). NOT owner-confirmed.
+
+## Actions view + report-from-Azure lanes (2026-11-17) -- Actions NOT live (PR #259 under verify loop 2)
+- LIVE (#252-#257, deployed): correspondence content in Azure (email/teams/sent/transcript), 25s barge cap,
+  stand-up auto toggle (owner set OFF), report runs from Azure since Monday with resolved + uninvolved chats excluded.
+  NOT owner-confirmed live.
+- IN FLIGHT: #259 Actions view + Modules (branch claude_actions-view 50063519; verify loop 2 found D1 cross-message
+  quote); claude_fix-uninvolved-chat-findings (@Everyone + malformed mention fixes, 5/5 findings coded);
+  claude_correspondence-tuning-fixes (forwarded part stored: Outlook web/new Outlook/Apple Mail lost it; refill pending).
+- Hardening (2026-11-17): agents ran 300-600 s per tool call (healthy 8-16 s) and builds took 10-20 h; machine
+  work is seconds (suites <1 s, tsc 15 s, build 11 s, load 0.03). Budgets of 60/90 min were ceilings set far too
+  loose and the owner challenged them. Size budgets from measured machine time + ~15 s/step, give each agent a short
+  hard stop, and check pushed progress at the halfway mark. Cause of the slow pace is NOT yet known.
+- Hardening: a container restart killed 3 agents; each had pushed per step, so all resumed from origin. The
+  verify-loop hook counts a restarted loop as loop 2 and rejects "none" in PRIOR STATE fields -- state it plainly.
+
 ## Correspondence + proposals (ACT:correspondence-checklist) -- 2026-11-13, NOT live, branch claude_task-proposals
 - TUNING ORDER (owner 2026-11-14): one question at a time. Step 1 = needs a reply (reply-scan, reviewed: no YES
   disputed; six NO rows need ACTION not a reply). Step 2 = on To -> open item (reply or do-it). Step 3 = CC/list ->
@@ -1792,6 +1819,7 @@ shared path before touching any prompt: the snapshot layer is not always the sou
 
 ## Active work — 1:1 VOICE latency (journey-speed) — plan + premise CONFIRMED, build next (2026-08-01)
 - **2026-11-12 Polish "New draft" (LIVE, #208, UAT 11/11 run 43268935452, NOT owner-confirmed).** Owner had a finished 20-version draft and no way to start over. New draft (Draft header, next to Clear) empties draft + polished text + versions + direction/changes; Undo for 10s via toast; disabled while a polish is in flight. Clear unchanged (draft box only). Browser check `polishNewDraft` in polish-checks.mjs.
+- **2026-11-12 Tavily "a-narrow" (LIVE, #210, deploy 43271250029, NOT owner-confirmed).** Owner asked why Tavily was being drained. Cause: every confirm-ask RE-ASK (follow-up check-in) ran a fresh `tavily_web_search` (advanced = 2 credits) to re-find links already sent in the first check-in. Fix: `turnPayload(..., notify, {webSearch})` defaults true; the confirm-ask enqueue passes `{ webSearch: !followUp }`, and `confirmIntentDirective` tells a follow-up NOT to search ("the links went in your first check-in"). First check-ins unchanged (still include links, per the owner's 5 Nov ask). Estimated ~88% fewer searches. Test: `scripts/confirm-ask-context.test.ts` 21/21 (regex `/"push",\s*\{\s*webSearch: !followUp/`). PENDING: re-measure daily Tavily calls after a few days.
 User complaint: "the delay for my convo with Flex to SPEAK takes way too long, much longer than journey."
 It's a VOICE latency ask (not text). Today's 1:1 voice is SLOW because Realtime is ears-only
 (`create_response:false`, remote track muted) → transcript → full Responses turn (5–10s) → 2500ms poll

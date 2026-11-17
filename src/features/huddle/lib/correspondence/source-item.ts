@@ -20,8 +20,8 @@
 // EVIDENCE (2026-11-16): docs/qc-evidence/BUILD-correspondence-content.md.
 
 import type { InboundMessage } from "../email/inbound-email";
-import { FEED_ID_PREFIX, mapFeedMessage, mapSentRecords, type FeedInboundMessage, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
-import { FORWARD_SUBJECT } from "./forwarded";
+import { FEED_ID_PREFIX, feedRecordBody, mapFeedMessage, mapSentRecords, type FeedInboundMessage, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
+import { FORWARD_SUBJECT, forwardedPart, type ForwardedPart } from "./forwarded";
 import { parseRecipients } from "./needs-you";
 
 export type CorrespondenceSource = "email" | "teams" | "transcript" | "sent";
@@ -44,6 +44,11 @@ export interface EmailContent {
   /** The SAME visible text the app derives (mapFeedMessage -> htmlToText for an HTML body). */
   bodyText: string | null;
   isForward: boolean;
+  /** 2026-11-16: the FORWARDED email of a "Fw:" message, read from the raw body (forwarded.ts forwardedPart).
+   *  bodyText is cut at the forward header for Outlook-marker / blockquote forwards, so without this the stored row
+   *  held only the cover note. Present only when isForward and a forwarded part was found; ABSENT on rows stored
+   *  before this field existed (the back-fill re-writes their content). Not part of the content hash. */
+  forwarded?: ForwardedPart;
   /** Present only when the record carries `hasAttachments`. */
   hasAttachments?: boolean;
 }
@@ -63,6 +68,17 @@ export interface TeamsContent {
   fromOwner: boolean | null;
   text: string;
   webUrl: string | null;
+  /** 2026-11-16: mentioned USER ids (lower-cased). Present when the source message carried Graph's `mentions` array
+   *  (empty = nobody); ABSENT = unknown (rows stored before this field existed). */
+  mentionedUserIds?: string[];
+  /** 2026-11-16: the line's `ownerUserId` (lower-cased), when the line carried it. */
+  ownerUserId?: string;
+  /** 2026-11-16: is the owner among mentionedUserIds (present only when both are known). */
+  mentionsOwner?: boolean;
+  /** Verifier loop 1 (finding 1): a mention named no comparable user (@Everyone / chat, tag, app, team, channel,
+   *  empty or malformed entry, or a body <at> tag with no matching user mention) -- the owner MAY be addressed.
+   *  Present whenever mentionedUserIds is (rows stored before 2026-11-16 evening lack it). */
+  unresolvedMention?: boolean;
 }
 
 export interface TranscriptContent {
@@ -96,6 +112,14 @@ export interface TeamsMessage {
   text: string;
   chatName?: string;
   webUrl?: string;
+  /** Mentioned user ids (lower-cased); present only when the message carried a `mentions` array. */
+  mentionedUserIds?: string[];
+  /** The line's `ownerUserId` (lower-cased), when present. */
+  ownerUserId?: string;
+  /** Owner among the mentioned users (present only when the mention list and an owner id are both known). */
+  mentionsOwner?: boolean;
+  /** A mention that names no comparable user (see TeamsContent.unresolvedMention). */
+  unresolvedMention?: boolean;
 }
 
 export interface SourceItem {
@@ -174,6 +198,10 @@ export function teamsContent(m: TeamsMessage): TeamsContent {
     fromOwner: m.fromOwner,
     text: m.text,
     webUrl: m.webUrl ?? null,
+    ...(m.mentionedUserIds ? { mentionedUserIds: [...m.mentionedUserIds] } : {}),
+    ...(m.ownerUserId ? { ownerUserId: m.ownerUserId } : {}),
+    ...(typeof m.mentionsOwner === "boolean" ? { mentionsOwner: m.mentionsOwner } : {}),
+    ...(typeof m.unresolvedMention === "boolean" ? { unresolvedMention: m.unresolvedMention } : {}),
   };
 }
 
@@ -188,6 +216,10 @@ export function emailContent(rec: Record<string, unknown>, mapped: InboundMessag
   const m = mapped as FeedInboundMessage;
   const to = parseRecipients(m.toRecipients ?? rec.toRecipients).addresses;
   const cc = parseRecipients(m.ccRecipients ?? rec.ccRecipients).addresses;
+  const isForward = FORWARD_SUBJECT.test(String(mapped.subject ?? ""));
+  // The forwarded part comes from the SAME raw body mapFeedMessage read (feedRecordBody), never from bodyText.
+  const raw = isForward ? feedRecordBody(rec) : null;
+  const forwarded = raw ? forwardedPart(mapped.subject, raw.raw, raw.isHtml) : null;
   return {
     kind: "email",
     subject: mapped.subject ?? null,
@@ -198,7 +230,8 @@ export function emailContent(rec: Record<string, unknown>, mapped: InboundMessag
     conversationId: mapped.conversationId ?? null,
     internetMessageId: str(rec.internetMessageId) || null,
     bodyText: mapped.bodyText ?? mapped.bodyPreview ?? null,
-    isForward: FORWARD_SUBJECT.test(String(mapped.subject ?? "")),
+    isForward,
+    ...(forwarded ? { forwarded } : {}),
     ...(typeof rec.hasAttachments === "boolean" ? { hasAttachments: rec.hasAttachments } : {}),
   };
 }
@@ -348,6 +381,72 @@ export function emailSourceItem(
     email: mapped,
     content: emailContent(rec, mapped),
   };
+}
+
+/** What the ledger holds for one stored forward (FLAGS only -- the back-fill never reads stored content to plan). */
+export interface StoredForwardFlags {
+  source: string;
+  sourceItemId: string;
+  hasContent: boolean;
+  hasForwarded: boolean;
+  purged: boolean;
+}
+
+export interface ForwardRefillPlan {
+  /** Distinct forward items read from the file versions, and how many of them carry a forwarded part. */
+  forwardsRead: number;
+  forwardsWithPart: number;
+  /** Ledger rows flagged as forwards, and how many of them hold no stored forwarded part. */
+  storedForwards: number;
+  storedMissing: number;
+  /** storedMissing rows the back-fill now has a forwarded part for (the content re-write below gives it to them). */
+  wouldGain: number;
+  /** storedMissing rows with no forwarded part in any version read (not a forward header we can read, or no version). */
+  stillMissing: number;
+  /** storedMissing rows whose content was purged by retention (never written again). */
+  purged: number;
+  /** Items to re-write (content only) on apply: one per wouldGain row, its newest version. */
+  refill: SourceItem[];
+}
+
+/**
+ * Pure (2026-11-16): which stored forwards gain their forwarded part from the back-fill. `items` are the email /
+ * Sent Items read from every file version, oldest first (the newest copy of an item wins); `stored` are the ledger's
+ * flags for rows marked isForward. A row is refilled only when it has content, no `forwarded`, is not purged, and a
+ * version yields a forwarded part -- content changed WITHOUT a hash change, so observe alone never rewrites it.
+ */
+export function planForwardRefill(items: readonly SourceItem[], stored: readonly StoredForwardFlags[]): ForwardRefillPlan {
+  const newest = new Map<string, SourceItem>();
+  for (const it of items) {
+    const c = it.content;
+    if (!c || (c.kind !== "email" && c.kind !== "sent") || !c.isForward) continue;
+    newest.set(ledgerKey(it), it);
+  }
+  const withPart = new Map([...newest].filter(([, it]) => !!(it.content as EmailContent).forwarded));
+  const plan: ForwardRefillPlan = {
+    forwardsRead: newest.size,
+    forwardsWithPart: withPart.size,
+    storedForwards: stored.length,
+    storedMissing: 0,
+    wouldGain: 0,
+    stillMissing: 0,
+    purged: 0,
+    refill: [],
+  };
+  for (const s of stored) {
+    if (s.hasForwarded) continue;
+    plan.storedMissing++;
+    if (s.purged) {
+      plan.purged++;
+      continue;
+    }
+    const it = withPart.get(ledgerKey(s));
+    if (it) {
+      plan.wouldGain++;
+      plan.refill.push(it);
+    } else plan.stillMissing++;
+  }
+  return plan;
 }
 
 /** Ledger key, as the store and the pass both spell it. */

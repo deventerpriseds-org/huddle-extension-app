@@ -1,3 +1,10 @@
+- [ ] 2026-11-16 Owner tuning batch ("about 3 of 5 forwarded emails lost the forwarded part ... handle now along with anything
+      else noticed besides the meetings action items"): branch claude_correspondence-tuning-fixes -- forwarded part stored
+      (EmailContent.forwarded) + back-fill refill, proposals-preview defaults, DB firewall rule really created/removed,
+      default verify-uat suite starts no stand-up. Mutation-proved (18 FIRED, controlled), suites green, tsc clean.
+      OPEN: merge, then dispatch correspondence-backfill.yml (dry run, then apply) to refill stored forwards.
+      Evidence: docs/qc-evidence/BUILD-correspondence-tuning-fixes.md.
+- [x] 2026-11-16 Meeting menu: stand-up title on one line + muted "Daily at 8:00" line (the single label wrapped mid-phrase in UAT run 43796721000 screenshot); UAT asserts one-line title.
 - [x] 2026-11-16 Meeting menu: "Automatic stand-up" is now a real Switch on a plain menu row aligned with "Daily stand-up" (owner: did not look like a toggle, not aligned); meeting-menu-checks.mjs UAT measures alignment + screenshots both themes.
 - [x] 2026-11-16 Loop 12 verifier (claude_verify-correspondence-proposals-12 @ 9d6c3889): PASS 6, FAIL 0, UI-UNVERIFIED 1; minor: "teams=scheduled | email=throttled" logged every minute before 6pm -> quiet-log check now includes scheduled (TL-10).
 - [x] Verifier loop 11 (claude_verify-correspondence-proposals-11 @ 40ea8726) = FIX FIRST, speed only: the tag-span
@@ -5404,3 +5411,15 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
 - [x] Owner screenshot: Iris `focus_on` failed "task board isn't connected" at 11-03 22:59/23:03. Ground truth (`chat.pending_turns` payloads via azure-pg-query.yml run 41815988842): those were `dur-qa-paf-5f7a74-*` turns from `qa-plan-and-answer-first.mjs` (other session), journey deliberately OFF; every owner-sent turn had journey ON. The refusal was the #124 guard working as designed — not a regression.
 - [x] Cleanup (standing pre-authorization for provable test artifacts; plan stated in-turn before running): deleted 4 `chat.pending_turns` rows by `dur-qa-paf-%` / `Test- qa-paf-%` marker; rag_chunks had 0. Verified 0 remaining (run 41816128549).
 - [ ] Fix: `qa-plan-and-answer-first.mjs` targets the LIVE `dm-iris-chase` and only prints its cleanup SQL. Point it at a test huddle id and auto-clean by marker. Folded into the handoff PR.
+
+## ACT:actions-view — Actions view in a Modules launcher (owner 2026-11-15/16: 1A, Add as task/Done, 4A, copy-paste drafts) — PR #259, NOT live
+- [x] Built: branch claude_actions-view 50063519, BUILD-actions-view.md (62 tests, 11 guards mutation-proved).
+- [ ] Independent verify loop 2 (VERIFY-actions-view-2.md on claude_verify-actions-view-1); D1 cross-message quote found.
+- [ ] Merge + deploy + live UAT (actions-view-checks.mjs, desktop + 390px, both themes) + screenshots to owner.
+## ACT:uninvolved-chat-findings — fix #257 verifier findings 1,2,4,5,6 (@Everyone hid a chat; malformed mention crashed report) — branch, NOT live
+## ACT:correspondence-tuning — forwarded part lost for ~3/5 forwards; preview defaults; firewall rule; UAT stand-up opt-in — branch, NOT live
+- [ ] Owner (2026-11-17) challenged 60/90-min agent budgets: measured machine work <1 min/job; budgets cut to 15/25 min.
+- [x] ACT:actions-view merged #259 efb7e41c, deploy success, live UAT 32/32 run 44008473254 (screenshots sent). NOT owner-confirmed.
+- [x] ACT:uninvolved-chat-findings merged #262 (verify loop 2 MERGE). ACT:correspondence-tuning merged #261, forward refill applied: 7 re-written, 0 failed.
+- [x] Owner 2026-11-17 "tracking able to detect what is taking so long each step": eds-agent-steps.py live (eds-claude-skills #140, v80); judge-failure kinds logged (#263).
+- [ ] Owner decision: rule change for background agents (session idle freezes them). [ ] OpenAI quota top-up (owner).

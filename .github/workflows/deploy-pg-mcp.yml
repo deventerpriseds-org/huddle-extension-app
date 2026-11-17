@@ -114,9 +114,17 @@ jobs:
           OBOT_ROLE="obot_${INSTANCE_KEY}"; echo "OBOT_ROLE=$OBOT_ROLE" >> "$GITHUB_ENV"
           OBOT_DB="obot_oauth_${INSTANCE_KEY}"; echo "OBOT_DB=$OBOT_DB" >> "$GITHUB_ENV"
           IP=$(curl -s https://api.ipify.org || curl -s https://checkip.amazonaws.com | tr -d '\n')
-          az postgres flexible-server firewall-rule create -g "$RG" -s "$PG_SERVER" \
-            --rule-name "mcpdeploy-${IP//./-}" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null 2>&1 \
-            || echo "firewall-rule create skipped — relying on existing server rules"
+          # 2026-11-16: the rule is --name/-n, the server --server-name/-s (`--rule-name` failed silently every run).
+          az postgres flexible-server firewall-rule create -g "$RG" --server-name "$PG_SERVER" \
+            --name "mcpdeploy-${IP//./-}" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null \
+            || echo "::warning::firewall-rule create failed — relying on existing server rules"
+          # Removed on EVERY exit of this step (set -e used to skip the inline delete when a psql call failed).
+          cleanup_fw() {
+            az postgres flexible-server firewall-rule delete -g "$RG" --server-name "$PG_SERVER" \
+              --name "mcpdeploy-${IP//./-}" --yes --only-show-errors \
+              || echo "::warning::firewall rule mcpdeploy-${IP//./-} was NOT removed -- delete it by hand."
+          }
+          trap cleanup_fw EXIT
           HOST="$PG_SERVER.postgres.database.azure.com"
           # (1) crystaldba's DB role, in the target DB. pg_read_all_data always granted; pg_write_all_data
           # only when access_mode=unrestricted (and explicitly revoked otherwise, so re-running an existing
@@ -144,8 +152,7 @@ jobs:
           SELECT format('ALTER SCHEMA public OWNER TO %I', :'obot_role') \gexec
           SELECT format('GRANT ALL ON SCHEMA public TO %I', :'obot_role') \gexec
           SQL
-          az postgres flexible-server firewall-rule delete -g "$RG" -s "$PG_SERVER" \
-            --rule-name "mcpdeploy-${IP//./-}" --yes --only-show-errors >/dev/null 2>&1 || true
+          # (the temporary firewall rule is removed by the EXIT trap above)
 
       - name: Ensure Container Apps environment
         run: |

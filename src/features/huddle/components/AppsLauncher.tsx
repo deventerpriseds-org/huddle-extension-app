@@ -47,15 +47,17 @@ export const APP_VIEWS: ReadonlySet<View> = new Set(
 
 export const AppsIcon = Blocks;
 
-function AppList({ onPick }: { onPick: () => void }) {
+/** THE launcher list, shared by Apps and Modules (AC-M-12: one component, parameterised by its entries). */
+export function LauncherList({ items, onPick, badges }: { items: HuddleApp[]; onPick: () => void; badges?: Partial<Record<string, number>> }) {
   const view = useHuddleStore((s) => s.view);
   const setView = useHuddleStore((s) => s.setView);
   return (
     <ul className="flex flex-col gap-1">
-      {HUDDLE_APPS.map((a) => {
+      {items.map((a) => {
         const Icon = a.icon;
         const live = !!a.view;
         const active = live && view === a.view;
+        const badge = badges?.[a.id];
         return (
           <li key={a.id}>
             <button
@@ -68,7 +70,7 @@ function AppList({ onPick }: { onPick: () => void }) {
                 onPick();
               }}
               className={cn(
-                "flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition",
+                "flex min-h-11 w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition",
                 live ? "hover:bg-muted" : "cursor-default opacity-55",
                 active && "bg-muted",
               )}
@@ -81,16 +83,28 @@ function AppList({ onPick }: { onPick: () => void }) {
               >
                 <Icon size={18} aria-hidden />
               </span>
-              <span className="min-w-0">
+              <span className="min-w-0 flex-1">
                 <span className="block text-sm font-semibold">{a.label}</span>
                 <span className="block truncate text-xs text-muted-foreground">{a.blurb}</span>
               </span>
+              {typeof badge === "number" && badge > 0 && (
+                <span
+                  data-testid={`launcher-badge-${a.id}`}
+                  className="inline-flex min-w-[18px] shrink-0 items-center justify-center rounded-full bg-muted px-1.5 text-[11px] font-semibold leading-[18px] text-foreground tabular-nums"
+                >
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              )}
             </button>
           </li>
         );
       })}
     </ul>
   );
+}
+
+function AppList({ onPick }: { onPick: () => void }) {
+  return <LauncherList items={HUDDLE_APPS} onPick={onPick} />;
 }
 
 /** Desktop: the labelled Apps button in the Rail, opening a popover to the right. */

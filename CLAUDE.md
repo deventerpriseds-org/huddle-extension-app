@@ -505,7 +505,14 @@ from the session → workflow closes it" loop does NOT help, because the session
   Chromium against the deployed SWA (`icy-flower-0f415200f.7.azurestaticapps.net`), impersonating the
   user via `?uat_token=`/`UAT_BYPASS_TOKEN` (single-use — consumed on first load, so any `page.reload()`
   check must run LAST). Runner = app-agnostic `.claude/skills/test-agent-serverfn/scripts/run-uat.mjs`;
-  the ONLY app-specific file is `huddle-checks.mjs` (a `checks` array of `{page,check,screenshot}` fns).
+  the DEFAULT checks module is `huddle-checks.mjs` (a `checks` array of `{page,check,screenshot}` fns).
+- **The stand-up ceremony + voice-barge check is OPT-IN (2026-11-16):** it lives in
+  `ceremony-voice-checks.mjs` and starts a REAL stand-up in the owner's account. It used to sit in the default
+  `huddle-checks.mjs`, so every full verify-uat run started one: four runs on 2026-11-15 = four stand-ups, and
+  its long-task barge saved real artifacts. Run it only when the ceremony/voice path is what you are verifying
+  (`checks_file=.claude/skills/test-agent-serverfn/scripts/ceremony-voice-checks.mjs`), then clean up. Every
+  line it speaks that can create or change a task/artifact is `Test-` prefixed; `scripts/uat-suite-safety.test.ts`
+  fails if the default suite starts a meeting or sends a message, or a mutating barge loses its prefix.
 - **Getting the screenshots back to the session:** the artifact zip is proxy-blocked (HTTP 000) and
   base64-in-logs bloats context. `verify-uat.yml` pushes shots to a **per-run** orphan branch
   **`uat-shots-run-<run_id>`** (since 2026-11-08; the old shared `uat-shots` branch was force-pushed by every

@@ -89,6 +89,47 @@ function sender(m: Record<string, unknown>): { id: string; name: string; isApp: 
   return { id: str(pick(o, "id", "userId")).toLowerCase(), name: str(pick(o, "displayName", "name")), isApp: o.isApp === true };
 }
 
+/** Pure: Graph `mentions` (+ the raw body) -> the mentioned USER ids, lower-cased, de-duplicated, and whether ANY
+ *  mention could NOT be resolved to a user id (verifier report-from-ledger-1, finding 1/4). Graph's
+ *  chatMessageMention.mentioned can be a user, an application, a conversation/chat (@Everyone), a tag, a team or a
+ *  channel; only a user carries an id we can compare with the owner's. Everything else -- and an entry that is not
+ *  an object, has no `mentioned`, or a user whose id is empty or not a string -- MAY include the owner, so it sets
+ *  `unresolved` and the uninvolved-chat rule SHOWS the chat (fail open). A body `<at id="N">` tag whose N is not a
+ *  resolved user mention (or that has no id) is unresolved too. */
+function mentionFacts(ms: unknown[], rawBody: string): { ids: string[]; unresolved: boolean } {
+  const out = new Set<string>();
+  const resolvedTagIds = new Set<string>();
+  let unresolved = false;
+  for (const x of ms) {
+    const o = x && typeof x === "object" && !Array.isArray(x) ? (x as Record<string, unknown>) : null;
+    const mt = o?.mentioned && typeof o.mentioned === "object" ? (o.mentioned as Record<string, unknown>) : null;
+    const user = mt?.user && typeof mt.user === "object" ? (mt.user as Record<string, unknown>) : null;
+    const id = user && typeof user.id === "string" ? user.id.trim().toLowerCase() : "";
+    if (!id) {
+      unresolved = true;
+      continue;
+    }
+    out.add(id);
+    if (o && (typeof o.id === "number" || typeof o.id === "string")) resolvedTagIds.add(String(o.id).trim());
+  }
+  for (const tag of rawBody.matchAll(/<at\b([^>]*)>/gi)) {
+    const idm = /\bid\s*=\s*["']?([^"'\s>]+)/i.exec(tag[1] ?? "");
+    if (!idm || !resolvedTagIds.has(idm[1])) {
+      unresolved = true;
+      break;
+    }
+  }
+  return { ids: [...out], unresolved };
+}
+
+/** The raw body string (HTML or text) of a Graph-style message, for the `<at>` tag check only (never stored). */
+function rawBodyOf(m: Record<string, unknown>): string {
+  const b = m.body;
+  if (typeof b === "string") return b;
+  if (b && typeof b === "object" && typeof (b as Record<string, unknown>).content === "string") return (b as Record<string, unknown>).content as string;
+  return "";
+}
+
 function bodyText(m: Record<string, unknown>): string {
   const b = m.body;
   // Red-team F17: a plain-text body gets the SAME URL rule as the HTML path (a link's "?" is a query
@@ -234,6 +275,16 @@ export function parseTeamsLog(
         continue;
       }
       const who = sender(m);
+      // 2026-11-16 (report from the ledger): the owner-involvement rule (correspondence/report-from-ledger.ts
+      // UNINVOLVED_CHAT_RULE) needs to know whether the owner was @mentioned. Graph's `mentions` array is kept as the
+      // mentioned USER ids only (lower-cased; conversation/tag mentions carry no user). Present only when the message
+      // carries the array (an empty array = "no one mentioned"; absent = "unknown").
+      // Verifier loop 1 (finding 1): `unresolvedMention` records a mention that names no comparable user (@Everyone,
+      // a tag, an app, a malformed entry, or a body <at> tag with no matching user mention). Present whenever
+      // mentionedUserIds is. NOT part of the content hash (teamsSourceItem), so nothing re-processes.
+      const mf = Array.isArray(m.mentions) ? mentionFacts(m.mentions, rawBodyOf(m)) : undefined;
+      const mentionedUserIds = mf?.ids;
+      const lineOwnerId = str(rec.ownerUserId).toLowerCase();
       const key = `${chatId}\u0000${messageId}`;
       if (byKey.has(key)) {
         out.duplicates++;
@@ -252,6 +303,11 @@ export function parseTeamsLog(
         text: textOut,
         ...(chatName ? { chatName } : {}),
         ...(str(m.webUrl) ? { webUrl: str(m.webUrl) } : {}),
+        ...(mentionedUserIds ? { mentionedUserIds } : {}),
+        ...(mf ? { unresolvedMention: mf.unresolved } : {}),
+        // Whether the owner is among the mentioned: known only when both the mention list and an owner id are.
+        ...(mentionedUserIds && lineOwners.size ? { mentionsOwner: mentionedUserIds.some((id) => lineOwners.has(id)) } : {}),
+        ...(lineOwnerId ? { ownerUserId: lineOwnerId } : {}),
       });
     }
   }

@@ -182,4 +182,7 @@ t("T10 label shows the effective schedule", async () => {
   expect(autoStandupLabel({ tz: "America/New_York", hours: [8] })).toBe("Automatic stand-up (daily 8:00)");
   expect(autoStandupLabel({ tz: "UTC", hours: [13, 7], daysOfWeek: [4, 1] })).toBe("Automatic stand-up (Mon, Thu 7:00, 13:00)");
   expect(autoStandupLabel(undefined)).toBe("Automatic stand-up");
+  const { cadenceLine } = await import(P("identity/auto-job-label.ts"));
+  expect(cadenceLine({ tz: "America/New_York", hours: [8] })).toBe("Daily at 8:00");
+  expect(cadenceLine({ tz: "UTC", hours: [13, 7], daysOfWeek: [4, 1] })).toBe("Mon, Thu at 7:00, 13:00");
 });

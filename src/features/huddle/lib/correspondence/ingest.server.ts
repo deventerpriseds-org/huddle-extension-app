@@ -33,13 +33,24 @@ let running: Promise<PassResult | null> | null = null;
  *  across instances the ledger's claim/lease makes concurrent passes safe (AC-3.9). */
 export function runCorrespondenceIngest(): Promise<PassResult | null> {
   const cfg = getFeedsConfig();
-  const pass = withContentPurge(cfg, runIngestOnly(cfg));
+  const pass = withActionsClassify(cfg, withContentPurge(cfg, runIngestOnly(cfg)));
   // File-staleness alert (2026-11-13): rides this heartbeat hook, independent of `ingest`. Flag OFF => exactly
   // the previous behaviour (not even the import). ON => the returned promise also waits for the check (the
   // heartbeat awaits it at the end of the tick), which never throws.
   if (cfg?.correspondence.staleAlerts !== true) return pass;
   const stale = import("./feed-staleness.server").then((m) => m.runFeedStaleness(cfg)).catch(() => null);
   return Promise.all([pass, stale]).then(([r]) => r);
+}
+
+/** Actions view classify step (2026-11-16): AFTER the pass (it reads what the pass stored), throttled to once per
+ *  10 minutes per process inside lib/actions, and only when the ingest is on (zero work otherwise, not even the
+ *  import). Never throws; the pass result comes back unchanged. */
+function withActionsClassify(cfg: ReturnType<typeof getFeedsConfig>, pass: Promise<PassResult | null>): Promise<PassResult | null> {
+  if (cfg?.correspondence.ingest !== true || !process.env.AZURE_PG_URL) return pass;
+  return pass.then(async (r) => {
+    await import("../actions/actions.server").then((m) => m.runActionsClassify()).catch(() => null);
+    return r;
+  });
 }
 
 /** Stored-content purge (2026-11-16), at most once a day per process, alongside the pass. Runs only where content

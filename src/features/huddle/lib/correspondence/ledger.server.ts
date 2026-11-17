@@ -131,6 +131,16 @@ BEGIN
     ON chat.correspondence_ledger ((COALESCE(item_at, first_seen_at)))
     WHERE content IS NOT NULL;
 END $ledger_content_migration$;
+-- 2026-11-16 (Actions view, Wrong?): the owner's correction of the thread whose latest message this row is, kept for
+-- the classifier's record. Nullable; added only when missing (no ALTER lock on an already-migrated table).
+DO $ledger_correction$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'chat.correspondence_ledger'::regclass
+                  AND attname = 'owner_correction' AND NOT attisdropped) THEN
+    PERFORM set_config('lock_timeout', '5s', true);
+    ALTER TABLE chat.correspondence_ledger ADD COLUMN IF NOT EXISTS owner_correction JSONB;
+  END IF;
+END $ledger_correction$;
 CREATE INDEX IF NOT EXISTS correspondence_ledger_due_idx
   ON chat.correspondence_ledger (owner_email, source, next_attempt_at)
   WHERE status IN ('pending','failed_retryable');
@@ -345,7 +355,13 @@ export const pgLedger: LedgerStore & ContentStore = {
   async markProcessed(c, resultIds) {
     await ensureBootstrapped();
     const r = await getPool().query(
-      `UPDATE chat.correspondence_ledger SET status = 'processed', result_ids = $4::jsonb, missing_field = NULL,
+      // 2026-11-16: a stored Actions verdict (result_ids.action, written by lib/actions) survives (re)processing.
+      // 2026-11-17 (loop-2 D2): so does the Actions model-call attempt list (result_ids.action_calls), which the daily
+      // cap counts; dropping it here would hand the cap back calls that were already made.
+      `UPDATE chat.correspondence_ledger SET status = 'processed',
+              result_ids = $4::jsonb || CASE WHEN result_ids ? 'action' THEN jsonb_build_object('action', result_ids->'action') ELSE '{}'::jsonb END
+                                     || CASE WHEN result_ids ? 'action_calls' THEN jsonb_build_object('action_calls', result_ids->'action_calls') ELSE '{}'::jsonb END,
+              missing_field = NULL,
               last_error_category = NULL, lease_until = NULL, processed_at = now(), updated_at = now()
         WHERE source = $1 AND source_item_id = $2 AND claim_version = $3`,
       [c.source, c.sourceItemId, c.claimVersion, JSON.stringify(resultIds)],

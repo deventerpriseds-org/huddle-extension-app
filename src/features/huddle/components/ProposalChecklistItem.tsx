@@ -26,7 +26,7 @@ import { useHuddleStore, type ChecklistRowState } from "../store";
 const STATE_LABEL: Record<string, string> = {
   proposed: "Proposed",
   approved: "Added to board",
-  completed: "Marked done",
+  completed: "Done",
   dismissed: "Dismissed",
   untriaged: "To sort",
   delegated: "For someone",
@@ -127,7 +127,7 @@ export function ProposalChecklistItem({
     <li className="flex items-center gap-2 px-3 py-2">
       <button
         type="button"
-        aria-label={`Approve "${title}" — add it to your board`}
+        aria-label={`Add "${title}" as a task on your board`}
         disabled={!open || busy || signedOut || triaging}
         onClick={() => act("approve")}
         className="-my-3 -ml-3 flex size-11 shrink-0 items-center justify-center disabled:opacity-50"
@@ -217,7 +217,8 @@ export function ProposalChecklistItem({
         ) : (
         <DropdownMenuContent align="end" className="w-44">
           <DropdownMenuItem onClick={() => act("approve")}>
-            <Check size={12} className="mr-2" /> Approve
+            {/* One vocabulary with the Actions page (owner 2026-11-16): "Add as task" / "Done". */}
+            <Check size={12} className="mr-2" /> Add as task
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => {
@@ -228,7 +229,7 @@ export function ProposalChecklistItem({
             <Pencil size={12} className="mr-2" /> Edit
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => act("complete")}>
-            <CheckCheck size={12} className="mr-2" /> Mark done
+            <CheckCheck size={12} className="mr-2" /> Done
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => act("dismiss")}>
             <X size={12} className="mr-2" /> Dismiss

@@ -47,13 +47,15 @@ export const actOnProposalFn = createServerFn({ method: "POST" })
         // Meeting triage (AC-correspondence-redesign R5.8): Mine / For someone (+ a typed name) / Skip.
         choice: z.enum(["mine", "someone", "skip"]).optional(),
         name: z.string().max(400).optional(),
+        // 2026-11-16: the Actions view's rows use this SAME endpoint; `from` only adds the bell settle (X-6).
+        from: z.enum(["actions"]).optional(),
       })
       .parse(raw),
   )
   .handler(async ({ data }): Promise<{ ok: boolean; error?: string; row?: ProposalRowState; alreadyDone?: boolean; alreadyOnBoard?: boolean; note?: string }> => {
     try {
       const { actOnProposal } = await import("./proposals.server");
-      const r = await actOnProposal(data.caller, data.id, data.action, data.title, data.choice ? { choice: data.choice, name: data.name } : undefined);
+      const r = await actOnProposal(data.caller, data.id, data.action, data.title, data.choice ? { choice: data.choice, name: data.name } : undefined, { from: data.from });
       const row = r.row
         ? { id: r.row.id, state: r.row.state, title: r.row.title, taskId: r.row.taskId, ...(r.row.state === "delegated" ? { assignee: r.row.assignee } : {}) }
         : undefined;

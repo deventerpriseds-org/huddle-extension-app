@@ -118,7 +118,8 @@ export const CHAT_UNCERTAIN_REASON: Record<string, string> = {
 /** The badge counts only items whose state is known (uncertain chat rows are listed, not counted). */
 export const badgeCount = (items: AttentionItem[]): number => items.filter((i) => !i.uncertain).length;
 
-const safeLink = (u: string | null | undefined): string | undefined => {
+/** THE https-only link rule (bell rows and the Actions view's Open in Teams). */
+export const safeLink = (u: string | null | undefined): string | undefined => {
   const s = String(u ?? "").trim();
   return /^https:\/\/[^\s"<>]+$/i.test(s) ? s : undefined;
 };
