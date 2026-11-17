@@ -1,5 +1,17 @@
 # Project Memory — huddle-extension-app
 
+## Actions view follow-ups (2026-11-17, late) -- LIVE, NOT owner-confirmed
+- #268 sender fix + accuracy (verify loop 4 MERGE-PENDING-UAT -> UAT 37/37 run 44027792082). #269 This week / All time
+  toggle (UAT 38/38 run 44028413853; the check never CLICKED the toggle -- gap, see below). #270 OWNER/OTHER role
+  labels never shown (plainRoles on admit + display; R13 tests; mutation FIRED; UAT 38/38 run 44032394550).
+- Owner saw the toggle missing: the live bundle had it (grep of /assets/*.js); his app had the pre-deploy bundle loaded.
+  A full app reload is needed after a deploy; sw.js does not cache fetches.
+- Gap found by owner: All time showed the same tab counts + "120 not checked yet" -- unchecked items are counted, never
+  listed, and the classifier judges 6 per ~10 min. Fix in flight (branch claude_actions-all-time-catchup): list the
+  unchecked items, "Check now" catch-up, tab reset on range change, UAT that clicks All time.
+- Hardening: a UAT check that only asserts a control EXISTS proves nothing about what it does. A range/filter control's
+  UAT must click it and assert the visible result changes, then restore the saved setting.
+
 ## Actions accuracy (2026-11-17, branch claude_actions-accuracy, NOT live) -- owner Teams ids are GLOBAL, not per chat
 - Live probe (counts only): 69 recent Teams rows, 0 carry `ownerUserId`, all `fromOwner` null; 37 were the owner's own id (seen on OLDER rows).
   `teamsOwnerIds` was per chat, so those chats had no owner id and his own message read as OTHER ("X asks you...").

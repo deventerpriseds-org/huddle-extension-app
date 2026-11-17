@@ -5439,3 +5439,8 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
 - [x] 10/10 new guards mutation-proved FIRED, control EQUIVALENT (Step 5).
 - [x] Build caught node:async_hooks in a client chunk; fixed via hooks.ts registry; suite now 49/49, tsc + build clean (Steps 6-7).
 - [ ] Merge + deploy (not in this lane's brief: no PR, no merge, no dispatch).
+
+## ACT:actions-role-labels — OWNER/OTHER labels leaked into summaries (owner screenshot 2026-11-17) — LIVE, NOT owner-confirmed
+- [x] Fixed in #270 (db7d32e2): plainRoles on admit + display; prompt sentence added; R13-1..5; mutation FIRED; deploy 44032153827; UAT 38/38 run 44032394550.
+## ACT:actions-all-time-catchup — All time showed only "120 not checked yet", tabs unchanged (owner 2026-11-17) — IN PROGRESS
+- [ ] Branch claude_actions-all-time-catchup: list unchecked items, Check now catch-up, tab reset, UAT that clicks All time.
