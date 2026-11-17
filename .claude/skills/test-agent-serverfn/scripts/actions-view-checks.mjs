@@ -2,8 +2,10 @@
 //             labelled Modules button and NO separate Priorities / Schedule icons; Modules opens and lists
 //             Priorities, Schedule, Actions; each opens its full page (h1 = its name); the phone bottom bar has
 //             equal columns with Modules in it and nothing wider than the screen; the phone top bar names the
-//             view; screenshots at desktop and 390px in both themes. READ-ONLY: it never taps a row button,
-//             never changes a What-shows setting and never sends Wrong?.
+//             view; screenshots at desktop and 390px in both themes. It never taps a row button, never changes a
+//             What-shows setting and never sends Wrong?. ONE stored write, undone: it clicks "All time" (and
+//             "This week") to check what the range changes, then restores the saved range and checks the restore
+//             (AT-9). PARITY (AT-P1..P6): the items listed (judged open + not checked) against what the page reports.
 // WHY:        Owner-approved design 2026-11-16 (Modules + Actions). ship-ui-that-belongs: a UI change is verified
 //             by looking at it at the width the owner uses, in both themes, not by a green unit suite.
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
@@ -15,6 +17,130 @@ const PHONE = { width: 390, height: 844 };
 const setTheme = (page, dark) => page.evaluate((d) => document.documentElement.classList.toggle("dark", d), dark);
 const h1Text = (page) => page.locator("main h1, section h1").first().textContent({ timeout: 8000 }).catch(() => null);
 const noHorizontalScroll = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+
+// ── 2026-11-17 owner bug: "All time" showed only "120 not checked yet" and the tabs/counts did not change. ─────────
+/** What the Actions page shows right now: the tab counts, the pressed tab and range, the listed judged rows, the
+ *  "Not checked yet" count the page reports and the not-checked items it LISTS (the section is expanded to count). */
+const COUNTED_SECTIONS = ["Needs your reply", "To-do for you", "FYI with an action", "From meetings", "Not checked yet"];
+export async function readActions(page) {
+  // Expand every section whose rows are counted (a section's rows are not in the DOM while it is collapsed; the
+  // open/closed choice is per device). Answered / Sent back are not counted and stay as they are.
+  for (const label of COUNTED_SECTIONS) {
+    const toggle = page.locator(`button[aria-label="Expand ${label}"]`).first();
+    if (await toggle.count()) {
+      await toggle.click().catch(() => {});
+      await page.waitForTimeout(250);
+    }
+  }
+  return page.evaluate(() => {
+    const q = (s) => document.querySelector(s);
+    const num = (el) => {
+      const m = /(\d+)\s*$/.exec((el?.textContent ?? "").trim());
+      return m ? Number(m[1]) : null;
+    };
+    const tabs = {};
+    for (const id of ["all", "email", "teams", "meeting"]) {
+      const b = q(`[data-testid="actions-filter-${id}"]`);
+      if (b) tabs[id] = num(b);
+    }
+    const pressedTab = [...document.querySelectorAll('[data-testid^="actions-filter-"][aria-pressed="true"]')].map((b) => b.getAttribute("data-testid").replace("actions-filter-", ""))[0] ?? null;
+    const pressedRange = [...document.querySelectorAll('[data-testid^="actions-range-"][aria-pressed="true"]')].map((b) => b.getAttribute("data-testid").replace("actions-range-", ""))[0] ?? null;
+    const nc = q('[data-testid="actions-not-checked"]');
+    const header = nc?.querySelector("button[aria-expanded]")?.textContent ?? "";
+    const hm = /\((\d+)\)/.exec(header);
+    return {
+      pressedRange,
+      pressedTab,
+      tabs,
+      judgedListed: document.querySelectorAll('[data-testid="actions-row"]').length,
+      // The count the page SHOWS: its data-count, else any visible "N not checked yet" text (the pre-fix line).
+      notCheckedReported: nc?.hasAttribute("data-count")
+        ? Number(nc.getAttribute("data-count"))
+        : Number(/(\d+)\s+not checked yet/i.exec(document.body.textContent ?? "")?.[1] ?? 0),
+      notCheckedHeader: hm ? Number(hm[1]) : null,
+      notCheckedListed: document.querySelectorAll('[data-testid="actions-not-checked-row"]').length,
+      notCheckedWithAiButtons: [...document.querySelectorAll('[data-testid="actions-not-checked-row"]')].filter((li) => /Add as task|Dismiss|Wrong\?|Done/.test(li.textContent ?? "")).length,
+      oldCountOnlyLine: [...document.querySelectorAll("p")].some((p) => /^\s*\d+ not checked yet/.test(p.textContent ?? "")),
+    };
+  });
+}
+
+/** Waits until the page has re-read after a range click: the pressed range is the one asked for and two reads 1.5s
+ *  apart agree (the subtitle flips before the data arrives, so it is not a signal). */
+async function settleOn(page, range, timeoutMs = 45000) {
+  const start = Date.now();
+  let prev = null;
+  while (Date.now() - start < timeoutMs) {
+    await page.waitForTimeout(1500);
+    const cur = await readActions(page);
+    const stable = prev && JSON.stringify(prev) === JSON.stringify(cur);
+    if (cur.pressedRange === range && stable && Date.now() - start > 3500) return cur;
+    prev = cur;
+  }
+  return readActions(page);
+}
+
+/** PARITY, printed and checked: the items the view lists (judged open + not checked) against what the page reports. */
+export function parity(check, label, v) {
+  const listed = v.judgedListed + v.notCheckedListed;
+  const detail = `listed ${listed} (judged open ${v.judgedListed} + not checked ${v.notCheckedListed}) | page reports: tab All ${v.tabs.all}, not checked ${v.notCheckedReported}, section header ${v.notCheckedHeader ?? "-"}`;
+  console.log(`  PARITY ${label}: ${detail}`);
+  check(`AT-P1 ${label}: a "not checked yet" count is never shown with no listed items`, !(v.notCheckedReported > 0 && v.notCheckedListed === 0), detail);
+  check(`AT-P2 ${label}: listed not-checked items = the count the page reports (tab All)`, v.notCheckedListed === v.notCheckedReported && (v.notCheckedHeader ?? v.notCheckedListed) === v.notCheckedListed, detail);
+  check(`AT-P3 ${label}: tab All = judged open listed + not checked listed`, v.tabs.all === listed, detail);
+  const typed = ["email", "teams", "meeting"].filter((k) => typeof v.tabs[k] === "number").reduce((a, k) => a + v.tabs[k], 0);
+  check(`AT-P4 ${label}: Email + Teams + Meetings tabs = All`, typed === v.tabs.all, JSON.stringify(v.tabs));
+  check(`AT-P5 ${label}: not-checked rows carry no Add as task / Done / Dismiss / Wrong? (never judged)`, v.notCheckedWithAiButtons === 0, `${v.notCheckedWithAiButtons} rows with judged-row buttons`);
+  check(`AT-P6 ${label}: the old count-only "N not checked yet" line is gone`, !v.oldCountOnlyLine);
+}
+
+/** Clicks "All time" (and "This week"), checks what changes, then puts the SAVED range back. The range is a stored
+ *  setting, so the restore runs in finally and is itself checked. */
+export async function rangeRoundTrip(page, check, screenshot) {
+  const before = await readActions(page);
+  const saved = before.pressedRange;
+  check("AT-0 the saved range is readable before clicking", saved === "week" || saved === "all", String(saved));
+  if (saved !== "week" && saved !== "all") return;
+  const click = async (r) => page.locator(`[data-testid="actions-range-${r}"]`).first().click();
+  const views = {};
+  try {
+    if (saved === "all") {
+      await click("week");
+      views.week = await settleOn(page, "week");
+    } else views.week = before;
+    // Put the tab on a non-All type first, so the tab reset is actually exercised.
+    const typeTab = ["email", "teams", "meeting"].find((k) => (views.week.tabs[k] ?? 0) > 0) ?? ["email", "teams", "meeting"].find((k) => typeof views.week.tabs[k] === "number");
+    if (typeTab) {
+      await page.locator(`[data-testid="actions-filter-${typeTab}"]`).first().click();
+      await page.waitForTimeout(400);
+    }
+    const onType = (await readActions(page)).pressedTab;
+    await click("all");
+    views.all = await settleOn(page, "all");
+    check("AT-1 clicking All time selects All time", views.all.pressedRange === "all", String(views.all.pressedRange));
+    check("AT-2 a range change resets the type tab to All", views.all.pressedTab === "all", `tab before click ${onType}, after ${views.all.pressedTab}`);
+    check(
+      "AT-3 All time lists at least as many items as This week (it is a superset)",
+      views.all.judgedListed + views.all.notCheckedListed >= views.week.judgedListed + views.week.notCheckedListed && views.all.tabs.all >= views.week.tabs.all,
+      `week: tab All ${views.week.tabs.all}, listed ${views.week.judgedListed}+${views.week.notCheckedListed} | all time: tab All ${views.all.tabs.all}, listed ${views.all.judgedListed}+${views.all.notCheckedListed}`,
+    );
+    parity(check, "All time", views.all);
+    await screenshot("actions-all-time-desktop");
+    if (saved === "week") {
+      await click("week");
+      views.week2 = await settleOn(page, "week");
+      parity(check, "This week", views.week2);
+    } else parity(check, "This week", views.week);
+  } finally {
+    const now = (await readActions(page).catch(() => ({ pressedRange: null }))).pressedRange;
+    if (now !== saved) {
+      await click(saved).catch(() => {});
+      await settleOn(page, saved).catch(() => {});
+    }
+    const restored = (await readActions(page).catch(() => ({ pressedRange: null }))).pressedRange;
+    check("AT-9 the saved range is restored after the test", restored === saved, `saved ${saved}, now ${restored}`);
+  }
+}
 
 export const checks = [
   // ── Desktop ─────────────────────────────────────────────────────────────────────────────────────────
@@ -70,6 +196,7 @@ export const checks = [
     } else {
       check("RANGE-UI the range toggle exists on the Actions page", false);
     }
+    if (await range.count()) await rangeRoundTrip(page, check, screenshot);
     // 2026-11-17 accuracy fixes (BUILD-actions-accuracy.md). READ-ONLY: More / Less and opening + closing Wrong?
     // change nothing stored; Send is never pressed.
     const rowsN = await page.locator('[data-testid="actions-row"]').count();
