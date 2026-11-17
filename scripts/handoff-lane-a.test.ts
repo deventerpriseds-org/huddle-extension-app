@@ -112,6 +112,23 @@ describe("F1 urgency: classifyAsk().urgency spelling table", () => {
     ["v3-O", "can't you just do it now?", "now"],
     ["v3-O", "I don't care just do it now", "now"],
     ["v3-O", "don't wait, do it right away", "now"],
+    // verify loop 4 C2 (VERIFY-handoff-confirm-flow-4.md): UNSAFE -- an urgent idiom must never hide a deferral,
+    // and "right now" describing the owner's state alongside any time/busy word is not a go-ahead.
+    ["v4-U", "Why don't you do it tomorrow instead of right now?", "default"],
+    ["v4-U", "I don't care, just not right now", "default"],
+    ["v4-U", "Can't you wait? Not right now.", "default"],
+    ["v4-U", "Won't you hold off for now.", "default"],
+    ["v4-U", "Do it on Friday, right now I'm slammed", "default"],
+    ["v4-U", "Right now I'm swamped, get to it Monday", "default"],
+    ["v4-U", "Get to it next month; right now there's too much going on", "default"],
+    ["v4-U", "Do it after lunch, I'm on a call right now", "default"],
+    ["v4-U", "don't worry about it now", "default"],
+    // ... OVER-MATCH, by design (the safe direction: one confirm step): a time word next to an urgent ask.
+    ["v4-O", "Do it right now so it's ready for tomorrow's meeting", "default"],
+    ["v4-O", "I need it now, I'm busy later", "default"],
+    ["v4-O", "ASAP please, I'm in a meeting at 3", "default"],
+    ["v4-O", "Do it right now before my flight tonight", "default"],
+    ["v4-O", "Start it immediately, I don't want to wait until Friday", "default"],
     ["pos", "do it right away", "now"],
     ["pos", "don't wait, do it immediately", "now"],
   ];

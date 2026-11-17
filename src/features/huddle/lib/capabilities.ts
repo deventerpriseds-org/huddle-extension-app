@@ -151,42 +151,49 @@ const URGENCY_RE: RegExp[] = [
   /^\s*now\b[,\s]/i, // leading "now,"
 ];
 
-// The over-matches URGENCY_RE has no context for (AC-handoff-confirm-flow.md S-U10..S-U13, measured live
-// defects): a NEGATED now ("not now", "not right now", "don't do it now"), a "bad time" now ("right now
-// is a bad time", "now isn't a good time") and the discourse marker "now that you mention it". Each one is
-// a reason NOT to start, so any match forces `default` — the safe direction, since "now" is what lets an
-// agent skip the confirm step (F1/F3). A negation only governs a "now" within three plain words of it, so
-// "don't wait, do it now" (comma between) is still urgent. The negation covers EVERY urgency word
-// URGENCY_RE fires on, not only "now": verify loop 1 (VERIFY-handoff-confirm-flow-1.md, C2) measured
-// "don't do it right away", "not immediately" and "not asap" all classifying `now`. "no rush" anywhere
-// is a reason not to start, so it forces `default` too.
-const NOT_URGENT_RE: RegExp[] = [
-  // Negator: any "n't" contraction (don't, doesn't, isn't, can't, won't, wouldn't, shouldn't …) plus the
-  // spelled-out forms. Verify loop 2 (VERIFY-handoff-confirm-flow-2.md, C2) measured nine unsafe misses
-  // from the closed list this replaced ("it doesn't need to be done right away", "can't do it now", …).
-  // The apostrophe is REQUIRED (verify loop 3, VERIFY-handoff-confirm-flow-3.md W-1..W-6): an optional one made
-  // every word ending in "nt" a negator, so "I want it now" / "urgent" / "important" / "client" read as not-now.
-  // The apostrophe-less spellings people actually type are listed by name instead.
-  /\b(?:not|never|do not|no need (?:to|for)|rather than|instead of|[a-z]+n['’]t|dont|cant|wont|doesnt|isnt|didnt|wouldnt|shouldnt|couldnt)\s+(?:[a-z'’]+\s+){0,4}?(?:now|right away|immediately|asap|straight away|this second|this instant)\b/i,
-  /\bnot[\s.,!]+now\b/i, // "Not. Now."
-  /\bno (?:rush|hurry)\b/i,
-  // Deferral idioms that mean "not yet" wherever they sit (verify loop 3, U-1..U-23): "leave it for now",
-  // "hold off", "busy right now, do it later", "instead of right away, do it Friday", "nothing right now".
-  /\b(?:for now|hold off|later|tomorrow|tonight|next week|this weekend|wait until|in a meeting|busy|park(?:ed)? it|on the backlog|nothing (?:right )?now)\b/i,
-  /\bnow(?:\s+is|'s|’s)?\s+(?:not|isn'?t|a\s+(?:bad|terrible|tough|awful|busy|hard|rough)\b)/i,
-  /\bnow\s+(?:isn'?t|doesn'?t|won'?t|does not|will not|is not)\b/i,
-  /\bnow\s+that\b/i,
-];
-
-// A negator that is part of an urgent REQUEST, not a refusal: "why don't you do it right now", "can't you just
-// do it now?", "I don't care, just do it now" (verify loop 3, O-3/O-4/O-6). Checked before NOT_URGENT_RE.
-const URGENT_DESPITE_NEGATOR_RE = /\b(?:why (?:don'?t|not) you|can'?t you|won'?t you|i don'?t care)\b/i;
+// WHICH DIRECTION IS UNSAFE. "now" is what lets an agent skip the confirm step (F1/F3), so a deferral read as
+// "now" acts on something the owner said to wait on; an urgent ask read as `default` only costs one confirm.
+// So "now" needs an urgency word AND no doubt anywhere in the message: any negation, and any time, schedule
+// or busy reference, forces `default`.
+//
+// SUPERSEDES four rounds of spelling patches (verify loops 1-4, VERIFY-handoff-confirm-flow-{1..4}.md C2).
+// Each closed the listed spellings and opened nearby ones; loop 4 found 8 deferrals still read as "now",
+// largely because an "urgent despite the negator" check (why don't you / can't you / I don't care) returned
+// "now" BEFORE any veto ran ("Why don't you do it tomorrow instead of right now?"). Now those urgent idioms
+// are REMOVED from the text and every veto still runs on what is left, so an idiom can never hide a
+// deferral. Known safe-direction misses, by design: "do it right now so it's ready for tomorrow's meeting"
+// and "ASAP please, I'm in a meeting at 3" read `default` (one confirm), because a time word is present.
+const URGENT_IDIOMS_RE =
+  /\b(?:don['’]?t (?:wait|forget)|never ?mind|i don['’]?t care|why (?:don['’]?t|not) you|can['’]?t you|won['’]?t you)\b/gi;
+// Any negation, wherever it sits ("not now", "it doesn't need to be done right away", "nothing right now").
+// The apostrophe is REQUIRED on "n't" (verify loop 3 W-1..W-6: "want", "urgent", "client" end in "nt"); the
+// apostrophe-less spellings people actually type are listed by name.
+const NEGATION_RE =
+  /\b(?:not|never|no|nothing|none|neither|nor|instead|rather|unless|without|[a-z]+n['’]t|dont|cant|wont|doesnt|isnt|didnt|wouldnt|shouldnt|couldnt|aint)\b/i;
+// Any time, schedule or busy reference: the owner is placing the work somewhere other than this moment, or
+// saying why this moment is bad ("right now I'm slammed, get to it Monday").
+const DEFERRAL_RE = new RegExp(
+  "\\b(?:" +
+    [
+      "later", "tomorrow", "tonight", "today", "morning", "afternoon", "evening", "weekend", "week", "month", "year",
+      "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+      "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
+      "after", "before", "until", "till", "til", "once", "whenever", "when", "soon", "eventually", "sometime",
+      "lunch", "dinner", "breakfast", "noon", "midnight", "o['’]?clock", "\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)",
+      "at \\d", "by \\d", "in (?:a|an|\\d+) (?:minute|min|hour|hr|day|bit|while)s?",
+      "busy", "slammed", "swamped", "meeting", "on (?:a|the) (?:call|phone)", "in (?:a|the) call",
+      "wait", "waiting", "hold", "park", "parked", "backlog", "for now", "bad time", "good time", "hurry", "rush",
+      "now that",
+    ].join("|") +
+    ")\\b",
+  "i",
+);
 
 /** Is this ask an explicit "do it now"? ONE classifier for urgency — consumers read `classifyAsk().urgency`. */
-function askIsUrgentNow(t: string): boolean {
-  if (!URGENCY_RE.some((re) => re.test(t))) return false;
-  if (URGENT_DESPITE_NEGATOR_RE.test(t)) return true;
-  return !NOT_URGENT_RE.some((re) => re.test(t));
+function askIsUrgentNow(text: string): boolean {
+  if (!URGENCY_RE.some((re) => re.test(text))) return false;
+  const rest = text.replace(URGENT_IDIOMS_RE, " ");
+  return !NEGATION_RE.test(rest) && !DEFERRAL_RE.test(rest);
 }
 
 export function classifyAsk(text: string): AskClass {
