@@ -67,3 +67,35 @@ create path, not the confirm/approach/not-ai paths of C4/C5/C9/C10, so the exclu
   mechanism ("buttons appear BECAUSE of the stamp") is **imprecise** -- the stamp drives typed-yes binding, the reply
   derivation drives the buttons.
 
+## C9 -- assist default + row 9 harness test-only threads
+- `npm run -s test:mode`: 70/70 passed. workability.ts:133-138: the final fall-through of `classifyTaskMode` is
+  `return "assist"` (PRODUCE_VERBS still route research/drafting to produce). Default-assist: **CONFIRMED** (code + suite;
+  no mutation run -- budget).
+- Harness qa-plan-and-answer-first.mjs: `journey:{enabled:false}` on every agent (l.45); every message `Test- <MARK>`;
+  thread ids `test-dm-iris-chase-<MARK>` / `test-group-<MARK>` (l.120-121); cleanup SQL deletes pending_turns by
+  `dur-<MARK>-%` id or payload text, and rag_chunks by MARK, then dispatches azure-pg-query.yml (l.205-224). CONFIRMED as written.
+- **CHALLENGE (REFUTES "test-only threads" in full, by code reading, not executed):** case 5 ("1:1 BIG LANE WORK: still
+  handed off by name", ctx ONE) is a 1:1 perform-intent message. huddle.functions.ts:7407-7424 then calls
+  `deliverOwnerFollowup`, which enqueues a REAL durable turn in `dm-${ownerId}` (2094, 2120-2123) -- the owner's real
+  1:1 thread, not a test- thread -- and that path fires the away-notification push. There is no `test-` huddle guard
+  anywhere in src/features/huddle/lib (grep `startsWith("test-")`: none). The row is probably caught by the MARK cleanup
+  (directive embeds `cleanAsk`, first 240 chars, which starts with `Test- <MARK>`), but the push to the phone and the
+  visible reply in the real DM happen before cleanup. Concrete input: case 5's text in ONE (`test-dm-iris-chase-<MARK>`)
+  -> follow-up in e.g. `dm-finn-reid` if the lane resolver picks a non-Iris owner. NOT executed (offline only).
+- **C9 verdict: CONFIRMED (assist default); harness "test-only thread ids" = REFUTED by code reading for the 1:1
+  hand-off case (UNSAFE: real-thread write + phone push), confidence medium -- depends on the lane resolver picking an
+  owner != iris-chase for case 5, which is that case's stated purpose.**
+
+## Summary
+| Claim | Verdict | Evidence |
+|---|---|---|
+| Blast radius | CONFIRMED excluded | last-5 diff touches none of the 5 files |
+| C5 | CONFIRMED; risk 2 REACHABLE (inference) | lane-b 7/0; confirm guard mutation FIRED (control EQUIVALENT); 8s race -> pass enqueues autowork-<run>-<id> beside live-work-<id> |
+| C10 | CONFIRMED; tag-preservation test INERT | not-ai-task 6/0; withMyTaskTag->[tag] mutation INERT |
+| C4 | CONFIRMED; causal wording imprecise | lane-b-db ALL PASS on local PG; 'asked'->'pending' FIRED; buttons come from reply derivation, not the stamp |
+| C9 | default CONFIRMED; harness test-only threads REFUTED (code reading, UNSAFE) | mode 70/70; case 5 -> deliverOwnerFollowup -> real dm-<owner> + push |
+
+Budget overrun: work finished at ~05:55 UTC against a 05:38 budget (clock jump observed between 05:32 and 05:54 during a
+single grep call). Full suite re-run (tsc + all 7 suites) NOT REACHED; only lane-b, not-ai-task, mode, lane-b-db run.
+
+LOOP-9-B-COMPLETE
