@@ -16,6 +16,7 @@
 import {
   actionSectionFor,
   admitActionVerdict,
+  canonQuote,
   emailActionInput,
   emailInstructionsFor,
   emailQuoteHaystack,
@@ -25,7 +26,7 @@ import {
   type ActionVerdict,
 } from "../correspondence/action-classify";
 import type { ConversationFacts } from "../correspondence/needs-you";
-import type { AssembledLedgerPlan, LedgerReportRow, MeetingItems, TeamsChatFacts } from "../correspondence/report-from-ledger";
+import { foldPersonName, type AssembledLedgerPlan, type LedgerReportRow, type MeetingItems, type TeamsChatFacts } from "../correspondence/report-from-ledger";
 import type { EmailContent } from "../correspondence/source-item";
 import { FEED_ID_PREFIX } from "../external-feeds/onedrive-feed";
 import { meetingItemIsOwnersOrUnassigned } from "../proposals/meeting-triage";
@@ -300,7 +301,7 @@ export function buildCandidates(a: {
         display: {
           title: p?.title ?? current?.todo ?? (c.chatName || lo.name),
           who: lo.name,
-          sourceLabel: c.kind === "one_on_one" ? "Teams 1:1" : `Teams${c.chatName ? `, ${c.chatName}` : ""}`,
+          sourceLabel: teamsSourceLabel(c, a.assembled.ctx.ownerNames),
           reasonLine: current?.reason ?? null,
           quote: current?.quote ?? null,
           due: current?.due ?? null,
@@ -355,5 +356,42 @@ export function buildCandidates(a: {
       });
     }
   }
-  return { candidates: out, uninvolvedHidden, meetingOthersHidden };
+  return { candidates: collapseDuplicateTeamsItems(out), uninvolvedHidden, meetingOthersHidden };
+}
+
+// ── 2026-11-17 accuracy fixes (owner report: one Teams ask showed twice, "Teams 1:1" and "Teams, <his own name>") ──
+
+/** Pure: the Teams source label. A non-1:1 chat whose Teams name is only the owner's own name (Teams names an
+ *  untitled group chat after its members) is labelled "Teams group chat", never with the owner's name. */
+export function teamsSourceLabel(c: Pick<TeamsChatFacts, "kind" | "chatName">, ownerNames: readonly string[]): string {
+  if (c.kind === "one_on_one") return "Teams 1:1";
+  const own = new Set(ownerNames.map(foldPersonName).filter(Boolean));
+  const name = c.chatName && !own.has(foldPersonName(c.chatName)) ? c.chatName : null;
+  return name ? `Teams, ${name}` : c.chatName ? "Teams group chat" : "Teams";
+}
+
+/**
+ * Pure: ONE row per Teams ask. OPEN Teams items that share a backing proposal, or the same sender AND the same
+ * quoted sentence (folded), are the same ask (posted in a 1:1 and again in a small group chat with the same person,
+ * or re-posted later): only the NEWEST (by `at`) is kept. Nothing else is touched: emails, meetings, and Teams
+ * items that are not open keep their place and order.
+ */
+export function collapseDuplicateTeamsItems(cands: readonly ActionCandidate[]): ActionCandidate[] {
+  const keysOf = (c: ActionCandidate): string[] => {
+    const k: string[] = [];
+    if (c.proposalId) k.push(`p:${c.proposalId}`);
+    const q = c.display.quote ? canonQuote(c.display.quote) : "";
+    if (q) k.push(`q:${canonQuote(c.display.who ?? "")}\u0000${q}`);
+    return k;
+  };
+  const t = (c: ActionCandidate) => (c.at ? Date.parse(c.at) : NaN);
+  const winner = new Map<string, ActionCandidate>();
+  for (const c of cands) {
+    if (c.source !== "teams" || c.status !== "open") continue;
+    for (const k of keysOf(c)) {
+      const w = winner.get(k);
+      if (!w || (t(c) || -Infinity) > (t(w) || -Infinity)) winner.set(k, c);
+    }
+  }
+  return cands.filter((c) => c.source !== "teams" || c.status !== "open" || keysOf(c).every((k) => winner.get(k) === c));
 }

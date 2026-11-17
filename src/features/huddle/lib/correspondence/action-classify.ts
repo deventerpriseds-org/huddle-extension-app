@@ -257,8 +257,8 @@ export function admitActionVerdict(raw: unknown, haystack: string | QuoteHaystac
   return { ...rest, status: "open" };
 }
 
-/** A sentence that claims the owner has NOT replied / answered / responded. */
-const NOT_REPLIED = /\b(?:not|n['’]t|never|no)\b[^.;]{0,24}\b(?:repl|respond|answer|got back)/i;
+/** A sentence that claims the OWNER ("you") has not replied / answered / responded. */
+const NOT_REPLIED = /\byou\b[^.;]{0,20}(?:\bnot\b|n['’]t\b|\bnever\b|\byet to\b)[^.;]{0,16}\b(?:repl|respond|answer|got back|get back)|\bno (?:reply|response|answer) from you\b/i;
 
 /**
  * THE SETTLED GUARD (2026-11-17, owner: "hallucination of actions not asked for ... 'you have not replied'"): when
