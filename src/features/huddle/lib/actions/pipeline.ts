@@ -395,8 +395,9 @@ export function teamsSourceLabel(c: Pick<TeamsChatFacts, "kind" | "chatName">, o
 }
 
 /** Loop-2 D-2: a quoted sentence shorter than this (folded) never makes two rows "the same ask": short generic
- *  sentences ("Can you take a look at this?") are re-used for different things. */
-export const DEDUP_MIN_QUOTE_CHARS = 25;
+ *  sentences ("Can you take a look at this?", 28 characters -- the verifier's counter-example, so 25 was too low)
+ *  are re-used for different things. 40 still covers a real re-posted ask (a full sentence with its specifics). */
+export const DEDUP_MIN_QUOTE_CHARS = 40;
 
 /** Pure: the chat id of a Teams item key ("teams:<chatId>|<message id>"), or null. */
 export function teamsChatOfItemKey(itemKey: string): string | null {

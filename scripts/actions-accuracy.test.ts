@@ -159,11 +159,11 @@ const cand = (o: Partial<ActionCandidate> & { quote?: string | null; who?: strin
     ...o,
     display: { title: "x", who: o.who ?? "Pat Example", sourceLabel: "", reasonLine: null, quote: o.quote ?? null, due: null, reply: null, replyAsk: null, teamsLink: null, meetingTitle: null, assignee: null },
   }) as ActionCandidate;
-const dupA = cand({ itemKey: "a", at: "2026-11-16T12:56:00Z", quote: "Please let me know  how often" });
-const dupB = cand({ itemKey: "b", at: "2026-11-16T15:04:00Z", quote: "please let me know how often" });
-const other = cand({ itemKey: "c", at: "2026-11-16T16:00:00Z", quote: "please let me know how often", who: "Sam Example" });
-const email = cand({ itemKey: "e", source: "email", at: "2026-11-16T10:00:00Z", quote: "please let me know how often" });
-const closed = cand({ itemKey: "n", status: "none", at: "2026-11-16T09:00:00Z", quote: "please let me know how often" });
+const dupA = cand({ itemKey: "a", at: "2026-11-16T12:56:00Z", quote: "Please let me know  how often you want our synthetic 1:1" });
+const dupB = cand({ itemKey: "b", at: "2026-11-16T15:04:00Z", quote: "please let me know how often you want our synthetic 1:1" });
+const other = cand({ itemKey: "c", at: "2026-11-16T16:00:00Z", quote: "please let me know how often you want our synthetic 1:1", who: "Sam Example" });
+const email = cand({ itemKey: "e", source: "email", at: "2026-11-16T10:00:00Z", quote: "please let me know how often you want our synthetic 1:1" });
+const closed = cand({ itemKey: "n", status: "none", at: "2026-11-16T09:00:00Z", quote: "please let me know how often you want our synthetic 1:1" });
 // Loop-2 D-2: the same-sender test is by SENDER ID (senderIdOf), never by display name; a long quote is required.
 const sidOf = (m: Record<string, string>) => (c: ActionCandidate) => m[c.itemKey] ?? null;
 const SIDS = { a: "pat-guid", b: "pat-guid", c: "sam-guid", e: "pat-guid", n: "pat-guid" };

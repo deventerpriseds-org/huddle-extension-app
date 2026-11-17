@@ -95,7 +95,8 @@ Source of the defects: `docs/qc-evidence/VERIFY-actions-accuracy-2.md` on `claud
 
 - CHANGE: `collapseDuplicateTeamsItems(cands, senderIdOf)` treats two OPEN Teams items as the same ask ONLY when
   (a) they come from the same chat (chat id parsed from the item key), or (b) the same sender ID quoted the same
-  folded sentence of at least `DEDUP_MIN_QUOTE_CHARS` = 25 characters. A shared backing proposal is no longer a
+  folded sentence of at least `DEDUP_MIN_QUOTE_CHARS` = 40 characters (25 was tried first: the verifier's
+  counter-example "Can you take a look at this?" is 28 characters and R6-5 failed at 25). A shared backing proposal is no longer a
   key (the store attaches different senders' to-dos to one proposal by title). A display name is never an id; an
   unknown sender id never matches. `buildCandidates` supplies the latest OTHER sender's id from the stored rows.
 - BEHAVIOUR: the verifier's two counter-examples now give two rows (F2 short generic sentence; F4 shared
