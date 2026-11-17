@@ -1,0 +1,49 @@
+{
+  "results": [
+    {
+      "name": "Sidebar visible by default on desktop",
+      "pass": true
+    },
+    {
+      "name": "Sidebar collapses (removed from DOM) after clicking collapse",
+      "pass": true
+    },
+    {
+      "name": "Main content reflows wider when Sidebar collapses",
+      "pass": true,
+      "detail": "before=368 after=624"
+    },
+    {
+      "name": "Sidebar re-expands via Rail's H button",
+      "pass": true
+    },
+    {
+      "name": "ContextPanel visible by default with a collapse button",
+      "pass": true
+    },
+    {
+      "name": "ContextPanel collapses to the slim edge-tab",
+      "pass": true
+    },
+    {
+      "name": "ContextPanel re-expands via the edge-tab",
+      "pass": true
+    },
+    {
+      "name": "No avatar image 404s (ACT-huddle-2 regression guard)",
+      "pass": true,
+      "detail": "all avatar images loaded"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
