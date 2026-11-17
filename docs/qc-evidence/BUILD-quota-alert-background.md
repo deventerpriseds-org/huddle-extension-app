@@ -62,3 +62,22 @@ NOT wrapped (interactive, unchanged): the user's own `u-`/`xapp-` turns -- they 
 ## Step 4 -- real SQL suite
 
 `bun scripts/ai-quota-alert-sql.test.ts` (local PostgreSQL 16): **12 passed, 0 failed** -- D1 four concurrent "instances" -> one row, one notice; D3 no duplicate; D4 listed first; D5 talking to Iris does not clear; D6 dismiss holds for the outage; D7 concurrent successes clear once; D8 next outage reopens; D9/D10 kind + owner isolation.
+
+## Step 5 -- mutation proofs (`mutate.sh`, anchors in files, exact test names, exit code read)
+
+| # | guard | mutation | test | verdict (exit) |
+|---|---|---|---|---|
+| M1 | SQL raise opens only from no row / auto-cleared | drop `AND e.status = 'replied'` | D1 concurrent raise (4 instances) -> exactly one alerted | FIRED, control EQUIVALENT (0) |
+| M2 | monitor notifies only the caller that opened the row | `if (false) return "already_open"` | Q2 second quota error -> already_open | FIRED, control EQUIVALENT (0) |
+| M3 | only quota errors alert (existing isQuotaError) | `if (false) return "not_quota"` | Q5 non-quota -> not_quota | FIRED, control EQUIVALENT (0) |
+| M4 | success clears through the store | `cleared = false` | Q4 success -> cleared | FIRED, control EQUIVALENT (0) |
+| M5 | talking to Iris does not settle the row | drop `'ai_quota'` from settleAttentionForHuddle exclusion | D5 talking to Iris does NOT clear it | FIRED, control EQUIVALENT (0) |
+| M6 | notice branch reads systemNoticeResult before the model path | `const notice = null` | N3 the branch is driven by systemNoticeResult(record.payload) | FIRED, control EQUIVALENT (0) |
+| M7 | failure KIND is logged | drop `kind=${kind}` | Q5 kind logged | FIRED, control EQUIVALENT (0) |
+| M8 | bell always lists ai_quota | `SYSTEM_KINDS = ["feed"]` | B1 listed even with every owner kind off | FIRED, control EQUIVALENT (0) |
+| M9 | empty notice text never short-circuits a turn | drop the non-empty check | N2 empty notice text is not a notice | FIRED, control EQUIVALENT (0) |
+| M10 | one shared kind helper | local copy in proposals-preview.ts | K1 preview script imports the shared copy | FIRED, control EQUIVALENT (0) |
+
+First M10 attempt (replace the alias line) was INERT -- the K1 check reads the import line; re-aimed at the import (the real
+"second copy" defect). First M1/M5 runs were UNDETERMINED: `/tmp` was full (other sessions' `corr-*` clusters plus this
+suite's own leaked `aiquota-*` dirs); the SQL suite now removes its cluster in `finally`, then both FIRED.
