@@ -14,7 +14,11 @@
 // board (focus_on is still OFFERED and its attempt is recorded in result.toolUses as
 // "focus_on -- journey disabled", which is exactly the signal case 1-3 read). Every message is `Test-`
 // prefixed and carries the run MARK so the run's chat.pending_turns + rag_chunks rows can be removed by
-// marker afterwards (the SQL is printed at the end; this script does not delete anything itself).
+// marker afterwards. The run uses PRIVATE test thread ids (test-dm-iris-chase-<MARK>, test-group-<MARK>) that the
+// owner's app never opens, and at the end it DISPATCHES azure-pg-query.yml itself to delete its rows by MARK
+// (needs GH_TOKEN/GITHUB_TOKEN; without one it prints the SQL). 2026-11-04: an earlier version used the owner's
+// real dm-iris-chase / all-members threads and only printed the SQL, so 4 "focus_on" failures sat in the
+// owner's live Iris thread and read as a broken app (ACT:harness-pollution-iris).
 //
 // Run (NOT run by the build lane — run against the deployed commit that contains the change):
 //   node .claude/skills/test-agent-serverfn/scripts/qa-plan-and-answer-first.mjs
@@ -111,8 +115,10 @@ const textOf = (r) => r.replies.map((x) => String(x.text || "")).join("\n");
 const calledFocus = (r) => r.toolUses.some((t) => t.tool === "focus_on");
 const TIME_LINE = /^\s*(?:[•\-*]\s*)?\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM)?\b.*·/;
 
-const ONE = { huddleId: "dm-iris-chase", scope: "one-to-one", members: ["iris-chase"], target: "iris-chase" };
-const GROUP = { huddleId: "all-members", scope: "group", members: ALL };
+// Never the owner's real threads ("dm-iris-chase", "all-members"): scope/target carry the 1:1-vs-group meaning,
+// and nothing server-side requires the dm- prefix when scope is one-to-one (assign-on-create.ts checks scope first).
+const ONE = { huddleId: `test-dm-iris-chase-${MARK}`, scope: "one-to-one", members: ["iris-chase"], target: "iris-chase" };
+const GROUP = { huddleId: `test-group-${MARK}`, scope: "group", members: ALL };
 
 const CASES = [
   {
@@ -139,7 +145,7 @@ const CASES = [
   {
     n: 3, name: "PRIORITY-CHECK REPLY: reply to Iris's scheduled check STILL calls focus_on (2026-10-16 design)", ctx: ONE,
     history: [{
-      id: `h-${MARK}-pc`, huddleId: "dm-iris-chase", author: { kind: "agent", agentId: "iris-chase" }, ts: Date.now() - 60_000,
+      id: `h-${MARK}-pc`, huddleId: ONE.huddleId, author: { kind: "agent", agentId: "iris-chase" }, ts: Date.now() - 60_000,
       text: "Hello Sir, here are your top priorities:\n• Test-the deck\n• Test-interview prep\nYou can also just reply with what you want to work on and I'll start those.",
     }],
     text: `Test- ${MARK} Test-the deck, Test-interview prep`,
@@ -198,9 +204,25 @@ for (const c of CASES) {
   console.log("");
 }
 console.log(`${pass} passed, ${fail} failed  (MARK=${MARK})`);
-console.log(
-  `\nCLEANUP (run via azure-pg-query.yml — journey was disabled, so there is no board to clean):\n` +
-  `  DELETE FROM chat.pending_turns WHERE id LIKE 'dur-${MARK}-%' OR payload->>'text' LIKE '%${MARK}%';\n` +
-  `  DELETE FROM public.rag_chunks WHERE text LIKE '%${MARK}%';`,
-);
+// Auto-clean (standing owner instruction 2026-08-11: always remove test artifacts, no need to ask). Journey was
+// disabled, so there is no board to clean: only this run's durable turns and memory chunks, by MARK.
+const CLEANUP_SQL =
+  `DELETE FROM chat.pending_turns WHERE id LIKE 'dur-${MARK}-%' OR payload->>'text' LIKE '%${MARK}%'; ` +
+  `DELETE FROM public.rag_chunks WHERE text LIKE '%${MARK}%'; ` +
+  `SELECT (SELECT count(*) FROM chat.pending_turns WHERE payload->>'text' LIKE '%${MARK}%') AS turns_left, ` +
+  `(SELECT count(*) FROM public.rag_chunks WHERE text LIKE '%${MARK}%') AS chunks_left;`;
+const GH = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+if (GH) {
+  const res = await fetch(
+    "https://api.github.com/repos/deventerpriseds-org/huddle-extension-app/actions/workflows/azure-pg-query.yml/dispatches",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${GH}`, Accept: "application/vnd.github+json" },
+      body: JSON.stringify({ ref: "main", inputs: { sql: CLEANUP_SQL } }),
+    },
+  ).catch((e) => ({ status: 0, statusText: String(e) }));
+  console.log(`\nCLEANUP dispatched to azure-pg-query.yml: HTTP ${res.status} (204 = queued; read the run log for turns_left/chunks_left = 0).`);
+} else {
+  console.log(`\nCLEANUP (no GH token here — run via azure-pg-query.yml):\n  ${CLEANUP_SQL}`);
+}
 if (fail) process.exit(1);

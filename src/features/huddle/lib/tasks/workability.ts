@@ -96,6 +96,13 @@ export function isAgentWork(title: string | null | undefined): boolean {
  */
 export const REMINDER_TAG = "reminder";
 
+/**
+ * The owner's "Not an AI task" button tag (confirm-ask row, 2026-11-17): the task is the owner's own, so it
+ * comes off its agent, goes to Backlog, and grooming never hands it back to an agent. Grooming also reads the
+ * titles tagged with it as examples of what the owner keeps for themselves, to tune future assignment.
+ */
+export const MY_TASK_TAG = "my-task";
+
 // Category / tag signals that lean personal (the user acts) when no verb decides it.
 const PERSONAL_CATEGORIES = new Set(["LIFE", "PERSONAL", "HEALTH"]);
 const PERSONAL_TAGS = new Set([
@@ -124,8 +131,11 @@ export function classifyTaskMode(task: {
   // No decisive verb → lean on the task's own category/tags.
   if (PERSONAL_CATEGORIES.has(cat) || tags.some((t) => PERSONAL_TAGS.has(t))) return "assist";
 
-  // Default: an assigned task with no personal signal is knowledge-work the agent can produce.
-  return "produce";
+  // Default when no verb or signal decides it: ASSIST (owner decision A, 2026-11-04/16 "Go on 1-9"). The old
+  // default, produce, turned errands like "Obtain official transcript" into an invented "acquisition brief";
+  // assist does the legwork the agent CAN finish and names the user's own step. Research/drafting tasks are
+  // unaffected — PRODUCE_VERBS above still sends them to produce.
+  return "assist";
 }
 
 // A short hint appended to the confirm-intent directive so the agent proposes the RIGHT kind of assumed

@@ -91,6 +91,7 @@ import {
   overrideApproachFromButtonFn,
   backlogTaskFromButtonFn,
   parkTaskFromButtonFn,
+  notAiTaskFromButtonFn,
 } from "../lib/tasks/confirm-ask.functions";
 import { streamItemSummary } from "../lib/stream-context";
 
@@ -919,7 +920,7 @@ function ChecklistItem({
 
 function ConfirmAskRow({ m }: { m: HuddleMessage }) {
   const { user } = useAuth();
-  const [busy, setBusy] = useState<"confirm" | "backlog" | "archive" | null>(null);
+  const [busy, setBusy] = useState<"confirm" | "backlog" | "archive" | "notai" | null>(null);
   const ask = m.confirmAsk;
   if (!ask) return null;
   if (ask.resolved) {
@@ -933,7 +934,7 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
     ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username }
     : undefined;
   async function run(
-    action: "confirm" | "backlog" | "archive",
+    action: "confirm" | "backlog" | "archive" | "notai",
     fn: () => Promise<{ ok: boolean; error?: string; alreadyDone?: boolean }>,
     doneLabel: string,
   ) {
@@ -945,7 +946,7 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
           .getState()
           .resolveConfirmAsk(
             m.id,
-            action === "confirm" ? "confirmed" : action === "backlog" ? "backlogged" : "parked",
+            action === "confirm" ? "confirmed" : action === "archive" ? "parked" : "backlogged",
           );
         // res.error here means a non-fatal partial failure (e.g. the journey mirror write failed)
         if (res.error) toast(doneLabel, { description: res.error });
@@ -1004,6 +1005,23 @@ function ConfirmAskRow({ m }: { m: HuddleMessage }) {
       >
         {busy === "backlog" && <Loader2 size={12} className="animate-spin" />}
         Backlog
+      </button>
+      {/* "Not an AI task": back to Backlog, off the agent, tagged my-task so grooming keeps it the owner's and
+          learns from it (confirm-ask.functions.ts notAiTaskFromButtonFn). */}
+      <button
+        type="button"
+        disabled={busy !== null}
+        onClick={() =>
+          run(
+            "notai",
+            () => notAiTaskFromButtonFn({ data: { caller, taskId: ask.taskId } }),
+            "Kept for you — moved to Backlog",
+          )
+        }
+        className={CONFIRM_ASK_BTN}
+      >
+        {busy === "notai" && <Loader2 size={12} className="animate-spin" />}
+        Not an AI task
       </button>
       <button
         type="button"

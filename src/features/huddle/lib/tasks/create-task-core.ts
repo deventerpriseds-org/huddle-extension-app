@@ -31,6 +31,100 @@ import { capabilityOwnerFor } from "../capabilities";
 import { normalizeTaskTitle } from "./scoring";
 export { normalizeTaskTitle };
 
+// Grammatical filler only, so the comparison below is about the words that carry meaning.
+const EXTENSION_FILLER = new Set([
+  "the", "and", "for", "you", "your", "with", "this", "that", "its", "please", "then", "also", "from", "into",
+  "onto", "about", "make", "sure",
+]);
+const meaningWords = (s: string): string[] =>
+  s
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    // Numbers always count, however short ("Dec 5" vs "Dec 12", "table for 2" vs "for 4": verify loop 9 C8).
+    .filter((w) => (w.length >= 3 || /\d/.test(w)) && !EXTENSION_FILLER.has(w));
+/**
+ * Does `w` appear among the description's words — the same word, give or take its ending?
+ *  - A short word (4 letters or fewer on either side) matches only itself plus a plain ending: +s, +es, +ed, +ing,
+ *    or +d after an e ("send"/"sends", "hold"/"holds", "bake"/"baked"), plus a few irregular verb forms. Verify loop 8 C8: a 3-letter prefix rule made "car" = "card" = "career",
+ *    "bus" = "business", "app" = "appointment", "kit" = "kitchen", "gas" = "gasket".
+ *  - Longer words share at least 5 leading letters ("transcript"/"transcripts", "registration"/"registered"), which
+ *    keeps "presentation" apart from "prescription" (4 shared).
+ */
+// Irregular forms of common task verbs, so "send" (the ask) still meets "sent" (journey's rewrite) — the real
+// 2026-10-30 UM-Flint row depends on exactly this pair.
+const IRREGULAR: Record<string, string[]> = {
+  send: ["sent"], pay: ["paid"], buy: ["bought"], make: ["made"], take: ["took", "taken"], get: ["got", "gotten"],
+  write: ["wrote", "written"], bring: ["brought"], find: ["found"], meet: ["met"], leave: ["left"], keep: ["kept"],
+  give: ["gave", "given"], tell: ["told"], sell: ["sold"], hold: ["held"], read: ["read"], run: ["ran"],
+};
+const plainForm = (short: string, long: string) =>
+  short === long ||
+  long === `${short}s` ||
+  long === `${short}es` ||
+  long === `${short}ed` ||
+  long === `${short}ing` ||
+  (short.endsWith("e") && long === `${short}d`);
+function sameWordIn(w: string, desc: readonly string[]): boolean {
+  return desc.some((d) => {
+    if ((IRREGULAR[w] ?? []).includes(d) || (IRREGULAR[d] ?? []).includes(w)) return true;
+    // Every word, any length: itself or a plain ending only. Verify loop 9 C8: a 5-letter shared beginning made
+    // "grandpa" = "grandma", "Christopher" = "Christina", "Danielle" = "Daniel", "manager" = "management".
+    const [short, long] = w.length <= d.length ? [w, d] : [d, w];
+    return plainForm(short, long) || (short.endsWith("y") && long === `${short.slice(0, -1)}ies`);
+  });
+}
+
+/**
+ * Which open title (normalized) is `key` (a normalized title about to be created) a duplicate of, or null?
+ *
+ *  1. An exact match.
+ *  2. journey's shortened form of the SAME request. journey's create keeps a SHORT title and moves the rest of
+ *     the text into the description (live 2026-10-30: "Obtain official transcript and send it directly to
+ *     UM-Flint ..." was stored as title "Obtain official transcript", description "Request the official
+ *     transcript and ensure it is sent directly to UM-Flint to remove the registration hold."), so the next
+ *     identical ask arrives long and an exact check misses it. It counts as the same task only when the new
+ *     title starts with the open one AND EVERY extra word appears in that task's DESCRIPTION.
+ *
+ * SUPERSEDES the 12e49afa rule (any 3+-word open title the new one extends). Verify loop 4 C8 refuted it: it
+ * silently blocked DISTINCT asks — open "Buy birthday gift" swallowed "Buy birthday gift for Sarah". The
+ * description test is what tells "journey moved my words there" from "a more specific, different task".
+ * Without descriptions (`descriptions` omitted, or the open task has none) only rule 1 applies.
+ */
+const CONTRAST_RE =
+  /\b(?:not|no|never|except|excluding|without|instead|rather|separately|separate|own|other|unless|besides|aside|but)\b|n['’]t\b/i;
+
+export function matchOpenTitle(
+  key: string,
+  titles: ReadonlySet<string>,
+  descriptions?: ReadonlyMap<string, string>,
+): string | null {
+  if (titles.has(key)) return key;
+  if (!descriptions) return null;
+  for (const t of titles) {
+    if (t.split(" ").length < 2 || !key.startsWith(`${t} `)) continue;
+    const desc = descriptions.get(t);
+    if (!desc) continue;
+    // A description that draws a contrast ("about the crown, not the cleaning", "Mom will book her own") may
+    // CONTAIN the new task's words while excluding them, so it never proves a duplicate (verify loop 8 C8).
+    if (CONTRAST_RE.test(desc)) continue;
+    const extra = meaningWords(key.slice(t.length));
+    if (extra.length === 0) continue;
+    // EVERY extra word must be in the description (verify loop 7 C8: at 60%, shared generic words — "schedule",
+    // "review", "before", "due" — outvoted the one word that made the new task different, "Sarah", "budget").
+    const descWords = meaningWords(desc);
+    if (extra.every((w) => sameWordIn(w, descWords))) return t;
+  }
+  return null;
+}
+
+export function matchesOpenTitle(
+  key: string,
+  titles: ReadonlySet<string>,
+  descriptions?: ReadonlyMap<string, string>,
+): boolean {
+  return matchOpenTitle(key, titles, descriptions) !== null;
+}
+
 export interface TaskCaller {
   entra_object_id?: string;
   entra_email?: string;
@@ -90,6 +184,10 @@ export function screenCapabilityMetaTask(
  *  "no duplicates". */
 export interface OpenTitleLoad {
   titles: Set<string>;
+  /** normalized title → that open task's description (journey keeps the rest of a long ask there). */
+  descriptions?: Map<string, string>;
+  /** normalized title → that open task's id, so a skipped duplicate can name the task it matched. */
+  ids?: Map<string, string>;
   unavailable: string | null;
 }
 
@@ -116,10 +214,17 @@ export async function loadOpenTaskTitles(caller: TaskCaller | undefined): Promis
     const { resolveTaskEmail } = await import("../journey/identity");
     const resolved = (await resolveTaskEmail(caller ?? {})) ?? email;
     const { getTasksForUser } = await import("./tasks.server");
+    const descriptions = new Map<string, string>();
+    const ids = new Map<string, string>();
     for (const t of await getTasksForUser(resolved, undefined, { includeBlocked: true })) {
-      if (t.title) titles.add(normalizeTaskTitle(t.title));
+      if (!t.title) continue;
+      const k = normalizeTaskTitle(t.title);
+      titles.add(k);
+      const d = (t as { description?: string | null }).description;
+      if (d && !descriptions.has(k)) descriptions.set(k, d);
+      if (t.id && !ids.has(k)) ids.set(k, String(t.id));
     }
-    return { titles, unavailable: null };
+    return { titles, descriptions, ids, unavailable: null };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     console.warn(`[task-dedup] open-title read failed — creating WITHOUT a duplicate check: ${reason}`);
@@ -196,7 +301,7 @@ export async function screenRawJourneyCreate(
       skipped.push({ title: entry, reason: DUP_THIS_TURN });
       continue;
     }
-    if (load.titles.has(key)) {
+    if (matchesOpenTitle(key, load.titles, load.descriptions)) {
       deps.ledger.add(key);
       skipped.push({ title: entry, reason: DUP_ON_BOARD });
       continue;

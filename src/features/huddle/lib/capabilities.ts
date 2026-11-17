@@ -6,6 +6,7 @@
 // roster with zero per-case code. See AgentCapability in agents.ts.
 import { AGENTS, type Agent, type AgentCapability, type AgentId } from "../data/agents";
 import { nexusCourseMentioned } from "./nexus/course-context";
+import { agentPerformedWork, type ToolUseLike } from "./tasks/board-claims";
 
 // ─── Turn intent classification ────────────────────────────────────────────────
 // Lightweight, trait-driven intent classifier. Determines the SEMANTIC INTENT of
@@ -144,16 +145,112 @@ export interface AskClass {
 }
 
 // Explicit "do it now" signals — the user overriding the default (which is defer/queue).
-const URGENCY_RE: RegExp[] = [
-  /\b(right now|right away|immediately|this second|this instant|do it now|now please|asap|straight away)\b/i,
-  /\bnow\b\s*[!.]*$/i, // trailing "now"
-  /^\s*now\b[,\s]/i, // leading "now,"
-];
+// "now" is an ALLOWLIST (verify loop 7, VERIFY-handoff-confirm-flow-7-C2.md): five loops of listing the ways to
+// say "not now" each found new ones (unusual apostrophes, typos like "dnt", "Nah, right now I'm good", "I'll do it
+// myself right now"). So "now" is no longer "an urgency word minus the refusals we know about"; it is "an
+// INSTRUCTION to the agent that ends in now / asap / right away" — a closed set of shapes. Anything else is
+// `default` (one confirm step). The negation and deferral vetoes below still run on top as a second layer.
+const URGENCY_WORD = "(?:now|right now|right away|immediately|asap|a\\.s\\.a\\.p\\.?|straight away|this second|this instant)";
+// Verbs that instruct the agent. Not "stop / cancel / drop": acting at once on those is a different decision.
+const INSTRUCTION_VERB =
+  "(?:do|start|begin|handle|get|research|build|draft|write|find|book|send|make|create|look|check|run|plan|prepare|" +
+  "compare|go|take|fix|update|order|call|email|schedule|move|mark|add|put|finish|complete|work|tackle|pull|set|" +
+  "review|summari[sz]e|analy[sz]e|outline|design|sketch|groom|prioriti[sz]e|figure|knock|crank|jump)";
+// One clause that is an instruction ending in an urgency word: "do it now", "research Agentforce right now",
+// "can you do it now", "I want it done right away", "it's important to do it right away", "now please".
+const URGENT_INSTRUCTION_RE = new RegExp(
+  "^(?:(?:please|just|so|ok|okay|go ahead and)\\s+)*" +
+    "(?:(?:can|could|will|would) you\\s+(?:please\\s+|just\\s+)?)?" +
+    // An instruction is REQUIRED: "I want it (done)" with an optional verb, or an instruction verb. A bare
+    // "right now" left over after an idiom is stripped ("I don't care right now") is not one.
+    "(?:i (?:want|need) (?:it|this|that|them)(?:\\s+(?:done|[a-z]+ed))?\\s+" +
+    `(?:${INSTRUCTION_VERB}\\b(?:\\s+[\\w'-]+){0,6}?\\s+)?` +
+    "|(?:(?:it's|it is|this is) (?:important|urgent) (?:to\\s+)?)?" +
+    `${INSTRUCTION_VERB}\\b(?!\\s+(?:i|we)\\b)(?:\\s+[\\w'-]+){0,6}?\\s+)` +
+    `${URGENCY_WORD}(?:\\s+please)?$`,
+  "i",
+);
+// The whole message is only the urgency word ("asap", "right away", "now please").
+const BARE_URGENCY_RE = new RegExp(`^(?:please\\s+)?${URGENCY_WORD}(?:\\s+please)?$`, "i");
+// "Now, research chew treats" — a leading now followed by an instruction.
+const LEADING_NOW_RE = new RegExp(`^now\\s*[,:\\-–—]?\\s*${INSTRUCTION_VERB}\\b`, "i");
+const CLAUSE_SPLIT_RE = /\s*[.!?;,:]+\s*|\s+[—–-]\s+|\s+(?:and|so|but|then)\s+/i;
+// Every apostrophe-like character people type, mapped to ' before any matching (loop 7: ‘ ʼ ` ＇ ´ slipped past).
+const normalizeApostrophes = (t: string) =>
+  t.replace(/[‘’ʼ`＇´′]/g, "'").replace(/[^\p{L}\p{N}\s'?.!,;:—–-]+/gu, " ").replace(/\s+/g, " ");
+
+// WHICH DIRECTION IS UNSAFE. "now" is what lets an agent skip the confirm step (F1/F3), so a deferral read as
+// "now" acts on something the owner said to wait on; an urgent ask read as `default` only costs one confirm.
+// So "now" needs an urgency word AND no doubt anywhere in the message: any negation, and any time, schedule
+// or busy reference, forces `default`.
+//
+// SUPERSEDES four rounds of spelling patches (verify loops 1-4, VERIFY-handoff-confirm-flow-{1..4}.md C2).
+// Each closed the listed spellings and opened nearby ones; loop 4 found 8 deferrals still read as "now",
+// largely because an "urgent despite the negator" check (why don't you / can't you / I don't care) returned
+// "now" BEFORE any veto ran ("Why don't you do it tomorrow instead of right now?"). Now those urgent idioms
+// are REMOVED from the text and every veto still runs on what is left, so an idiom can never hide a
+// deferral. Known safe-direction misses, by design: "do it right now so it's ready for tomorrow's meeting"
+// and "ASAP please, I'm in a meeting at 3" read `default` (one confirm), because a time word is present.
+const URGENT_IDIOMS_RE =
+  /\b(?:don['’]?t (?:wait|forget)|i don['’]?t care|why (?:don['’]?t|not) you|can['’]?t you|won['’]?t you)\b/gi;
+// Any negation, wherever it sits ("not now", "it doesn't need to be done right away", "nothing right now").
+// The apostrophe is REQUIRED on "n't" (verify loop 3 W-1..W-6: "want", "urgent", "client" end in "nt"); the
+// apostrophe-less spellings people actually type are listed by name.
+const NEGATION_RE =
+  /\b(?:not|never|no|nah|nope|nothing|none|neither|nor|instead|rather|unless|without|[a-z]+n['’]t|dont|cant|wont|doesnt|isnt|didnt|wouldnt|shouldnt|couldnt|aint)\b/i;
+// Any time, schedule or busy reference: the owner is placing the work somewhere other than this moment, or
+// saying why this moment is bad ("right now I'm slammed, get to it Monday").
+const DEFERRAL_RE = new RegExp(
+  "\\b(?:" +
+    [
+      "later", "tomorrow", "tonight", "today", "morning", "afternoon", "evening", "weekend", "week", "month", "year",
+      "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+      "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
+      "after", "before", "until", "till", "til", "once", "whenever", "when", "soon", "eventually", "sometime",
+      "lunch", "dinner", "breakfast", "noon", "midnight", "o['’]?clock", "\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)",
+      "at \\d", "by \\d", "in (?:a|an|\\d+) (?:minute|min|hour|hr|day|bit|while)s?",
+      "busy", "slammed", "swamped", "meeting", "on (?:a|the) (?:call|phone)", "in (?:a|the) call",
+      "wait", "waiting", "hold", "park", "parked", "backlog", "for now", "bad time", "good time", "hurry", "rush",
+      "now that",
+      // verify loop 8 C2: take-backs, jokes, approval gates and more time words
+      "never ?mind", "nvm", "cancel", "cancell?ed", "scratch that", "forget (?:it|that|about it)", "ignore", "drop it",
+      "jk", "j/k", "kidding", "joking", "lol",
+      "pending", "approval", "approve", "sign-?off", "signal", "say so", "go-?ahead", "green light",
+      "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
+      "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+      "next", "quarter", "sprint", "tmrw", "tmr", "tomorow", "tommorow", "tommorrow", "meh", "can keep", "maybe", "eventually",
+      // verify loop 9 C2: conditions, reported speech, questions, more take-backs / time words / refusals
+      "if", "assuming", "provided", "providing", "whether", "should", "think", "thoughts", "wonder",
+      "says", "said", "texted", "wrote", "told", "mentioned",
+      "belay", "disregard", "strike that", "psych", "messing", "hard pass", "na", "no+",
+      "eod", "eow", "2moro", "2morrow", "ma[nñ]ana", "in the (?:am|pm|morning|evening)",
+      "in (?:a|an|one|two|three|a few|a couple of|few|couple|\\\\d+) (?:minute|min|hour|hr|day|week)s?", "afterwards", "someday", "a sec", "a moment",
+    ].join("|") +
+    ")\\b",
+  "i",
+);
+
+/** Is this ask an explicit "do it now"? ONE classifier for urgency — consumers read `classifyAsk().urgency`. */
+function askIsUrgentNow(text: string): boolean {
+  // Quoted speech is someone else's words ("Sam texted me: \"book it asap\". Ignore that.") -> never "now".
+  if (/["“”«»„‟「」『』‹›″〝〞＂]/.test(text)) return false;
+  const t = normalizeApostrophes(text).trim().toLowerCase();
+  const rest = t.replace(URGENT_IDIOMS_RE, " ");
+  // Second layer: any negation or time/busy word anywhere still means not now.
+  if (NEGATION_RE.test(rest) || DEFERRAL_RE.test(rest)) return false;
+  const whole = t.replace(/[.!?]+$/g, "").trim();
+  if (BARE_URGENCY_RE.test(whole) || LEADING_NOW_RE.test(whole)) return true;
+  return rest
+    .split(CLAUSE_SPLIT_RE)
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .some((c) => URGENT_INSTRUCTION_RE.test(c));
+}
 
 export function classifyAsk(text: string): AskClass {
   const t = (text ?? "").trim();
   const intent = classifyTurnIntent(t);
-  const urgency: AskUrgency = URGENCY_RE.some((re) => re.test(t)) ? "now" : "default";
+  const urgency: AskUrgency = askIsUrgentNow(t) ? "now" : "default";
   let type: AskType;
   switch (intent) {
     case "query":
@@ -169,6 +266,105 @@ export function classifyAsk(text: string): AskClass {
       break;
   }
   return { type, urgency, intent };
+}
+
+// ─── 1:1 hand-off suppression (F1, docs/qc-evidence/AC-handoff-confirm-flow.md) ─────────────────────
+// Whoever is asked does the work when they can. The SEMANTIC lane hand-off (a teammate's lane, resolved
+// by the LLM owner judge) is skipped when the addressed agent already HANDLED the ask this turn (it
+// dispatched a specialist, saved a document or created the task row -- read from what it DID, never from
+// what it said), or when the owner asked for it NOW (the existing classifyAsk urgency, the one urgency
+// classifier). Tool-gated hand-offs (an EXCLUSIVE capability, or a deterministic prime-holder hand-off
+// such as a Nexus write) are NOT suppressed here: the addressed agent cannot perform those at all.
+export type LaneHandoffSuppression = "handled" | "now" | null;
+
+export function laneHandoffSuppression(opts: {
+  text: string;
+  addressedId: string;
+  toolUses: readonly ToolUseLike[];
+}): LaneHandoffSuppression {
+  if (agentPerformedWork(opts.toolUses, opts.addressedId)) return "handled";
+  if (classifyAsk(opts.text).urgency === "now") return "now";
+  return null;
+}
+
+const escapeName = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** The deferral shapes a reply uses to hand an ask to teammate `N` (F1-4). */
+function deferralPatterns(name: string): RegExp[] {
+  // "Finn" or "Finn Reid" (verify loop 8, 8-rest C1: a full name broke every pattern).
+  const [first, ...rest] = name.trim().split(/\s+/);
+  const n = rest.length ? `${escapeName(first)}(?:\\s+${escapeName(rest.join(" "))})?` : escapeName(first);
+  return [
+    // verify loop 8 (8-rest C1): eleven more ways of promising a teammate
+    new RegExp(`\\b${n}(?:\\s+will|\\s+can|\\s+should|'ll|’ll)\\s+(?:take\\s+care\\s+of|sort(?:\\s+out)?|pick\\s+(?:that|this|it)\\s+up|review|cover|own|run\\s+with|take\\s+(?:the|that|this))\\b`, "i"),
+    new RegExp(`\\bget\\s+${n}\\s+to\\b|\\bask(?:ed)?\\s+${n}\\s*[.!]|\\bleav(?:e|ing)\\s+(?:it|this|that|the\\s+\\w+)\\s+with\\s+${n}\\b`, "i"),
+    new RegExp(`\\bover\\s+to\\s+${n}\\b(?!\\s+(?:is|are|was|were|has|have|had|got|gets)\\b)|\\bflag(?:ged|ging)?\\s+(?:it|this|that)\\s+(?:for|to)\\s+${n}\\b|\\b${n}(?:'s|’s)\\s+your\\s+(?:guy|gal|person|go-?to)\\b`, "i"),
+    new RegExp(`\\bloop(?:ing)?\\s+(?:in\\s+)?${n}\\b|\\bloop\\s+${n}\\s+in\\b`, "i"),
+    new RegExp(`\\bpass(?:ed|ing)?\\s+(?:(?:this|it|that)\\s+)?(?:(?:along|over)\\s+)?to\\s+${n}\\b`, "i"),
+    new RegExp(`\\bhand(?:ed|ing)?\\s+(?:(?:this|it|that)\\s+)?(?:(?:off|over)\\s+)?to\\s+${n}\\b`, "i"),
+    new RegExp(`\\b${n}(?:'s|’s|\\s+is)\\s+(?:much\\s+|really\\s+)?(?:better\\s+suited|the\\s+(?:right|best)\\s+(?:person|one|fit))`, "i"),
+    new RegExp(`\\b${n}(?:\\s+will|\\s+can|'ll|’ll)\\s+(?:reach\\s+out|follow\\s+up|be\\s+in\\s+touch|get\\s+back|pick\\s+(?:this|it)\\s+up|take\\s+(?:it|this|that|over)\\b|handle\\b|look\\s+into\\b|work\\s+on\\b)`, "i"),
+    new RegExp(`\\b(?:have|get|let)\\s+${n}\\s+(?:reach\\s+out|follow\\s+up|take\\s+(?:this|it|over)|look\\s+(?:into|at)|handle|work\\s+on|dig\\s+into)`, "i"),
+    // Verify loop 3 (VERIFY-handoff-confirm-flow-3.md, C1 D-5..D-13): nine more ways of promising a teammate.
+    new RegExp(`\\bbring(?:ing)?\\s+(?:in\\s+${n}\\b|${n}\\s+in\\b)`, "i"),
+    new RegExp(`\\bask(?:ed|ing)?\\s+${n}\\s+to\\b`, "i"),
+    new RegExp(`\\bget\\s+${n}\\s+on\\s+(?:it|this|that)\\b`, "i"),
+    new RegExp(`\\bping(?:ed|ing)?\\s+${n}\\b`, "i"),
+    new RegExp(`\\bin\\s+${n}(?:'s|’s)\\s+hands\\b`, "i"),
+    new RegExp(`\\bsend(?:ing)?\\s+(?:(?:this|it|that)\\s+)?(?:over\\s+)?to\\s+${n}\\b`, "i"),
+    new RegExp(`\\b${n}(?:'s|’s)\\s+(?:area|lane|domain|wheelhouse)\\b`, "i"),
+    // #131 answer-first wording (lane-handoff.ts laneAnswerFirstDirective): "<Name> knows this area best —
+    // I'm looping them in". A sentence that names the teammate AND loops a pronoun in is a deferral.
+    // Verify loop 7 (7-rest C1): "Finn's got this one", "Finn is on it", "I'll let Finn know".
+    // "got this" / "on it" only at the end of the clause: "Finn's got this week off" is not a hand-off (loop 9).
+    new RegExp(`\\b${n}(?:'s|’s|\\s+has)\\s+got\\s+(?:this|it|that)(?:\\s+one)?\\s*(?:[.!,;—–-]|$)`, "i"),
+    new RegExp(`\\b${n}(?:'s|’s|\\s+is)\\s+(?:already\\s+)?on\\s+(?:it|this|that)(?:\\s+one)?\\s*(?:[.!,;—–-]|$)`, "i"),
+    // "Don't let Finn know about the party" is not a hand-off (loop 9).
+    new RegExp(`(?<!\\b(?:don['’]?t|do not|never|not)\\s+)\\b(?:let|tell|update)\\s+${n}\\s+know\\b`, "i"),
+    new RegExp(`\\b${n}\\s+knows\\s+(?:this|that|the)?\\s*(?:area|stuff|lane|space|topic|subject)?\\s*best\\b`, "i"),
+    new RegExp(`\\b${n}\\b.*\\bloop(?:ing)?\\s+(?:them|him|her)\\s+in\\b|\\bloop(?:ing)?\\s+(?:them|him|her)\\s+in\\b.*\\b${n}\\b`, "i"),
+  ];
+}
+
+/**
+ * F1-4: when the runtime decided NOT to hand off, a reply must not tell the owner a teammate will pick it
+ * up (the directive and the follow-up must never disagree). Drops each sentence that defers to a NAMED
+ * teammate (any roster agent other than `addressedId`); everything else is kept verbatim. Returns the
+ * original text when nothing matches, or when dropping would leave nothing to say. Pure.
+ */
+export function stripTeammateDeferral(text: string, addressedId: string): string {
+  const src = String(text ?? "");
+  const others = AGENTS.filter((a) => a.id !== addressedId).map((a) => a.name);
+  const pats = others.flatMap(deferralPatterns);
+  const parts = src.split(/((?<=[.!?])\s+|\n+)/);
+  let changed = false;
+  const kept: string[] = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const sentence = parts[i] ?? "";
+    const sep = parts[i + 1] ?? "";
+    // Markdown emphasis and brackets never hide a name ("**Finn** will handle it", "(Finn will review it)").
+    const plain = (t: string) => t.replace(/[*_()[\]]+/g, "");
+    if (sentence.trim() && pats.some((re) => re.test(plain(sentence)))) {
+      changed = true;
+      // A sentence of several clauses keeps the others: "I booked it — Finn will handle the receipts" or "I booked
+      // the flight, and Finn will handle the receipts" -> "I booked it." (verify loops 7 and 8: dashes, then commas,
+      // semicolons and spaced hyphens). A clause that hands off by PRONOUN ("I'm looping them in") goes with it.
+      const pieces = sentence.split(/(\s+[—–-]\s+|\s*[;,]\s+)/);
+      const pronounHandoff = /\b(?:loop(?:ing)?\s+(?:them|him|her)\s+in|(?:they|he|she)(?:'ll|’ll|\s+will)\s+(?:reach\s+out|follow\s+up|handle|take\s+(?:it|this|over)|get\s+back))\b/i;
+      const keptClauses: string[] = [];
+      for (let j = 0; j < pieces.length; j += 2) {
+        const c = pieces[j] ?? "";
+        if (!c.trim() || pats.some((re) => re.test(plain(c))) || pronounHandoff.test(c)) continue;
+        keptClauses.push(c.trim());
+      }
+      const rest = keptClauses.join(", ").replace(/^(?:and|so|but)\s+/i, "").replace(/[\s,;—–-]+$/, "").trim();
+      if (pieces.length > 1 && rest) kept.push((/[.!?]$/.test(rest) ? rest : `${rest}.`) + sep);
+      continue;
+    }
+    kept.push(sentence + sep);
+  }
+  if (!changed) return src;
+  const out = kept.join("").trim();
+  return out ? out : src;
 }
 
 // Immediate, TYPE-AWARE, VARIED acknowledgement voiced the instant the user hands an agent a task —

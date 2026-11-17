@@ -77,6 +77,7 @@ import {
   loadOpenTaskTitles,
   normalizeJourneyDate,
   normalizeTaskTitle,
+  matchesOpenTitle,
   screenCapabilityMetaTask,
   screenRawJourneyCreate,
   splitTaskEntries,
@@ -755,7 +756,7 @@ export async function executeRealtimeTool(
           continue;
         }
         const key = normalizeTaskTitle(entry);
-        if (seen.has(key)) {
+        if (matchesOpenTitle(key, seen, load.descriptions)) {
           skipped.push({ title: entry, reason: "an open task with this title already exists" });
           continue;
         }
@@ -886,6 +887,7 @@ export async function executeRealtimeTool(
         taskId: pending.taskId,
         email,
         additions: typeof args.additions === "string" ? args.additions : undefined,
+        via: "voice", // F3: a spoken confirm is a live confirm (start-now), recorded as such
       });
       return done(
         JSON.stringify({
