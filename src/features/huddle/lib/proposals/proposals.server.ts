@@ -297,12 +297,19 @@ export async function actOnProposal(
 ): Promise<ActionResult> {
   // The Actions view (2026-11-16) backs its rows with proposals under its OWN switch (the correspondence ingest +
   // the per-owner classify setting), so a row acted on from Actions does not need correspondence.proposals.
-  const fromActions = opts.from === "actions";
-  const cfg = proposalsConfig() ?? (fromActions ? (await import("../actions/actions.server")).actionsConfig() : null);
-  if (!cfg) return { ok: false, error: "Task proposals are not switched on." };
-  if (action === "triage" && !fromActions && !meetingTriageOn(cfg)) return { ok: false, error: "Meeting triage is not switched on." };
+  // Loop-2 D5 (2026-11-17): `from` is CLIENT-supplied, so the bypass (and the bell settle) is honoured only when the
+  // SERVER confirms this proposal backs an Actions row (a stored thread verdict points at it, or it is a meeting
+  // triage row). Otherwise the call is treated exactly as one without `from`.
+  const proposalsCfg = proposalsConfig();
+  const actionsMod = opts.from === "actions" ? await import("../actions/actions.server") : null;
+  const actionsCfg = actionsMod ? actionsMod.actionsConfig() : null;
+  if (!proposalsCfg && !actionsCfg) return { ok: false, error: "Task proposals are not switched on." };
   const owners = await callerOwners(caller);
   if (!owners) return { ok: false, error: "Sign-in required." };
+  const fromActions = !!(actionsMod && actionsCfg) && (await actionsMod.proposalBacksActionsRow(owners, actionsCfg.ownerLogins, id));
+  const cfg = proposalsCfg ?? (fromActions ? actionsCfg : null);
+  if (!cfg) return { ok: false, error: "Task proposals are not switched on." };
+  if (action === "triage" && !fromActions && !meetingTriageOn(cfg)) return { ok: false, error: "Meeting triage is not switched on." };
   const { pgProposalStore: store } = await import("./proposals-store.server");
   if (action === "triage") return triageProposal(owners, id, triage?.choice as TriageChoice, triage?.name, store);
   if (action === "complete" || action === "dismiss") {

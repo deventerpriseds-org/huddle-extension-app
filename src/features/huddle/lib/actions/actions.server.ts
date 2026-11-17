@@ -449,6 +449,29 @@ export async function itemBacking(
   }
 }
 
+/**
+ * Loop-2 D5: does this proposal back a row the Actions view lists? Yes when one of the owner's stored thread verdicts
+ * is `open` and points at it, or when it is a meeting triage row (a transcript ref of its own). Only then does the
+ * proposals endpoint honour the client's `from:"actions"` (flag bypass, triage without meetingTriage, bell settle).
+ * Owner-scoped; a read error answers false (fail closed). Exported for the real-PostgreSQL test.
+ */
+export async function proposalBacksActionsRow(owners: string[], ledgerOwners: string[], proposalId: string): Promise<boolean> {
+  try {
+    const r = await getSharedPool().query<{ ok: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM chat.task_proposals WHERE id = $3 AND owner_email = ANY($1::text[]))
+          AND (EXISTS (SELECT 1 FROM chat.correspondence_ledger
+                        WHERE owner_email = ANY($2::text[]) AND source IN ('email','teams') AND result_ids ? 'action'
+                          AND result_ids->'action'->>'proposalId' = $3 AND result_ids->'action'->>'status' = 'open')
+               OR EXISTS (SELECT 1 FROM chat.task_proposal_refs
+                           WHERE proposal_id = $3 AND owner_email = ANY($1::text[]) AND source = 'transcript')) AS ok`,
+      [owners.map((o) => o.toLowerCase()), lower(ledgerOwners), proposalId],
+    );
+    return r.rows[0]?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
 /** X-6: the bell rows behind a decided proposal's refs. */
 export async function settleBellForProposal(owners: string[], refs: readonly ProposalSourceRef[]): Promise<number> {
   const t = bellTargetsFor(refs);

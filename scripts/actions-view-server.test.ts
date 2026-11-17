@@ -171,6 +171,47 @@ try {
   t("D6-S6 meeting item: its own key is accepted; another item's key of the same meeting is refused", [(await A.correctItemFor(owners, lo, { proposalId: tri[0].id, reason: "not_mine", itemKey: MK }, "2026-11-16T11:02:00.000Z")).ok, await A.correctItemFor(owners, lo, { proposalId: tri[0].id, reason: "not_mine", itemKey: `meeting:mtg-1|${tri[1].normTitle}` }, "2026-11-16T11:02:00.000Z")], [true, notListed]);
   t("D6-S7 itemBacking is owner-scoped (another owner's scope sees no backing)", [await A.itemBacking([OTHER], [OTHER], pd.id, KD), await A.itemBacking([OTHER], [OTHER], tri[0].id, MK)], [null, null]);
 
+  // ── D5: the client's from:"actions" is honoured only when the server confirms the proposal backs an Actions row ──
+  {
+    const { teamsSourceItemId } = await import("../src/features/huddle/lib/correspondence/source-item");
+    const { actOnProposal } = await import("../src/features/huddle/lib/proposals/proposals.server");
+    const { listEmailRepliesFor } = await import("../src/features/huddle/lib/email/email-replies.server");
+    await listEmailRepliesFor([O], ["bootstrap"], []); // creates chat.email_replies
+    const feeds = (cc: Record<string, unknown>) =>
+      JSON.stringify({ enabled: true, synthetic: true, ownerLogins: [O], driveUser: O, mailbox: "owner@work.example", sourceLogin: "login@work.example", subjectPrefix: "HUDDLE-PA-SBX-", teams: { ownerSenderIds: ["owner-guid-0001"] }, correspondence: cc });
+    const caller = { entra_email: O };
+    const chat = (n: string) => `19:d5${n}_x${"@"}unq.gbl.spaces`;
+    const mk = async (n: string, backed: boolean) => {
+      const sid = teamsSourceItemId(chat(n), "1");
+      await L.observe(O, [item(sid)]);
+      const p = cand(`Test-Item ${n}`, `test-item ${n}`, "teams", sid);
+      await P.upsert(p);
+      if (backed) await verdict(sid, `teams:${chat(n)}|${sid}`, p.id);
+      await pool.query(`INSERT INTO chat.email_replies (id, owner_email, mailbox, graph_message_id, conversation_id, status, kind) VALUES ($1, $2, '', $3, $4, 'owed', 'chat')`, [`bell-${n}`, O, `src-${n}`, chat(n)]);
+      return p.id;
+    };
+    const state = async (id: string) => (await pool.query(`SELECT state FROM chat.task_proposals WHERE id = $1`, [id])).rows[0]?.state;
+    const bell = async (n: string) => (await pool.query(`SELECT status FROM chat.email_replies WHERE id = $1`, [`bell-${n}`])).rows[0]?.status;
+    const unbacked = await mk("u", false);
+    const backed = await mk("b", true);
+    const unbacked2 = await mk("u2", false);
+    t("D5-S0 proposalBacksActionsRow: verdict-backed yes, unbacked no, meeting triage row yes, other owner no", [await A.proposalBacksActionsRow([O], [O], backed), await A.proposalBacksActionsRow([O], [O], unbacked), await A.proposalBacksActionsRow([O], [O], tri[1].id), await A.proposalBacksActionsRow([OTHER], [OTHER], backed)], [true, false, true, false]);
+    // Proposals switched OFF, the ingest ON (the Actions view's own switch).
+    process.env.HUDDLE_ONEDRIVE_FEEDS = feeds({ ingest: true });
+    const r1 = await actOnProposal(caller, unbacked, "dismiss", undefined, undefined, { from: "actions" });
+    t("D5-S1 GUARD: flag OFF + from:actions on a proposal that backs NO Actions row -> refused, nothing changes", [r1.ok, r1.ok ? null : r1.error, await state(unbacked), await bell("u")], [false, "Task proposals are not switched on.", "proposed", "owed"]);
+    const r2 = await actOnProposal(caller, backed, "dismiss", undefined, undefined, { from: "actions" });
+    t("D5-S2 flag OFF + from:actions on a proposal that backs an Actions row -> applied, its bell row settled", [r2.ok, await state(backed), await bell("b")], [true, "dismissed", "dismissed"]);
+    const r3 = await actOnProposal(caller, tri[1].id, "triage", undefined, { choice: "skip" }, { from: "actions" });
+    t("D5-S3 a meeting triage row from Actions triages with meetingTriage OFF", [r3.ok, await state(tri[1].id)], [true, "dismissed"]);
+    // Proposals ON, meeting triage OFF.
+    process.env.HUDDLE_ONEDRIVE_FEEDS = feeds({ ingest: true, proposals: true });
+    const r4 = await actOnProposal(caller, unbacked2, "triage", undefined, { choice: "skip" }, { from: "actions" });
+    t("D5-S4 GUARD: from:actions does NOT unlock triage for a proposal that backs no Actions row", r4.ok ? "ok" : r4.error, "Meeting triage is not switched on.");
+    const r5 = await actOnProposal(caller, unbacked2, "dismiss", undefined, undefined, { from: "actions" });
+    t("D5-S5 GUARD: flag ON, unbacked + from:actions -> the normal dismiss applies but the bell row is NOT settled", [r5.ok, await state(unbacked2), await bell("u2")], [true, "dismissed", "owed"]);
+  }
+
   // ── D2: every model call ATTEMPT is recorded before the call and counted by the daily cap ─────────
   // Day used here: 2026-11-10 (New York midnight = 05:00Z).
   const D10 = "2026-11-10T05:00:00.000Z";
