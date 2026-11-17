@@ -102,3 +102,73 @@ touched.
 
 Re-ran both new suites on the restored branch: forwarded-store 82/0, uat-suite-safety 19/0. Next: mutation proofs,
 then final runs, then the refill dispatch.
+
+## Mutation proofs (mutate.sh, every FIRED controlled by a comment-only negative control)
+
+Every row was run with `mutate.sh <file> <anchor-file> <replacement-file> <test-cmd> <must-fail-pattern>`, with
+anchors kept in files. "Exit" is mutate.sh's exit code. After every run the tree was restored and matched HEAD.
+
+| id | guard | mutation | must-fail test | verdict | exit |
+|---|---|---|---|---|---|
+| M1a | forwarded part stored | drop `...(forwarded ? { forwarded } : {})` | B "stored content carries the forwarded ask" | FIRED (control EQUIVALENT) | 0 |
+| M1b | own history cut inside the part | `newTextOnly(...)` -> raw join | first run: C-4 named | UNDETERMINED | 4 |
+| M1b | (re-run after adding C-4b) | same | C-4b "plain-text forward: its OWN older history is cut" | FIRED (control EQUIVALENT) | 0 |
+| M1c | Apple Mail blockquote fallback | `if (!out && bq)` -> `if (false && bq)` | A "Apple Mail" | FIRED (control EQUIVALENT) | 0 |
+| M1d | header fields parsed | header assignment removed | A "header from" | FIRED (control EQUIVALENT) | 0 |
+| M1e | part read from the RAW body, not bodyText | `feedRecordBody(rec)` -> `mapped.bodyText` | B "stored content carries the forwarded ask" | FIRED (control EQUIVALENT) | 0 |
+| M2a | bodyText unchanged | bodyText gets the forwarded body appended | B "bodyText is exactly the live mapper's text" | FIRED (control EQUIVALENT) | 0 |
+| M2b | content hash unchanged | the raw body is added to the hash parts | B-2 "content hash is unchanged" | FIRED (control EQUIVALENT) | 0 |
+| M3a | refill skips rows that already have the part | `if (s.hasForwarded) continue` removed | E-2 | FIRED (control EQUIVALENT) | 0 |
+| M3b | refill only when a version HAS the part | `withPart.get` -> `newest.get` | E-3 | FIRED (control EQUIVALENT) | 0 |
+| M3c | purged rows never re-written | `if (s.purged)` -> `if (false)` | E-5 | FIRED (control EQUIVALENT) | 0 |
+| M3d | newest version wins | first version kept instead | E-4 | FIRED (control EQUIVALENT) | 0 |
+| M3e | a reply is not a forward | `!c.isForward` check removed | E-1 | FIRED (control EQUIVALENT) | 0 |
+| M4a | default UAT suite has no stand-up | a `standupCeremonyTiming` check that clicks Start is added | A-1 | FIRED (control EQUIVALENT) | 0 |
+| M4b | default UAT suite sends no message | a check that `.fill`s a textarea is added | A-4 | FIRED (control EQUIVALENT) | 0 |
+| M4c | ceremony park line carries Test- | `Test-` removed | C-2 "2-park" | FIRED (control EQUIVALENT) | 0 |
+| M4d | verify-uat defaults to the safe suite | default -> ceremony-voice-checks.mjs | B-1 | FIRED (control EQUIVALENT) | 0 |
+| M4e | long-task line carries Test- | `Test-` removed | C-2 "4-long-task" | FIRED (control EQUIVALENT) | 0 |
+
+Why M1b first came back UNDETERMINED: the mutation did break the suite, but only C-6 (the German plain-text case)
+failed, not C-4. For HTML, `forwardedText` already stops at the next Outlook marker, so C-4 cannot see the cut that
+`forwardedPart` makes. The English plain-text version of that cut had no test. C-4b was added (forwarded-store 82 ->
+83 tests), and the re-run FIRED.
+
+NOT PROVEN by mutation: the back-fill script's SQL flag read, the shape-count logging, and the workflow firewall flag
+changes (fix 3). Those are shell and SQL, with no offline suite.
+
+Observation, not changed: the `planForwardRefill` docstring says a row is refilled "only when it has content".
+The code does not check `hasContent`. The script passes NULL-content rows only when a file version marks the item
+as a forward, so such a row gains its whole content. That matches the content-fill behaviour, but the comment
+over-claims.
+
+## Final runs (2026-11-17)
+
+forwarded-store 83/0, uat-suite-safety 19/0, forwarded 22/0, correspondence-ingest 186/0, report-from-ledger 39/0,
+needs-you 77/0, redteam-correspondence 77/0, onedrive-feed "all passed", and `npx tsc --noEmit` clean (exit 0).
+
+## Refill dispatch, for the coordinator to run (not run from this branch)
+
+The refill code lives on this branch. Once it is merged, run with `ref: main`. Before merging, run with
+`ref: claude_correspondence-tuning-fixes`.
+
+1. **Dry run first:** `correspondence-backfill.yml` with `ref` = `main`, `since` = `2026-11-09T05:00:00Z` (the
+   default), and `apply` = `false`.
+2. **Apply:** the same inputs with `apply` = `true`.
+
+The run is a full back-fill pass. On apply it also re-runs the email, Sent, Teams and Fireflies loops. Those are
+idempotent: an unchanged hash means no rewrite.
+
+Log lines that prove it worked. They hold counts only, never content:
+
+- Dry run: `forwards: read R (with forwarded part P) | stored S, stored without forwarded part M | would gain it G |
+  still missing X | purged U | DRY RUN: nothing written`. Expect `G > 0` and `G + X + U = M`.
+- Apply: the same line ending `| content re-written W, failed 0`. Proof is `W = G` and `failed 0`.
+- A second dry run after apply shows `stored without forwarded part` dropped by `W` and `would gain it 0`.
+- `forwards still missing by shape: {...}` gives per-source counts of why the rest have no part (for example
+  `email:no_header_has_attachments`). A non-zero `outlook_marker_unread` or `blockquote_unread` would point to a
+  parser gap.
+- `forwards: could not read the ledger flags -- refill skipped` means the refill did NOT run. Check the DB
+  connection and firewall step.
+- The firewall step should log `Opened firewall rule ghquery-...` and `Removed ghquery-...`. A `::warning::` on
+  either line means fix 3 did not take.
