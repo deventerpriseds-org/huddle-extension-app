@@ -38,9 +38,20 @@ const EXTENSION_FILLER = new Set([
 ]);
 const meaningWords = (s: string): string[] =>
   s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3 && !EXTENSION_FILLER.has(w));
-// A 4-letter stem, so "send"/"sending" and "registration"/"register" meet; "send"/"sent" do not, which only
-// makes the rule stricter.
-const stem4 = (w: string) => w.slice(0, 4);
+/**
+ * Does `w` appear among the description's words? Same word up to its ending: the shared beginning must reach
+ * min(5, the shorter length - 1) letters. So "transcript"/"transcripts" and "send"/"sent" meet, while
+ * "presentation"/"prescription" (4 shared letters) do not — verify loop 7 C8 found a plain 4-letter stem
+ * treated those as the same word.
+ */
+function sameWordIn(w: string, desc: readonly string[]): boolean {
+  return desc.some((d) => {
+    const need = Math.min(5, Math.min(w.length, d.length) - 1);
+    let i = 0;
+    while (i < w.length && i < d.length && w[i] === d[i]) i++;
+    return i >= need && i >= 3;
+  });
+}
 
 /**
  * Which open title (normalized) is `key` (a normalized title about to be created) a duplicate of, or null?
@@ -51,7 +62,7 @@ const stem4 = (w: string) => w.slice(0, 4);
  *     UM-Flint ..." was stored as title "Obtain official transcript", description "Request the official
  *     transcript and ensure it is sent directly to UM-Flint to remove the registration hold."), so the next
  *     identical ask arrives long and an exact check misses it. It counts as the same task only when the new
- *     title starts with the open one AND at least 60% of the extra words appear in that task's DESCRIPTION.
+ *     title starts with the open one AND EVERY extra word appears in that task's DESCRIPTION.
  *
  * SUPERSEDES the 12e49afa rule (any 3+-word open title the new one extends). Verify loop 4 C8 refuted it: it
  * silently blocked DISTINCT asks — open "Buy birthday gift" swallowed "Buy birthday gift for Sarah". The
@@ -71,9 +82,10 @@ export function matchOpenTitle(
     if (!desc) continue;
     const extra = meaningWords(key.slice(t.length));
     if (extra.length === 0) continue;
-    const inDesc = new Set(meaningWords(desc).map(stem4));
-    const found = extra.filter((w) => inDesc.has(stem4(w))).length;
-    if (found / extra.length >= 0.6) return t;
+    // EVERY extra word must be in the description (verify loop 7 C8: at 60%, shared generic words — "schedule",
+    // "review", "before", "due" — outvoted the one word that made the new task different, "Sarah", "budget").
+    const descWords = meaningWords(desc);
+    if (extra.every((w) => sameWordIn(w, descWords))) return t;
   }
   return null;
 }

@@ -66,6 +66,31 @@ describe("row 7: a different, more specific task is NOT a duplicate (verify loop
     test(`${JSON.stringify(title)} -> new task`, () => expect(matchesOpenTitle(n(title), titles, descriptions)).toBe(false));
 });
 
+// Verify loop 7 C8 (VERIFY-handoff-confirm-flow-7-C8.md on claude_verify-handoff-confirm-flow-7-c8): at a 60% threshold,
+// shared generic words outvoted the one word that made a request different. Every one of these is a DIFFERENT task.
+describe("row 7: one distinct word is never outvoted (verify loop 7 C8)", () => {
+  const rows: [string, string, string][] = [
+    ["Buy birthday gift", "Buy a birthday gift for Mom and have it delivered before Saturday", "Buy birthday gift for Sarah and have it delivered before Saturday"],
+    ["Schedule a meeting", "Schedule a meeting with the team to review the project timeline", "Schedule a meeting with the team to review the budget"],
+    ["Pay the electric bill", "Pay the electric bill before the due date to avoid a late fee", "Pay the electric bill for the rental property before the due date"],
+    ["Call the doctor", "Call the doctor to schedule an appointment about the persistent cough", "Call the doctor to schedule an appointment for Sarah"],
+    ["Pick up prescription", "Pick up the prescription from the pharmacy", "Pick up prescription for the presentation"],
+    ["Follow up", "Follow up with the team to schedule the quarterly review and confirm the agenda", "Follow up with the landlord to schedule the review"],
+    ["Email John", "Email John about the lease agreement", "Email John about the lease for Mike"],
+  ];
+  for (const [open, desc, next] of rows)
+    test(`${JSON.stringify(next)} -> new task`, () =>
+      expect(matchesOpenTitle(n(next), new Set([n(open)]), new Map([[n(open), desc]]))).toBe(false));
+  test("same task, every extra word in the description -> duplicate", () =>
+    expect(
+      matchesOpenTitle(
+        n("Email John Smith the deposit receipt"),
+        new Set([n("Email John Smith")]),
+        new Map([[n("Email John Smith"), "Send John the signed lease and the deposit receipt"]]),
+      ),
+    ).toBe(true));
+});
+
 describe("row 7: without descriptions only an exact title matches", () => {
   test("prefix + no description map -> new task", () =>
     expect(matchesOpenTitle(n("Obtain official transcript and send it directly to UM-Flint"), titles)).toBe(false));
