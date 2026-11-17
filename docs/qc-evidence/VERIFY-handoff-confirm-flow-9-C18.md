@@ -26,3 +26,29 @@ task's extra words "appear" in the open task's description:
 - open "Order prints" / desc "Order prints from the photographer." / new "Order prints of the photo" -> BLOCKED
 Correctly NOT blocked: 3pm vs 5pm, two vs three nights, train vs training; same-task re-ask (5pm/5pm) still blocked.
 UNSAFE per the brief (a distinct request blocked). Most realistic: the person-name and date rows.
+
+## C1 hand-off skip + deferral strip -- REFUTED (strip: UNSAFE over-strips AND remaining under-strips)
+Loop-8 (8-rest) strip rows rebuilt (`verify-handoff-confirm-flow-9-c18-c1-probe.out`): all 19 now pass (full name, comma,
+semicolon, spaced hyphen, bold, paren, 11 phrasings; whole-deferral kept; "Finn's numbers"/"Finn's notes" kept).
+
+NEW OVER-strip (a non-deferral sentence deleted). Reachability proven by replaying the real 1:1 branch order
+(capabilityOwnerFor -> primeLaneDecision -> laneHandoffSuppression with a performed tool -> strip) in
+`verify-handoff-confirm-flow-9-c18-c1-reach.out`: cap=null, prime=null, suppression=handled, strip runs.
+- **UNSAFE** "Done. Flights over to Charleston are booked for Friday." -> "Done." (addressed troy-lennox, iris-chase or
+  terry-locke). Charleston Lewis is a roster agent AND a city; `\bover\s+to\s+<name>\b` eats the work confirmation.
+- **UNSAFE** "I booked the hotel. Over to Charleston on Friday, back Sunday." -> "I booked the hotel. back Sunday."
+- **UNSAFE** "I booked the venue. Don't let Finn know about the surprise party." -> "I booked the venue." (`let Finn know`)
+- "Finn's got this week off, so I booked it myself." -> "I booked it myself." (`got this\b` matches "this week")
+- "Finn is on that trip too, so I booked two seats." -> "I booked two seats." (`on that\b`)
+- "This is outside Finn's area, so I handled it myself." -> "I handled it myself."
+- "I couldn't get Finn to respond, so I booked it myself." -> "I booked it myself."
+- "I booked it. Ping Finn anytime if you want a second opinion." -> "I booked it."
+- "Since Finn will review budgets in Q1 anyway, I booked the cheaper fare." -> "I booked the cheaper fare." (the reason is lost)
+- "You asked Finn. I booked it anyway." -> "I booked it anyway."
+- (contrived, not counted) "good faith. Loop in Faith's..." and "Pass it to Cam Post's address?" also over-strip.
+
+NEW UNDER-strip (reply still promises a teammate after the skip), all unchanged:
+- "Finn is going to handle the receipts." / "Finn's going to sort the budget."
+- "I'll have Finn draft the budget." / "Finn will do the budget." / "Finn will email you the numbers."
+- "Next step: Finn handles the receipts." / "Reid will handle the receipts." (surname only)
+Stripped correctly: "Finn will take it from here", "*Finn* will handle", "@Finn will handle".
