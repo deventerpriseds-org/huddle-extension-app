@@ -257,8 +257,20 @@ try {
     setSystemTime(new Date(Date.parse("2026-11-16T15:00:00.000Z") + i * 10 * 60_000 + 1000));
     await A.runActionsClassify();
   }
-  setSystemTime();
   t("D2-E1 GUARD (real heartbeat + SQL): cap 5, model failing, 10 passes -> at most 5 model calls", [modelCalls.n <= 5, modelCalls.n, await A.actionCallsToday([O], "2026-11-16T05:00:00.000Z")], [true, 5, 5]);
+
+  // ── Owner 2026-11-17: the page's cap notice reads THE SAME count the heartbeat capped on (usedTodayFor), real SQL.
+  const capPage = await A.getActionsPage({ entra_email: O });
+  const cp = capPage.status === "ok" ? capPage : null;
+  t(
+    "CAP-S1 GUARD (real page read + SQL): after the heartbeat spent the cap, the page shows used 5 of 5 and the notice",
+    [capPage.status, cp?.capUsedToday, cp?.capNotice, await A.usedTodayFor([O], Date.now(), "America/New_York")],
+    ["ok", 5, "Daily AI check limit reached (5 of 5 used today). Remaining items wait until tomorrow. To change the limit, open What shows → Sorting → Daily limit on this page.", 5],
+  );
+  await setActionsSettingsRaw(O, resolveActionsSettings({ dailyCap: 6 }));
+  const capPage2 = await A.getActionsPage({ entra_email: O });
+  t("CAP-S2 GUARD: the owner raises the limit to 6 -> no notice, used still 5", capPage2.status === "ok" ? [capPage2.capUsedToday, capPage2.capNotice] : capPage2.status, [5, null]);
+  setSystemTime();
 } catch (e) {
   fail++;
   console.log(`FAIL harness: ${e instanceof Error ? `${e.name}: ${e.message}` : "error"}`);
