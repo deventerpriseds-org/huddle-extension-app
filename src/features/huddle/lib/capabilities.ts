@@ -192,7 +192,7 @@ const normalizeApostrophes = (t: string) =>
 // deferral. Known safe-direction misses, by design: "do it right now so it's ready for tomorrow's meeting"
 // and "ASAP please, I'm in a meeting at 3" read `default` (one confirm), because a time word is present.
 const URGENT_IDIOMS_RE =
-  /\b(?:don['’]?t (?:wait|forget)|never ?mind|i don['’]?t care|why (?:don['’]?t|not) you|can['’]?t you|won['’]?t you)\b/gi;
+  /\b(?:don['’]?t (?:wait|forget)|i don['’]?t care|why (?:don['’]?t|not) you|can['’]?t you|won['’]?t you)\b/gi;
 // Any negation, wherever it sits ("not now", "it doesn't need to be done right away", "nothing right now").
 // The apostrophe is REQUIRED on "n't" (verify loop 3 W-1..W-6: "want", "urgent", "client" end in "nt"); the
 // apostrophe-less spellings people actually type are listed by name.
@@ -212,6 +212,13 @@ const DEFERRAL_RE = new RegExp(
       "busy", "slammed", "swamped", "meeting", "on (?:a|the) (?:call|phone)", "in (?:a|the) call",
       "wait", "waiting", "hold", "park", "parked", "backlog", "for now", "bad time", "good time", "hurry", "rush",
       "now that",
+      // verify loop 8 C2: take-backs, jokes, approval gates and more time words
+      "never ?mind", "nvm", "cancel", "cancell?ed", "scratch that", "forget (?:it|that|about it)", "ignore", "drop it",
+      "jk", "j/k", "kidding", "joking", "lol",
+      "pending", "approval", "approve", "sign-?off", "signal", "say so", "go-?ahead", "green light",
+      "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
+      "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+      "next", "quarter", "sprint", "tmrw", "tmr", "tomorow", "tommorow", "tommorrow", "meh", "can keep", "maybe", "eventually",
     ].join("|") +
     ")\\b",
   "i",
@@ -219,6 +226,8 @@ const DEFERRAL_RE = new RegExp(
 
 /** Is this ask an explicit "do it now"? ONE classifier for urgency — consumers read `classifyAsk().urgency`. */
 function askIsUrgentNow(text: string): boolean {
+  // Quoted speech is someone else's words ("Sam texted me: \"book it asap\". Ignore that.") -> never "now".
+  if (/["“”«»]/.test(text)) return false;
   const t = normalizeApostrophes(text).trim().toLowerCase();
   const rest = t.replace(URGENT_IDIOMS_RE, " ");
   // Second layer: any negation or time/busy word anywhere still means not now.

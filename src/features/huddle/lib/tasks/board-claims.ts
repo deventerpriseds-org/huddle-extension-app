@@ -50,7 +50,9 @@ const NOT_PERFORMED_RE =
 
 /** The summary minus a leading quoted task title, so a title like "Test-set Huddle-only mode" cannot read as a
  *  "not performed" marker (verify loop 7, 7-rest C1). Create summaries start with “<title>”. */
-const afterTitle = (summary: string) => summary.replace(/^\s*["“][^"”]*["”]\s*/, "");
+// Greedy to the LAST closing quote before the arrow, so a title with its own quotes inside
+// (Test-say "hi" in Huddle-only mode) is removed whole (verify loop 8, 8-rest).
+const afterTitle = (summary: string) => summary.replace(/^\s*["“][\s\S]*["”](?=\s*→)/, "");
 const notPerformed = (u: ToolUseLike) => NOT_PERFORMED_RE.test(afterTitle(u.summary));
 
 export function isDeferredStatusChange(u: ToolUseLike): boolean {
@@ -159,10 +161,24 @@ const HUDDLE_TASK_TOOLS = new Set([
   "confirm_task_intent", // a confirmed task can start (Doing)
   "override_approach_gate",
 ]);
+/**
+ * Did a successful Huddle task tool really change the task? Decided per tool from the summaries huddle.functions.ts
+ * records — never by scanning the summary's free text (verify loop 8 C7: every successful flag_blocker summary is
+ * "blocked: <reason>", which the generic "not performed" words matched, so the truest "I marked it blocked" was
+ * always rewritten; an artifact named "Huddle-only …" did the same). Failures are recorded ok:false.
+ */
+function huddleToolChangedTask(u: ToolUseLike): boolean {
+  if (!u.ok || !HUDDLE_TASK_TOOLS.has(u.tool)) return false;
+  if (/skipped duplicate$/i.test(u.summary)) return false;
+  if (u.tool === "confirm_task_intent") return /^DoD confirmed$/.test(u.summary.trim());
+  if (u.tool === "override_approach_gate") return !/^not approved\b/i.test(u.summary);
+  return true;
+}
+
 /** Any change this agent really made to a task this turn — what backs a status claim. */
 function changedATask(u: ToolUseLike): boolean {
   if (isPerformedTaskChange(u) || isPerformedCreate(u)) return true;
-  return u.ok && HUDDLE_TASK_TOOLS.has(u.tool) && !notPerformed(u) && !/failed/i.test(u.summary);
+  return huddleToolChangedTask(u);
 }
 
 export const BOARD_CLAIM_LINES = {

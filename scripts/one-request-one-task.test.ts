@@ -91,6 +91,41 @@ describe("row 7: one distinct word is never outvoted (verify loop 7 C8)", () => 
     ).toBe(true));
 });
 
+// Verify loop 8 C8 (VERIFY-handoff-confirm-flow-8-C8.md on claude_verify-handoff-confirm-flow-8-c8): a short extra word
+// matched any description word that STARTS with it. Every one of these is a different task.
+describe("row 7: a short word only matches itself plus a plain ending (verify loop 8 C8)", () => {
+  const rows: [string, string, string][] = [
+    ["Pay insurance", "Pay the insurance premium online with the credit card.", "Pay insurance for the car"],
+    ["Pay the bill", "Pay the credit card bill before the due date.", "Pay the bill for the car"],
+    ["Renew registration", "Renew the registration for the career fair.", "Renew registration for the car"],
+    ["Pay invoice", "Pay the invoice for the business lunch.", "Pay invoice for the bus"],
+    ["Cancel subscription", "Cancel the subscription before the next appointment renewal.", "Cancel subscription for the app"],
+    ["Buy first aid", "Buy first aid supplies for the kitchen.", "Buy first aid kit"],
+    ["Pay for", "Pay for the gasket replacement.", "Pay for gas"],
+  ];
+  for (const [open, desc, next] of rows)
+    test(`${JSON.stringify(next)} -> new task`, () =>
+      expect(matchesOpenTitle(n(next), new Set([n(open)]), new Map([[n(open), desc]]))).toBe(false));
+  test("a plain ending still matches: 'holds' in the description covers 'hold'", () =>
+    expect(
+      matchesOpenTitle(
+        n("Obtain official transcript to remove the registration hold"),
+        new Set([n("Obtain official transcript")]),
+        new Map([[n("Obtain official transcript"), "Request the transcript so the registration holds are removed"]]),
+      ),
+    ).toBe(true));
+});
+
+describe("row 7: a description that draws a contrast never proves a duplicate (verify loop 8 C8)", () => {
+  const rows: [string, string, string][] = [
+    ["Call dentist", "Call the dentist about the crown, not the cleaning.", "Call dentist about the cleaning"],
+    ["Book appointment", "Book the appointment for Sarah; Mom will book her own later.", "Book appointment for Mom"],
+  ];
+  for (const [open, desc, next] of rows)
+    test(`${JSON.stringify(next)} -> new task`, () =>
+      expect(matchesOpenTitle(n(next), new Set([n(open)]), new Map([[n(open), desc]]))).toBe(false));
+});
+
 describe("row 7: without descriptions only an exact title matches", () => {
   test("prefix + no description map -> new task", () =>
     expect(matchesOpenTitle(n("Obtain official transcript and send it directly to UM-Flint"), titles)).toBe(false));

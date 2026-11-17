@@ -39,17 +39,37 @@ const EXTENSION_FILLER = new Set([
 const meaningWords = (s: string): string[] =>
   s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3 && !EXTENSION_FILLER.has(w));
 /**
- * Does `w` appear among the description's words? Same word up to its ending: the shared beginning must reach
- * min(5, the shorter length - 1) letters. So "transcript"/"transcripts" and "send"/"sent" meet, while
- * "presentation"/"prescription" (4 shared letters) do not — verify loop 7 C8 found a plain 4-letter stem
- * treated those as the same word.
+ * Does `w` appear among the description's words — the same word, give or take its ending?
+ *  - A short word (4 letters or fewer on either side) matches only itself plus a plain ending: +s, +es, +ed, +ing,
+ *    or +d after an e ("send"/"sends", "hold"/"holds", "bake"/"baked"), plus a few irregular verb forms. Verify loop 8 C8: a 3-letter prefix rule made "car" = "card" = "career",
+ *    "bus" = "business", "app" = "appointment", "kit" = "kitchen", "gas" = "gasket".
+ *  - Longer words share at least 5 leading letters ("transcript"/"transcripts", "registration"/"registered"), which
+ *    keeps "presentation" apart from "prescription" (4 shared).
  */
+// Irregular forms of common task verbs, so "send" (the ask) still meets "sent" (journey's rewrite) — the real
+// 2026-10-30 UM-Flint row depends on exactly this pair.
+const IRREGULAR: Record<string, string[]> = {
+  send: ["sent"], pay: ["paid"], buy: ["bought"], make: ["made"], take: ["took", "taken"], get: ["got", "gotten"],
+  write: ["wrote", "written"], bring: ["brought"], find: ["found"], meet: ["met"], leave: ["left"], keep: ["kept"],
+  give: ["gave", "given"], tell: ["told"], sell: ["sold"], hold: ["held"], read: ["read"], run: ["ran"],
+};
+const plainForm = (short: string, long: string) =>
+  short === long ||
+  long === `${short}s` ||
+  long === `${short}es` ||
+  long === `${short}ed` ||
+  long === `${short}ing` ||
+  (short.endsWith("e") && long === `${short}d`);
 function sameWordIn(w: string, desc: readonly string[]): boolean {
   return desc.some((d) => {
-    const need = Math.min(5, Math.min(w.length, d.length) - 1);
+    if ((IRREGULAR[w] ?? []).includes(d) || (IRREGULAR[d] ?? []).includes(w)) return true;
+    if (Math.min(w.length, d.length) <= 4) {
+      const [short, long] = w.length <= d.length ? [w, d] : [d, w];
+      return plainForm(short, long);
+    }
     let i = 0;
     while (i < w.length && i < d.length && w[i] === d[i]) i++;
-    return i >= need && i >= 3;
+    return i >= 5;
   });
 }
 
@@ -69,6 +89,9 @@ function sameWordIn(w: string, desc: readonly string[]): boolean {
  * description test is what tells "journey moved my words there" from "a more specific, different task".
  * Without descriptions (`descriptions` omitted, or the open task has none) only rule 1 applies.
  */
+const CONTRAST_RE =
+  /\b(?:not|no|never|except|excluding|without|instead|rather|separately|separate|own|other|unless|besides|aside|but)\b|n['’]t\b/i;
+
 export function matchOpenTitle(
   key: string,
   titles: ReadonlySet<string>,
@@ -80,6 +103,9 @@ export function matchOpenTitle(
     if (t.split(" ").length < 2 || !key.startsWith(`${t} `)) continue;
     const desc = descriptions.get(t);
     if (!desc) continue;
+    // A description that draws a contrast ("about the crown, not the cleaning", "Mom will book her own") may
+    // CONTAIN the new task's words while excluding them, so it never proves a duplicate (verify loop 8 C8).
+    if (CONTRAST_RE.test(desc)) continue;
     const extra = meaningWords(key.slice(t.length));
     if (extra.length === 0) continue;
     // EVERY extra word must be in the description (verify loop 7 C8: at 60%, shared generic words — "schedule",

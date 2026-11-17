@@ -158,3 +158,26 @@ describe("F6 loop-7 rows", () => {
     expect(SHOW("I've added 'Test-set Huddle-only mode' to your board.", [real])).toBe("I've added 'Test-set Huddle-only mode' to your board.");
   });
 });
+
+// Verify loop 8 (VERIFY-handoff-confirm-flow-8-C7.md on claude_verify-handoff-confirm-flow-8-c7): a Huddle tool's own free
+// text (a block reason, an artifact name) must never make a real change read as "not performed".
+describe("F6 loop-8 rows", () => {
+  const W = (tool: string, summary: string): ToolUseLike => ({ agentId: A, tool, summary, ok: true, detail: "/artifacts/x" });
+  const BLOCK = W("flag_blocker", "blocked: waiting on the vendor's quote");
+  const keep: [string, string, ToolUseLike[]][] = [
+    ["U8-1", "I've marked it blocked.", [BLOCK]],
+    ["U8-2", "I moved the task to Blocked until the quote arrives.", [BLOCK]],
+    ["U8-3", "I flagged it and set it to blocked.", [BLOCK]],
+    ["U8-4", "I saved the post-mortem and moved the task to review.", [W("create_artifact", 'saved "Why the Q3 launch failed"')]],
+    ["U8-5", "I saved the notes and moved it to Review.", [W("create_artifact", 'saved "Huddle-only vs journey sync notes"')]],
+  ];
+  for (const [id, text, uses] of keep) test(`${id} kept: ${JSON.stringify(text)}`, () => expect(SHOW(text, uses)).toBe(text));
+  test("a skipped-duplicate or failed-journey confirm does not back a claim", () => {
+    expect(SHOW("I marked it done.", [W("confirm_task_intent", "DoD confirmed, journey write failed: 500")])).toBe(L.notChanged);
+    expect(SHOW("I marked it done.", [W("create_artifact", "already saved this turn — skipped duplicate")])).toBe(L.notChanged);
+  });
+  test("a title with its own quotes still reads as a real create (8-rest)", () => {
+    const real = W("create_huddle_task", "“Test-say \"hi\" in Huddle-only mode” → Huddle board + journey");
+    expect(SHOW("I've added it to your board.", [real])).toBe("I've added it to your board.");
+  });
+});

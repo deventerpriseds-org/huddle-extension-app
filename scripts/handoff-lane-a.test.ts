@@ -84,7 +84,8 @@ describe("F1 urgency: classifyAsk().urgency spelling table", () => {
     ["v2-C2", "can't do it now", "default"],
     ["v2-C2", "I won't need it right away", "default"],
     ["v2-C2", "later is fine, rather than right now", "default"],
-    ["pos", "never mind, do it right away", "now"],
+    // "never mind" is also a take-back ("Do it now. Never mind.") -> one confirm step (accepted safe miss, loop 8)
+    ["pos", "never mind, do it right away", "default"],
     ["pos", "don't forget, do it now", "now"],
     // verify loop 3 C2 (VERIFY-handoff-confirm-flow-3.md): deferral idioms are NOT urgent (U-rows) ...
     ["v3-C2", "just leave it for now", "default"],
@@ -162,6 +163,15 @@ describe("F1 urgency: classifyAsk().urgency spelling table", () => {
     ["v7-P", "Start now?", "now"],
     ["v7-U", "Do I need it right now? Nah.", "default"],
     ["v7-P", "Do it now 🙏", "now"],
+    // verify loop 8 C2 (VERIFY-handoff-confirm-flow-8-C2.md): take-backs, jokes, approval gates, time words, quotes
+    ...([
+      "Do it now. Never mind.", "Do it now. Nvm.", "Do it now. Scratch that.", "Do it asap. Cancel that.", "Do it now. Forget it.",
+      "book it asap... jk", "Do it now — kidding.", "Draft it right away — on my signal.", "Book it asap, pending my approval.",
+      "Send it right away, but only with my sign-off.", "Do it right away, in December.", "Book it asap, for March.",
+      "Do it immediately, next quarter.", "Do it now, I mean next sprint.", "Do it now. Eh, maybe tmrw.",
+      "Do it right away? Meh, it can keep.", 'Sam texted me: "book it asap". Ignore that.', 'Finn said: "do it now". I think it can keep.',
+      "draft it now, just kidding",
+    ].map((t) => ["v8-U", t, "default"] as [string, string, "now" | "default"])),
     ["pos", "do it right away", "now"],
     ["pos", "don't wait, do it immediately", "now"],
   ];
