@@ -83,3 +83,21 @@ list-stop made before this deploy wrote `dailyCap: 150` into `chat.attention_set
 -> 150. Effect: the owner's decision "150 -> 500" may not reach him; the new notice would then say "150 of 150" and
 point him at the field. Not fixable in code without a one-off data change or treating a stored 150 as "default";
 needs the owner's call or a read of the live row.
+
+## Claim 3 -- suites, tsc, build (branch head 763bd8f6)
+
+CONFIRMED. `bun scripts/<x>.test.ts`: actions-view 90/0, actions-view-server 28/0, report-from-ledger 103/0,
+correspondence-ingest 186/0, fireflies-list 9/0 (matches the builder's 90/28/103/186/9). `npx tsc --noEmit` exit 0 (0
+`error TS`). `npm run build` exit 0.
+
+## Claim 4 -- mutation proofs (verifier's own, `mutate.sh`, anchors in files, exit code read)
+
+| # | file | mutation | named test | result |
+|---|---|---|---|---|
+| V1 | report-from-ledger.ts | `groupOnly` ignores `chatWideMention === false` | MK-S3 | exit 0, FIRED (control EQUIVALENT) |
+| V2 | teams-log.ts | `mentionKind`: `t === "chat"` returns "group" (@Everyone hideable) | MK-R5 | exit 0, FIRED (control EQUIVALENT) |
+| V3 | actions.ts | `capNotice`: `<` -> `<=` (off by one) | CAP-4 GUARD | exit 0, FIRED (control EQUIVALENT) |
+| V4 | teams-log.ts | `mentionKind`: `present.length !== 1` -> `< 1` (two variants accepted) | MK-R14 | exit 0, FIRED (control EQUIVALENT) |
+| V5 | actions.ts | `DAILY_CAP_DEFAULT` 500 -> 150 | CAP-1 | exit 0, FIRED (control EQUIVALENT) |
+
+Every run restored the file to HEAD (`restored: ... matches HEAD`).
