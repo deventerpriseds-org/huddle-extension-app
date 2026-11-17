@@ -40,12 +40,11 @@ export interface FollowupDirectiveInput {
 export const ADDRESSED_REPLY_MAX = 400;
 
 /**
- * F2 switch: a hand-off creates a real task and shows Confirm buttons, with one in-turn retry. OFF — the owner
- * held row 2 back on 2026-11-17 ("Go on all 1-9 besides number 2 ... not sure the problem behind it"). While
- * off, a confirm-mode hand-off keeps the live wording (offer to take it over, ask to confirm) and is never
- * retried. Turning it on is this one line.
+ * F2 switch: a hand-off creates a real task and shows Confirm buttons, with one in-turn retry. ON — the owner,
+ * 2026-11-17: "keep 2 ... if it causes issues you can turn it off" (it had been held OFF earlier the same day).
+ * Set it to false to go back to the earlier wording (offer to take it over, ask to confirm, never retried).
  */
-export const HANDOFF_TASK_AND_BUTTONS = false;
+export const HANDOFF_TASK_AND_BUTTONS = true;
 
 function alreadySaidClause(fromName: string, addressedReply: string | undefined): string {
   const said = String(addressedReply ?? "").replace(/\s+/g, " ").trim().slice(0, ADDRESSED_REPLY_MAX);

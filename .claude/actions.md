@@ -5395,6 +5395,9 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
 - [ ] Open from loop 3: C1 strip phrasings + M8; C3 M12 + retry task id; C5/C6 verification; then rows 6–9 after owner 👍. Parked row in .claude/parked.md.
 - [ ] F6 presenter NOT wired yet (board-claims.ts helpers exist); F7 not started. Owner change-table 👍 required (CLAUDE.md 2026-11-03 rule) before merge to main.
 - [ ] F5 task-mode judge (both directions wrong: research parked as reminders; errands produce invented briefs) — WAITING on owner's default: A Assist (recommended) / B Remind / C Produce.
+- [x] 2026-11-17 loops 4–5 refuted C2 (4th time), C7 and C8; REDESIGNED each to fail toward the safe side: C8 83e1eb30 (a longer title is a duplicate only if its extra words are in the open task's description — live UM-Flint row; 22/0, FIRED), C2 7f88135f (no negation/time/busy word anywhere; urgent idioms stripped, never short-circuit; 132/0, 2 FIRED), C7 28d0ab3b (claims must name a board status; Huddle task tools back a claim; offers only before the verb; 53/0, 2 FIRED).
+- [x] 2026-11-17 owner "No need keep 2 ... if it causes issues you can turn it off": row 2 switched ON (HANDOFF_TASK_AND_BUTTONS=true; loop-3 defects already fixed in a8d9cc8d + 844f1f4b). lane-a 133/0.
+- [ ] Verify loop 7 (4 parallel passes: 7-c7, 7-c2, 7-c8, 7-rest) running; PR open. NOT merged, NOT deployed, NOT owner-confirmed.
 - [ ] Red-team pass → PR → independent verifier → merge → live E2E with `Test-` tasks + cleanup. NOT deployed, NOT owner-confirmed.
 
 ## ACT:harness-pollution-iris — test harness wrote into the owner's real Iris thread (2026-11-04)

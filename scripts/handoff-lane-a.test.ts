@@ -309,12 +309,18 @@ describe("F2 directive (AC-F2-1/F2-2/F2-5)", () => {
     mode: "confirm",
     taskAndButtons: true,
   });
-  test("row 2 held back (owner 2026-11-17): the switch is OFF, so the live wording ships and nothing retries", () => {
-    expect(HANDOFF_TASK_AND_BUTTONS).toBe(false);
-    const live = buildFollowupDirective({ ownerName: "Finn Reid", ownerId: "finn-reid", fromName: "Tess", ask: "budget", mode: "confirm" });
+  test("row 2 ON (owner 2026-11-17 'keep 2'): the default is the task + buttons directive, and a skipped propose retries", () => {
+    expect(HANDOFF_TASK_AND_BUTTONS).toBe(true);
+    const base = { ownerName: "Finn Reid", ownerId: "finn-reid", fromName: "Tess", ask: "budget", mode: "confirm" as const };
+    expect(buildFollowupDirective(base)).toBe(buildFollowupDirective({ ...base, taskAndButtons: true }));
+    expect(buildFollowupDirective(base)).toContain("create_huddle_task");
+    expect(needsHandoffConfirmRetry({ handoff: { mode: "confirm", fromName: "Tess", ownerId: "finn-reid", ask: "budget" }, internal: true, agentId: "finn-reid", outcomeKind: "reply", toolUses: [] })).toBe(true);
+  });
+  test("row 2 OFF side still works (the one-line rollback): live wording, no retry", () => {
+    const live = buildFollowupDirective({ ownerName: "Finn Reid", ownerId: "finn-reid", fromName: "Tess", ask: "budget", mode: "confirm", taskAndButtons: false });
     expect(live).toContain("ask them to confirm before you act");
     expect(live).not.toContain("create_huddle_task");
-    expect(needsHandoffConfirmRetry({ handoff: { mode: "confirm", fromName: "Tess", ownerId: "finn-reid", ask: "budget" }, internal: true, agentId: "finn-reid", outcomeKind: "reply", toolUses: [] })).toBe(false);
+    expect(needsHandoffConfirmRetry({ handoff: { mode: "confirm", fromName: "Tess", ownerId: "finn-reid", ask: "budget" }, internal: true, agentId: "finn-reid", outcomeKind: "reply", toolUses: [], enabled: false })).toBe(false);
   });
   test("F2-5: hand-off framing kept (passed/tapped, YOUR OWN channel, no at-sign)", () => {
     expect(d).toMatch(/passed|tapped/);
