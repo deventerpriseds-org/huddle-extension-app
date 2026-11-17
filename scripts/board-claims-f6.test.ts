@@ -194,3 +194,16 @@ describe("F6 loop-9 rows", () => {
     expect(SHOW("I've moved it to Doing.", [W("delegate_to_specialist", "already delegated Researcher this turn — skipped duplicate")])).toBe(L.notChanged);
   });
 });
+
+// Live run qa-paf-a342b6 (2026-11-17): Iris said "I added all 4 activities to your board" with task writes disabled.
+describe("F6 live-run rows", () => {
+  const W = (tool: string, summary: string): ToolUseLike => ({ agentId: A, tool, summary, ok: true });
+  test("an unbacked 'added all 4 activities to your board' is corrected", () =>
+    expect(SHOW("I added all 4 activities to your board for today.", [W("create_huddle_tasks", "Huddle-only — journey disabled")])).toBe(L.suggestionOnly));
+  test("with no create at all it says nothing was added", () =>
+    expect(SHOW("I added all 4 activities to your board for today.", [])).toBe(L.notAdded));
+  test("a real batch create keeps it", () =>
+    expect(SHOW("I added all 4 activities to your board for today.", [W("create_huddle_tasks", "created 4/4 → Huddle board + journey")])).toBe(
+      "I added all 4 activities to your board for today.",
+    ));
+});
