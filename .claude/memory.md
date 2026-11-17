@@ -1,5 +1,19 @@
 # Project Memory — huddle-extension-app
 
+## Actions view + report-from-Azure lanes (2026-11-17) -- Actions NOT live (PR #259 under verify loop 2)
+- LIVE (#252-#257, deployed): correspondence content in Azure (email/teams/sent/transcript), 25s barge cap,
+  stand-up auto toggle (owner set OFF), report runs from Azure since Monday with resolved + uninvolved chats excluded.
+  NOT owner-confirmed live.
+- IN FLIGHT: #259 Actions view + Modules (branch claude_actions-view 50063519; verify loop 2 found D1 cross-message
+  quote); claude_fix-uninvolved-chat-findings (@Everyone + malformed mention fixes, 5/5 findings coded);
+  claude_correspondence-tuning-fixes (forwarded part stored: Outlook web/new Outlook/Apple Mail lost it; refill pending).
+- Hardening (2026-11-17): agents ran 300-600 s per tool call (healthy 8-16 s) and builds took 10-20 h; machine
+  work is seconds (suites <1 s, tsc 15 s, build 11 s, load 0.03). Budgets of 60/90 min were ceilings set far too
+  loose and the owner challenged them. Size budgets from measured machine time + ~15 s/step, give each agent a short
+  hard stop, and check pushed progress at the halfway mark. Cause of the slow pace is NOT yet known.
+- Hardening: a container restart killed 3 agents; each had pushed per step, so all resumed from origin. The
+  verify-loop hook counts a restarted loop as loop 2 and rejects "none" in PRIOR STATE fields -- state it plainly.
+
 ## Correspondence + proposals (ACT:correspondence-checklist) -- 2026-11-13, NOT live, branch claude_task-proposals
 - TUNING ORDER (owner 2026-11-14): one question at a time. Step 1 = needs a reply (reply-scan, reviewed: no YES
   disputed; six NO rows need ACTION not a reply). Step 2 = on To -> open item (reply or do-it). Step 3 = CC/list ->

@@ -5382,3 +5382,11 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
       Report: OneDrive /automation/Huddle Preview/reply-scan-2026-11-14T04-33-28.html (+ emailed). Waiting on the
       owner to mark wrong YES / missed NO before tuning further.
 - [x] graph-permission-check: `feed_links` input prints OneDrive web links for report files in /automation/Huddle Preview only (owner 2026-11-14: "You have to provide links I can click").
+
+## ACT:actions-view — Actions view in a Modules launcher (owner 2026-11-15/16: 1A, Add as task/Done, 4A, copy-paste drafts) — PR #259, NOT live
+- [x] Built: branch claude_actions-view 50063519, BUILD-actions-view.md (62 tests, 11 guards mutation-proved).
+- [ ] Independent verify loop 2 (VERIFY-actions-view-2.md on claude_verify-actions-view-1); D1 cross-message quote found.
+- [ ] Merge + deploy + live UAT (actions-view-checks.mjs, desktop + 390px, both themes) + screenshots to owner.
+## ACT:uninvolved-chat-findings — fix #257 verifier findings 1,2,4,5,6 (@Everyone hid a chat; malformed mention crashed report) — branch, NOT live
+## ACT:correspondence-tuning — forwarded part lost for ~3/5 forwards; preview defaults; firewall rule; UAT stand-up opt-in — branch, NOT live
+- [ ] Owner (2026-11-17) challenged 60/90-min agent budgets: measured machine work <1 min/job; budgets cut to 15/25 min.
