@@ -117,3 +117,61 @@ Verdict: CONFIRMED with D-7.
 | F3 different senders, same quote | `["a","b"]` | CONFIRMED |
 | F4 shared proposalId, different senders and quotes | `["b"]` | depends on whether two asks can share a proposal; noted |
 | F6 no `at` on either | `["a"]` | CONFIRMED (no crash) |
+
+Addendum to F4 (code read, `proposals-store.server.ts:192-206`, OQ-9): a new to-do whose `norm_title` matches an
+ACTIVE proposal from another source is ATTACHED to that proposal. So two different Teams asks whose to-do folds to
+the same title ("Review the document") share one `proposalId`, and `collapseDuplicateTeamsItems` then lists only one
+of them -- the second path into D-2.
+
+## C7 -- UI (code read only; rendered result is MERGE-PENDING-UAT)
+
+- Expand/collapse: one `expanded` state per row; title, meta and summary switch `truncate`/`line-clamp-2` to
+  `whitespace-pre-wrap break-words`; a "More"/"Less" button with `aria-expanded`. CONFIRMED by read.
+- Wrong? textarea: `useLayoutEffect` on `[text]` sets `height = scrollHeight`, `overflow-hidden`, capped by
+  `maxLength={CORRECTION_TEXT_MAX}`. CONFIRMED by read.
+- `ai_misread`: added to `CORRECTION_REASONS` + `CORRECTION_LABEL`; the chips are `CORRECTION_REASONS.map`, the send
+  goes through the same `correctActionFn` -> `makeCorrection` validator (`actions.ts:255`); no other reason list exists
+  in `src` (grep for `not_mine` / `CORRECTION_REASONS`). CONFIRMED by read; R3-2 green.
+- Tokens only: grep of the added lines for hex / rgb / hsl / palette classes -> none. CONFIRMED.
+- Note: the "More" button is `min-h-6` (24px), below a 44px touch target on a phone (low). It also shows on rows whose
+  text is not truncated.
+- The builder's UAT checks ACC-3/4/5 (`actions-view-checks.mjs`) exist but were not run (no dispatch allowed here).
+
+## C8 -- Mutation proofs (`mutate.sh`, anchors in files, exit code read)
+
+| # | file | mutation | test | outcome | exit |
+|---|---|---|---|---|---|
+| M1 | report-from-ledger.ts | `ownerIdsAll = [...configuredOwnerIds]` (per-chat again) | R1-1 | FIRED (control EQUIVALENT) | 0 |
+| M2 | action-classify.ts | `if (a.settled && false) return settledGuard(rest)` | R2-1 | FIRED (control EQUIVALENT) | 0 |
+| M3 | meeting-triage.ts | `detail = null` (no label detection) | R4-1 | FIRED (control EQUIVALENT) | 0 |
+| M4 | pipeline.ts | `q = ""` (no quote key in de-dup) | R6-1 | FIRED (control EQUIVALENT) | 0 |
+| M5 | action-classify.ts | `reason = v.reason` (no NOT_REPLIED scrub) | R2-3 | FIRED (control EQUIVALENT) | 0 |
+
+Every run reported the source restored to HEAD and the named test green again. `git status --short` empty afterwards.
+
+## C9 -- Test-merge origin/main
+
+`git merge-base --is-ancestor origin/main origin/claude_actions-accuracy` -> true (0 behind, 5 ahead).
+`git merge-tree --write-tree origin/main origin/claude_actions-accuracy` = `b8fbc043...` = the branch's own tree, so
+the suites in C0 ran on exactly the merged tree. CONFIRMED.
+
+## Defects
+
+| id | severity | where | what | repro |
+|---|---|---|---|---|
+| D-1 | **HIGH** | `pipeline.ts:68` (key) + `pipeline.ts:251` (`v.key === u.itemKey`) | Verdicts stored by the old code are not re-judged: the key does not depend on who is OWNER, so every row the owner already sees with a reversed sender stays listed after deploy (now with `who` = the other person and the owner's own sentence as the quote) until that chat gets a new message. | `bun repro2.ts`, C1b |
+| D-2 | MEDIUM | `pipeline.ts` `collapseDuplicateTeamsItems` | Two different asks collapse: (a) same sender, same short generic sentence in two different chats ("Can you take a look at this?") -> one row; (b) any two Teams asks sharing a proposal, which the store does by `norm_title` across sources, even with different senders. Breaks "two genuinely different asks from the same sender must never collapse". | repro F2, F4 |
+| D-3 | MEDIUM | `report-from-ledger.ts` `ownerTeamsIdsAcross` / `teamsSourceLabel` with `needs-you.ts:124` | With no `correspondence.ownerNames` configured the owner names default to the login's FIRST name (`["Von"]`): the display-name last resort never matches "Ellis, Von" (and would match a sender named just "Von"), and the "Teams group chat" relabel never fires for a chat named "Ellis, Von". Live effect depends on config I could not read. | repro A3 |
+| D-4 | MEDIUM (latent) | `ownerTeamsIdsAcross` | The fix now relies on older rows' `ownerUserId`. (a) Stored content is purged after `contentRetentionDays` (default 90, `onedrive-feed.ts:95`); if the flow keeps omitting `ownerUserId`, recognition silently reverts once the Nov 9-13 rows are purged. (b) One row with a wrong `ownerUserId` now relabels that sender as OWNER in every chat (their asks vanish), where before it affected one chat. Not live today (probe: 1 distinct id). Configuring `teams.ownerSenderIds` (already an open owner item) closes both. | repro A4 |
+| D-5 | LOW | `chatInvolvement` now gets the global ids | A group chat whose rows carry `fromOwner` false and mention arrays but no `ownerUserId` moves from `cant_tell_owner_unknown` (shown) to `uninvolved` (hidden): more hidden than before. Not live today (all recent `fromOwner` null). The extra hiding is of genuinely uninvolved chats. | repro A5 |
+| D-6 | LOW | `action-classify.ts` `settledGuard` | Only `reason` is scrubbed; a `todo` claiming "You have not replied..." is shown, and "you still need to resubmit" has no deterministic guard (prompt only). | repro B5b, B5c |
+| D-7 | LOW-MEDIUM | `meeting-triage.ts` `DETAIL_LABEL` | A genuine bulleted item written `Label: action` ("- Note: Von to send pricing to the client", "- **Deadline**: submit the grant application by Dec 1") becomes a detail; `details` is consumed nowhere, so the action is lost. | repro E |
+
+## Verdict
+
+CONFIRMED: C0, C1 (live shape), C2, C3, C4, C5 (with D-7), C7 by read, C8 (5/5 FIRED), C9.
+REFUTED: C1b (stale verdicts persist, D-1), C6 F2/F4 (D-2).
+UI-UNVERIFIED: expand/collapse, auto-grow textarea, AI-misread chip as rendered.
+
+**FIX FIRST** -- D-1 means the owner's reported rows would not change on deploy, and D-2 breaks a stated criterion.
+After those: MERGE-PENDING-UAT (UI claims owe a verify-uat run).
