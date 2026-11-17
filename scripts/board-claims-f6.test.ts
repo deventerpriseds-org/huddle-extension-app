@@ -80,3 +80,42 @@ describe("F6 loop-4 rows", () => {
   ];
   for (const [text, want] of fix) test(`unbacked claim corrected: ${JSON.stringify(text)}`, () => expect(SHOW(text)).toBe(want));
 });
+
+// Verify loop 5 (VERIFY-handoff-confirm-flow-5-C7.md on claude_verify-handoff-confirm-flow-5-c7). Summaries are the
+// ones huddle.functions.ts records: create_artifact `saved "<name>"…` (+ ensureReviewFlip moves the task to
+// Review), groom_backlog "groomed the backlog", delegate_to_specialist `tasked <role>: …`.
+describe("F6 loop-5 rows", () => {
+  const W = (tool: string, summary: string): ToolUseLike => ({ agentId: A, tool, summary, ok: true, detail: "/artifacts/x" });
+  const ART = W("create_artifact", 'saved "Comparison"');
+  const GROOM = W("groom_backlog", "groomed the backlog");
+  const DELEGATE = W("delegate_to_specialist", "tasked Finance: compare plans");
+  // UNSAFE direction: a true statement is never rewritten.
+  const keep: [string, string, ToolUseLike[]][] = [
+    ["N-U1", "I've moved the task to Review with the write-up attached.", [ART]],
+    ["N-U2", "The task has been moved to Review.", [ART]],
+    ["N-U3", "I've completed the analysis for that task.", [ART]],
+    ["N-U4", "I've put the comparison on the task card for you.", [ART]],
+    ["N-U5", "I've set the priorities across your backlog.", [GROOM]],
+    ["N-U6", "I moved three tasks into Up next.", [GROOM]],
+    ["N-U7", "I've put Finn on that task.", [DELEGATE]],
+    ["N-U8", "I set that task as your top priority.", [W("set_priority_rank", "set_priority_rank → journey-voice · ok")]],
+    ["N-U9", "I added a calendar hold and moved nothing on the board.", []],
+    ["N-U10", "I created 3 tasks and set them in your backlog.", [W("create_huddle_tasks", "created 3/3 → Huddle board + journey")]],
+    // work statements with NO tool at all are not board claims either
+    ["N-U3b", "I've completed the analysis for that task.", []],
+    ["N-U4b", "I've put the comparison on the task card for you.", []],
+  ];
+  for (const [id, text, uses] of keep) test(`${id} kept: ${JSON.stringify(text)}`, () => expect(SHOW(text, uses)).toBe(text));
+  // Under-matches: an unbacked claim is corrected.
+  const fix: [string, string, string][] = [
+    ["N-M1", "I've marked it done, let me know if you need anything else.", L.notChanged],
+    ["N-M2", "I moved it to Done so it's off your plate if you were worried.", L.notChanged],
+    ["N-M3", "I've updated the task to Done.", L.notChanged],
+    ["N-M4", "Your task is now marked done.", L.notChanged],
+    ["N-M5", "I marked the task done and set a reminder for Friday.", L.notChanged],
+    ["N-M6", "I've checked that task off.", L.notChanged],
+    ["N-M7", "That one's handled — marked it complete.", L.notChanged],
+    ["N-M8", "I've scheduled the task for 3pm tomorrow.", L.notChanged],
+  ];
+  for (const [id, text, want] of fix) test(`${id} corrected: ${JSON.stringify(text)}`, () => expect(SHOW(text)).toBe(want));
+});

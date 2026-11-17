@@ -97,24 +97,75 @@ export function agentPerformedWork(toolUses: readonly ToolUseLike[], agentId: st
 // turn presenter (presentedReplies), so every exit point — stream, chunk save, final result, the prior shown to the
 // next agent, memory — sees the same corrected text. Pure and idempotent: replacement lines never match a claim.
 
+// WHICH DIRECTION IS UNSAFE. Rewriting a TRUE statement into "Nothing was changed" tells the owner a real change
+// did not happen (verify loops 4 and 5 found 6+ of these each time); letting a false claim through is what F6
+// exists to reduce, but it is the status quo before F6. So the presenter fails toward leaving the agent's words
+// alone: (1) a claim must be EXPLICIT about the board — a status the board has, or the task itself completed /
+// archived / checked off / scheduled — never a work statement ("I've completed the analysis", "I put the
+// comparison on the card"); (2) ANY task-changing tool the agent ran this turn backs it, Huddle's own included
+// (create_artifact flips the task to Review, groom_backlog ranks and fills Up next, flag_blocker → Blocked).
+//
+// SUPERSEDES the c94d1085 matcher (off-board word list + journey-only backing), refuted by verify loop 5 C7
+// (docs/qc-evidence/VERIFY-handoff-confirm-flow-5-C7.md on claude_verify-handoff-confirm-flow-5-c7).
+
 const SENTENCE_SPLIT = /((?<=[.!?])\s+|\n+)/;
-// Offers, plans, questions and capability statements are not claims (S-B5..S-B7).
-const NOT_A_CLAIM_RE =
-  /\b(?:I'll|I’ll|I will|I can|I could|I'd|I’d|want me to|shall I|should I|let me|going to|once you|if you)\b|\?\s*$/i;
-// Non-board objects (S-B8..S-B10): email read state, notes, "noted".
-const OFF_BOARD_RE =
-  /\bas (?:read|unread)\b|\bemails?\b|\binbox\b|\bnotes?\b|\bnoted\b|\breminders?\b|\balarms?\b|\bcalendar\b|\bevents?\b|\bmeetings?\b|\bbrief\b|\bdocument\b|\bdoc\b|\bdraft\b|\breport\b|\bresearch\b|\bartifact\b/i;
+// Inside a sentence, a dash starts a new clause: "That one's handled — marked it complete." (loop 5 N-M7).
+// The claim is judged per clause; the whole sentence is still what gets replaced.
+const CLAUSE_SPLIT = /\s+[—–]\s+/;
+// Offers, plans and capability statements are not claims (S-B5..S-B7) — but only when they come BEFORE the
+// claim verb: "I've marked it done, let me know if you need anything" is a claim (loop 5 N-M1/N-M2).
+const OFFER_RE =
+  /\b(?:I'll|I’ll|I will|I can|I could|I'd|I’d|I would|want me to|shall I|should I|let me|going to|once you|if you|happy to|ready to)\b/i;
 // A quoted request echoed back ("You asked me to "mark it done"") is not a claim (S-B13).
-const QUOTED_RE = /["“][^"”]*\b(?:mark|move|add|archive)\w*\b[^"”]*["”]/i;
-const BOARD_WORD_RE = /\b(?:done|complete(?:d)?|review|up next|backlog|doing|board|task|card|archived?|deleted)\b/i;
-// Subject forms (verify loop 4 under-matches): I / we, optionally "just|now|already|gone ahead and|went ahead
-// and"; passive "it's (been) marked", "task moved to Done"; or the verb opening the sentence ("Marked done").
-const CLAIM_SUBJECT =
-  "(?:^|\\b(?:I|we|I've|I’ve|I have|we've|we’ve|we have)\\s+(?:(?:just|now|already|gone ahead and|went ahead and)\\s+)?|\\b(?:it's|it’s|it is|it has|it's been|it’s been|it has been|task|that's|that’s)\\s+(?:been\\s+)?)";
-const STATUS_CLAIM_RE = new RegExp(`${CLAIM_SUBJECT}(?:marked|moved|set|put|archived|deleted|removed|closed|completed)\\b`, "i");
-const CREATE_CLAIM_RE = new RegExp(`${CLAIM_SUBJECT}(?:added|created)\\b`, "i");
+const QUOTED_RE = /["“][^"”]*\b(?:mark|move|add|archive|check)\w*\b[^"”]*["”]/i;
+
+const SUBJECT =
+  "(?:^|\\b(?:I|we|I've|I’ve|I have|we've|we’ve|we have)\\s+(?:(?:just|now|already|also|gone ahead and|went ahead and)\\s+)?" +
+  "|\\b(?:it's|it’s|it is|it has|it's been|it’s been|it has been|that's|that’s)\\s+(?:now\\s+)?(?:been\\s+)?" +
+  "|\\b(?:your |the |that |this )?(?:task|card|item|one)\\s+(?:is|was|has been|'s been|’s been|'s|’s)?\\s*(?:now\\s+)?(?:been\\s+)?)";
+const TASK_OBJ = "(?:the |that |this |your |both |all )?(?:(?:\\w+\\s+){0,2}tasks?|cards?|items?|it|that|this|them|one)";
+// A status the board actually has.
+const STATUS_TARGET = "(?:done|complete|completed|finished|in review|review|up next|in progress|doing|backlog|blocked|archived|parked|parking lot)";
+const STATUS_CLAIM_RE = new RegExp(
+  [
+    // "marked it done", "moved three tasks into Up next", "updated the task to Done", "set it as blocked"
+    `${SUBJECT}(?:marked|moved|set|put|changed|updated|switched|flipped|shifted|bumped|dragged)\\s+(?:[\\w'’-]+\\s+){0,5}?(?:(?:to|as|into|in|on)\\s+)?(?:the\\s+)?${STATUS_TARGET}\\b`,
+    // "archived the task", "completed it", "deleted that card"
+    `${SUBJECT}(?:archived|deleted|removed|closed|completed|finished)\\s+${TASK_OBJ}\\b`,
+    // "checked that task off", "ticked it off"
+    `${SUBJECT}(?:checked|ticked|crossed)\\s+${TASK_OBJ}\\s+off\\b`,
+    `${SUBJECT}(?:checked|ticked|crossed)\\s+off\\s+${TASK_OBJ}\\b`,
+    // "scheduled the task for 3pm", "moved the task to Thursday"
+    `${SUBJECT}(?:scheduled|rescheduled|moved)\\s+(?:the |that |this |your )?tasks?\\b`,
+    // a bare opener: "Marked done.", "Archived."
+    `^(?:marked|moved)\\s+(?:[\\w'’-]+\\s+){0,3}?(?:(?:to|as|into)\\s+)?${STATUS_TARGET}\\b`,
+    `^(?:archived|deleted)\\b`,
+  ].join("|"),
+  "i",
+);
+// "added a task", "created two new cards", "added it to your board"
+const CREATE_CLAIM_RE = new RegExp(
+  `${SUBJECT}(?:added|created)\\s+(?:(?:a|an|the|that|this|two|three|\\d+)\\s+)?(?:new\\s+)?(?:tasks?|cards?|to-?dos?)\\b` +
+    `|${SUBJECT}(?:added|created)\\s+(?:(?:it|that|this|them|[\\w'’-]+(?:\\s+[\\w'’-]+){0,3})\\s+)?(?:to|on)\\s+(?:your|the)\\s+(?:board|backlog|task list|to-?do list)\\b`,
+  "i",
+);
 const STARTED_CLAIM_RE =
   /\b(?:I'm|I’m|I am)\s+(?:now\s+)?(?:proceeding|starting on|working on it|getting started)\b|\bI(?:'ve|’ve| have)\s+started\b/i;
+
+/** Huddle's own tools that change a task (alongside journey's TASK_WRITE_TOOLS). */
+const HUDDLE_TASK_TOOLS = new Set([
+  "create_artifact", // a task-linked artifact flips the task DOING -> IN_REVIEW (ensureReviewFlip)
+  "groom_backlog", // ranks, tags, assigns, then the promote-only pass fills Up next
+  "delegate_to_specialist",
+  "flag_blocker", // sets the task BLOCKED
+  "confirm_task_intent", // a confirmed task can start (Doing)
+  "override_approach_gate",
+]);
+/** Any change this agent really made to a task this turn — what backs a status claim. */
+function changedATask(u: ToolUseLike): boolean {
+  if (isPerformedTaskChange(u) || isPerformedCreate(u)) return true;
+  return u.ok && HUDDLE_TASK_TOOLS.has(u.tool) && !NOT_PERFORMED_RE.test(u.summary) && !/failed/i.test(u.summary);
+}
 
 export const BOARD_CLAIM_LINES = {
   notChanged: "Nothing was changed on the board for that.",
@@ -127,25 +178,37 @@ export const BOARD_CLAIM_LINES = {
 
 type ClaimKind = "status" | "create" | "started";
 
+/** The claim a sentence makes, judged only on the text up to the claim (an offer AFTER it does not cancel it). */
 function claimKind(sentence: string): ClaimKind | null {
-  const s = sentence
+  for (const clause of sentence.split(CLAUSE_SPLIT)) {
+    const k = clauseClaimKind(clause);
+    if (k) return k;
+  }
+  return null;
+}
+
+function clauseClaimKind(clause: string): ClaimKind | null {
+  const s = clause
     .trim()
     .replace(/^[\s✅☑️✔️👍]+/u, "")
     .replace(/^(?:done|ok(?:ay)?|sure|great|all set)\s*[—–\-:,!.]\s*/i, "");
-  if (!s || NOT_A_CLAIM_RE.test(s) || QUOTED_RE.test(s)) return null;
-  // A "started work" claim is about the WORK, not a board object, so it is judged before the off-board words
-  // ("research", "brief" ...) — otherwise "I'm proceeding with the research" (S-B12) slips through.
-  if (STARTED_CLAIM_RE.test(s)) return "started";
-  if (OFF_BOARD_RE.test(s)) return null;
-  if (CREATE_CLAIM_RE.test(s) && BOARD_WORD_RE.test(s)) return "create";
-  if (STATUS_CLAIM_RE.test(s) && (BOARD_WORD_RE.test(s) || /^(?:archived|deleted)\b/i.test(s))) return "status";
+  if (!s || /\?\s*$/.test(s) || QUOTED_RE.test(s)) return null;
+  const before = (m: RegExpExecArray | null) => (m ? s.slice(0, m.index + m[0].length) : null);
+  for (const [kind, re] of [
+    ["started", STARTED_CLAIM_RE],
+    ["status", STATUS_CLAIM_RE],
+    ["create", CREATE_CLAIM_RE],
+  ] as const) {
+    const upTo = before(re.exec(s));
+    if (upTo !== null && !OFFER_RE.test(upTo)) return kind;
+  }
   return null;
 }
 
 /** The code-built line that replaces an unbacked claim, or null when the agent's own toolUses back it. */
 export function boardClaimCorrection(kind: ClaimKind, agentUses: readonly ToolUseLike[]): string | null {
   if (kind === "status") {
-    if (agentUses.some(isPerformedTaskChange)) return null;
+    if (agentUses.some(changedATask)) return null;
     return agentUses.some(isDeferredStatusChange) ? BOARD_CLAIM_LINES.deferred : BOARD_CLAIM_LINES.notChanged;
   }
   if (kind === "create") {
@@ -154,7 +217,7 @@ export function boardClaimCorrection(kind: ClaimKind, agentUses: readonly ToolUs
     if (agentUses.some(isSuggestionOnlyCreate)) return BOARD_CLAIM_LINES.suggestionOnly;
     return BOARD_CLAIM_LINES.notAdded;
   }
-  if (agentUses.some(isPerformedWork) || agentUses.some(isPerformedTaskChange)) return null;
+  if (agentUses.some(isPerformedWork) || agentUses.some(changedATask)) return null;
   return BOARD_CLAIM_LINES.notStarted;
 }
 
