@@ -5400,3 +5400,7 @@ Branch `claude_status-answers` (no PR, no merge — caller ships). Evidence: `do
 - [x] ACT:uninvolved-chat-findings merged #262 (verify loop 2 MERGE). ACT:correspondence-tuning merged #261, forward refill applied: 7 re-written, 0 failed.
 - [x] Owner 2026-11-17 "tracking able to detect what is taking so long each step": eds-agent-steps.py live (eds-claude-skills #140, v80); judge-failure kinds logged (#263).
 - [ ] Owner decision: rule change for background agents (session idle freezes them). [ ] OpenAI quota top-up (owner).
+## ACT:actions-accuracy — owner 2026-11-17 phone report: sender reversed, hallucinated "you have not replied", no AI-inaccuracy reason, meeting label lines as rows, text cut off, one ask twice — branch claude_actions-accuracy, NOT merged, NOT live
+- [x] Root causes + fixes + tests (actions-accuracy 25/25, 7 guards FIRED with control): docs/qc-evidence/BUILD-actions-accuracy.md.
+- [ ] Merge + deploy + live UAT (actions-view-checks.mjs ACC-3/4/5) + owner confirms on his phone.
+- [ ] Owner: set `teams.ownerSenderIds` in HUDDLE_ONEDRIVE_FEEDS (fixes the ingest-time bell path too) -- or check why recent Teams log lines carry no `ownerUserId`.
