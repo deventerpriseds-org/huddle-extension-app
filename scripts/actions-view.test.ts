@@ -9,6 +9,11 @@
 // EVIDENCE:   docs/qc-evidence/BUILD-actions-view.md.
 // Run: bun scripts/actions-view.test.ts
 import {
+  ACTION_SCHEMA,
+  CLASSIFIER_INPUT_VERSION,
+  STEP2_INSTRUCTIONS,
+  STEP3_INSTRUCTIONS,
+  TEAMS_INSTRUCTIONS,
   actionSectionFor,
   admitActionVerdict,
   emailQuoteHaystack,
@@ -30,6 +35,8 @@ import {
   classifyEnabled,
   DAILY_CAP_DEFAULT,
   DAILY_CAP_SETTING_PATH,
+  HIDEABLE_CATEGORIES,
+  HIDEABLE_CATEGORY_LABEL,
   localMidnightMs,
   correctionFor,
   correctionHides,
@@ -48,7 +55,7 @@ import {
   type ActionCandidate,
   type ActionsSettings,
 } from "../src/features/huddle/lib/actions/actions";
-import { buildCandidates, classifyCallsLeft, runClassify, threadUnits, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
+import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, threadUnits, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
 import { meetingItemIsOwnersOrUnassigned, splitActionItems } from "../src/features/huddle/lib/proposals/meeting-triage";
 import { titleKey } from "../src/features/huddle/lib/proposals/proposals";
 
@@ -501,6 +508,87 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   );
   const pipe = readFileSync(new URL("../src/features/huddle/lib/actions/pipeline.ts", import.meta.url), "utf8");
   t("U-14 the heartbeat backlog sizing is NOT on this branch (another branch owns AI-call volume)", ["heartbeatPassShape", "HEARTBEAT_BACKLOG_PER_PASS", "CATCHUP_", "catchUpStopReason", "catchUpContinue"].filter((n) => pipe.includes(n)), []);
+}
+
+// ── AI. APP AND WORKSPACE INVITATIONS (owner-approved option A, 2026-11-17; BUILD-actions-app-invite.md) ──────────
+// THE SPELLING TABLE. Synthetic subjects / bodies only. Tests cannot call the model, so each row carries the answer
+// the changed instructions ask for (category + open / none + a verbatim quote) and runs it through the REAL
+// admission guard (admitActionVerdict) and the REAL selection (selectActionItems) at default settings.
+//   expect: "gone"   = never shown (status none: no row, not counted hidden)
+//           "hidden" = admitted, hidden by a default What-shows switch, counted in hidden.categories[cat]
+//           "listed" = shown as a row
+{
+  type Spell = { id: string; source: "email" | "teams"; subject: string; body: string; open: boolean; kind: "reply" | "action" | "both" | "none"; category: string; quote: string | null; expect: "gone" | "hidden" | "listed" };
+  const P = (id: string, subject: string, body: string, category = "app_invite", source: "email" | "teams" = "email"): Spell => ({ id, source, subject, body, open: false, kind: "none", category, quote: null, expect: "gone" });
+  const TEAM_COPY = (n: number) => P(`P3-copy-${n}`, "Pat Example has invited you to join the team Synthetic Squad", `Pat Example has invited you to join the team Synthetic Squad in Example Design. Open the app to accept. (${n})`);
+  const TABLE: Spell[] = [
+    // ── Positives: the owner's six shapes. Per the new instructions an app_invite has NO open item.
+    P("P1-new-org", "Check out your new organization", "Welcome! Check out your new organization, Synthetic Studio, in Example Design."),
+    P("P2-access-org", "You can access organization Example Org", "You can now access organization Example Org. Sign in to Example Design to get started."),
+    TEAM_COPY(1), TEAM_COPY(2), TEAM_COPY(3), TEAM_COPY(4), TEAM_COPY(5),
+    P("P4-devops", "You've been invited to Example DevOps", "You've been invited to Example DevOps by an administrator. Join the project to see its boards."),
+    P("P5-sheet", "Pat Example has invited you to edit the following spreadsheet", "Pat Example has invited you to edit the following spreadsheet: Synthetic Budget. Open in Example Docs."),
+    P("P5-teams-bot", "Teams", "Example Design bot: you were added to the workspace Synthetic Squad.", "app_invite", "teams"),
+    // A workflow mailer's approval request about SOMEONE ELSE's timecard: timekeeping, hidden by the existing switch
+    // even when the model calls it an action.
+    { id: "P6-timecard", source: "email", subject: "Timecard approval needed", body: "Please click one of the following choices to approve the timecard for Sam Example for the week ending Friday.", open: true, kind: "action", category: "timekeeping", quote: "Please click one of the following choices to approve the timecard for Sam Example", expect: "hidden" },
+    // Travel-security poll: governed by the EXISTING "mail from systems has no open item" rule (automated_notice).
+    P("P7-poll", "Travel safety check", "Are you safe? Please select from the responses below so the travel desk knows your status.", "automated_notice"),
+    // ── Negatives that MUST stay visible.
+    { id: "N1-deliverable", source: "email", subject: "Budget deck", body: "Hi, could you send me the synthetic budget deck by Friday? Thanks.", open: true, kind: "both", category: "person_request", quote: "could you send me the synthetic budget deck by Friday?", expect: "listed" },
+    { id: "N2-training", source: "email", subject: "Required: annual security training", body: "All staff must complete the annual security awareness training by December 1.", open: true, kind: "action", category: "automated_notice", quote: "All staff must complete the annual security awareness training by December 1.", expect: "listed" },
+    { id: "N3-payroll", source: "email", subject: "Register for payroll self-service", body: "Please register for the payroll self-service portal by Friday to receive your pay statements.", open: true, kind: "action", category: "automated_notice", quote: "Please register for the payroll self-service portal by Friday", expect: "listed" },
+    { id: "N3b-password-manager", source: "email", subject: "Set up your company password manager", body: "Your employer requires every employee to finish setting up the company password manager account by Monday.", open: true, kind: "action", category: "automated_notice", quote: "finish setting up the company password manager account by Monday", expect: "listed" },
+    { id: "N4-manager", source: "email", subject: "Onboarding plan", body: "Please review the synthetic onboarding plan and send me your comments by Wednesday.", open: true, kind: "both", category: "person_request", quote: "Please review the synthetic onboarding plan and send me your comments by Wednesday.", expect: "listed" },
+    // ── Over-match negative: a PERSON's own email that mentions an invite in passing stays a person_request.
+    { id: "O1-passing", source: "email", subject: "Yesterday", body: "Thanks for joining the call yesterday. I sent the workspace invite to the new hire as well. Can you share your notes from the session?", open: true, kind: "reply", category: "person_request", quote: "Can you share your notes from the session?", expect: "listed" },
+    { id: "O2-passing-teams", source: "teams", subject: "Teams", body: "I invited the whole team to the shared folder last week. Could you check the synthetic draft before Thursday?", open: true, kind: "both", category: "person_request", quote: "Could you check the synthetic draft before Thursday?", expect: "listed" },
+  ];
+  const verdictFor = (r: Spell) => admitActionVerdict({ open_item: r.open, kind: r.kind, todo: r.open ? "Synthetic to-do" : null, due: null, quote: r.quote, confidence: "high", reason: "Synthetic.", category: r.category }, [r.body], { key: `${r.id}|1`, settled: false, nowIso: NOW, inputVersion: CLASSIFIER_INPUT_VERSION[r.source] });
+  const candFor = (r: Spell, over: Partial<{ open: boolean; kind: Spell["kind"]; quote: string | null }> = {}): ActionCandidate => {
+    const v = verdictFor({ ...r, ...over });
+    return cand({ source: r.source, status: v.status, category: v.category, kind: v.kind, section: v.status === "open" ? actionSectionFor(r.source, v.kind, "direct") : null, itemKey: v.key, proposalId: v.status === "open" ? `prop-${r.id}` : null, display: { ...disp, title: r.id } });
+  };
+  const outcome = (sel: ReturnType<typeof selectActionItems>, id: string, cat: string | null) =>
+    sel.rows.some((x) => x.title === id) ? "listed" : sel.unchecked.some((x) => x.title === id) ? "unchecked" : sel.answered.some((x) => x.title === id) ? "answered" : cat && (sel.hidden.categories as Record<string, number>)[cat] ? "hidden" : "gone";
+  for (const r of TABLE) {
+    const v = verdictFor(r);
+    t(`AI-T ${r.id}: model answer ${r.category}/${r.open ? r.kind : "none"} is admitted (never bad_shape) and ends ${r.expect}`, [v.category, v.notCheckedReason ?? null, outcome(selectActionItems([candFor(r)], S()), r.id, r.category)], [r.category, null, r.expect]);
+  }
+  // Belt and braces: even when the model (wrongly) still calls an app invite an open item, the default switch hides
+  // it and counts it. The five near-identical team invites count 5.
+  const appRows = TABLE.filter((r) => r.category === "app_invite");
+  const driftCands = appRows.map((r) => candFor(r, { open: true, kind: "action", quote: r.body.slice(0, 40) }));
+  const drift = selectActionItems(driftCands, S());
+  t("AI-1 GUARD: app_invite is a hideable category, labelled for What shows", [HIDEABLE_CATEGORIES.includes("app_invite"), HIDEABLE_CATEGORY_LABEL.app_invite], [true, "App and workspace invitations"]);
+  t("AI-2 GUARD: hidden by DEFAULT -- an app invite the model still marked open is never a row, and is counted hidden", [drift.rows.length, drift.counts.all, drift.hidden.categories.app_invite, drift.hidden.total], [0, 0, appRows.length, appRows.length]);
+  t("AI-3 the five near-identical team invites are each counted (5), never silently dropped", selectActionItems(driftCands.filter((c) => c.display.title.startsWith("P3-copy")), S()).hidden.categories.app_invite, 5);
+  const on = selectActionItems(driftCands, S({ hideCategories: ["meeting_invite", "timekeeping", "verification_code"] }));
+  t("AI-4 the switch: turning it off in What shows lists them at once (no re-judge), hidden count 0", [on.rows.length, on.hidden.categories.app_invite ?? 0], [appRows.length, 0]);
+  const notChecked = selectActionItems([cand({ status: "not_checked", category: "app_invite", proposalId: null, section: null, itemKey: "nc|1" })], S());
+  t("AI-5 a not-checked item already labelled app_invite is hidden by the same switch (counted, not listed)", [notChecked.unchecked.length, notChecked.hidden.categories.app_invite], [0, 1]);
+  // Stored settings: a list saved BEFORE app_invite existed takes the new default (hidden); one saved after keeps the
+  // owner's choice; a round trip through resolve keeps it.
+  const legacy = resolveActionsSettings({ hideCategories: ["meeting_invite", "timekeeping", "verification_code"], dailyCap: 300 });
+  const chosen = resolveActionsSettings({ ...legacy, hideCategories: legacy.hideCategories.filter((c) => c !== "app_invite") });
+  t("AI-6 GUARD: settings saved before app_invite existed hide it by default (and keep the rest of the saved choice)", [legacy.hideCategories.includes("app_invite"), legacy.dailyCap, legacy.knownHideCategories.length], [true, 300, HIDEABLE_CATEGORIES.length]);
+  t("AI-7 GUARD: the owner switching it ON (unhidden) after it existed is kept, also across a second save", [chosen.hideCategories.includes("app_invite"), resolveActionsSettings(chosen).hideCategories.includes("app_invite"), resolveActionsSettings(JSON.parse(JSON.stringify(chosen))).hideCategories], [false, false, ["meeting_invite", "timekeeping", "verification_code"]]);
+  t("AI-8 an old saved list that had switched timekeeping OFF stays off; only the NEW category takes its default", resolveActionsSettings({ hideCategories: ["meeting_invite"] }).hideCategories, ["meeting_invite", "app_invite"]);
+  // The instruction text: app_invite defined in every block; the step-2 contradiction gone; the courtesy rule kept.
+  t("AI-9 GUARD: app_invite is in the strict schema enum (else every app_invite answer is bad_shape)", (ACTION_SCHEMA.properties.category.enum as readonly string[]).includes("app_invite"), true);
+  t("AI-10 GUARD: app_invite defined in step 2, step 3 and Teams; employer-required accounts excluded in each", [STEP2_INSTRUCTIONS, STEP3_INSTRUCTIONS, TEAMS_INSTRUCTIONS].map((x) => [x.includes("app_invite (an app or platform notifying him"), x.includes("his EMPLOYER requires is automated_notice, never app_invite")]), [[true, true], [true, true], [true, true]]);
+  t("AI-11 GUARD: step 2 no longer makes an invited account an open item; an EMPLOYER-required one still is", [STEP2_INSTRUCTIONS.includes("setting up an account or access he was invited to"), STEP2_INSTRUCTIONS.includes("access his EMPLOYER requires (payroll self-service, the company password manager, required training, a performance review)"), STEP2_INSTRUCTIONS.includes("(category app_invite) has no open item")], [false, true, true]);
+  t("AI-12 the PERSON courtesy-reply rule is kept in step 2", [STEP2_INSTRUCTIONS.includes("A REPLY IS AN OPEN ITEM EVEN WITH NO TASK: when a PERSON (not a system) writes to him personally"), STEP2_INSTRUCTIONS.includes("a PERSON writing to him personally is still owed the courteous reply above")], [true, true]);
+  t("AI-13 someone else's timecard approval is timekeeping, in the email and the Teams blocks", [STEP2_INSTRUCTIONS.includes("approval requests about someone else's timecard or timesheet"), TEAMS_INSTRUCTIONS.includes("approval requests about someone else's timecard or timesheet")], [true, true]);
+  // The version bump forces a re-judge: verdicts stored at the old versions are not "judged", the new ones are.
+  const store = new Map<string, ActionVerdict>([
+    ["email\u0000old-none", { ...verdictFor(TABLE[0]), key: "e-old|1", inputVersion: undefined }],
+    ["email\u0000old-1", { ...verdictFor(TABLE[0]), key: "e-v1|1", inputVersion: 1 }],
+    ["teams\u0000old-2", { ...verdictFor(TABLE[0]), key: "t-v2|1", inputVersion: 2 }],
+    ["email\u0000cur", { ...verdictFor(TABLE[0]), key: "e-cur|1" }],
+    ["teams\u0000cur", { ...verdictFor(TABLE[0]), key: "t-cur|1", inputVersion: CLASSIFIER_INPUT_VERSION.teams }],
+  ]);
+  t("AI-14 GUARD: the version bump forces a re-judge (email < 2, teams < 3 are not current; the new versions are)", [CLASSIFIER_INPUT_VERSION, [...currentlyJudgedKeys(store)].sort()], [{ email: 2, teams: 3 }, ["e-cur|1", "t-cur|1"]]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
