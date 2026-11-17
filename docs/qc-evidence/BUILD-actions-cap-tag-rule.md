@@ -168,3 +168,47 @@ Tests: actions-view H-3 (changed: expected default 150 -> 500), CAP-1..CAP-5; ac
 change, so if the owner ever saved a What-shows setting before this deploy, his row holds `dailyCap: 150`
 explicitly and he stays at 150 (CAP-1 pins that a stored value wins). It cannot be told apart from a 150 he chose.
 The notice tells him where to change it; the live row was not read (no DB access from this session).
+
+## Step 5 -- mutation proofs (`mutate.sh`, anchors and replacements from files, exit code read)
+
+Every new guard: the defect reinstated, the named test must FAIL; then mutate.sh's comment-only control must PASS.
+All 20 runs: exit 0, `FIRED (control EQUIVALENT)`, file restored to HEAD, tree clean afterwards. None INERT, none
+NOT-APPLIED.
+
+| id | file | defect reinstated | test that must fail | result |
+|---|---|---|---|---|
+| M1 | report-from-ledger.ts | `groupOnly = false` (old rule: every unresolved mention shows) | MK-R11 tag mention -> HIDE | FIRED, control EQUIVALENT |
+| M1a | report-from-ledger.ts | same, through the Actions path | MK-A1 Actions: tag/team/channel-only chat is NOT a unit | FIRED, control EQUIVALENT |
+| M2 | report-from-ledger.ts | drop `chatWideMention === false` | MK-S4 groupMentionOnly true, chatWideMention absent -> SHOW | FIRED, control EQUIVALENT |
+| M3 | report-from-ledger.ts | return before the bad-user-id check | MK-S5 groupMentionOnly + empty user id -> SHOW | FIRED, control EQUIVALENT |
+| M4 | teams-log.ts | @Everyone classified as group | MK-R5 @Everyone -> SHOW | FIRED, control EQUIVALENT |
+| M5 | teams-log.ts | accept two non-null variants | MK-R14 tag AND conversation -> SHOW | FIRED, control EQUIVALENT |
+| M6 | teams-log.ts | drop the non-empty-id check | MK-R12 tag with empty / missing id -> SHOW | FIRED, control EQUIVALENT |
+| M7 | teams-log.ts | `<at id>` of a classified mention not explained | MK-R18 `<at id=0>` matched by a tag -> HIDE | FIRED, control EQUIVALENT |
+| M8 | teams-log.ts | unexplained `<at>` not marked unknown | MK-R17 `<at>` with no entry -> SHOW | FIRED, control EQUIVALENT |
+| M9 | teams-log.ts | unknown kinds (app) not marked unknown | MK-R4 application -> SHOW | FIRED, control EQUIVALENT |
+| M10 | teams-log.ts | any conversation type = group | MK-R8 unknownFutureValue -> SHOW | FIRED, control EQUIVALENT |
+| M11 | source-item.ts | `teamsContent` drops groupMentionOnly | MK-P2 stored content carries the flags | FIRED, control EQUIVALENT |
+| M11b | teams-log.ts | parser does not store groupMentionOnly | MK-R11 (end to end) | FIRED, control EQUIVALENT |
+| M12 | actions.ts | `<` -> `<=` (notice one call late) | CAP-2 at the cap: exact notice | FIRED, control EQUIVALENT |
+| M12b | actions.ts | same | CAP-4 notice iff classifyCallsLeft = 0 | FIRED, control EQUIVALENT |
+| M13 | actions.ts | notice even with sorting off | CAP-3 | FIRED, control EQUIVALENT |
+| M14 | actions.server.ts | page reads a constant 0, not the heartbeat's count | CAP-S1 (real page read + SQL) | FIRED, control EQUIVALENT |
+| M14b | actions.server.ts | page compares to a literal 500, not the owner's cap | CAP-S1 | FIRED, control EQUIVALENT |
+| M15 | actions.ts | default back to 150 | CAP-1 | FIRED, control EQUIVALENT |
+| M16 | ActionsView.tsx | notice never rendered | CAP-5 (source check; there is no DOM test harness for this view offline) | FIRED, control EQUIVALENT |
+
+## Step 6 -- final counts
+
+| check | before (80a7cf0e) | after |
+|---|---|---|
+| `bun scripts/actions-view.test.ts` | 82 / 0 | 90 pass / 0 fail |
+| `bun scripts/actions-view-server.test.ts` | 26 / 0 | 28 pass / 0 fail |
+| `bun scripts/report-from-ledger.test.ts` | 62 / 0 | 103 pass / 0 fail |
+| `bun scripts/correspondence-ingest.test.ts` | 186 / 0 | 186 pass / 0 fail |
+| `bun scripts/fireflies-list.test.ts` | 9 / 0 | 9 pass / 0 fail |
+| `npx tsc --noEmit` | -- | exit 0 |
+| `npm run build` | -- | exit 0 |
+
+NOT done here (by instruction): no merge, no PR, no workflow dispatch, no live/UAT check. The notice's look in the
+real app (light and dark) is unverified in a browser.
