@@ -321,6 +321,7 @@ Return STRICT JSON: {"assignments":[{"id","assigned_agent","tags":[],"priority",
         15000,
         "grooming classification",
       );
+      void import("../ai-quota/hooks").then((q) => q.reportAiResponse(res)).catch(() => {}); // 2026-11-17 quota alert
       if (!res.ok) return [];
       const j = (await res.json()) as { choices?: { message?: { content?: string } }[] };
       try {
