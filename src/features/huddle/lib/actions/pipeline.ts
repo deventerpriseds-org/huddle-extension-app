@@ -26,7 +26,7 @@ import {
   teamsQuoteHaystack,
   type ActionVerdict,
 } from "../correspondence/action-classify";
-import type { ConversationFacts } from "../correspondence/needs-you";
+import { personNameWordCount, type ConversationFacts } from "../correspondence/needs-you";
 import { foldPersonName, normTeamsId, type AssembledLedgerPlan, type LedgerReportRow, type MeetingItems, type TeamsChatFacts } from "../correspondence/report-from-ledger";
 import type { EmailContent } from "../correspondence/source-item";
 import { FEED_ID_PREFIX } from "../external-feeds/onedrive-feed";
@@ -325,7 +325,7 @@ export function buildCandidates(a: {
         display: {
           title: p?.title ?? current?.todo ?? (c.chatName || lo.name),
           who: lo.name,
-          sourceLabel: teamsSourceLabel(c, a.assembled.ctx.ownerNames),
+          sourceLabel: teamsSourceLabel(c, a.assembled.ctx.ownerFullNames ?? []),
           reasonLine: current?.reason ?? null,
           quote: current?.quote ?? null,
           due: current?.due ?? null,
@@ -389,7 +389,8 @@ export function buildCandidates(a: {
  *  untitled group chat after its members) is labelled "Teams group chat", never with the owner's name. */
 export function teamsSourceLabel(c: Pick<TeamsChatFacts, "kind" | "chatName">, ownerNames: readonly string[]): string {
   if (c.kind === "one_on_one") return "Teams 1:1";
-  const own = new Set(ownerNames.map(foldPersonName).filter(Boolean));
+  // Loop-2 D-3: FULL names only (ownerFullNames); a chat named after a bare first name keeps its name.
+  const own = new Set(ownerNames.filter((n) => personNameWordCount(n) >= 2).map(foldPersonName).filter(Boolean));
   const name = c.chatName && !own.has(foldPersonName(c.chatName)) ? c.chatName : null;
   return name ? `Teams, ${name}` : c.chatName ? "Teams group chat" : "Teams";
 }

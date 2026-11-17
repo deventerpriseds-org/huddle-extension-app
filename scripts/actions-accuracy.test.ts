@@ -17,6 +17,7 @@ import {
   TEAMS_INSTRUCTIONS,
   teamsQuoteHaystack,
 } from "../src/features/huddle/lib/correspondence/action-classify";
+import { ownerFullNames } from "../src/features/huddle/lib/correspondence/needs-you";
 import { assembleLedgerPlan, foldPersonName, ownerTeamsIdsAcross, teamsChatsFromLedger, type LedgerReportRow } from "../src/features/huddle/lib/correspondence/report-from-ledger";
 import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { teamsSourceItemId, type TeamsContent } from "../src/features/huddle/lib/correspondence/source-item";
@@ -232,6 +233,33 @@ void GRP;
   t("R7-5 the re-judged verdict passes the settled guard (owner wrote last): a reply he already gave is not owed", [rep.nv?.status, rep.nv?.answeredByReply], ["none", true]);
   t("R7-6 a current-version verdict is reused (no call); a verdict for an older item key is not", [currentlyJudgedKeys(new Map([[storeKey, nv!]])).has(u.itemKey), verdictIsCurrent({ ...nv!, key: "teams:x|old" }, u.itemKey, "teams")], [true, false]);
   t("R7-7 email verdicts without inputVersion stay current (email version not bumped)", verdictIsCurrent({ key: "e|1" }, "e|1", "email"), true);
+}
+
+// ── R8. LOOP-2 D-3: owner FULL names from config, never a bare first name ──────────────────────────
+{
+  const full = ownerFullNames({ mailbox: "owen.example@work.example", ownerLogins: ["owen.example@huddle.example"] });
+  t("R8-1 ownerFullNames: 'first.last' login/mailbox -> 'First Last'; config names need two words; no config -> login only", [full, ownerFullNames({ ownerLogins: ["oexample@x.example"], correspondence: { ownerNames: ["Owen", "Example, Owen", "Owen  Example"] } })], [["Owen Example"], ["Example, Owen", "Owen Example"]]);
+  // The live default: NO correspondence.ownerNames, login first.last. No owner id anywhere (last resort applies).
+  const cfgDefault = parseFeedsConfig(JSON.stringify({ enabled: true, synthetic: false, driveUser: MAILBOX, mailbox: MAILBOX, ownerLogins: ["owen.example@huddle.example"], teams: {} }))!;
+  const ownLF = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: OWNER_ID, name: "Example, Owen", isApp: false }, text: "Synthetic owner line" });
+  const asm3 = assembleLedgerPlan({ rows: [ask, ownLF], proposals: [], bell: [] }, cfgDefault, Date.parse("2026-11-09T05:00:00Z"));
+  t("R8-2 GUARD: default config (no ownerNames): 'Example, Owen' is recognised as the owner via the login's full name", asm3.plan.teams.scan.concat(asm3.plan.teams.hiddenUninvolved).find((c) => c.chatId === ONE)?.messages.map((m) => m.speaker), ["OTHER", "OWNER"]);
+  const sameFirst = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: "near-guid", name: "Owen Other", isApp: false } });
+  const bare = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: "bare-guid", name: "Owen", isApp: false } });
+  t(
+    "R8-3 GUARD: a bare first-name match never marks the sender as the owner (configured 'Owen'; senders 'Owen' and 'Owen Other')",
+    [teamsChatsFromLedger([ask, bare], [], ["Owen"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), teamsChatsFromLedger([ask, sameFirst], [], ["Owen", "Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker)],
+    [["OTHER", "OTHER"], ["OTHER", "OTHER"]],
+  );
+  t(
+    "R8-4 label: a group chat named 'Example, Owen' -> 'Teams group chat' with the full name; a chat named just 'Owen' keeps its name",
+    [teamsSourceLabel({ kind: "group", chatName: "Example, Owen" }, full), teamsSourceLabel({ kind: "group", chatName: "Owen" }, ["Owen", ...full])],
+    ["Teams group chat", "Teams, Owen"],
+  );
+  const grpRow = row({ chatId: GRP, chatName: "Example, Owen", messageId: "g1", at: "2026-11-16T11:00:00Z", text: "Synthetic group line", mentionedUserIds: [OWNER_ID] });
+  const asm4 = assembleLedgerPlan({ rows: [older, grpRow], proposals: [], bell: [] }, cfgDefault, Date.parse("2026-11-09T05:00:00Z"));
+  const g = buildCandidates({ assembled: asm4, rows: [older, grpRow], settings: { ...ACTIONS_SETTINGS_DEFAULT, hideUninvolvedChats: false }, verdicts: new Map(), proposals: new Map(), meetingProposals: [], replies: [], isDraftable: () => false }).candidates.find((c) => c.itemKey.startsWith(`teams:${GRP}`));
+  t("R8-5 end to end with the default config: the group chat named after the owner is labelled 'Teams group chat'", g?.display.sourceLabel, "Teams group chat");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

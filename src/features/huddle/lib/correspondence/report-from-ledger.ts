@@ -23,6 +23,8 @@ import {
   emailConversationKey,
   groupEmailConversations,
   ownerAddressSet,
+  ownerFullNames,
+  personNameWordCount,
   type ConversationFacts,
   type NeedsYouContext,
 } from "./needs-you";
@@ -292,7 +294,8 @@ export function ownerTeamsIdsAcross(rows: readonly LedgerReportRow[], configured
   for (const id of configuredOwnerIds ?? []) if (normTeamsId(id)) ids.add(normTeamsId(id));
   for (const c of contents) if (normTeamsId(c?.ownerUserId)) ids.add(normTeamsId(c.ownerUserId));
   if (!ids.size) {
-    const names = new Set((ownerNames ?? []).map(foldPersonName).filter(Boolean));
+    // Loop-2 D-3: FULL names only (two or more name words). A bare first name never marks a sender as the owner.
+    const names = new Set((ownerNames ?? []).filter((n) => personNameWordCount(n) >= 2).map(foldPersonName).filter(Boolean));
     for (const c of contents) {
       const sid = normTeamsId(c?.sender?.id);
       if (sid && c?.sender?.isApp !== true && names.has(foldPersonName(c?.sender?.name))) ids.add(sid);
@@ -617,9 +620,9 @@ export function assembleLedgerPlan(
   sinceMs: number,
 ): AssembledLedgerPlan {
   const sent = sentFromLedger(data.rows);
-  const ctx: NeedsYouContext = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), latestSent: latestSentByConversation(sent), sentKnown: sent.length > 0 };
+  const ctx: NeedsYouContext = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), ownerFullNames: ownerFullNames(cfg), latestSent: latestSentByConversation(sent), sentKnown: sent.length > 0 };
   const emailFacts = [...groupEmailConversations(cfg.mailbox, emailMessagesFromLedger(data.rows))].map(([k, msgs]) => conversationFacts(k, msgs, ctx));
-  const teams = teamsChatsFromLedger(data.rows, cfg.teams.ownerSenderIds, ctx.ownerNames);
+  const teams = teamsChatsFromLedger(data.rows, cfg.teams.ownerSenderIds, ctx.ownerFullNames ?? []);
   const meetings = meetingItemsFromLedger(data.rows, data.proposals);
   const signals = resolutionSignals(data.proposals, data.bell, messageLookup(data.rows, cfg.mailbox), cfg.mailbox);
   const fw = forwardsFromLedger(data.rows);

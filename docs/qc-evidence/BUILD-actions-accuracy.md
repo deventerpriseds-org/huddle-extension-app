@@ -104,3 +104,16 @@ Source of the defects: `docs/qc-evidence/VERIFY-actions-accuracy-2.md` on `claud
 - TESTS: R6-1 (rewritten: sender id instead of name), R6-2 (expectation REVERSED by this defect: shared proposal
   -> two rows), R6-5 short generic quote -> two rows, R6-6 name without id -> two rows, R6-7 same chat -> one,
   R6-8 end to end through buildCandidates (Pat's two copies -> one; Sam's identical ask on the same proposal stays).
+
+### D-3 (MEDIUM): owner name matching uses FULL names from config, never a bare first name
+
+- CHANGE: `ownerFullNames(cfg)` (needs-you.ts): every configured `correspondence.ownerNames` entry with two or more
+  name words, plus each owner login / the mailbox whose local part is `first.last` -> "First Last". Config only; no
+  identity in code. `assembleLedgerPlan` puts it on `ctx.ownerFullNames`; the Teams display-name last resort
+  (`ownerTeamsIdsAcross`) and the "Teams group chat" label (`teamsSourceLabel`) read it, and both ignore any
+  one-word name. Folding ("Last, First" -> "first last") makes both forms match.
+- BEHAVIOUR: with no `ownerNames` configured, "Last, First" of the owner now matches (login first.last); a sender
+  named only by the owner's first name, or with his first name and another last name, is never the owner; a chat
+  named after a bare first name keeps its name. `effectiveOwnerNames` (model context, meeting headings) unchanged.
+- TESTS: R8-1..R8-5 (derivation; default config recognises "Last, First"; bare / same-first-name never owner;
+  label; label end to end with the default config).
