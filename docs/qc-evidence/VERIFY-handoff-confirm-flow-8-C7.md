@@ -33,4 +33,11 @@ Kept correctly: U8-6 (`saved "Blocked payments analysis"` -- leading `saved` sto
 - M8-1 confirm_task_intent `DoD confirmed, journey write failed: 500` + "I've moved it to Doing." correctly rewritten.
 
 ### 4. Suite + mutation
-(see below)
+- `npm run -s test:board-claims` at cee02ab3: 72 pass / 0 fail. The suite does not contain a real flag_blocker summary (`blocked: ...`)
+  as backing, so it is green over the U8-1..3 defect.
+- Full multi-suite re-run (tsc, lane-a/b, not-ai-task, one-request, mode, router): NOT REACHED (budget).
+- Mutation of a guard via mutate.sh: NOT REACHED (budget).
+- C1 skip radius (isPerformedWork/agentPerformedWork): NOT REACHED. Observation only: isPerformedWork does not use HUDDLE_TASK_TOOLS,
+  so the flag_blocker defect does not reach it; a create_artifact named with "failed" still counts there (detail-based).
+
+LOOP-8-C7-COMPLETE
