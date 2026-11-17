@@ -261,8 +261,42 @@ export interface TeamsChatFacts {
   newestMs: number;
 }
 
-/** Pure: stored Teams rows -> one facts object per chat (every stored message, oldest first). */
-export function teamsChatsFromLedger(rows: readonly LedgerReportRow[], configuredOwnerIds: readonly string[] = []): TeamsChatFacts[] {
+/** Pure: a display name folded for comparison: lower-case, whitespace collapsed, and "Last, First" turned into
+ *  "first last" (Teams shows many tenants' names as "Last, First"). */
+export function foldPersonName(v: unknown): string {
+  const s = typeof v === "string" ? v.trim().replace(/\s+/g, " ").toLowerCase() : "";
+  const m = /^([^,]+),\s*([^,]+)$/.exec(s);
+  return m ? `${m[2].trim()} ${m[1].trim()}` : s;
+}
+
+/**
+ * Pure (2026-11-17, owner report "the sender and receiver are wrong"): THE OWNER'S TEAMS IDS ACROSS EVERY STORED
+ * TEAMS ROW -- the configured ids plus every row's line `ownerUserId`, through normTeamsId. It used to be built PER
+ * CHAT, so a chat whose own rows carried no `ownerUserId` had NO owner id, and the owner's own message was labelled
+ * OTHER and judged as someone asking him (live probe 2026-11-17: 37 of 69 recent messages were the owner's, none
+ * carried the id). The owner is one person, so an id seen on any of his capture lines is his everywhere.
+ * LAST RESORT, only when no id is known at all: a sender whose display name (foldPersonName) is one of the owner's
+ * configured names contributes its sender ID; ids decide everything after that. App senders never count.
+ */
+export function ownerTeamsIdsAcross(rows: readonly LedgerReportRow[], configuredOwnerIds: readonly string[] = [], ownerNames: readonly string[] = []): string[] {
+  const contents: TeamsContent[] = [];
+  for (const r of rows) if (r?.source === "teams" && r.content?.kind === "teams") contents.push(r.content as TeamsContent);
+  const ids = new Set<string>();
+  for (const id of configuredOwnerIds ?? []) if (normTeamsId(id)) ids.add(normTeamsId(id));
+  for (const c of contents) if (normTeamsId(c?.ownerUserId)) ids.add(normTeamsId(c.ownerUserId));
+  if (!ids.size) {
+    const names = new Set((ownerNames ?? []).map(foldPersonName).filter(Boolean));
+    for (const c of contents) {
+      const sid = normTeamsId(c?.sender?.id);
+      if (sid && c?.sender?.isApp !== true && names.has(foldPersonName(c?.sender?.name))) ids.add(sid);
+    }
+  }
+  return [...ids];
+}
+
+/** Pure: stored Teams rows -> one facts object per chat (every stored message, oldest first). The owner's ids are
+ *  taken across ALL the rows given (ownerTeamsIdsAcross), never per chat. */
+export function teamsChatsFromLedger(rows: readonly LedgerReportRow[], configuredOwnerIds: readonly string[] = [], ownerNames: readonly string[] = []): TeamsChatFacts[] {
   const byChat = new Map<string, { id: string; c: TeamsContent }[]>();
   for (const r of rows) {
     if (r.source !== "teams" || r.content?.kind !== "teams") continue;
@@ -271,12 +305,13 @@ export function teamsChatsFromLedger(rows: readonly LedgerReportRow[], configure
     if (!k) continue;
     (byChat.get(k) ?? byChat.set(k, []).get(k)!).push({ id: r.sourceItemId, c });
   }
+  const ownerIdsAll = ownerTeamsIdsAcross(rows, configuredOwnerIds, ownerNames);
   const out: TeamsChatFacts[] = [];
   for (const [chatId, list] of byChat) {
     // Finding 2: one bad row can never abort the report -- a chat whose facts cannot be built SHOWS, with the
     // defensively-built facts below.
     try {
-      out.push(chatFacts(chatId, list, configuredOwnerIds));
+      out.push(chatFacts(chatId, list, ownerIdsAll));
     } catch {
       out.push(malformedChatFacts(chatId, list));
     }
@@ -577,7 +612,7 @@ export function assembleLedgerPlan(
   const sent = sentFromLedger(data.rows);
   const ctx: NeedsYouContext = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), latestSent: latestSentByConversation(sent), sentKnown: sent.length > 0 };
   const emailFacts = [...groupEmailConversations(cfg.mailbox, emailMessagesFromLedger(data.rows))].map(([k, msgs]) => conversationFacts(k, msgs, ctx));
-  const teams = teamsChatsFromLedger(data.rows, cfg.teams.ownerSenderIds);
+  const teams = teamsChatsFromLedger(data.rows, cfg.teams.ownerSenderIds, ctx.ownerNames);
   const meetings = meetingItemsFromLedger(data.rows, data.proposals);
   const signals = resolutionSignals(data.proposals, data.bell, messageLookup(data.rows, cfg.mailbox), cfg.mailbox);
   const fw = forwardsFromLedger(data.rows);

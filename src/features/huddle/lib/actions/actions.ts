@@ -132,12 +132,16 @@ export function sinceMondayMs(nowMs: number, tz: string): number {
 
 // ── CORRECTIONS (Wrong?) ─────────────────────────────────────────────────────────────────────────────
 
-export const CORRECTION_REASONS = ["not_mine", "already_handled", "not_an_action", "wrong_section", "stop_list"] as const;
+// 2026-11-17 (owner: "there is no good option for when the information is just ai inaccuracy"): `ai_misread` is
+// ADDED for a summary that is wrong, a reversed sender, or an ask that is not in the message. Additive: the earlier
+// reasons and their stored values are unchanged; it rides the same store (owner_correction) and ledger mirror.
+export const CORRECTION_REASONS = ["not_mine", "already_handled", "not_an_action", "ai_misread", "wrong_section", "stop_list"] as const;
 export type CorrectionReason = (typeof CORRECTION_REASONS)[number];
 export const CORRECTION_LABEL: Record<CorrectionReason, string> = {
   not_mine: "Not mine to do",
   already_handled: "Already handled",
   not_an_action: "Not an action",
+  ai_misread: "AI misread it",
   wrong_section: "Wrong section",
   stop_list: "Stop flagging this list",
 };
