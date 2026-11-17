@@ -1,0 +1,17 @@
+PASS V3-D4c 5 rounds of concurrent Wrong?/Wrong? then Undo/Wrong? on two chats sharing one proposal: no lost update
+PASS V3-D2c 25 concurrent recordActionCall on one row -> 25 counted for the day
+[actions] classify calls=2 open=1 none=0 not_checked=1 failures=0 over_cap=0 already=0 meeting_rows=0 uninvolved_skipped=0 used_today=27/100
+O1 pass1 {"calls":2,"open":1,"none":0,"notChecked":1,"failures":0,"overCap":0,"alreadyJudged":0,"meetingRows":0,"uninvolvedSkipped":0}
+O1 page after pass1 {"status":"ok","keys":["status","sinceIso","settings","classifyOn","neverClassified","meetingOthersHidden","rows","answered","corrected","counts","sectionCounts","hidden","notChecked"],"items":"null","hidden":{"total":0,"categories":{},"uninvolved":0,"sources":0,"senders":0},"notChecked":1,"counts":{"all":1,"email":0,"teams":1,"meeting":0}}
+O1 proposals after pass1 [{"id":"prop-0a43f41","state":"proposed","norm":"send the synthetic budget sheet"}]
+O1 page after Dismiss {"status":"ok","keys":["status","sinceIso","settings","classifyOn","neverClassified","meetingOthersHidden","rows","answered","corrected","counts","sectionCounts","hidden","notChecked"],"items":"null","hidden":{"total":0,"categories":{},"uninvolved":0,"sources":0,"senders":0},"notChecked":1,"counts":{"all":0,"email":0,"teams":0,"meeting":0}}
+[actions] classify calls=1 open=1 none=0 not_checked=0 failures=0 over_cap=0 already=1 meeting_rows=0 uninvolved_skipped=0 used_today=28/100
+O1 pass2 {"calls":1,"open":1,"none":0,"notChecked":0,"failures":0,"overCap":0,"alreadyJudged":1,"meetingRows":0,"uninvolvedSkipped":0} model calls this pass 1
+O1 stored verdict for the follow-up {"v":1,"at":"2026-11-16T16:10:01.000Z","due":"Friday","key":"teams:19:v3f_x@unq.gbl.spaces|19%3Av3f_x%40unq.gbl.spaces:2","kind":"action","todo":"Send the synthetic budget sheet","quote":"send the synthetic budget sheet by Friday","reason":"Pat asked for it","status":"open","onBoard":true,"category":"person_request","confidence":"high","proposalId":null,"answeredByReply":false}
+O1 page after follow-up {"status":"ok","keys":["status","sinceIso","settings","classifyOn","neverClassified","meetingOthersHidden","rows","answered","corrected","counts","sectionCounts","hidden","notChecked"],"items":"null","hidden":{"total":0,"categories":{},"uninvolved":0,"sources":0,"senders":0},"notChecked":1,"counts":{"all":0,"email":0,"teams":0,"meeting":0}}
+PASS V3-O1 follow-up after Dismiss: verdict open, onBoard true, no proposal (suppressed)
+O2 after edit {"content_hash":"f2-edited","t":"Never mind, all sorted now, thanks.","q":"send the synthetic budget sheet by Friday","k":"teams:19:v3f_x@unq.gbl.spaces|19%3Av3f_x%40unq.gbl.spaces:2"} pass {"calls":0,"open":0,"none":0,"notChecked":0,"failures":0,"overCap":0,"alreadyJudged":2,"meetingRows":0,"uninvolvedSkipped":0} model calls 0
+PASS V3-O2 edited latest message: row shows new text + new hash, old verdict (old quote) kept, NOT re-judged
+O2 page {"status":"ok","keys":["status","sinceIso","settings","classifyOn","neverClassified","meetingOthersHidden","rows","answered","corrected","counts","sectionCounts","hidden","notChecked"],"items":"null","hidden":{"total":0,"categories":{},"uninvolved":0,"sources":0,"senders":0},"notChecked":1,"counts":{"all":0,"email":0,"teams":0,"meeting":0}}
+
+4 passed, 0 failed
