@@ -62,10 +62,9 @@ Other runs, which make no model calls:
 - onedrive-feed-flags: 2 runs
 
 **Observed:**
-- Successful proposals-preview model calls in the window total 17 + 80 + 137 + 128 = **362 small calls**, all on
-  UTC 11-15 and early UTC 11-16.
-- The 7 Actions-side calls that are visible on UTC 11-16 are the 137 and the 128. The 148 and 35 failures come
-  later.
+- Successful proposals-preview model calls in the window total 17 + 80 + 137 + 128 = **362 small calls**.
+- 97 of those calls fall on UTC 11-15. The other **265** (the 137 and the 128) fall on UTC 11-16, between 03:14 and
+  03:41. The later 148 + 35 + 35 calls all failed.
 - **The first 429 seen in any Actions log is at 11-17 00:37 UTC (11-16 19:37 ET).** By then the quota was already
   exhausted.
 - The quota was usable again by 11-17 03:31 UTC.
