@@ -75,6 +75,10 @@ export interface TeamsContent {
   ownerUserId?: string;
   /** 2026-11-16: is the owner among mentionedUserIds (present only when both are known). */
   mentionsOwner?: boolean;
+  /** Verifier loop 1 (finding 1): a mention named no comparable user (@Everyone / chat, tag, app, team, channel,
+   *  empty or malformed entry, or a body <at> tag with no matching user mention) -- the owner MAY be addressed.
+   *  Present whenever mentionedUserIds is (rows stored before 2026-11-16 evening lack it). */
+  unresolvedMention?: boolean;
 }
 
 export interface TranscriptContent {
@@ -114,6 +118,8 @@ export interface TeamsMessage {
   ownerUserId?: string;
   /** Owner among the mentioned users (present only when the mention list and an owner id are both known). */
   mentionsOwner?: boolean;
+  /** A mention that names no comparable user (see TeamsContent.unresolvedMention). */
+  unresolvedMention?: boolean;
 }
 
 export interface SourceItem {
@@ -195,6 +201,7 @@ export function teamsContent(m: TeamsMessage): TeamsContent {
     ...(m.mentionedUserIds ? { mentionedUserIds: [...m.mentionedUserIds] } : {}),
     ...(m.ownerUserId ? { ownerUserId: m.ownerUserId } : {}),
     ...(typeof m.mentionsOwner === "boolean" ? { mentionsOwner: m.mentionsOwner } : {}),
+    ...(typeof m.unresolvedMention === "boolean" ? { unresolvedMention: m.unresolvedMention } : {}),
   };
 }
 

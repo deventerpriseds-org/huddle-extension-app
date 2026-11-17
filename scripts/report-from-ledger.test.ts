@@ -14,6 +14,7 @@ import {
   emailMessagesFromLedger,
   forwardsFromLedger,
   inReportWindow,
+  normTeamsId,
   meetingItemsFromLedger,
   messageLookup,
   planLedgerReport,
@@ -214,6 +215,127 @@ const tc = teamsContent(parsed.messages[0]);
 t("TP-2 stored Teams content carries the new fields; the content hash is unchanged by them", [tc.mentionedUserIds, tc.ownerUserId, teamsSourceItem(parsed.messages[0], { path: "/t" }).contentHash === teamsSourceItem({ ...parsed.messages[0], mentionedUserIds: undefined, ownerUserId: undefined }, { path: "/t" }).contentHash], [["owner-guid-0001"], OWNER, true]);
 const viaParser = teamsChatsFromLedger(parsed.messages.map((m) => ({ source: "teams" as const, sourceItemId: m.messageId, threadId: m.chatId, at: m.at, content: teamsContent(m) })));
 t("TP-3 end to end: parsed line -> stored content -> the chat shows because the owner was @mentioned", viaParser[0].involvement.reason, "owner_mentioned");
+
+// ── Verifier report-from-ledger-1, finding 1: a mention that names no comparable user (@Everyone, tag, app, team,
+//    channel) MAY address the owner -> the chat SHOWS (fail open). Synthetic ids only.
+const pmsg = (id: string, o: Record<string, unknown>) => ({ id, createdDateTime: "2026-11-10T14:00:00Z", from: { user: { id: "other-guid", displayName: "Pat Example" } }, body: { contentType: "html", content: "Please send the synthetic numbers" }, ...o });
+const parseOne = (o: Record<string, unknown>) => parseTeamsLog(line([pmsg("1", o)]), cfg).messages[0];
+const everyone = { body: { contentType: "html", content: '<at id="0">Everyone</at> please send the synthetic numbers by Friday' }, mentions: [{ id: 0, mentionText: "Everyone", mentioned: { conversation: { id: CHAT_G, displayName: "Everyone", conversationIdentityType: "chat" } } }] };
+const pe = parseOne(everyone);
+t("VF1-1 parser: @Everyone (conversation mention) -> no user ids, unresolvedMention true", [pe.mentionedUserIds, pe.unresolvedMention], [[], true]);
+t(
+  "VF1-2 parser: tag / application / team / channel mentions -> unresolvedMention true",
+  [{ tag: { id: "tag-1", displayName: "Leads" } }, { application: { id: "app-1" } }, { team: { id: "team-1" } }, { channel: { id: "chan-1" } }].map((mentioned) => parseOne({ mentions: [{ id: 0, mentioned }] }).unresolvedMention),
+  [true, true, true, true],
+);
+t(
+  "VF1-3 parser: a resolved user mention whose <at> id matches, and an empty list with no <at>, -> unresolvedMention false",
+  [parseOne({ body: { contentType: "html", content: '<at id="0">Pat</at> ok?' }, mentions: [{ id: 0, mentioned: { user: { id: "user-guid-0002" } } }] }).unresolvedMention, parseOne({ mentions: [] }).unresolvedMention],
+  [false, false],
+);
+t("VF1-4 parser: body <at> tag with no matching user mention -> unresolvedMention true", [parseOne({ body: { contentType: "html", content: '<at id="0">Someone</at> ok?' }, mentions: [] }).unresolvedMention, parseOne({ body: { contentType: "html", content: '<at id="3">Someone</at> ok?' }, mentions: [{ id: 0, mentioned: { user: { id: "user-guid-0002" } } }] }).unresolvedMention], [true, true]);
+const evChats = teamsChatsFromLedger([pe].map((m) => ({ source: "teams" as const, sourceItemId: m.messageId, threadId: m.chatId, at: m.at, content: teamsContent(m) })));
+const evPlan = planLedgerReport({ emailFacts: [], teams: evChats, meetings: [], signals: [], sinceMs: SINCE });
+t(
+  "VF1-5 end to end: an @Everyone ask in a group chat the owner never wrote in is SCANNED, not hidden; ownerMentioned unknown",
+  [evPlan.teams.hiddenUninvolved.length, evPlan.teams.scan.length, evChats[0].involvement.reason, evChats[0].ownerMentioned, evPlan.teams.cantTell],
+  [0, 1, "owner_maybe_mentioned", null, 1],
+);
+t("VF1-6 stored unresolvedMention true -> shows; stored false with [] -> still hidden (rule unchanged)", [chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), unresolvedMention: true }]).reason, chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), unresolvedMention: false }]).reason], ["owner_maybe_mentioned", "uninvolved"]);
+t(
+  "VF1-7 legacy row (no flag): an <at> tag left in the stored text with no stored user mention -> shows; without one -> unchanged (hidden)",
+  [chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), text: "hi <at>Everyone</at> please" }]).reason, chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent) }]).reason],
+  ["owner_maybe_mentioned", "uninvolved"],
+);
+t("VF1-8 the content hash is unchanged by unresolvedMention (nothing re-processes)", teamsSourceItem(pe, { path: "/t" }).contentHash === teamsSourceItem({ ...pe, unresolvedMention: undefined, mentionedUserIds: undefined }, { path: "/t" }).contentHash, true);
+t("VF1-9 stored content carries unresolvedMention", teamsContent(pe).unresolvedMention, true);
+
+// ── Finding 4: a mention with an empty / non-string user id, a null mention entry, or a tag mention is UNKNOWN
+//    (someone was mentioned, we cannot tell who) -> the chat shows. Parser side and stored side.
+t(
+  "VF4-1 parser: user id empty / whitespace / numeric, a null entry, an entry with no `mentioned`, a tag -> unresolvedMention true",
+  [[{ id: 0, mentioned: { user: { id: "" } } }], [{ id: 0, mentioned: { user: { id: "   " } } }], [{ id: 0, mentioned: { user: { id: 9 } } }], [null], [{ id: 0 }], [{ id: 0, mentioned: { tag: { id: "tag-1" } } }]].map((mentions) => parseOne({ mentions }).unresolvedMention),
+  [true, true, true, true, true, true],
+);
+const p4 = parseOne({ mentions: [null] });
+t("VF4-2 parser -> ledger end to end: a null mention entry in a group chat the owner never wrote in -> SHOWS", chatInvolvement(CHAT_G, [teamsContent(p4)]).reason, "owner_maybe_mentioned");
+t(
+  "VF4-3 stored (older writer, no flag): an empty-string / whitespace / null / numeric entry in mentionedUserIds -> SHOWS",
+  [[""], ["  "], [null], [7], ["user-guid-0002", ""]].map((ids) => chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), mentionedUserIds: ids as string[] }]).reason),
+  ["owner_maybe_mentioned", "owner_maybe_mentioned", "owner_maybe_mentioned", "owner_maybe_mentioned", "owner_maybe_mentioned"],
+);
+t("VF4-4 a stored list of real, non-owner user ids is still 'nobody we care about' -> hidden (rule unchanged)", chatInvolvement(CHAT_G, [{ ...(g1[0].content as TeamsContent), mentionedUserIds: ["user-guid-0002"] }]).reason, "uninvolved");
+
+// ── Finding 5: chatInvolvement and teamsChatsFromLedger use ONE owner-id normaliser (trim + lower-case), so the
+//    involvement verdict and the facts handed to the model (who is OWNER, settled, ownerMentioned) always agree.
+t("VF5-1 normTeamsId: trim + lower-case; non-string -> ''", [normTeamsId("  OWNER-Guid-0001 "), normTeamsId(null), normTeamsId(9), normTeamsId(undefined)], [OWNER, "", "", ""]);
+const f5 = (rows: LedgerReportRow[], cfgIds: string[] = []) => {
+  const c = teamsChatsFromLedger(rows, cfgIds)[0];
+  return [c.involvement.reason, c.messages.map((m) => m.speaker), c.settled, c.ownerMentioned];
+};
+const askThenOwner = (o1: Partial<TeamsContent>, o2: Partial<TeamsContent>) => [tmsg(CHAT_G, "q", "2026-11-10T10:00:00Z", o1), tmsg(CHAT_G, "a", "2026-11-10T11:00:00Z", { fromOwner: null, ...o2 })];
+t(
+  "VF5-2 stored ownerUserId upper-case (non-parser writer): the owner's reply is OWNER and the chat is settled, matching owner_sent",
+  f5(askThenOwner({ ownerUserId: OWNER.toUpperCase() }, { ownerUserId: OWNER.toUpperCase(), sender: { id: OWNER, name: "Owner", isApp: false } })),
+  ["owner_sent", ["OTHER", "OWNER"], true, false],
+);
+t(
+  "VF5-3 configured id with surrounding whitespace (no line id): same verdict and same speakers",
+  f5(askThenOwner({ ownerUserId: undefined }, { ownerUserId: undefined, sender: { id: OWNER, name: "Owner", isApp: false } }), [`  ${OWNER.toUpperCase()} `]),
+  ["owner_sent", ["OTHER", "OWNER"], true, false],
+);
+t(
+  "VF5-4 sender id and mention id with whitespace / upper-case (non-parser writer) -> OWNER / owner mentioned, at both sites",
+  [f5(askThenOwner({}, { sender: { id: ` ${OWNER.toUpperCase()} `, name: "Owner", isApp: false } }))[1], f5([tmsg(CHAT_G, "m", "2026-11-10T10:00:00Z", { mentionedUserIds: [` ${OWNER.toUpperCase()}`] })])],
+  [["OTHER", "OWNER"], ["owner_mentioned", ["OTHER"], false, true]],
+);
+t("VF5-5 stored mentionsOwner=true alone: the facts say ownerMentioned=true, matching the owner_mentioned verdict", f5([tmsg(CHAT_G, "m", "2026-11-10T10:00:00Z", { mentionsOwner: true })])[3], true);
+t("VF5-6 a null entry in a stored mention list is handled by the normal path (no fallback), and shows", f5([tmsg(CHAT_G, "m", "2026-11-10T10:00:00Z", { mentionedUserIds: [null as unknown as string] })]), ["owner_maybe_mentioned", ["OTHER"], false, null]);
+
+// ── Finding 2: a malformed stored mention field (string / object) must not throw; it shows, and one bad row never
+//    aborts the report.
+const bad = (v: unknown) => ({ ...(g1[0].content as TeamsContent), mentionedUserIds: v as string[] });
+const safeInv = (ms: TeamsContent[]) => {
+  try {
+    return chatInvolvement(CHAT_G, ms).reason;
+  } catch (e) {
+    return `THREW ${(e as Error).name}`;
+  }
+};
+t("VF2-1 mentionedUserIds stored as a string or an object -> no throw, can't tell -> SHOWS", [safeInv([bad(OWNER)]), safeInv([bad({ 0: "x" })]), safeInv([bad(7)])], ["cant_tell_no_mention_data", "cant_tell_no_mention_data", "cant_tell_no_mention_data"]);
+const safeHide = (ms: TeamsContent[]) => {
+  try {
+    return chatInvolvement(CHAT_G, ms).hide;
+  } catch (e) {
+    return `THREW ${(e as Error).name}`;
+  }
+};
+t("VF2-2 anything that would throw inside the rule -> cant_tell_malformed, shows", [safeInv([null as unknown as TeamsContent]), safeHide([null as unknown as TeamsContent])], ["cant_tell_malformed", false]);
+const CHAT_B = "19:group03@thread.v2";
+const throwingText = { toString: () => { throw new Error("synthetic"); } } as unknown as string;
+const mixedRows: LedgerReportRow[] = [
+  ...g1,
+  tmsg(CHAT_B, "b1", "2026-11-12T10:00:00Z", { mentionedUserIds: "not-an-array" as unknown as string[] }),
+  tmsg("19:group04@thread.v2", "c1", "2026-11-12T11:00:00Z", { text: throwingText }),
+];
+const safeChats = (() => {
+  try {
+    return teamsChatsFromLedger(mixedRows);
+  } catch (e) {
+    return `THREW ${(e as Error).name}`;
+  }
+})();
+const mixedPlan = typeof safeChats === "string" ? null : planLedgerReport({ emailFacts: [], teams: safeChats, meetings: [], signals: [], sinceMs: SINCE });
+t(
+  "VF2-3 one bad row never aborts the report: every chat comes back; the bad ones SHOW, the good uninvolved one is still hidden",
+  typeof safeChats === "string" ? safeChats : [safeChats.map((c) => [c.chatId, c.involvement.reason]).sort(), mixedPlan!.teams.hiddenUninvolved.map((c) => c.chatId), mixedPlan!.teams.scan.length],
+  [[[CHAT_G, "uninvolved"], [CHAT_B, "cant_tell_no_mention_data"], ["19:group04@thread.v2", "cant_tell_malformed"]].sort(), [CHAT_G], 2],
+);
+t(
+  "VF2-4 a malformed chat is counted as can't-tell in the plan (alongside the no-mention-data one)",
+  mixedPlan ? mixedPlan.teams.cantTell : "no plan",
+  2,
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
