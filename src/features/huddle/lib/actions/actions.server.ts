@@ -10,7 +10,7 @@
 // THIS REPO'S LOGS ARE PUBLIC: one line per classify pass with COUNTS only. No title, quote, subject, sender, chat
 // name or id is ever logged; errors are logged by category name only.
 
-import { getSharedPool } from "../db/shared-pool.server";
+import { getSharedPool, SHARED_POOL_MAX } from "../db/shared-pool.server";
 import { ACTION_SCHEMA, type ActionVerdict } from "../correspondence/action-classify";
 import { assembleLedgerPlan, type MeetingItems } from "../correspondence/report-from-ledger";
 import { isFeedId, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
@@ -30,7 +30,7 @@ import {
   type ActionsSettings,
   type OwnerCorrection,
 } from "./actions";
-import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, runReportClassify, inMemoryWrites, type ClassifyDeps, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
+import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, runReportClassify, inMemoryWrites, type ClassifyDeps, type ThreadTx, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
 
 /** The feed config when the correspondence ingest is on (the Actions view reads what the ingest stored). */
 export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | null {
@@ -212,7 +212,72 @@ export async function classifyDepsFor(owner: string, owners: readonly string[]):
       return { id: null, onBoard: false };
     },
     addMeetingRows: (m, items) => addMeetingRows(owner, m, items),
+    lockThread: (u, fn) => withThreadLock(owners, u, fn),
   };
+}
+
+// ── AC8 (verifier VERIFY-report-saves-verdicts-1): one proposal per thread when two passes judge it at once ─────
+// The heartbeat and the report can both start on a thread that has no verdict yet. Each makes its own model call; if
+// the two to-dos are worded differently, proposeFromSource's "reworded" check (a read outside any transaction) cannot
+// see the other, and two proposals were created. Now the propose + store step of a thread runs inside a transaction
+// holding pg_advisory_xact_lock on the thread's item key, and the stored-verdict check happens INSIDE it: the second
+// pass waits, sees the first one's verdict, and writes nothing.
+
+/** At most this many lock-holding transactions at once in this process. Each holds one pooled connection while its
+ *  proposal write needs another, so holders must stay below SHARED_POOL_MAX or the pool could deadlock on itself. */
+export const THREAD_LOCK_HOLDERS_MAX = Math.max(1, SHARED_POOL_MAX - 3);
+let lockHolders = 0;
+const lockWaiters: (() => void)[] = [];
+async function acquireHolder(): Promise<void> {
+  if (lockHolders < THREAD_LOCK_HOLDERS_MAX) {
+    lockHolders++;
+    return;
+  }
+  await new Promise<void>((resolve) => lockWaiters.push(resolve)); // the slot is handed over by releaseHolder
+}
+function releaseHolder(): void {
+  const next = lockWaiters.shift();
+  if (next) next();
+  else lockHolders--;
+}
+
+/** Exported for the real-PostgreSQL test (scripts/actions-view-server.test.ts AC8-S*). */
+export async function withThreadLock<T>(owners: readonly string[], u: ThreadUnit, fn: (tx: ThreadTx) => Promise<T>): Promise<T> {
+  await acquireHolder();
+  try {
+    const c = await getSharedPool().connect();
+    try {
+      await c.query("BEGIN");
+      await c.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`actions-thread:${u.itemKey}`]);
+      const out = await fn({
+        current: async () => {
+          const r = await c.query<{ action: ActionVerdict | null }>(
+            `SELECT result_ids->'action' AS action FROM chat.correspondence_ledger
+              WHERE source = $1 AND source_item_id = $2 AND owner_email = ANY($3::text[])`,
+            [u.storeAt.source, u.storeAt.sourceItemId, lower(owners)],
+          );
+          const v = r.rows[0]?.action;
+          return v && typeof v === "object" ? v : null;
+        },
+        store: async (v) => {
+          await c.query(
+            `UPDATE chat.correspondence_ledger SET result_ids = result_ids || jsonb_build_object('action', $3::jsonb)
+              WHERE source = $1 AND source_item_id = $2 AND owner_email = ANY($4::text[])`,
+            [u.storeAt.source, u.storeAt.sourceItemId, JSON.stringify(v), lower(owners)],
+          );
+        },
+      });
+      await c.query("COMMIT");
+      return out;
+    } catch (e) {
+      await c.query("ROLLBACK").catch(() => null);
+      throw e;
+    } finally {
+      c.release();
+    }
+  } finally {
+    releaseHolder();
+  }
 }
 
 /**

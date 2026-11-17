@@ -196,5 +196,36 @@ for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INF
   t("RM-2 GUARD: runClassify given a NaN allowance returns (0 calls, all over cap) instead of looping forever", r === "HUNG" ? "HUNG" : [r.calls, r.overCap, f.log.model], [0, 3, 0]);
 }
 
+// ── AC8 (verifier loop 1), offline half: the thread lock's "already judged while I waited" check, and save OFF ──
+{
+  const f = fakeStore(honest);
+  let chain = Promise.resolve();
+  let lockCalls = 0;
+  const locked: ClassifyDeps = {
+    ...f.deps,
+    lockThread: async (u, fn) => {
+      lockCalls++;
+      const prev = chain;
+      let done: () => void = () => {};
+      chain = new Promise<void>((r) => (done = r));
+      await prev;
+      try {
+        return await fn({ current: async () => f.store.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`) ?? null, store: async (v) => void f.store.set(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`, v) });
+      } finally {
+        done();
+      }
+    },
+  };
+  const S1 = S({ sources: { email: true, teams: false, meeting: false } });
+  const judged = new Set([UNITS[1].itemKey]); // only the email on To is pending
+  const [a1, a2] = await Promise.all([runClassify(asm, S1, judged, 5, locked), runClassify(asm, S1, judged, 5, locked)]);
+  t("RL-1 GUARD: two passes on one thread through the lock -> 1 proposal; the second adopts the stored verdict", [f.log.model, f.log.propose, a1.open + a2.open, a1.alreadyJudged + a2.alreadyJudged, lockCalls], [2, 1, 1, 3, 2]);
+  const off = fakeStore(honest);
+  let offLock = 0;
+  const io = inMemoryWrites({ ...off.deps, lockThread: async (_u, fn) => (offLock++, fn({ current: async () => null, store: async () => {} })) }, off.loadVerdicts);
+  await runReportClassify({ assembled: asm, settings: S(), sortingOn: true, usedToday: 0, maxCalls: 250, loadVerdicts: io.loadVerdicts, deps: io.deps });
+  t("RL-2 GUARD: save OFF never enters the thread lock (its tx.store writes the real store)", [offLock, off.store.size], [0, 0]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

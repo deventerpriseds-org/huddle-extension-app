@@ -144,6 +144,19 @@ export interface ClassifyDeps {
   deadlineMs?: number;
   /** 2026-11-17: model calls started together per batch (default 1 = the original one-at-a-time pass). */
   concurrency?: number;
+  /**
+   * AC8 (verifier VERIFY-report-saves-verdicts-1): serialise the propose + store step of ONE thread across passes
+   * running at the same time (the heartbeat and the report). Runs `fn` inside a transaction that holds a lock keyed
+   * on the thread's item key; `tx.current()` reads the thread's stored verdict INSIDE that transaction and
+   * `tx.store(v)` writes it there. Absent = no lock (offline tests; the report with saving off).
+   */
+  lockThread?<T>(u: ThreadUnit, fn: (tx: ThreadTx) => Promise<T>): Promise<T>;
+}
+
+/** The thread-locked transaction handed to ClassifyDeps.lockThread's callback. */
+export interface ThreadTx {
+  current(): Promise<ActionVerdict | null>;
+  store(v: ActionVerdict): Promise<void>;
 }
 
 export interface ClassifyResult {
@@ -206,23 +219,38 @@ export async function runClassify(
     const haystack = u.email ? emailQuoteHaystack(u.email, a.forwards) : teamsQuoteHaystack(u.teams!);
     const settled = u.email ? u.email.settled : u.teams!.settled;
     let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source] });
-    if (v.status === "open") {
-      const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");
-      try {
-        const p = await deps.propose(u, v, text);
-        v = { ...v, proposalId: p.id, ...(p.onBoard ? { onBoard: true } : {}) };
-      } catch {
-        res.failures++;
-        return true; // nothing stored: retried next pass
+    /** Propose (when open) then store. Inside the thread lock (AC8) it first re-reads the thread's stored verdict:
+     *  another pass that judged this version while we waited wins, and this one writes nothing (no 2nd proposal). */
+    const finish = async (tx?: ThreadTx): Promise<"stored" | "adopted" | "failed"> => {
+      if (tx) {
+        const cur = await tx.current();
+        if (cur && verdictIsCurrent(cur, u.itemKey, u.source)) return "adopted";
       }
-    }
+      if (v.status === "open") {
+        const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");
+        try {
+          const p = await deps.propose(u, v, text);
+          v = { ...v, proposalId: p.id, ...(p.onBoard ? { onBoard: true } : {}) };
+        } catch {
+          return "failed"; // nothing stored: retried next pass
+        }
+      }
+      try {
+        await (tx ? tx.store(v) : deps.storeVerdict(u.storeAt, v));
+      } catch {
+        return "failed";
+      }
+      return "stored";
+    };
+    let outcome: "stored" | "adopted" | "failed";
     try {
-      await deps.storeVerdict(u.storeAt, v);
+      outcome = deps.lockThread ? await deps.lockThread(u, finish) : await finish();
     } catch {
-      res.failures++;
-      return true;
+      outcome = "failed"; // the lock or its transaction failed: nothing counted as stored, retried next pass
     }
-    if (v.status === "open") res.open++;
+    if (outcome === "failed") res.failures++;
+    else if (outcome === "adopted") res.alreadyJudged++;
+    else if (v.status === "open") res.open++;
     else if (v.status === "none") res.none++;
     else res.notChecked++;
     return true;
@@ -310,7 +338,8 @@ export async function runReportClassify(a: {
 export function inMemoryWrites(base: ClassifyDeps, stored: () => Promise<Map<string, ActionVerdict>>): { deps: ClassifyDeps; loadVerdicts(): Promise<Map<string, ActionVerdict>> } {
   const mem = new Map<string, ActionVerdict>();
   return {
-    deps: { ...base, propose: async () => ({ id: null, onBoard: false }), storeVerdict: async (at, v) => void mem.set(`${at.source}\u0000${at.sourceItemId}`, v), addMeetingRows: async () => 0 },
+    // lockThread is dropped: its tx.store writes the real store, and nothing here may.
+    deps: { ...base, lockThread: undefined, propose: async () => ({ id: null, onBoard: false }), storeVerdict: async (at, v) => void mem.set(`${at.source}\u0000${at.sourceItemId}`, v), addMeetingRows: async () => 0 },
     loadVerdicts: async () => new Map([...(await stored()), ...mem]),
   };
 }
