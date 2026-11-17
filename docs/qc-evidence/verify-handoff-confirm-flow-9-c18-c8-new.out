@@ -1,0 +1,13 @@
+UNSAFE   N-grandpa        blocked=true same=false | open="Buy birthday gift" desc="Buy a birthday gift for grandma." new="Buy birthday gift for grandpa"
+UNSAFE   N-christopher    blocked=true same=false | open="Send invoice" desc="Send the invoice to Christina." new="Send invoice to Christopher"
+UNSAFE   N-danielle       blocked=true same=false | open="Email the contract" desc="Email the contract to Daniel." new="Email the contract to Danielle"
+UNSAFE   N-alexandra      blocked=true same=false | open="Call about lease" desc="Call Alexander about the lease renewal." new="Call about lease with Alexandra"
+UNSAFE   N-dec-day        blocked=true same=false | open="Schedule dentist" desc="Schedule the dentist on Dec 12." new="Schedule dentist Dec 5"
+UNSAFE   N-party-size     blocked=true same=false | open="Book table" desc="Book a table at Nobu for 4." new="Book table for 2 at Nobu"
+ok       N-time           blocked=false same=false | open="Book massage" desc="Book a massage at the spa at 3pm." new="Book massage at the spa at 5pm"
+ok       N-room           blocked=false same=false | open="Reserve hotel" desc="Reserve a hotel room in Austin for two nights." new="Reserve hotel room in Austin for three nights"
+UNSAFE   N-manager-mgmt   blocked=true same=false | open="Email the report" desc="Email the report to the management team." new="Email the report to my manager"
+UNSAFE   N-photo          blocked=true same=false | open="Order prints" desc="Order prints from the photographer." new="Order prints of the photo"
+ok       N-train          blocked=false same=false | open="Sign up" desc="Sign up for the training course." new="Sign up for the train pass"
+ok       N-same-time      blocked=true same=true | open="Book massage" desc="Book a massage at the spa at 5pm." new="Book massage at the spa at 5pm"
+TOTAL rows=12 unsafe_overmatch=8
