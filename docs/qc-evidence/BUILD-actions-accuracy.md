@@ -149,3 +149,15 @@ Source of the defects: `docs/qc-evidence/VERIFY-actions-accuracy-2.md` on `claud
   form" -> "Resubmit the form"; a pure claim -> null. Someone else's state ("Pat still needs ...") and unsettled
   threads are unchanged. Applies to verdicts judged from now on (Teams re-judges via D-1; email verdicts do not).
 - TESTS: R11-1..R11-4.
+
+### D-7 (LOW-MEDIUM): a real meeting item written "Label: action" is no longer lost
+
+- CHANGE (meeting-triage.ts `splitActionItems`): a labelled line is a DETAIL only when (a) its label is pure
+  metadata (Responsible person / Owner / Assignee / Assigned to / Timestamp / Timing / Due / Deadline) and its
+  value carries no action verb (`isMetadataDetail`), or (b) it is indented under a kept item. Otherwise it stays
+  an item. Pure metadata with no item above is dropped and counted (as before).
+- BEHAVIOUR: "- Note: Owen to send pricing to the client" and "- **Deadline**: submit the grant application by Dec 1"
+  are items again (title keeps the label text, ** stripped). The owner's real examples ("Responsible person: Not
+  stated.", "Timestamp: (01:01-01:32).", "Timing: Beyond two weeks, inferred because ...") still attach.
+  An unindented "Notes:" alone is a heading again (as on main).
+- TESTS: R12-1..R12-3; R4-1..R4-4 unchanged and green; meeting-triage 69 / -sql 34 / -server 7 green.

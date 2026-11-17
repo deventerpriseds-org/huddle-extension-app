@@ -25,7 +25,7 @@ import { teamsSourceItemId, type TeamsContent } from "../src/features/huddle/lib
 import { CORRECTION_LABEL, CORRECTION_REASONS, makeCorrection, ACTIONS_SETTINGS_DEFAULT, type ActionCandidate } from "../src/features/huddle/lib/actions/actions";
 import { buildCandidates, collapseDuplicateTeamsItems, currentlyJudgedKeys, runClassify, teamsSourceLabel, threadUnits, verdictIsCurrent, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
 import { CLASSIFIER_INPUT_VERSION, type ActionVerdict } from "../src/features/huddle/lib/correspondence/action-classify";
-import { detailLineOf, splitActionItems } from "../src/features/huddle/lib/proposals/meeting-triage";
+import { detailLineOf, isMetadataDetail, splitActionItems } from "../src/features/huddle/lib/proposals/meeting-triage";
 
 let fail = 0;
 let pass = 0;
@@ -280,6 +280,34 @@ void GRP;
     ["Send the deck to Pat", "Pat still needs the signed form", "Pat still needs the form.", "You have not replied to Pat: send the deck"],
   );
   t("R11-4 scrubOwnerStateTodo leaves null / claim-free input as is", [scrubOwnerStateTodo(null), scrubOwnerStateTodo("Book the room")], [null, "Book the room"]);
+}
+
+// ── R12. LOOP-2 D-7: a real "Label: action" bullet stays an item ─────────────────────────────────────
+{
+  const E = [
+    "**Pat Example**",
+    "- Pat to send the synthetic deck (01:02)",
+    "Responsible person: Not stated.",
+    "Timestamp: (01:01-01:32).",
+    "- Timing the launch with marketing",
+    "- Notes from Jane on budget",
+    "- **Deadline**: submit the synthetic grant application by Dec 1",
+    "- Note: Owen to send synthetic pricing to the client",
+    "Timing: Beyond two weeks, inferred because no date was set.",
+    "  - Context: the client asked twice",
+  ].join("\n");
+  const se = splitActionItems(E);
+  t(
+    "R12-1 GUARD: '- Note: <action>' and '- **Deadline**: <action>' stay ITEMS (content never dropped)",
+    se.items,
+    ["Pat to send the synthetic deck", "Timing the launch with marketing", "Notes from Jane on budget", "Deadline: submit the synthetic grant application by Dec 1", "Note: Owen to send synthetic pricing to the client"],
+  );
+  t(
+    "R12-2 the owner's real metadata lines still attach (Responsible person / Timestamp / Timing), and an indented note attaches",
+    se.details.map((d) => d.map((x) => x.label)),
+    [["responsible person", "timestamp"], [], [], [], ["timing", "context"]],
+  );
+  t("R12-3 isMetadataDetail: metadata label + no action verb only", [isMetadataDetail({ label: "owner", value: "Pat" }), isMetadataDetail({ label: "owner", value: "Pat to send the deck" }), isMetadataDetail({ label: "note", value: "Not stated" })], [true, false, false]);
 }
 
 // ── R8. LOOP-2 D-3: owner FULL names from config, never a bare first name ──────────────────────────
