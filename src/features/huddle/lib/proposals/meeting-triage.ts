@@ -41,13 +41,59 @@ const STAMP = /\s*\(\s*\d{1,2}:\d{2}(?::\d{2})?\s*\)\s*$/;
 /** A line that is only a heading (not seen by P-4, kept defensive): "**Name**", "## Name", or "Name:" alone. */
 const HEADING = /^\s*(?:\*\*[^*]+\*\*:?|#{1,6}\s+.+|[^.!?]{1,60}:)\s*$/u;
 
+/**
+ * 2026-11-17 (owner: "several actions are not actionable and don't belong"): Fireflies puts DETAIL lines under an
+ * item ("Responsible person: Not stated.", "Timestamp: (01:01-01:32).", "Timing: Beyond two weeks, inferred ...").
+ * A line whose text (bullet and ** emphasis removed) starts with one of these labels and a colon is METADATA of
+ * the item above it, never an item of its own. With no item above it, it is dropped and counted.
+ */
+const DETAIL_LABEL =
+  /^(responsible(?:\s+(?:person|party|owner))?|owner|owners|assignee|assigned\s+to|time\s*stamps?|timing|due(?:\s+date)?|deadline|context|notes?)\s*:\s*(.*)$/i;
+/** Markdown emphasis markers (** and __) -- stripped from item titles and detail lines. */
+const EMPHASIS = /\*\*|__/g;
+
+export interface ItemDetail {
+  /** The label as written, lower-cased ("responsible person", "timestamp", ...). */
+  label: string;
+  value: string;
+}
+
 export interface SplitResult {
   items: string[];
   /** 2026-11-16 (Actions view): the heading line each item sat under (Fireflies groups items under the assignee's
    *  name, e.g. "**Name**"), aligned with `items`; null when no heading came before it. Text only, never a lookup. */
   headings: (string | null)[];
-  dropped: { heading: number; duplicate: number; overCap: number };
+  /** 2026-11-17: the detail lines attached to each item (aligned with `items`; [] when none). */
+  details: ItemDetail[][];
+  dropped: { heading: number; duplicate: number; overCap: number; detail: number };
 }
+
+/** Pure: a line (bullet, emphasis and whitespace removed) -> its detail label + value, or null when it is not one. */
+export function detailLineOf(line: string): ItemDetail | null {
+  const t = canonicalSpan(String(line ?? "").replace(EMPHASIS, "")).replace(BULLET, "").trim();
+  const m = DETAIL_LABEL.exec(t);
+  if (!m) return null;
+  return { label: m[1].toLowerCase().replace(/\s+/g, " "), value: m[2].trim().slice(0, 300) };
+}
+
+/**
+ * Loop-2 D-7 (verifier: "- Note: Von to send pricing" was swallowed as a detail and lost): only these labels are
+ * PURE METADATA -- who, when, by when. Any other label ("Note:", "Context:", ...) is a detail only when its line is
+ * indented under an item.
+ */
+const METADATA_LABEL = /^(?:responsible(?: (?:person|party|owner))?|owners?|assignee|assigned to|time ?stamps?|timing|due(?: date)?|deadline)$/;
+/** An action verb in a value ("submit the grant application", "Von to send pricing"): such a line is an ITEM. */
+const ACTION_VERB =
+  /\b(?:send|submit|book|review|prepare|draft|schedule|call|email|e-mail|follow|share|update|create|complete|finish|finali[sz]e|write|reply|respond|contact|check|confirm|fix|deliver|file|sign|pay|order|arrange|organi[sz]e|provide|investigate|plan|coordinate|research|reach|ask|present|upload|approve|set up|build|test|deploy|invite|introduce|circulate|distribute|collect|gather|compile|run|host|attend|meet|discuss|decide|resolve|reconcile|renew|register|apply|purchase|buy|design|document|summari[sz]e|outline|evaluate|assess|analy[sz]e|verify|validate|ship|launch|publish|post|notify|remind|chase|look into|sort out|hand over)(?:s|es|ed|ing)?\b/i;
+
+/** Pure (loop-2 D-7): a detail whose label is pure metadata and whose value states no action (Responsible person:
+ *  Not stated. / Timestamp: (01:01-01:32). / Timing: Beyond two weeks, inferred ...). */
+export function isMetadataDetail(d: ItemDetail): boolean {
+  return METADATA_LABEL.test(d.label) && !ACTION_VERB.test(d.value);
+}
+
+/** Pure: is the raw line indented (leading whitespace before its text / bullet)? */
+const isIndented = (line: string) => /^[ \t ]+\S/.test(String(line ?? ""));
 
 /** Pure: a heading line -> its plain text ("**Pat Doe**:" / "## Pat Doe" / "Pat Doe:" -> "Pat Doe"). */
 export function headingText(line: string): string {
@@ -72,19 +118,32 @@ export function meetingItemIsOwnersOrUnassigned(heading: string | null, ownerNam
  *  Blank lines are skipped silently; a heading-only line, a duplicate (same title key) and anything past the
  *  cap are dropped and counted. Never guesses an owner (P-4: the text has none). */
 export function splitActionItems(raw: unknown): SplitResult {
-  const out: SplitResult = { items: [], headings: [], dropped: { heading: 0, duplicate: 0, overCap: 0 } };
+  const out: SplitResult = { items: [], headings: [], details: [], dropped: { heading: 0, duplicate: 0, overCap: 0, detail: 0 } };
   let heading: string | null = null;
   const lines: string[] =
     typeof raw === "string" ? raw.split(/\r?\n|\r/) : Array.isArray(raw) ? raw.flatMap((x) => (typeof x === "string" ? x.split(/\r?\n|\r/) : [])) : [];
   const seen = new Set<string>();
+  // The item a detail line belongs to: the last item KEPT (a dropped duplicate / over-cap item has no row, so its
+  // details are dropped with it).
+  let lastKept: number | null = null;
   for (const line of lines) {
     if (!line.trim()) continue;
+    // Loop-2 D-7: a labelled line is a DETAIL only when it is pure metadata (no action in its value), or it is
+    // indented under a kept item. Anything else stays an item: never drop content. Pure metadata with no item
+    // above it carries nothing to do and is dropped and counted.
+    const detail = detailLineOf(line);
+    if (detail && (isMetadataDetail(detail) || (isIndented(line) && lastKept !== null))) {
+      if (lastKept !== null) out.details[lastKept].push(detail);
+      else out.dropped.detail++;
+      continue;
+    }
     if (HEADING.test(line) && !BULLET.test(line)) {
       out.dropped.heading++;
       heading = headingText(line) || null;
+      lastKept = null;
       continue;
     }
-    let t = canonicalSpan(sanitizeTitle(line)).replace(BULLET, "");
+    let t = canonicalSpan(sanitizeTitle(line).replace(EMPHASIS, "")).replace(BULLET, "");
     while (STAMP.test(t)) t = t.replace(STAMP, "");
     t = t.trim();
     if (!t) continue;
@@ -92,15 +151,19 @@ export function splitActionItems(raw: unknown): SplitResult {
     const key = titleKey(t);
     if (!key || seen.has(key)) {
       out.dropped.duplicate++;
+      lastKept = null;
       continue;
     }
     if (out.items.length >= MAX_TRIAGE_PER_MEETING) {
       out.dropped.overCap++;
+      lastKept = null;
       continue;
     }
     seen.add(key);
     out.items.push(t);
     out.headings.push(heading);
+    out.details.push([]);
+    lastKept = out.items.length - 1;
   }
   return out;
 }
