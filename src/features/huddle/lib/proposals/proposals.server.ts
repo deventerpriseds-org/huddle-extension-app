@@ -69,7 +69,7 @@ export const extract: ExtractFn = async (instructions, input) => {
     return await Promise.race([
       callOpenAIRouter<unknown>({ model: EXTRACT_MODEL, system: instructions, prompt: input, schema: EXTRACTION_SCHEMA as unknown as Record<string, unknown>, schemaName: EXTRACTION_SCHEMA_NAME }),
       new Promise<never>((_, rej) => {
-        timer = setTimeout(() => rej(new Error("extract_timeout")), EXTRACT_TIMEOUT_MS);
+        timer = setTimeout(() => { const e = new Error("extract_timeout"); void import("../ai-quota/ai-quota.server").then((q) => q.noteAiFailure(e)).catch(() => {}); rej(e); }, EXTRACT_TIMEOUT_MS);
       }),
     ]);
   } finally {
@@ -87,7 +87,7 @@ export const judge: JudgeFn = async (instructions, input) => {
     return await Promise.race([
       callOpenAIRouter<unknown>({ model: EXTRACT_MODEL, system: instructions, prompt: input, schema: JUDGE_SCHEMA as unknown as Record<string, unknown>, schemaName: JUDGE_SCHEMA_NAME }),
       new Promise<never>((_, rej) => {
-        timer = setTimeout(() => rej(new Error("judge_timeout")), EXTRACT_TIMEOUT_MS);
+        timer = setTimeout(() => { const e = new Error("judge_timeout"); void import("../ai-quota/ai-quota.server").then((q) => q.noteAiFailure(e)).catch(() => {}); rej(e); }, EXTRACT_TIMEOUT_MS);
       }),
     ]);
   } finally {

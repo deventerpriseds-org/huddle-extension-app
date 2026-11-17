@@ -33,3 +33,24 @@ All data in tests is synthetic (`.example` addresses). Logs carry job names, kin
 | agent turns | `executeClaimedTurn` | non-user turns run as job `Agent turn (<prefix>)` |
 
 `tsc --noEmit`: clean after adding the `ai_quota` icon to `AttentionBell.tsx` (`Record<BellKind,...>` caught it).
+
+## Step 2 -- every background job wired (job context set at the job's entry)
+
+| job (bell name) | entry wrapped | model calls reached |
+|---|---|---|
+| Auto-work | `routes/api/public/run-autowork.ts` | callOpenAIResponses / Router via agent work |
+| Grooming | `run-grooming.ts` | groom.ts raw chat/completions (`noteAiResponse`) |
+| Stand-up | `run-standup.ts` | ceremony-script raw fetch (`noteAiResponse`), agent turns |
+| Review digest / Review recheck | `run-review-digest.ts` / `run-review-recheck.ts` | agent turns |
+| Priority check / Schedule brief | `run-priority-check.ts` / `run-schedule-brief.ts` | agent turns |
+| Ceremony | `run-ceremony.ts` | ceremony-script, agent turns |
+| Inbound email | `run-inbound-email.ts` | Iris email-alert turns |
+| Meeting minutes and triage | heartbeat `processDueFirefliesMeetings` (scheduler.server.ts) | fireflies.server |
+| Correspondence and Actions classifier | heartbeat `runCorrespondenceIngest` (incl. `runActionsClassify`) | callOpenAIRouter; `classify_timeout` reported |
+| Task proposals | heartbeat `runProposalsPass` | proposals extract/judge (callOpenAIRouter); `extract_timeout`/`judge_timeout` reported |
+| Confirm-intent asks | heartbeat `fireDueConfirmAsks` | agent turns |
+| Agent turn (<id prefix>) | `executeClaimedTurn` for every non-user turn (autowork-, standup-, groom-, followup-, integrate-, worker sub-turns ...) | runHuddleTurn -> callOpenAIResponses / Router |
+
+The scheduler (`fireJob`) POSTs to the routes above, so cadence fires are covered by the route wrappers.
+NOT wrapped (interactive, unchanged): the user's own `u-`/`xapp-` turns -- they keep the existing toast.
+`tsc --noEmit`: clean.

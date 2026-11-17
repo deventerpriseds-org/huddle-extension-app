@@ -78,6 +78,7 @@ async function matchByModel(items: FocusMatch[], rows: readonly FocusCandidate[]
         ],
       }),
     }).finally(() => clearTimeout(timer));
+    void import("../ai-quota/ai-quota.server").then((q) => q.noteAiResponse(res)).catch(() => {}); // 2026-11-17 quota alert
     if (!res.ok) return;
     const j = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     const parsed = JSON.parse(j.choices?.[0]?.message?.content ?? "{}") as {

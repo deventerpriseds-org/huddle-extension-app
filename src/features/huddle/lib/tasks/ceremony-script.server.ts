@@ -125,6 +125,7 @@ async function generateSlot(agentId: AgentId, directive: string, apiKey: string)
     GEN_TIMEOUT_MS,
     `ceremony gen (${agentId})`,
   );
+  void import("../ai-quota/ai-quota.server").then((q) => q.noteAiResponse(res)).catch(() => {}); // 2026-11-17 quota alert
   if (!res.ok) throw new Error(`ceremony gen ${res.status}`);
   const j = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const text = j.choices?.[0]?.message?.content?.trim();

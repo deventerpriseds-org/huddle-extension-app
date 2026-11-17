@@ -55,7 +55,11 @@ export const Route = createFileRoute("/api/public/run-priority-check")({
 
         try {
           const { runPriorityCheck } = await import("@/features/huddle/lib/tasks/priority-check.server");
-          const result = await runPriorityCheck(
+          // Runs as a background AI job: a quota error inside it raises the bell + Iris alert (lib/ai-quota, 2026-11-17).
+          const result = await (await import("@/features/huddle/lib/ai-quota/ai-quota.server")).runAsAiJob(
+            "Priority check",
+            userEmail,
+            () => runPriorityCheck(
             { entra_email: userEmail },
             {
               timeZone: payload.timeZone,
@@ -63,6 +67,7 @@ export const Route = createFileRoute("/api/public/run-priority-check")({
               dryRun: !!payload.dryRun,
               runId: payload.runId,
             },
+          ),
           );
           return json(result, result.ok ? 200 : 500);
         } catch (err) {

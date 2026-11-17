@@ -70,7 +70,11 @@ export const Route = createFileRoute("/api/public/run-schedule-brief")({
           const { runScheduleBrief } = await import(
             "@/features/huddle/lib/tasks/schedule-brief-run.server"
           );
-          const result = await runScheduleBrief(
+          // Runs as a background AI job: a quota error inside it raises the bell + Iris alert (lib/ai-quota, 2026-11-17).
+          const result = await (await import("@/features/huddle/lib/ai-quota/ai-quota.server")).runAsAiJob(
+            "Schedule brief",
+            userEmail,
+            () => runScheduleBrief(
             { entra_email: userEmail },
             {
               timeZone: payload.timeZone,
@@ -79,6 +83,7 @@ export const Route = createFileRoute("/api/public/run-schedule-brief")({
               runId: payload.runId,
               window,
             },
+          ),
           );
           return json(result, result.ok ? 200 : 500);
         } catch (err) {

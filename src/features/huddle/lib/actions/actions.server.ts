@@ -121,7 +121,7 @@ async function model(system: string, input: string, schemaName: string): Promise
     return await Promise.race([
       callOpenAIRouter<unknown>({ model: EXTRACT_MODEL, system, prompt: input, schema: ACTION_SCHEMA as unknown as Record<string, unknown>, schemaName }),
       new Promise<never>((_, rej) => {
-        timer = setTimeout(() => rej(new Error("classify_timeout")), MODEL_TIMEOUT_MS);
+        timer = setTimeout(() => { const e = new Error("classify_timeout"); void import("../ai-quota/ai-quota.server").then((q) => q.noteAiFailure(e)).catch(() => {}); rej(e); }, MODEL_TIMEOUT_MS);
       }),
     ]);
   } finally {
