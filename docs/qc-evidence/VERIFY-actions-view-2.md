@@ -133,3 +133,121 @@ C. America/New_York 2026-03-08 / 2026-11-01 / 04:59:59Z / 05:00:00Z -> correct l
 
 Verdict claim 2: **REFUTED** for the daily cap as a hard ceiling (D2) and for concurrency across instances (D3).
 The per-pass cap and in-process concurrency are CONFIRMED.
+
+### 3. Uninvolved chats never reach the AI; channels hidden like groups; ONE rule
+
+- `pipeline.ts:69-73` `threadUnits`: chats in `plan.teams.hiddenUninvolved` become units only when
+  `!s.hideUninvolvedChats`. When the switch is ON, they never become units, so `runClassify` cannot send them to the
+  model. Suite tests E-1 and S-15 pass.
+- Channels: `report-from-ledger.ts:134` maps `thread.tacv2` to `channel`, and `:171` covers channel along with
+  group and meeting. Suite test S-4 passes.
+- One implementation: `chatInvolvement` is defined only in `report-from-ledger.ts:167`. `grep -rn chatInvolvement
+  src scripts` finds no second definition. `scripts/action-scan-steps.ts` takes the plan from the same module and
+  imports `quoteIsVerbatim` from `action-classify.ts` (lines 23-38).
+- **Mutation M2** (my own): `if (!s.hideUninvolvedChats) for` -> `if (true) for` in `pipeline.ts`, run with
+  `mutate.sh ... "bun scripts/actions-view.test.ts" "E-1 one call per in-window thread"`. Result: **FIRED (control
+  EQUIVALENT)**, exit 0, file restored to HEAD.
+
+Verdict claim 3: **CONFIRMED**.
+
+### 4. Decided items stay hidden; a newer message brings an item back; Wrong? hides one version; Undo
+
+- Decided items: `selectActionItems` lists only proposal states `proposed` / `untriaged` (`actions.ts:245,302`).
+  **CONFIRMED** (code, plus the BUILD's m7 and suite test F-1).
+- Wrong? hides only its own version: `correctionHides` compares `itemKey`. Probe `probes/correction.ts`: after
+  Wrong? on A, A is hidden and B is not. On A's newer version (new key), `hides=false`, so it is judged again.
+  Undo (`withdrawnAt`) shows it again. **Mutation M3** (my own): `!c.withdrawnAt && c.itemKey ===
+  currentItemKey` -> `!c.withdrawnAt` in `actions.ts`, pattern `G-4 GUARD: hides the SAME version only`. Result:
+  **FIRED (control EQUIVALENT)**, exit 0, restored.
+- **DEFECT D4 (MEDIUM, Tier 1: a correction un-hides another item)**. `owner_correction` is ONE value per
+  proposal, but one proposal can back two threads: store `upsertOnce` step 2 attaches a second source with the same
+  `norm_title` to the active proposal (`proposals-store.server.ts` "already ACTIVE from another source: attach").
+  Probe output:
+  ```
+  after Wrong? on A: hides A = true  hides B = false
+  after Wrong? on B: hides A = false  hides B = true
+  Undo (on B): hides A = false  hides B = false
+  ```
+  Repro: two chats both ask "Complete the training" -> one proposal. Press Wrong? on chat A, then Wrong? on chat B:
+  chat A comes BACK into the list, although nothing about A changed. Undo on B does not restore A's correction.
+- **OBSERVATION O1 (newer message after Dismiss)**. If the newer message gets the same to-do wording, then
+  `proposeFromSource` finds the dismissed proposal (F15, "a dismissal suppresses the same to-do from ANY source").
+  It returns `suppressed`, which Actions maps to `{onBoard:true}` (`actions.server.ts:148`). The item then drops
+  out of the list without being counted anywhere: not in notChecked and not in hidden. After **Done**, the same
+  follow-up creates a new proposal and IS listed. So "a newer message brings it back" holds after Done and does
+  not hold after Dismiss when the wording is the same. This is consistent with the existing F15 decision, so it is
+  not a defect against the ACs, but it is invisible to the owner. UNPROVEN against a real store (code read only).
+- OBSERVATION O2 (LOW): the classification key is thread key + latest message id, with no content hash. An EDITED
+  latest message (ledger `content_hash` change, `ledger.server.ts:224-240`) keeps the old verdict and its old
+  quote, which may no longer appear in the edited text.
+
+Verdict claim 4: decided-hidden and same-version Wrong?/Undo **CONFIRMED**. "Hides only that version" is
+**REFUTED** when two threads share one proposal (D4). The newer-message claim is **UNPROVEN** (O1).
+
+### 5. Mark processed keeps the stored verdict (`ledger.server.ts:355-362`)
+
+The diff keeps `result_ids->'action'` through `markProcessed`. `correspondence-ledger-sql` (real PostgreSQL 16)
+gives 79/79, including AI-9. `grep "result_ids\s*="` across `src`: the only writers are this UPDATE and
+`storeVerdict` (`||` merge), and the column is `NOT NULL DEFAULT '{}'` (line 79), so the `||` never meets a NULL.
+Mutation m10 (the builder's) was not re-run. **CONFIRMED.**
+
+### 6. Bell: Done / Dismiss in Actions settles only the matching bell row
+
+`proposals.server.ts`: the settle runs only when `fromActions && r.ok && !r.alreadyDone`, with the targets from
+`bellTargetsFor(r.row.sources)`. `settleBellRows` (`email-replies.server.ts`) matches by owner,
+`status IN ('owed','drafted')`, and the email `graph_message_id` or Teams chat `conversation_id`. Suite test H-1
+passes. Caveat that comes from D4's mechanism: a proposal with refs from two threads settles BOTH threads' bell
+rows. A Teams settle is per CHAT, not per message. **CONFIRMED** for the single-source case. The multi-source
+case is by design of the refs (not covered by an AC).
+
+### 7. The `correspondence.proposals` flag bypass applies only to the Actions row buttons
+
+**DEFECT D5 (LOW, flag bypass)**. `from: "actions"` is a client-supplied zod enum
+(`proposals.functions.ts`, `from: z.enum(["actions"]).optional()`). The server never checks that the proposal is
+one that backs an Actions row. Any signed-in owner call to `actOnProposalFn` with `from:"actions"` can approve,
+complete, dismiss, edit or triage ANY of their own proposals while `correspondence.proposals` and
+`meetingTriage` are OFF (only the ingest must be on). Ownership is still enforced by `callerOwners`, so no
+cross-user exposure. Verdict: **REFUTED** as stated ("only the Actions row buttons" is a client convention, not a
+server rule).
+
+### 8. Security
+
+- Server functions: `getActionsPage`, `saveActionsSettings` and `correctActionItem` go through `ownedScope`. A
+  caller who is not the configured owner gets `off` or `Sign-in required.`. `correctActionItem` selects and updates
+  `chat.task_proposals WHERE id = $2 AND owner_email = ANY($1)`, so another user's proposal id gives "That item
+  isn't in your list." (code read). `PropId` is regex-validated. **CONFIRMED** by reading the code; not run
+  against a DB.
+- **DEFECT D6 (LOW)**. `correctActionItem` derives the ledger row it writes from the CLIENT's `itemKey`
+  (`actions.server.ts:320-322`), not from the proposal. The owner can therefore stamp `owner_correction` on any of
+  his own email or Teams ledger rows. It is owner-scoped, so there is no cross-user write.
+- Logs: `git diff origin/main...50063519 -- src | grep console.` gives three lines, all counts or `e.name` only
+  (`actions.server.ts:155-160`, `actions.functions.ts:23`). **CONFIRMED.**
+- Hard-coded addresses: an email-address regex over every added line under `src` finds 0 hits. **CONFIRMED.**
+
+### 9. Build, typecheck, baseline
+
+- `npx tsc --noEmit`: exit 0. `npm run build`: exit 0 (nitro "You can deploy this build"). The tree is clean
+  afterwards.
+- Baseline: `git archive origin/main` (046ec493) unpacked, then `bun scripts/fireflies-minutes.test.ts` gives
+  `FAIL G3`, `FAIL G5`, `FAIL G8`, `3 FAILED`, the same three as on the PR head. **CONFIRMED** (these failures
+  exist before the PR).
+
+### 10. Mutation proofs run by this verifier (mutate.sh, all with control)
+
+| id | file | mutation | test pattern | result |
+|---|---|---|---|---|
+| M1 | action-classify.ts | drop `q.length >= MIN_QUOTE_CHARS && ` | `A-4 GUARD: quote under 8 characters` | FIRED (control EQUIVALENT), exit 0 |
+| M2 | pipeline.ts | `if (!s.hideUninvolvedChats) for` -> `if (true) for` | `E-1 one call per in-window thread` | FIRED (control EQUIVALENT), exit 0 |
+| M3 | actions.ts | correctionHides drops the itemKey test | `G-4 GUARD: hides the SAME version only` | FIRED (control EQUIVALENT), exit 0 |
+
+(M1's first attempt used the pattern `FAIL A-4` and returned UNDETERMINED, exit 4, because the pattern was wrong.
+It was re-run with the test name.) The builder's other 8 mutations (m3-m9, m11) were NOT re-run.
+
+### NOT REACHED (budget cut to 25 min by the coordinator)
+
+- The per-AC sweep of all 96 ACs in `AC-actions-view-modules.md`. Only the Tier 1 items above were derived.
+- The E-U spelling table, row by row. Only S-4 (channel) and the switch were checked, through the suite and M2.
+- UI: `ModulesLauncher.tsx`, `ActionsView.tsx`, `Rail.tsx`, `ViewSwitcher.tsx`, `HuddleApp.tsx` (tokens and raw
+  colours; Priorities and Schedule reachable from Modules on desktop and phone). No browser run was made, so every
+  UI claim is UI-UNVERIFIED.
+- Re-running the builder's mutations m3-m11.
