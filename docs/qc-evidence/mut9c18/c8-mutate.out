@@ -1,0 +1,5 @@
+FIRED (control EQUIVALENT): '"Call dentist about the cleaning" -> new task' failed with the defect reinstated and passed with
+        a comment-only edit, so the FIRED is about behaviour, not the file's identity.
+        The guard is real.
+restored: src/features/huddle/lib/tasks/create-task-core.ts matches HEAD
+tree clean: '"Call dentist about the cleaning" -> new task' passes again on the restored tree (build output regenerated)

@@ -52,3 +52,27 @@ NEW UNDER-strip (reply still promises a teammate after the skip), all unchanged:
 - "I'll have Finn draft the budget." / "Finn will do the budget." / "Finn will email you the numbers."
 - "Next step: Finn handles the receipts." / "Reid will handle the receipts." (surname only)
 Stripped correctly: "Finn will take it from here", "*Finn* will handle", "@Finn will handle".
+
+## Mutations (mutate.sh, `bash -c 'set -o pipefail; bun test <file> 2>&1 | sed "s/(fail)/FAIL/"'`)
+- C8: remove `if (CONTRAST_RE.test(desc)) continue;` -> **FIRED (control EQUIVALENT)** on `"Call dentist about the cleaning" -> new task` (mut9c18/c8-mutate.out)
+- C1: full-name pattern reverted to first name only -> **FIRED (control EQUIVALENT)** on `removes: Finn Reid will handle the rest.` (mut9c18/c1-mutate.out)
+So the loop-8 fixes are real and guarded; the refutations above are NEW inputs outside what the fixes cover.
+
+## Suite re-run at e45abd80 (mut9c18/suite.out)
+tsc 0; lane-a 204/0; lane-b 7/0; board-claims 79/0; not-ai-task 6/0; one-request 40/0; mode 70/70; router 39/0 -- matches the implementer.
+
+## Radius
+- stripTeammateDeferral has ONE call site (huddle.functions.ts:7452, 1:1 laneSuppressed branch) -- confirmed by grep; board-claims.ts does not call it.
+- matchOpenTitle/matchesOpenTitle: all 4 create paths share it (create-task-core.ts:303 screenRawJourneyCreate, realtime-tools.server.ts:759 voice,
+  huddle.functions.ts:3199 and :3477) and each passes the descriptions map, so every C8 over-match above applies to text, voice and produce creates.
+- Challenge: the C1 over-strip is a roster-name/common-word collision (Charleston = a city, Faith, Cam). It is not specific to the new patterns:
+  any pattern that takes `<name>` after a preposition ("over to", "send to", "pass to", "hand to") collides with the city.
+
+## Summary
+| Claim | Verdict | Concrete failing input |
+|---|---|---|
+| C1 | REFUTED (UNSAFE) | over-strip: "Done. Flights over to Charleston are booked for Friday." -> "Done." (reached via the real branch order); "Don't let Finn know about the surprise party." deleted. under-strip: "Finn is going to handle the receipts." kept. Loop-8 rows all fixed; skip/full-name mutation FIRED |
+| C8 | REFUTED (UNSAFE) | open "Buy birthday gift"+desc "...for grandma." blocks "Buy birthday gift for grandpa"; "Send invoice to Christopher" blocked by "...to Christina."; "Schedule dentist Dec 5" blocked by "...on Dec 12."; 8/12 new rows. Loop-8 rows all fixed; contrast mutation FIRED |
+
+## Status: COMPLETE (finished 05:31Z, inside the 12-min budget)
+LOOP-9-C18-COMPLETE

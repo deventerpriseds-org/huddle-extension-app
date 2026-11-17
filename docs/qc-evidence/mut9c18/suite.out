@@ -1,0 +1,22 @@
+tsc rc=0
+== test:handoff-lane-a
+ 204 pass
+ 0 fail
+== test:handoff-lane-b
+ 7 pass
+ 0 fail
+== test:board-claims
+ 79 pass
+ 0 fail
+== test:not-ai-task
+ 6 pass
+ 0 fail
+== test:one-request-one-task
+ 40 pass
+ 0 fail
+== test:mode
+70/70 passed
+== test:router
+  PASS F2-45/46 unchanged lane: "assign the grocery run to Iris" — -> charleston-lewis (baseline charleston-lewis)
+  PASS F2-45/46 unchanged lane: "fix the typo in the email draft" — -> cam-post (baseline cam-post)
+==================== 39 passed, 0 failed ====================

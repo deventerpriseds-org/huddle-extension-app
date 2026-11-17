@@ -1,0 +1,1 @@
+    if (CONTRAST_RE.test(desc)) continue;
