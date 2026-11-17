@@ -60,3 +60,45 @@ report (step=action, source=ledger)
 
 ## Progress log
 
+### Chunk 1 -- wiring (commit 53978ead)
+
+- `pipeline.ts`: `runReportClassify` (pure orchestration: stored verdicts -> `currentlyJudgedKeys` -> `classifyCallsLeft`
+  -> `runClassify` with concurrency 5 -> verdicts re-read) and `inMemoryWrites` (save OFF).
+- `actions.server.ts`: the real deps factored out of `runActionsClassify` into `classifyDepsFor` (heartbeat behaviour
+  unchanged: same deps, same 20s deadline, concurrency still 1); `loadVerdicts` exported; `runReportPassFor(cfg, ...)`.
+- `scripts/action-report-html.ts` (new, pure): the report HTML moved out of `action-scan-steps.ts`, plus
+  `rowsFromStoredVerdicts` (only CURRENT verdicts; only `open`/`none` are rows; a not-admitted answer is listed as
+  not checked, never as open -- the old report showed it as an open row marked "quote not found").
+- `scripts/action-scan-steps.ts`: `runStoredActionScan` (ledger path); the old loop stays for `source=files` only.
+- `scripts/reply-scan-preview.ts`: step=action + ledger branches to `runStoredActionScan` before its own load.
+  `PREVIEW_STEP=reply` untouched.
+- Workflow: input `save_verdicts` (boolean, default true) -> `PREVIEW_SAVE`.
+
+Behaviour differences vs the old report, all because it now IS the app's pass:
+1. CC/list conversations the owner already answered used to be skipped before the model; the app's pass judges them
+   (its settled guard then decides). Expect a few more calls on the FIRST run than the old report's 144.
+2. Sources and the uninvolved-chat switch come from the owner's Actions settings (what the view covers).
+3. Meeting items: the app pass also adds the EXISTING untriaged meeting triage rows for in-window meetings (idempotent
+   by ref) -- exactly what the heartbeat does. Skipped when save is OFF.
+4. Save OFF still RECORDS the attempt (spend is spend); it writes no verdict, proposal or meeting row.
+
+### Chunk 2 -- tests (commit f9ab65c5) + mutation proofs
+
+`bun scripts/report-saves-verdicts.test.ts`: **19 passed, 0 failed** (fake model + fake store, synthetic data).
+
+| guard | test | mutation (mutate.sh, anchors in files) | verdict |
+|---|---|---|---|
+| report skips already-judged threads | RB-2 | `judged = currentlyJudgedKeys(before)` -> empty set | FIRED (control EQUIVALENT), exit 0 |
+| report bounded by the daily cap's remainder | RB-4 | `classifyCallsLeft(...)` -> `maxCalls` only | FIRED (control EQUIVALENT), exit 0 |
+| HTML uses only CURRENT verdicts | RC-5 | `verdictIsCurrent(...)` check removed | FIRED (control EQUIVALENT), exit 0 |
+| not-admitted answers never rendered as rows | RC-6 | status filter -> bad_shape only | FIRED (control EQUIVALENT), exit 0 |
+| only stored `open` is a YES | RC-2 | `yes: v.status === "open"` -> `yes: true` | FIRED (control EQUIVALENT), exit 0 |
+| report-path verdicts go through the verbatim guard | RA-1 | haystack widened to include the model's own quote | FIRED (control EQUIVALENT), exit 0 |
+| save OFF writes nothing to the store | RB-6 | in-memory `storeVerdict` -> real `storeVerdict` | FIRED (control EQUIVALENT), exit 0 |
+
+All seven restores asserted against HEAD by mutate.sh.
+
+Suites after the change: actions-accuracy 60/0, actions-view 96/0, actions-view-server (real local PostgreSQL)
+28/0, report-saves-verdicts 19/0. `npx tsc --noEmit`: 0 errors (src). The touched scripts (outside tsconfig's
+include) type-checked with a temporary config that adds them: 0 errors.
+
