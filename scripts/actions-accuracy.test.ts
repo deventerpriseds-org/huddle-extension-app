@@ -237,7 +237,13 @@ void GRP;
   const rep = await run("reply");
   t("R7-5 the re-judged verdict passes the settled guard (owner wrote last): a reply he already gave is not owed", [rep.nv?.status, rep.nv?.answeredByReply], ["none", true]);
   t("R7-6 a current-version verdict is reused (no call); a verdict for an older item key is not", [currentlyJudgedKeys(new Map([[storeKey, nv!]])).has(u.itemKey), verdictIsCurrent({ ...nv!, key: "teams:x|old" }, u.itemKey, "teams")], [true, false]);
-  t("R7-7 email verdicts without inputVersion stay current (email version not bumped)", verdictIsCurrent({ key: "e|1" }, "e|1", "email"), true);
+  // 2026-11-17 (app_invite, BUILD-actions-app-invite.md): the email instructions changed, so email was bumped to 2 and
+  // teams to 3. Every verdict judged before is judged again; only the current version is reused.
+  t(
+    "R7-7 GUARD: email bumped to 2, teams to 3 -- older email (none / 1) and teams (2) verdicts are re-judged",
+    [verdictIsCurrent({ key: "e|1" }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 1 }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 2 }, "e|1", "email"), verdictIsCurrent({ key: "t|1", inputVersion: 2 }, "t|1", "teams"), verdictIsCurrent({ key: "t|1", inputVersion: 3 }, "t|1", "teams")],
+    [false, false, true, false, true],
+  );
 }
 
 // ── R9. LOOP-2 D-4: one bad ownerUserId row cannot promote a sender everywhere ─────────────────────

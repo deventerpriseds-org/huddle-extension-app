@@ -338,7 +338,7 @@ const cand = (o: Partial<ActionCandidate>): ActionCandidate => ({ proposalId: `p
 // ── H. Bell targets (X-6, AC-I-8) + settings + candidates ────────────────────────────────────────────
 t("H-1 bell targets from refs: email -> feed id; teams -> decoded chat id; meetings none", bellTargetsFor([{ source: "email", sourceItemId: `${MAILBOX}:m1` }, { source: "teams", sourceItemId: teamsSourceItemId(ONE, "1") }, { source: "transcript", sourceItemId: "mtg-1" }]), { emailGraphIds: [`feed:${MAILBOX}:m1`], chatIds: [ONE] });
 t("H-2 chat id decoded from a ledger id", chatIdOfTeamsItem(teamsSourceItemId(UNINV, "17")), UNINV);
-t("H-3 settings defaults: three noise categories, uninvolved ON, all sources, cap 500 (owner 2026-11-17, was 150)", [resolveActionsSettings(null).hideCategories, resolveActionsSettings(null).hideUninvolvedChats, resolveActionsSettings(null).dailyCap], [["meeting_invite", "timekeeping", "verification_code"], true, 500]);
+t("H-3 settings defaults: four noise categories (app_invite added 2026-11-17), uninvolved ON, all sources, cap 500 (owner 2026-11-17, was 150)", [resolveActionsSettings(null).hideCategories, resolveActionsSettings(null).hideUninvolvedChats, resolveActionsSettings(null).dailyCap], [["meeting_invite", "timekeeping", "verification_code", "app_invite"], true, 500]);
 
 // ── Owner 2026-11-17: the daily-cap notice. Same count and same condition as the heartbeat's cap (classifyCallsLeft).
 t("CAP-1 default cap is 500; an explicitly stored 150 is the owner's value and is kept", [DAILY_CAP_DEFAULT, resolveActionsSettings({}).dailyCap, resolveActionsSettings({ dailyCap: 150 }).dailyCap], [500, 500, 150]);
@@ -367,7 +367,9 @@ t(
     [true, true, true, true],
   );
 }
-t("H-4 settings: junk falls back field by field; cap clamped", [resolveActionsSettings({ hideCategories: ["spam", "timekeeping"], dailyCap: 99999, timeZone: "Mars/Base" }).hideCategories, resolveActionsSettings({ dailyCap: 99999 }).dailyCap, resolveActionsSettings({ timeZone: "Mars/Base" }).timeZone], [["timekeeping"], 2000, "America/New_York"]);
+// 2026-11-17: a list saved before knownHideCategories existed also gets app_invite (a category added after he saved
+// takes its default, hidden) -- see section AI below.
+t("H-4 settings: junk falls back field by field; cap clamped", [resolveActionsSettings({ hideCategories: ["spam", "timekeeping"], dailyCap: 99999, timeZone: "Mars/Base" }).hideCategories, resolveActionsSettings({ dailyCap: 99999 }).dailyCap, resolveActionsSettings({ timeZone: "Mars/Base" }).timeZone], [["timekeeping", "app_invite"], 2000, "America/New_York"]);
 // ── RANGE (owner 2026-11-17: "an option for all time vs this week") ─────────────────────────────────
 t("RANGE-1 default range is this week; junk falls back to week; 'all' is kept", [ACTIONS_SETTINGS_DEFAULT.range, resolveActionsSettings(null).range, resolveActionsSettings({ range: "forever" }).range, resolveActionsSettings({ range: "all" }).range], ["week", "week", "week", "all"]);
 t("RANGE-2 week window = since Monday 00:00 (unchanged behaviour)", actionsWindowStartMs(Date.parse(NOW), S()), SINCE);

@@ -15,20 +15,30 @@ import { ACTION_SECTION_ORDER } from "../correspondence/action-classify";
 
 // ── SETTINGS ("What shows") ─────────────────────────────────────────────────────────────────────────
 
-/** The three noise categories the owner hides by default (owner 2026-11-15). Exact SCHEMA enum values. */
-export const HIDEABLE_CATEGORIES = ["meeting_invite", "timekeeping", "verification_code"] as const satisfies readonly ActionCategory[];
+/** The noise categories the owner hides by default (owner 2026-11-15; `app_invite` owner-approved 2026-11-17, option
+ *  A). Exact SCHEMA enum values. Every one is hidden by default and switchable in What shows. */
+export const HIDEABLE_CATEGORIES = ["meeting_invite", "timekeeping", "verification_code", "app_invite"] as const satisfies readonly ActionCategory[];
 export type HideableCategory = (typeof HIDEABLE_CATEGORIES)[number];
 export const HIDEABLE_CATEGORY_LABEL: Record<HideableCategory, string> = {
   meeting_invite: "Meeting invites and calendar replies",
   timekeeping: "Timekeeping and timesheet reminders",
   verification_code: "Verification and sign-in codes",
+  app_invite: "App and workspace invitations",
 };
+/** The hideable categories that existed before `knownHideCategories` was stored (2026-11-17). Stored settings without
+ *  that field were saved knowing only these, so a category added later takes its DEFAULT (hidden) for them instead of
+ *  silently showing because it is missing from an older saved list. */
+export const HIDEABLE_CATEGORIES_V1: readonly HideableCategory[] = ["meeting_invite", "timekeeping", "verification_code"];
 
 export type ActionSource = "email" | "teams" | "meeting";
 export const ACTION_SOURCES: readonly ActionSource[] = ["email", "teams", "meeting"];
 
 export interface ActionsSettings {
   hideCategories: HideableCategory[];
+  /** The hideable categories the owner's saved `hideCategories` was decided against (resolved settings always carry
+   *  every current one). A hideable category NOT in this list was added after he saved, so it takes its default
+   *  (hidden) rather than reading as "switched on". */
+  knownHideCategories: HideableCategory[];
   /** UNINVOLVED_CHAT_RULE switch: hide Teams group / meeting / channel chats the owner never wrote in and was never
    *  @mentioned in. Default ON (owner 2026-11-16). */
   hideUninvolvedChats: boolean;
@@ -72,6 +82,7 @@ export function capNotice(usedToday: number | null | undefined, dailyCap: number
 
 export const ACTIONS_SETTINGS_DEFAULT: ActionsSettings = {
   hideCategories: [...HIDEABLE_CATEGORIES],
+  knownHideCategories: [...HIDEABLE_CATEGORIES],
   hideUninvolvedChats: true,
   sources: { email: true, teams: true, meeting: true },
   hiddenSenders: [],
@@ -95,12 +106,17 @@ const isZone = (z: unknown): z is string => {
 export function resolveActionsSettings(raw: unknown): ActionsSettings {
   const d = ACTIONS_SETTINGS_DEFAULT;
   const o = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  const cats = Array.isArray(o.hideCategories) ? o.hideCategories.filter((c): c is HideableCategory => (HIDEABLE_CATEGORIES as readonly string[]).includes(c as string)) : d.hideCategories;
+  const isHideable = (c: unknown): c is HideableCategory => (HIDEABLE_CATEGORIES as readonly string[]).includes(c as string);
+  const known = new Set<HideableCategory>(Array.isArray(o.knownHideCategories) ? o.knownHideCategories.filter(isHideable) : HIDEABLE_CATEGORIES_V1);
+  const cats = Array.isArray(o.hideCategories)
+    ? [...o.hideCategories.filter(isHideable), ...d.hideCategories.filter((c) => !known.has(c))]
+    : d.hideCategories;
   const src = o.sources && typeof o.sources === "object" ? (o.sources as Record<string, unknown>) : {};
   const senders = Array.isArray(o.hiddenSenders) ? o.hiddenSenders.filter((s): s is string => typeof s === "string" && !!s.trim()).map((s) => s.trim().toLowerCase().slice(0, 254)).slice(0, 200) : [];
   const cap = typeof o.dailyCap === "number" && Number.isFinite(o.dailyCap) ? Math.max(0, Math.min(DAILY_CAP_MAX, Math.floor(o.dailyCap))) : d.dailyCap;
   return {
     hideCategories: [...new Set(cats)],
+    knownHideCategories: [...HIDEABLE_CATEGORIES],
     hideUninvolvedChats: typeof o.hideUninvolvedChats === "boolean" ? o.hideUninvolvedChats : d.hideUninvolvedChats,
     sources: {
       email: typeof src.email === "boolean" ? src.email : true,
