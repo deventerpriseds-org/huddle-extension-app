@@ -54,3 +54,7 @@ All data in tests is synthetic (`.example` addresses). Logs carry job names, kin
 The scheduler (`fireJob`) POSTs to the routes above, so cadence fires are covered by the route wrappers.
 NOT wrapped (interactive, unchanged): the user's own `u-`/`xapp-` turns -- they keep the existing toast.
 `tsc --noEmit`: clean.
+
+## Step 3 -- offline suite
+
+`bun scripts/ai-quota-alert.test.ts`: **44 passed, 0 failed** (Q1 one row + one notice, Q2 no duplicate, Q3 concurrent -> one, Q4 success clears + recovery, Q5 non-quota logs kind only, Q6 throttle, Q7 no owner, N1 zero fetch while raising/clearing, N2 notice payload, N3 source-order guard, B1 bell, K1 kind helper, J1, C1 job context).
