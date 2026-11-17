@@ -252,3 +252,85 @@ or hide tag-only mentions (then change main's rule).
 
 AC-EU-2 (switch ON -> hidden chats never reach the model, counted in N hidden): `pipeline.ts:69-73` plus suite E-1 and
 S-15 -> CONFIRMED. AC-EU-3 (one rule): one `chatInvolvement` definition in `src` + `scripts` -> CONFIRMED.
+
+### 12. UI claims, read from code (`git diff 9c1859e1 5a21fc7b` of Rail.tsx, HuddleApp.tsx, store.ts, AppsLauncher.tsx, ViewSwitcher.tsx; ModulesLauncher.tsx and ActionsView.tsx read)
+
+- **Priorities and Schedule are still reachable.** Desktop: `Rail.tsx` drops them from `items` and renders
+  `RailModulesButton` (popover `side="right" align="start"`, header "Modules", `LauncherList items={HUDDLE_MODULES}`
+  = Priorities, Schedule, Actions, each setting `view`). Desktop header: `ViewSwitcher` inline = Huddle, Board, Files
+  + `ModulesPill` (same list). Phone: `BOTTOM_ENTRIES` = Huddle, Board, Modules, Files, Apps; Modules opens
+  `ModulesSheet` with the same list; grid columns derived (`bottomGridClass(5)` = `grid-cols-5`). `HuddleApp.tsx`
+  `VIEWS` keeps `priorities`/`schedule` and adds `actions`; `View` union gains `"actions"` (`tsc` exit 0 enforces the
+  `Record<View>`). X-3 (header pills lose Priorities/Schedule) is recorded as approved in the AC file (line 156).
+  **Code: CONFIRMED. Rendered: MERGE-PENDING-UAT.**
+- **Design tokens, not raw colours.** A regex for Tailwind palette colours (`bg|text|border|ring|fill|stroke|from|to|
+  via`-`red..black`), hex, `rgb(` and `hsl(` over ActionsView, ModulesLauncher, ViewSwitcher, Rail, HuddleApp and
+  AppsLauncher -> **0 hits**. New classes use `bg-muted`, `text-foreground`, `text-muted-foreground`,
+  `bg-primary-foreground/15`, `bg-surface`. **CONFIRMED (code).**
+- One shared list component (AC-M-12): `LauncherList` exported from AppsLauncher, used by Apps (`AppList`) and all
+  three Modules surfaces. Touch targets: `min-h-11` on list rows and bottom-bar buttons. Badge only when > 0, shows
+  `counts.all` from the same `getActionsFn`. Active state: `aria-current="page"` when `MODULE_VIEWS.has(view)`.
+  **CONFIRMED (code); rendered MERGE-PENDING-UAT.**
+- Phone top bar: `VIEW_TITLE` gives every view its own name, huddle view keeps the huddle's name (X-5).
+
+### 13. Sweep of all 96 ACs (`AC-actions-view-modules.md`)
+
+Method per AC: a named passing test (suite run in section 1), a probe of mine, or a code read. Anything only
+observable in a browser is MERGE-PENDING-UAT (code read consistent, not rendered). Nothing below was run in a browser.
+
+| ACs | evidence | verdict |
+|---|---|---|
+| M-1, M-2, M-3, M-4, M-7, M-8, M-9, M-10, M-11, M-12, M-13, M-14 | code read, section 12 (M-14 keyboard/Esc/focus return comes from the Radix Popover used, not new code) | code CONFIRMED; rendered **MERGE-PENDING-UAT** |
+| M-5 badge = All | code: badge reads `r.counts.all` from `getActionsFn`, hidden at 0 | code CONFIRMED; **MERGE-PENDING-UAT** |
+| M-6 View union + VIEWS | `store.ts` diff, `HuddleApp.tsx` diff, `tsc` exit 0 | **CONFIRMED** |
+| B-1..B-13 | code: `WidgetPage`, `CollapsibleSection` with counts, "Since Monday, <Mon D>" (`ActionsView.tsx:97`), never-classified state distinct from "caught up" (`:269-284`), error + Retry (`:219`), "What shows · N hidden" (`:205`), `truncate` + `title=` (`:308,327,517,524`), tokens only (section 12); section order F-4, newest first F-2, window C-1..C-5 | logic **CONFIRMED** by tests/code; rendered **MERGE-PENDING-UAT** |
+| C-1 | `actOnProposalFn` with `from:"actions"` (`ActionsView.tsx:378`); no new action endpoint in the diff | **CONFIRMED** |
+| C-2..C-5, C-7, C-8, C-11, C-12, C-13, C-14, C-16, C-22, C-23 | existing endpoints reused (code); optimistic/rollback/clipboard/toasts are client behaviour | **MERGE-PENDING-UAT** (not exercised here) |
+| C-6 Dismiss + F15 | V3-O1 on a real store: the same to-do from a follow-up is not proposed again | **CONFIRMED** (see O1 mislabel, LOW) |
+| C-9, C-10 Draft reply split by `isFeedId` | `saveEmailReplyDraftFn` only for draftable rows (`ActionsView.tsx:422`; `isDraftable: !isFeedId`) | code CONFIRMED; **MERGE-PENDING-UAT** |
+| C-15, F-3 Open in Teams | `teamsLink: safeLink(c.webUrl)` (`pipeline.ts:309`), `<a target="_blank" rel="noopener noreferrer">` (`ActionsView.tsx:447,559`) | **CONFIRMED** (code) |
+| C-17, C-18, C-19, E-14 (Tier 1) | D4 (section 3), G-1..G-7, D4-1..D4-8, D4-E1..E3, D4-S1..S5, V3-D4c; newer version judged again G-7 / D4-6 | **CONFIRMED** |
+| C-20 stop list | F-7 (hidden and counted). Note: `listSender` is client-supplied on Wrong?/Undo and not checked against the row (`actions.server.ts` `correctActionItem`); owner-scoped to his own settings, no cross-user effect | **CONFIRMED** (LOW note) |
+| C-21 Wrong? text is data, never logged | G-3 bound; no log line carries it (section F-4 below); not passed to any model in this diff | **CONFIRMED** (code) |
+| D-1, D-3, D-10 | client behaviour | **MERGE-PENDING-UAT** |
+| D-2 reconciliation | F-3 RECONCILE | **CONFIRMED** (logic) |
+| D-4, D-5, D-6, D-7, D-8 | H-3, H-4, F-5, F-6; settings stored server-side via `setActionsSettingsRaw` | **CONFIRMED** (logic); panel rendering MERGE-PENDING-UAT |
+| D-9, EU-1, EU-2, EU-3 | section 11 | EU-1 **REFUTED on row S-9 (D7)**, all other rows CONFIRMED; EU-2, EU-3, D-9 CONFIRMED |
+| E-1 one classifier module | `action-classify.ts` imported by `pipeline.ts` and `scripts/action-scan-steps.ts` (section 2 grep) | **CONFIRMED** |
+| E-2, E-3 (Tier 1) | A-1..A-11, D1 section 2 | **CONFIRMED** |
+| E-4, E-5 | A-6, A-7, E-5 | **CONFIRMED** |
+| E-6 | B-1, H-7 | **CONFIRMED** |
+| E-7 | E-3; V3-O2 (an edit with the same id is NOT re-judged, O2, outside the AC) | **CONFIRMED** |
+| E-8, H-3 | E-4, D2 (section 5), D2-E1, V3-D2c | **CONFIRMED** |
+| E-9 | C-1..C-5 | **CONFIRMED** |
+| E-10 | V3-O1 (one proposal, suppressed follow-up backs nothing) + suite H-6 | **CONFIRMED** |
+| E-11 resolved threads not classified | code: the plan splits `email.resolved` / `teams.resolved` from `scan`, and `threadUnits` iterates `scan` only | **CONFIRMED** (code) |
+| E-12 store-only sent rows never classified | not traced this loop | **NOT REACHED** |
+| E-13 | F-1 | **CONFIRMED** |
+| F-1, F-2 | `ownedScope` / `callerOwners` gate on every server fn; D4-S4, D6-S7, D5-S0 other owner refused | **CONFIRMED** |
+| F-4 logs | the diff adds 3 log lines, all counts or `e.name` (`git diff 9c1859e1 5a21fc7b -- src`) | **CONFIRMED** |
+| G-1, G-2, G-3 (phone) | code (dropdown chip under `md:app-hidden`, `VIEW_TITLE`) | **MERGE-PENDING-UAT** |
+| H-1 page read makes no model call | `getActionsPage` (`actions.server.ts:272-311`) calls no model and imports none (code read; not measured) | **CONFIRMED** (code) |
+| H-2 heartbeat | `ingest.server.ts` `withActionsClassify` after the pass, only when ingest is on; `classifyDue` 10 min; try/catch; counts-only log | **CONFIRMED** (code) |
+| I-1, I-2, I-3, I-6 | unchanged components re-used; nav entries code-read | **MERGE-PENDING-UAT** |
+| I-4 bell unchanged | attention 16 / attention-focus 27 all passed | **CONFIRMED** |
+| I-5 checklist labels only | `ProposalChecklistItem.tsx` +9/-9 in the diff; not read line by line | **UNPROVEN** |
+| I-7 report keeps working | `scripts/action-scan-steps.ts` imports the same module (section 2) | **CONFIRMED** (code) |
+| I-8 bell settle from Actions only | D5-S2, D5-S5, H-1 | **CONFIRMED** |
+| I-9 markProcessed keeps the verdict | correspondence-ledger-sql 79/79 (AI-9), D2-S2 | **CONFIRMED** |
+
+### 14. Verdict
+
+| class | count |
+|---|---|
+| Loop-2 defects re-derived | D1, D2, D4, D5, D6 **CONFIRMED FIXED**; D3 bound CONFIRMED, its wording inaccurate (LOW, doc) |
+| New defects | **D7 (LOW)** AC S-9 vs main's merged fail-open rule; **test gap (LOW)** owner's own words as a quote source not locked (D1-M INERT); **O1 (LOW)** suppressed follow-up stored as `onBoard: true`; **O2 (LOW)** edited message keeps its old verdict and quote |
+| Mutations (mine) | 3 FIRED (control EQUIVALENT), 2 INERT (1 test gap, 1 equivalent in reachable states), 0 NOT-APPLIED |
+| Suites | all 20 + tsc + build on 5a21fc7b and on the test-merge with main 9c1859e1; only fireflies-minutes G3/G5/G8 fail, as on main |
+| NOT REACHED | AC-E-12; AC-I-5 line-by-line |
+| UI | rendered behaviour of every M/B/C/D/G/I UI claim: **MERGE-PENDING-UAT** |
+
+No defect blocks a merge: none of the new findings is above LOW, and D7 fails toward showing (one model call per
+such chat, inside the daily cap), never toward hiding. **Verdict: MERGE-PENDING-UAT** -- the code may land; the UI
+claims are NOT YET UAT-VERIFIED until a browser run against the deployed app passes. D7 needs the owner's call
+(keep main's fail-open rule and fix the S-9 row and fixture, or hide tag-only mentions).
