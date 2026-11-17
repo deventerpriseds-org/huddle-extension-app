@@ -87,3 +87,24 @@ Fixes for the defects in `VERIFY-actions-view-2.md` (verifier probes copied to
   kept main's body (never-throwing wrapper around `chatInvolvementOf`, shared `teamsOwnerIds` / `isOwnerMessage`,
   `Array.isArray` mention guards, `owner_maybe_mentioned`) and added ONLY the branch's channel rule (`kind === "channel"`
   hidden like a group). After: `report-from-ledger` 62/62, `actions-view` 65/65 (S-4 channel PASS), `tsc` exit 0.
+- D1 re-check after the container restart (2026-11-17): `actions-view` 65/65, `report-from-ledger` 62/62 on a434a54c;
+  the `chatInvolvement` resolution confirmed by `git diff origin/main` (main's body intact, the only change is
+  `&& kind !== "channel"`). **D1 mutation proofs** (`mutate.sh`, anchors in files, exact test names):
+  d1a `quoteIsVerbatim` joins the pieces again -> A-9 **FIRED (control EQUIVALENT)**, exit 0; d1b
+  `teamsQuoteHaystack` returns one joined string -> A-9 **FIRED (control EQUIVALENT)**, exit 0; d1c
+  `emailQuoteHaystack` joins body + forwarded part -> A-10 **FIRED (control EQUIVALENT)**, exit 0.
+- **D4 FIXED (Tier 1)** (cce40415): `chat.task_proposals.owner_correction` (EXISTING nullable column, no new table)
+  now holds `{v:2, items:{<itemKey>: correction}}`: one correction per ITEM VERSION (itemKey = thread key + latest
+  message id; meetings: meeting id + item). `correctionFor(stored, itemKey)` reads only that version; the pre-D4
+  single-object value is read as a map of its one item, so no migration. `withItemCorrection` / `withItemUndo`
+  change ONE entry; the server writes inside `BEGIN ... SELECT ... FOR UPDATE ... COMMIT` (`correctItemFor`), so two
+  concurrent Wrong?s on two threads both survive. Undo now sends the row's `itemKey` (ActionsView, both Undo
+  buttons); the ledger mirror stays per version (one correction per latest-message row).
+  Tests: `actions-view` 76/76 (new D4-1..D4-8, D4-E1..E3: the verifier's A/B repro, Undo on B never touches A,
+  pre-D4 shape, history per item, end to end through `buildCandidates` + selection with two threads on one shared
+  proposal). New real-PostgreSQL suite `scripts/actions-view-server.test.ts` 6/6 (D4-S1..S5: the repro on the real
+  SQL, Undo byte-identity of A, per-version ledger mirror, owner scoping, and a deterministic lost-update check where
+  a second connection holds the row lock and commits C while B's Wrong? waits). `tsc` exit 0.
+  Mutations (all `FIRED (control EQUIVALENT)`, exit 0, restored to HEAD): d4a `withItemCorrection` starts from an
+  empty map -> D4-1; d4b `withItemUndo` withdraws every entry -> D4-2; d4c candidates read the last-written entry
+  instead of this item's -> D4-E2; d4d `FOR UPDATE` removed -> D4-S5.
