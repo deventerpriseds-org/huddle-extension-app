@@ -356,8 +356,11 @@ export const pgLedger: LedgerStore & ContentStore = {
     await ensureBootstrapped();
     const r = await getPool().query(
       // 2026-11-16: a stored Actions verdict (result_ids.action, written by lib/actions) survives (re)processing.
+      // 2026-11-17 (loop-2 D2): so does the Actions model-call attempt list (result_ids.action_calls), which the daily
+      // cap counts; dropping it here would hand the cap back calls that were already made.
       `UPDATE chat.correspondence_ledger SET status = 'processed',
-              result_ids = $4::jsonb || CASE WHEN result_ids ? 'action' THEN jsonb_build_object('action', result_ids->'action') ELSE '{}'::jsonb END,
+              result_ids = $4::jsonb || CASE WHEN result_ids ? 'action' THEN jsonb_build_object('action', result_ids->'action') ELSE '{}'::jsonb END
+                                     || CASE WHEN result_ids ? 'action_calls' THEN jsonb_build_object('action_calls', result_ids->'action_calls') ELSE '{}'::jsonb END,
               missing_field = NULL,
               last_error_category = NULL, lease_until = NULL, processed_at = now(), updated_at = now()
         WHERE source = $1 AND source_item_id = $2 AND claim_version = $3`,

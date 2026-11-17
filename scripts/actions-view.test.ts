@@ -25,6 +25,7 @@ import {
   bellTargetsFor,
   chatIdOfTeamsItem,
   classifyEnabled,
+  localMidnightMs,
   correctionFor,
   correctionHides,
   correctionsOf,
@@ -37,7 +38,7 @@ import {
   type ActionCandidate,
   type ActionsSettings,
 } from "../src/features/huddle/lib/actions/actions";
-import { buildCandidates, runClassify, threadUnits, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
+import { buildCandidates, classifyCallsLeft, runClassify, threadUnits, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
 import { meetingItemIsOwnersOrUnassigned, splitActionItems } from "../src/features/huddle/lib/proposals/meeting-triage";
 import { titleKey } from "../src/features/huddle/lib/proposals/proposals";
 
@@ -146,6 +147,7 @@ const stub = (answer: (system: string, input: string) => unknown) => {
   const stored = new Map<string, ActionVerdict>();
   const meeting: string[][] = [];
   const deps: ClassifyDeps = {
+    recordCall: async () => {},
     model: async (system, input) => {
       calls.push(input);
       const a = answer(system, input);
@@ -188,6 +190,62 @@ const answerFor = (system: string, input: string) => (input.includes("CHAT (olde
   const s7 = stub(answerFor);
   await runClassify(asm, S(), new Set(), 10, { ...s7.deps, nowMs: () => 100, deadlineMs: 50 });
   t("E-9 no model call starts after the pass deadline", s7.calls.length, 0);
+}
+
+// ── D2 (loop 2): EVERY model call attempt counts toward the daily cap at the moment it is made ────────
+// The server's own formula: attempts recorded since local midnight -> classifyCallsLeft(used, cap) per pass.
+{
+  const day = (iso: string) => new Date(localMidnightMs(Date.parse(iso), "America/New_York")).toISOString();
+  const passAt = (i: number) => `2026-11-16T${String(15 + Math.floor(i / 6)).padStart(2, "0")}:${String((i % 6) * 10).padStart(2, "0")}:00.000Z`;
+  /** 10 passes, 10 minutes apart, one day; the failure mode is injected; attempts live in an in-memory "ledger". */
+  const tenPasses = async (failure: "model" | "timeout" | "propose" | "store", cap = 5, recordFails = false) => {
+    const attempts: string[] = [];
+    let modelCalls = 0;
+    for (let i = 0; i < 10; i++) {
+      const now = passAt(i);
+      const used = attempts.filter((a) => a >= day(now)).length;
+      const s = stub(answerFor);
+      await runClassify(asm, S(), new Set(), classifyCallsLeft(used, cap), {
+        ...s.deps,
+        nowIso: () => now,
+        recordCall: async () => {
+          if (recordFails) throw new Error("db down");
+          attempts.push(now);
+        },
+        model: async (system, input) => {
+          modelCalls++;
+          if (failure === "model") throw new Error("429");
+          if (failure === "timeout") throw new Error("classify_timeout");
+          return answerFor(system, input);
+        },
+        propose: async (u) => {
+          if (failure === "propose") throw new Error("propose failed");
+          return { id: `prop-${u.refItemId.length}`, onBoard: false };
+        },
+        storeVerdict: async () => {
+          if (failure === "store") throw new Error("write failed");
+        },
+      });
+    }
+    return { modelCalls, attempts: attempts.length };
+  };
+  const failing = await tenPasses("model");
+  t("D2-1 GUARD: cap 5, model failing, 10 passes -> at most 5 model calls (verifier probe A gave 50)", [failing.modelCalls <= 5, failing.modelCalls, failing.attempts], [true, 5, 5]);
+  t("D2-2 GUARD: timeouts / failed proposal writes / failed verdict writes each count too", [(await tenPasses("timeout")).modelCalls, (await tenPasses("propose")).modelCalls, (await tenPasses("store")).modelCalls], [5, 5, 5]);
+  t("D2-3 GUARD: when the attempt cannot be recorded, NO model call is made", (await tenPasses("model", 5, true)).modelCalls, 0);
+  t("D2-4 classifyCallsLeft: per-pass 6, cap reached, over cap, junk count fails closed", [classifyCallsLeft(0, 150), classifyCallsLeft(147, 150), classifyCallsLeft(150, 150), classifyCallsLeft(400, 150), classifyCallsLeft(Number.NaN, 150)], [6, 3, 0, 0, 0]);
+  // The next local day starts fresh (owner zone): attempts at 23:50 ET do not count after 00:00 ET.
+  t("D2-5 the count is per local day", [day("2026-11-17T04:50:00.000Z") === day("2026-11-16T15:00:00.000Z"), day("2026-11-17T05:10:00.000Z") > "2026-11-17T04:50:00.000Z"], [true, true]);
+  // D3 (accepted, measured): two instances that start a pass at the same instant both read the same count.
+  const shared: string[] = [];
+  let concurrent = 0;
+  const one = () => {
+    const s = stub(answerFor);
+    const used = 3; // read by both before either records
+    return runClassify(asm, S(), new Set(), classifyCallsLeft(used, 5), { ...s.deps, recordCall: async () => void shared.push("x"), model: async (sy, inp) => (concurrent++, answerFor(sy, inp)) });
+  };
+  await Promise.all([one(), one()]);
+  t("D3-MEASURE two simultaneous instances, cap 5, 3 used: 4 calls -> 7 for the day (overrun = 2 = (instances-1) x left)", [concurrent, 3 + shared.length], [4, 7]);
 }
 
 // Meeting headings.

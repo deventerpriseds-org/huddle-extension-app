@@ -83,7 +83,20 @@ export function meetingUnits(meetings: readonly MeetingItems[], ownerNames: read
   });
 }
 
+/** At most this many model calls per pass (a pass rides the ~45s heartbeat). */
+export const CLASSIFY_PER_PASS = 6;
+
+/** Pure (AC-H-3, loop-2 D2): how many model calls this pass may START. `attemptsToday` is every model call ATTEMPT
+ *  made since the owner's local midnight (recorded at the moment of the call, whatever happened after it). */
+export function classifyCallsLeft(attemptsToday: number, dailyCap: number): number {
+  return Math.max(0, Math.min(CLASSIFY_PER_PASS, dailyCap - (Number.isFinite(attemptsToday) ? attemptsToday : dailyCap)));
+}
+
 export interface ClassifyDeps {
+  /** Loop-2 D2: record ONE model call attempt (durably, on the thread's ledger row) BEFORE the call is made, so a
+   *  call that times out, fails, or whose verdict / proposal write fails still counts toward the daily cap. Throws
+   *  when it cannot record; then no call is made. */
+  recordCall(at: ThreadUnit["storeAt"]): Promise<void>;
   /** The model call (strict JSON). Throws on failure. */
   model(system: string, input: string, schemaName: string): Promise<unknown>;
   /** Back an admitted item with a proposal (EXISTING proposeFromSource). onBoard = already an open board task. */
@@ -110,8 +123,9 @@ export interface ClassifyResult {
 }
 
 /**
- * The heartbeat CLASSIFY pass. `judged` = the item keys that already have a stored verdict (AC-E-7). `callsLeft` = the
- * daily cap minus today's calls (AC-E-8 / AC-H-3). A model failure stores nothing (retried next pass, AC-E-5).
+ * The heartbeat CLASSIFY pass. `judged` = the item keys that already have a stored verdict (AC-E-7). `callsLeft` =
+ * classifyCallsLeft(attempts today, daily cap) (AC-E-8 / AC-H-3). A model failure stores no verdict (retried next
+ * pass, AC-E-5), but its attempt was recorded first, so retries still spend the daily cap (D2).
  */
 export async function runClassify(
   a: AssembledLedgerPlan,
@@ -131,6 +145,13 @@ export async function runClassify(
     if (res.calls >= callsLeft || (deps.deadlineMs !== undefined && deps.nowMs && deps.nowMs() >= deps.deadlineMs)) {
       res.overCap++;
       continue;
+    }
+    // D2: the attempt is counted BEFORE the call. No record, no call (the store is what the cap reads).
+    try {
+      await deps.recordCall(u.storeAt);
+    } catch {
+      res.failures++;
+      break;
     }
     res.calls++;
     let raw: unknown;

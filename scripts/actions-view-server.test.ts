@@ -53,6 +53,15 @@ const LIB = join(import.meta.dir, "../src/features/huddle/lib");
 // The caller resolves to O (no journey / identity service in a test).
 mock.module(join(LIB, "journey/identity.ts"), () => ({ resolveTaskEmail: async (c: { entra_email?: string }) => c?.entra_email }));
 mock.module(join(LIB, "identity/identity.server.ts"), () => ({ resolveScopeByEmail: async (e: string) => ({ emails: [e] }) }));
+mock.module(join(LIB, "identity/scheduling-config.server.ts"), () => ({ DEFAULT_TZ: "America/New_York" }));
+// The model: every call counted, every call FAILS (a 429 / a timeout that still bills).
+const modelCalls = { n: 0 };
+mock.module(join(LIB, "openai-responses.server.ts"), () => ({
+  callOpenAIRouter: async () => {
+    modelCalls.n++;
+    throw new Error("429");
+  },
+}));
 
 const item = (id: string, source: SourceItem["source"] = "teams"): SourceItem => ({
   source,
@@ -92,7 +101,8 @@ try {
     pool.query(`UPDATE chat.correspondence_ledger SET result_ids = result_ids || jsonb_build_object('action', $3::jsonb) WHERE source = $1 AND source_item_id = $2`, [
       source,
       sid,
-      JSON.stringify({ v: 1, key, status: "open", proposalId: propId, at: "2026-11-16T10:00:00.000Z" }),
+      // A day well before the D2 day below, so these verdicts never count toward that day's cap.
+      JSON.stringify({ v: 1, key, status: "open", proposalId: propId, at: "2026-11-09T10:00:00.000Z" }),
     ]);
   const column = async (id: string) => (await pool.query(`SELECT owner_correction c FROM chat.task_proposals WHERE id = $1`, [id])).rows[0]?.c ?? null;
   const ledgerCorr = async (sid: string) => (await pool.query(`SELECT owner_correction c FROM chat.correspondence_ledger WHERE source_item_id = $1`, [sid])).rows[0]?.c ?? null;
@@ -140,6 +150,54 @@ try {
   await pending;
   const c4 = await column(shared);
   t("D4-S5 GUARD: two concurrent corrections on two chats both survive (row lock, no lost update)", [hides(c4, "teams:chatC|chatC:m1"), hides(c4, KB), hides(c4, KA)], [true, true, true]);
+
+  // ── D2: every model call ATTEMPT is recorded before the call and counted by the daily cap ─────────
+  // Day used here: 2026-11-10 (New York midnight = 05:00Z).
+  const D10 = "2026-11-10T05:00:00.000Z";
+  await L.observe(O, [item("d2:m1"), item("d2:m2")]);
+  const at1 = { source: "teams" as const, sourceItemId: "d2:m1" };
+  for (const ts of ["2026-11-10T15:00:00.000Z", "2026-11-10T15:10:00.000Z", "2026-11-10T15:20:00.000Z"]) await A.recordActionCall([O], at1, ts);
+  t("D2-S1 GUARD: three recorded attempts (no verdict stored at all) count 3 for the day", await A.actionCallsToday([O], D10), 3);
+  const cl = (await L.claimDue(O, ["teams"], 50, 5)).find((c) => c.sourceItemId === "d2:m1");
+  t("D2-S2 GUARD: markProcessed keeps the attempt list (the cap is not handed back)", [cl ? await L.markProcessed(cl, { bell: ["b"] }) : "no-claim", await A.actionCallsToday([O], D10)], [true, 3]);
+  let threw = false;
+  try {
+    await A.recordActionCall([O], { source: "teams", sourceItemId: "no-such-row" }, "2026-11-10T15:30:00.000Z");
+  } catch {
+    threw = true;
+  }
+  t("D2-S3 recording on a row that is not there throws (so no model call is made)", threw, true);
+  t("D2-S4 another owner's attempts are not counted; attempts before midnight are not counted", [await A.actionCallsToday([OTHER], D10), await A.actionCallsToday([O], "2026-11-11T05:00:00.000Z")], [0, 0]);
+  await A.recordActionCall([O], at1, "2026-11-13T15:00:00.000Z");
+  const kept = (await pool.query(`SELECT result_ids->'action_calls' c FROM chat.correspondence_ledger WHERE source_item_id = 'd2:m1'`)).rows[0].c;
+  t("D2-S5 entries older than 48h are pruned when a new one is added", kept, ["2026-11-13T15:00:00.000Z"]);
+  await pool.query(`UPDATE chat.correspondence_ledger SET result_ids = result_ids || jsonb_build_object('action', '{"v":1,"key":"k","status":"none","at":"2026-11-14T15:00:00.000Z"}'::jsonb) WHERE source_item_id = 'd2:m2'`);
+  t("D2-S6 a verdict stored with no recorded attempt (deploy day) still counts: max(attempts, verdicts)", await A.actionCallsToday([O], "2026-11-14T05:00:00.000Z"), 1);
+
+  // ── D2 end to end: the REAL heartbeat pass (runActionsClassify), real SQL, model mocked to FAIL ────
+  // Cap 5, 10 passes 10 minutes apart on one day, 8 Teams 1:1 chats waiting -> at most 5 model calls.
+  const { setSystemTime } = await import("bun:test");
+  const { teamsSourceItemId } = await import("../src/features/huddle/lib/correspondence/source-item");
+  process.env.HUDDLE_ONEDRIVE_FEEDS = JSON.stringify({ enabled: true, synthetic: true, ownerLogins: [O], driveUser: O, mailbox: "owner@work.example", sourceLogin: "login@work.example", subjectPrefix: "HUDDLE-PA-SBX-", teams: { ownerSenderIds: ["owner-guid-0001"] }, correspondence: { ingest: true, ownerNames: ["Owen Example"] } });
+  const { setActionsSettingsRaw } = await import("../src/features/huddle/lib/email/email-replies.server");
+  const { resolveActionsSettings } = await import("../src/features/huddle/lib/actions/actions");
+  await setActionsSettingsRaw(O, resolveActionsSettings({ dailyCap: 5 }));
+  const chats = Array.from({ length: 8 }, (_, i) => `19:e2e${i}_x${"@"}unq.gbl.spaces`);
+  await L.storeContent(
+    O,
+    chats.map((c) => ({
+      ...item(teamsSourceItemId(c, "1")),
+      threadId: c,
+      at: "2026-11-16T14:00:00.000Z",
+      content: { kind: "teams", chatId: c, chatName: null, messageId: "1", at: "2026-11-16T14:00:00.000Z", sender: { id: "other-guid", name: "Pat Example", isApp: false }, fromOwner: false, text: "Could you please send the synthetic deck today?", webUrl: null, mentionedUserIds: [], ownerUserId: "owner-guid-0001" },
+    })) as never,
+  );
+  for (let i = 0; i < 10; i++) {
+    setSystemTime(new Date(Date.parse("2026-11-16T15:00:00.000Z") + i * 10 * 60_000 + 1000));
+    await A.runActionsClassify();
+  }
+  setSystemTime();
+  t("D2-E1 GUARD (real heartbeat + SQL): cap 5, model failing, 10 passes -> at most 5 model calls", [modelCalls.n <= 5, modelCalls.n, await A.actionCallsToday([O], "2026-11-16T05:00:00.000Z")], [true, 5, 5]);
 } catch (e) {
   fail++;
   console.log(`FAIL harness: ${e instanceof Error ? `${e.name}: ${e.message}` : "error"}`);

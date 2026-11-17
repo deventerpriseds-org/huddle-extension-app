@@ -29,7 +29,7 @@ import {
   type ActionsSettings,
   type OwnerCorrection,
 } from "./actions";
-import { buildCandidates, runClassify, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
+import { buildCandidates, classifyCallsLeft, runClassify, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
 
 /** The feed config when the correspondence ingest is on (the Actions view reads what the ingest stored). */
 export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | null {
@@ -67,13 +67,45 @@ async function storeVerdict(owners: readonly string[], at: ThreadUnit["storeAt"]
   );
 }
 
-async function callsToday(owners: readonly string[], dayStartIso: string): Promise<number> {
-  const r = await getSharedPool().query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM chat.correspondence_ledger
-      WHERE owner_email = ANY($1::text[]) AND result_ids ? 'action' AND (result_ids->'action'->>'at') >= $2`,
+/** Attempts older than this are pruned from a row's list when a new one is added (only today's count). */
+const ACTION_CALLS_KEEP_MS = 48 * 3600_000;
+
+/**
+ * Loop-2 D2: record ONE model call attempt on the thread's latest ledger row (`result_ids.action_calls`, a list of
+ * ISO instants), BEFORE the call. Atomic append in one UPDATE, so concurrent passes never lose a count. Throws when
+ * the row is not there (then the caller makes no call). Exported for the real-PostgreSQL test.
+ */
+export async function recordActionCall(owners: readonly string[], at: ThreadUnit["storeAt"], nowIso: string): Promise<void> {
+  const keepFrom = new Date(Date.parse(nowIso) - ACTION_CALLS_KEEP_MS).toISOString();
+  const r = await getSharedPool().query(
+    `UPDATE chat.correspondence_ledger
+        SET result_ids = jsonb_set(result_ids, '{action_calls}',
+              COALESCE((SELECT jsonb_agg(x) FROM jsonb_array_elements_text(
+                          CASE WHEN jsonb_typeof(result_ids->'action_calls') = 'array' THEN result_ids->'action_calls' ELSE '[]'::jsonb END) x
+                         WHERE x >= $5), '[]'::jsonb) || to_jsonb($3::text))
+      WHERE source = $1 AND source_item_id = $2 AND owner_email = ANY($4::text[])`,
+    [at.source, at.sourceItemId, nowIso, lower(owners), keepFrom],
+  );
+  if ((r.rowCount ?? 0) !== 1) throw new Error("action_call_not_recorded");
+}
+
+/**
+ * Model calls spent today (AC-H-3): every recorded ATTEMPT since the owner's local midnight (D2), and never fewer
+ * than the verdicts stored today (verdicts stored before attempts were recorded, i.e. the deploy day). Exported for
+ * the real-PostgreSQL test.
+ */
+export async function actionCallsToday(owners: readonly string[], dayStartIso: string): Promise<number> {
+  const r = await getSharedPool().query<{ calls: number; verdicts: number }>(
+    `SELECT
+       (SELECT count(*)::int FROM chat.correspondence_ledger l
+          CROSS JOIN LATERAL jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(l.result_ids->'action_calls') = 'array' THEN l.result_ids->'action_calls' ELSE '[]'::jsonb END) a(at)
+         WHERE l.owner_email = ANY($1::text[]) AND l.result_ids ? 'action_calls' AND a.at >= $2) AS calls,
+       (SELECT count(*)::int FROM chat.correspondence_ledger
+         WHERE owner_email = ANY($1::text[]) AND result_ids ? 'action' AND (result_ids->'action'->>'at') >= $2) AS verdicts`,
     [lower(owners), dayStartIso],
   );
-  return Number(r.rows[0]?.n ?? 0) || 0;
+  return Math.max(Number(r.rows[0]?.calls ?? 0) || 0, Number(r.rows[0]?.verdicts ?? 0) || 0);
 }
 
 // ── the model ────────────────────────────────────────────────────────────────────────────────────────
@@ -99,8 +131,8 @@ async function model(system: string, input: string, schemaName: string): Promise
 
 // ── HEARTBEAT: the classify step ─────────────────────────────────────────────────────────────────────
 
-/** At most this many model calls per pass (a pass rides the ~45s heartbeat), and one pass per interval. */
-export const CLASSIFY_PER_PASS = 6;
+/** One pass per interval (the per-pass call limit, CLASSIFY_PER_PASS, lives with the pure cap rule in pipeline.ts). */
+export { CLASSIFY_PER_PASS } from "./pipeline";
 export const CLASSIFY_EVERY_MS = 10 * 60_000;
 let lastClassifyMs = 0;
 let classifying: Promise<ClassifyResult | null> | null = null;
@@ -127,12 +159,13 @@ export function runActionsClassify(): Promise<ClassifyResult | null> {
       const assembled = assembleLedgerPlan(data, cfg, sinceMondayMs(now, s.timeZone));
       const verdicts = await loadVerdicts(owners);
       const judged = new Set([...verdicts.values()].map((v) => v.key));
-      const used = await callsToday(owners, new Date(localMidnightMs(now, s.timeZone)).toISOString());
-      const left = Math.max(0, Math.min(CLASSIFY_PER_PASS, s.dailyCap - used));
+      const used = await actionCallsToday(owners, new Date(localMidnightMs(now, s.timeZone)).toISOString());
+      const left = classifyCallsLeft(used, s.dailyCap);
       const { proposeFromSource } = await import("../proposals/engine");
       const { deps } = await import("../proposals/proposals.server");
       const pd = await deps(cfg.owner);
       const res = await runClassify(assembled, s, judged, left, {
+        recordCall: (at) => recordActionCall(owners, at, new Date().toISOString()),
         model,
         nowMs: () => Date.now(),
         deadlineMs: now + CLASSIFY_BUDGET_MS,
