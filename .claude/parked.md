@@ -6,3 +6,4 @@
 - [x] PARKED: report-links-checklist | Report email links into Iris's checklist + Wrong link + category settings | state: ACs written, not built | since 2026-11-15 | DECIDED: go 2026-11-15 (owner: option A)
 - [x] PARKED: verify-loop-work-slug-alias | eds-claude-skills #138 checker fix | state: not merged (AC findings fixed at 722c72f, CI running) | since 2026-11-15 | DECIDED: go 2026-11-15 (owner: "Go on cHecker fix")
 - [x] PARKED: parked-work-reminder | eds-claude-skills #139: the per-turn reminder hook that prints this list | state: not merged (CI running) | since 2026-11-15 | DECIDED: go 2026-11-15 (owner: "Make a mechanized rule")
+- [ ] PARKED: actions-accuracy | Actions view accuracy fixes (sender no longer reversed, old verdicts re-judged, one row per real ask, AI misread reason, meeting label lines, More control) | state: not merged (branch claude_actions-accuracy; loop-2 verifier fixes done, UAT not run) | since 2026-11-17 | decide: go/skip

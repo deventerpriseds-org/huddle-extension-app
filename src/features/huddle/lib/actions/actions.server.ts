@@ -30,7 +30,7 @@ import {
   type ActionsSettings,
   type OwnerCorrection,
 } from "./actions";
-import { buildCandidates, classifyCallsLeft, runClassify, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
+import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
 
 /** The feed config when the correspondence ingest is on (the Actions view reads what the ingest stored). */
 export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | null {
@@ -128,7 +128,7 @@ async function model(system: string, input: string, schemaName: string): Promise
     return await Promise.race([
       callOpenAIRouter<unknown>({ model: EXTRACT_MODEL, system, prompt: input, schema: ACTION_SCHEMA as unknown as Record<string, unknown>, schemaName }),
       new Promise<never>((_, rej) => {
-        timer = setTimeout(() => rej(new Error("classify_timeout")), MODEL_TIMEOUT_MS);
+        timer = setTimeout(() => { const e = new Error("classify_timeout"); void import("../ai-quota/hooks").then((q) => q.reportAiFailure(e)).catch(() => {}); rej(e); }, MODEL_TIMEOUT_MS);
       }),
     ]);
   } finally {
@@ -165,7 +165,8 @@ export function runActionsClassify(): Promise<ClassifyResult | null> {
       const data = await loadLedgerReportData(cfg.ownerLogins);
       const assembled = assembleLedgerPlan(data, cfg, sinceMondayMs(now, s.timeZone));
       const verdicts = await loadVerdicts(owners);
-      const judged = new Set([...verdicts.values()].map((v) => v.key));
+      // Loop-2 D-1: only verdicts judged at the current classifier-input version are skipped; older ones re-judge.
+      const judged = currentlyJudgedKeys(verdicts);
       const used = await usedTodayFor(cfg.ownerLogins, now, s.timeZone);
       const left = classifyCallsLeft(used, s.dailyCap);
       const { proposeFromSource } = await import("../proposals/engine");

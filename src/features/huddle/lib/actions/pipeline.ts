@@ -17,6 +17,7 @@ import {
   actionSectionFor,
   admitActionVerdict,
   canonQuote,
+  CLASSIFIER_INPUT_VERSION,
   emailActionInput,
   emailInstructionsFor,
   emailQuoteHaystack,
@@ -25,8 +26,8 @@ import {
   teamsQuoteHaystack,
   type ActionVerdict,
 } from "../correspondence/action-classify";
-import type { ConversationFacts } from "../correspondence/needs-you";
-import { foldPersonName, type AssembledLedgerPlan, type LedgerReportRow, type MeetingItems, type TeamsChatFacts } from "../correspondence/report-from-ledger";
+import { personNameWordCount, type ConversationFacts } from "../correspondence/needs-you";
+import { foldPersonName, normTeamsId, type AssembledLedgerPlan, type LedgerReportRow, type MeetingItems, type TeamsChatFacts } from "../correspondence/report-from-ledger";
 import type { EmailContent } from "../correspondence/source-item";
 import { FEED_ID_PREFIX } from "../external-feeds/onedrive-feed";
 import { meetingItemIsOwnersOrUnassigned } from "../proposals/meeting-triage";
@@ -82,6 +83,23 @@ export function meetingUnits(meetings: readonly MeetingItems[], ownerNames: read
     m.open.forEach((it, i) => (meetingItemIsOwnersOrUnassigned(m.openHeadings?.[i] ?? null, ownerNames) ? items.push(it) : othersHidden++));
     return { meeting: m, items, othersHidden };
   });
+}
+
+/** Pure (loop-2 D-1): is a stored verdict the CURRENT judgement of this thread version? Same item key AND judged at
+ *  the current classifier-input version of its source (absent = 1). An older verdict is neither reused nor shown. */
+export function verdictIsCurrent(v: Pick<ActionVerdict, "key" | "inputVersion"> | null | undefined, itemKey: string, source: "email" | "teams"): boolean {
+  return !!v && v.key === itemKey && (v.inputVersion ?? 1) === CLASSIFIER_INPUT_VERSION[source];
+}
+
+/** Pure (loop-2 D-1): the item keys whose stored verdict is current, from the stored verdicts keyed
+ *  "<source>\u0000<ledger id>" (as loadVerdicts reads them). Only these are skipped by the classify pass. */
+export function currentlyJudgedKeys(verdicts: ReadonlyMap<string, ActionVerdict>): Set<string> {
+  const out = new Set<string>();
+  for (const [k, v] of verdicts) {
+    const source = k.slice(0, k.indexOf("\u0000"));
+    if ((source === "email" || source === "teams") && v && typeof v.key === "string" && verdictIsCurrent(v, v.key, source)) out.add(v.key);
+  }
+  return out;
 }
 
 /** At most this many model calls per pass (a pass rides the ~45s heartbeat). */
@@ -169,7 +187,7 @@ export async function runClassify(
     }
     const haystack = u.email ? emailQuoteHaystack(u.email, a.forwards) : teamsQuoteHaystack(u.teams!);
     const settled = u.email ? u.email.settled : u.teams!.settled;
-    let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso() });
+    let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source] });
     if (v.status === "open") {
       const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");
       try {
@@ -245,10 +263,14 @@ export function buildCandidates(a: {
   const out: ActionCandidate[] = [];
   const emailById = new Map<string, EmailContent>();
   for (const r of a.rows) if (r.source === "email" && r.content?.kind === "email") emailById.set(r.sourceItemId, r.content as EmailContent);
+  // Loop-2 D-2: the latest OTHER sender's Teams id per Teams item (for the de-dup's same-sender test only).
+  const teamsSenderById = new Map<string, string>();
+  for (const r of a.rows) if (r.source === "teams" && r.content?.kind === "teams") teamsSenderById.set(r.sourceItemId, normTeamsId((r.content as { sender?: { id?: unknown } }).sender?.id));
+  const senderByItem = new Map<string, string>();
   const { units, uninvolvedHidden } = threadUnits(a.assembled, a.settings);
   for (const u of units) {
     const v = a.verdicts.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`);
-    const current = v && v.key === u.itemKey ? v : null;
+    const current = v && verdictIsCurrent(v, u.itemKey, u.source) ? v : null;
     const p = current?.proposalId ? a.proposals.get(current.proposalId) ?? null : null;
     const base = {
       proposalId: p?.id ?? null,
@@ -293,6 +315,8 @@ export function buildCandidates(a: {
     } else {
       const c = u.teams!;
       const lo = c.latestOther!;
+      const sid = teamsSenderById.get(lo.id);
+      if (sid) senderByItem.set(u.itemKey, sid);
       out.push({
         ...base,
         source: "teams",
@@ -301,7 +325,7 @@ export function buildCandidates(a: {
         display: {
           title: p?.title ?? current?.todo ?? (c.chatName || lo.name),
           who: lo.name,
-          sourceLabel: teamsSourceLabel(c, a.assembled.ctx.ownerNames),
+          sourceLabel: teamsSourceLabel(c, a.assembled.ctx.ownerFullNames ?? []),
           reasonLine: current?.reason ?? null,
           quote: current?.quote ?? null,
           due: current?.due ?? null,
@@ -356,7 +380,7 @@ export function buildCandidates(a: {
       });
     }
   }
-  return { candidates: collapseDuplicateTeamsItems(out), uninvolvedHidden, meetingOthersHidden };
+  return { candidates: collapseDuplicateTeamsItems(out, (c) => senderByItem.get(c.itemKey) ?? null), uninvolvedHidden, meetingOthersHidden };
 }
 
 // ── 2026-11-17 accuracy fixes (owner report: one Teams ask showed twice, "Teams 1:1" and "Teams, <his own name>") ──
@@ -365,23 +389,42 @@ export function buildCandidates(a: {
  *  untitled group chat after its members) is labelled "Teams group chat", never with the owner's name. */
 export function teamsSourceLabel(c: Pick<TeamsChatFacts, "kind" | "chatName">, ownerNames: readonly string[]): string {
   if (c.kind === "one_on_one") return "Teams 1:1";
-  const own = new Set(ownerNames.map(foldPersonName).filter(Boolean));
+  // Loop-2 D-3: FULL names only (ownerFullNames); a chat named after a bare first name keeps its name.
+  const own = new Set(ownerNames.filter((n) => personNameWordCount(n) >= 2).map(foldPersonName).filter(Boolean));
   const name = c.chatName && !own.has(foldPersonName(c.chatName)) ? c.chatName : null;
   return name ? `Teams, ${name}` : c.chatName ? "Teams group chat" : "Teams";
 }
 
+/** Loop-2 D-2: a quoted sentence shorter than this (folded) never makes two rows "the same ask": short generic
+ *  sentences ("Can you take a look at this?", 28 characters -- the verifier's counter-example, so 25 was too low)
+ *  are re-used for different things. 40 still covers a real re-posted ask (a full sentence with its specifics). */
+export const DEDUP_MIN_QUOTE_CHARS = 40;
+
+/** Pure: the chat id of a Teams item key ("teams:<chatId>|<message id>"), or null. */
+export function teamsChatOfItemKey(itemKey: string): string | null {
+  if (!itemKey.startsWith("teams:")) return null;
+  const bar = itemKey.lastIndexOf("|");
+  const chat = bar > 6 ? itemKey.slice(6, bar) : "";
+  return chat || null;
+}
+
 /**
- * Pure: ONE row per Teams ask. OPEN Teams items that share a backing proposal, or the same sender AND the same
- * quoted sentence (folded), are the same ask (posted in a 1:1 and again in a small group chat with the same person,
- * or re-posted later): only the NEWEST (by `at`) is kept. Nothing else is touched: emails, meetings, and Teams
- * items that are not open keep their place and order.
+ * Pure: ONE row per Teams ask (loop-2 D-2, tightened). OPEN Teams items are the same ask ONLY when
+ *  - they come from the SAME chat, or
+ *  - the SAME sender id (senderIdOf; null = unknown, never matched) quoted the SAME sentence (folded) of at least
+ *    DEDUP_MIN_QUOTE_CHARS characters (posted in a 1:1 and again in a small group chat, or re-posted later).
+ * Only the NEWEST (by `at`) is kept. A shared backing proposal is NEVER a reason to collapse: the proposal store
+ * attaches different senders' to-dos to one proposal by title (proposals-store.server.ts, OQ-9). A display NAME is
+ * never a sender id. Nothing else is touched: emails, meetings, and Teams items that are not open keep their place.
  */
-export function collapseDuplicateTeamsItems(cands: readonly ActionCandidate[]): ActionCandidate[] {
+export function collapseDuplicateTeamsItems(cands: readonly ActionCandidate[], senderIdOf: (c: ActionCandidate) => string | null = () => null): ActionCandidate[] {
   const keysOf = (c: ActionCandidate): string[] => {
     const k: string[] = [];
-    if (c.proposalId) k.push(`p:${c.proposalId}`);
+    const chat = teamsChatOfItemKey(c.itemKey);
+    if (chat) k.push(`c:${chat}`);
+    const sid = senderIdOf(c);
     const q = c.display.quote ? canonQuote(c.display.quote) : "";
-    if (q) k.push(`q:${canonQuote(c.display.who ?? "")}\u0000${q}`);
+    if (sid && q.length >= DEDUP_MIN_QUOTE_CHARS) k.push(`q:${sid}\u0000${q}`);
     return k;
   };
   const t = (c: ActionCandidate) => (c.at ? Date.parse(c.at) : NaN);

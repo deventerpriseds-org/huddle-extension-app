@@ -132,6 +132,34 @@ export function effectiveOwnerNames(cfg: { ownerLogins: string[]; correspondence
   return [...out];
 }
 
+/** Pure: how many name words a display name has ("Last, First" and "First Last" both 2). */
+export function personNameWordCount(n: unknown): number {
+  return typeof n === "string" ? n.split(/[\s,]+/).filter(Boolean).length : 0;
+}
+
+/**
+ * Pure (2026-11-17 loop-2 D-3): the owner's FULL names, for matching a PERSON (a Teams sender, a chat named after
+ * him) -- never a bare first name. From config only (the repo is public; no identity is ever written in code):
+ *  - every configured `correspondence.ownerNames` entry with at least two name words;
+ *  - each owner login / the mailbox whose local part is `first.last` (or first_last): "First Last".
+ * Matching folds "Last, First" to "first last" (report-from-ledger foldPersonName), so both forms match. A sender
+ * whose first name matches but whose last name differs is never the owner. `effectiveOwnerNames` (model context,
+ * meeting headings) is unchanged.
+ */
+export function ownerFullNames(cfg: { mailbox?: string; ownerLogins: string[]; correspondence?: { ownerNames?: string[] } }): string[] {
+  const out = new Set<string>();
+  for (const n of cfg.correspondence?.ownerNames ?? []) {
+    const t = String(n ?? "").trim().replace(/\s+/g, " ");
+    if (personNameWordCount(t) >= 2) out.add(t);
+  }
+  for (const login of [...cfg.ownerLogins, cfg.mailbox ?? ""]) {
+    const parts = String(login ?? "").split("@")[0].split(/[._]/);
+    if (parts.length < 2 || !parts.every((p) => p.length >= 2 && /^\p{L}+$/u.test(p))) continue;
+    out.add(parts.map((p) => p[0].toUpperCase() + p.slice(1).toLowerCase()).join(" "));
+  }
+  return [...out];
+}
+
 // ── Metadata header FACTS (names/values, never wording) ───────────────────────────────────────────────
 
 export interface HeaderFacts {
@@ -176,6 +204,8 @@ export interface NeedsYouContext {
   ownerAddresses: ReadonlySet<string>;
   /** Context for the model only (never a gate). */
   ownerNames: readonly string[];
+  /** Loop-2 D-3: the owner's FULL names (ownerFullNames), for matching a person by display name. Absent = none. */
+  ownerFullNames?: readonly string[];
   /** Latest Sent Items time per conversationId (onedrive-feed latestSentByConversation). */
   latestSent: ReadonlyMap<string, number>;
   /** false when the Sent Items file is missing, rejected or has no usable times. */

@@ -23,6 +23,8 @@ import {
   emailConversationKey,
   groupEmailConversations,
   ownerAddressSet,
+  ownerFullNames,
+  personNameWordCount,
   type ConversationFacts,
   type NeedsYouContext,
 } from "./needs-you";
@@ -178,27 +180,32 @@ export interface ChatInvolvement {
  * Spelling table: docs/qc-evidence/BUILD-actions-cap-tag-rule.md.
  * `messages` = every stored message of the chat (not only the window's): "never sent" means never, in the data held.
  */
-export function chatInvolvement(chatId: string, messages: readonly TeamsContent[], configuredOwnerIds: readonly string[] = []): ChatInvolvement {
+export function chatInvolvement(chatId: string, messages: readonly TeamsContent[], configuredOwnerIds: readonly string[] = [], crossChatOwnerIds: readonly string[] = []): ChatInvolvement {
   // Verifier report-from-ledger-1, finding 2: one malformed stored row must never throw out of the rule (it aborted
   // the whole report). Anything unexpected -> can't tell -> SHOW.
   try {
-    return chatInvolvementOf(chatId, messages, configuredOwnerIds);
+    return chatInvolvementOf(chatId, messages, configuredOwnerIds, crossChatOwnerIds);
   } catch {
     return { hide: false, kind: teamsChatKind(String(chatId ?? "")), reason: "cant_tell_malformed" };
   }
 }
 
-function chatInvolvementOf(chatId: string, messages: readonly TeamsContent[], configuredOwnerIds: readonly string[]): ChatInvolvement {
+/** `crossChatOwnerIds` (loop-2 D-5): the owner's ids learned from OTHER chats' rows (ownerTeamsIdsAcross). They may
+ *  only make a chat SHOW (he sent / was mentioned). Whether the owner's ids count as KNOWN for hiding is decided by
+ *  the configured ids and this chat's own rows only, exactly as before the cross-chat lookup: a chat with no owner
+ *  id of its own stays `cant_tell_owner_unknown` (shown) even when its rows say `fromOwner: false`. */
+function chatInvolvementOf(chatId: string, messages: readonly TeamsContent[], configuredOwnerIds: readonly string[], crossChatOwnerIds: readonly string[]): ChatInvolvement {
   const kind = teamsChatKind(chatId);
   if (kind === "one_on_one") return { hide: false, kind, reason: "one_on_one" };
   // 2026-11-16 (Actions view, owner's accepted answers): team CHANNELS (thread.tacv2) are treated like group chats.
   if (kind !== "group" && kind !== "meeting" && kind !== "channel") return { hide: false, kind, reason: "not_group_or_meeting" };
-  const ownerIds = teamsOwnerIds(messages, configuredOwnerIds);
+  const ownIds = teamsOwnerIds(messages, configuredOwnerIds);
+  const ownerIds = teamsOwnerIds(messages, [...configuredOwnerIds, ...(crossChatOwnerIds ?? [])]);
   if (messages.some((m) => isOwnerMessage(m, ownerIds))) return { hide: false, kind, reason: "owner_sent" };
   // Array.isArray BEFORE .some (finding 2): a string / object stored in the field is "no mention data" (shows below).
   if (messages.some((m) => m.mentionsOwner === true || mentionsOwnerId(m, ownerIds))) return { hide: false, kind, reason: "owner_mentioned" };
   if (messages.some(maybeMentionsOwner)) return { hide: false, kind, reason: "owner_maybe_mentioned" };
-  if (!ownerIds.size || messages.some((m) => m.fromOwner === null || m.fromOwner === undefined)) return { hide: false, kind, reason: "cant_tell_owner_unknown" };
+  if (!ownIds.size || messages.some((m) => m.fromOwner === null || m.fromOwner === undefined)) return { hide: false, kind, reason: "cant_tell_owner_unknown" };
   if (!messages.length || messages.some((m) => !Array.isArray(m.mentionedUserIds))) return { hide: false, kind, reason: "cant_tell_no_mention_data" };
   return { hide: true, kind, reason: "uninvolved" };
 }
@@ -284,15 +291,34 @@ export function foldPersonName(v: unknown): string {
  * carried the id). The owner is one person, so an id seen on any of his capture lines is his everywhere.
  * LAST RESORT, only when no id is known at all: a sender whose display name (foldPersonName) is one of the owner's
  * configured names contributes its sender ID; ids decide everything after that. App senders never count.
+ * LOOP-2 D-4 (one bad row must not promote a sender to OWNER in every chat): a row's `ownerUserId` is taken
+ * ACROSS chats only when that id is on rows of AT LEAST 2 DIFFERENT chats. When no id reaches that, the single
+ * MOST FREQUENT id is taken, only when it is on 2+ rows and strictly ahead of every other id. Configured ids always
+ * count. (Within its OWN chat a row's `ownerUserId` still counts, as it did before: teamsOwnerIds in chatFacts.)
+ * The real fix is the capture flow writing `ownerUserId` again, or `teams.ownerSenderIds` configured.
  */
 export function ownerTeamsIdsAcross(rows: readonly LedgerReportRow[], configuredOwnerIds: readonly string[] = [], ownerNames: readonly string[] = []): string[] {
   const contents: TeamsContent[] = [];
   for (const r of rows) if (r?.source === "teams" && r.content?.kind === "teams") contents.push(r.content as TeamsContent);
   const ids = new Set<string>();
   for (const id of configuredOwnerIds ?? []) if (normTeamsId(id)) ids.add(normTeamsId(id));
-  for (const c of contents) if (normTeamsId(c?.ownerUserId)) ids.add(normTeamsId(c.ownerUserId));
+  const seen = new Map<string, { chats: Set<string>; rows: number }>();
+  for (const c of contents) {
+    const id = normTeamsId(c?.ownerUserId);
+    if (!id) continue;
+    const e = seen.get(id) ?? seen.set(id, { chats: new Set(), rows: 0 }).get(id)!;
+    e.chats.add(String(c?.chatId ?? ""));
+    e.rows++;
+  }
+  const multiChat = [...seen].filter(([, e]) => e.chats.size >= 2).map(([id]) => id);
+  if (multiChat.length) for (const id of multiChat) ids.add(id);
+  else {
+    const ranked = [...seen].sort((a, b) => b[1].rows - a[1].rows);
+    if (ranked.length && ranked[0][1].rows >= 2 && (ranked.length === 1 || ranked[0][1].rows > ranked[1][1].rows)) ids.add(ranked[0][0]);
+  }
   if (!ids.size) {
-    const names = new Set((ownerNames ?? []).map(foldPersonName).filter(Boolean));
+    // Loop-2 D-3: FULL names only (two or more name words). A bare first name never marks a sender as the owner.
+    const names = new Set((ownerNames ?? []).filter((n) => personNameWordCount(n) >= 2).map(foldPersonName).filter(Boolean));
     for (const c of contents) {
       const sid = normTeamsId(c?.sender?.id);
       if (sid && c?.sender?.isApp !== true && names.has(foldPersonName(c?.sender?.name))) ids.add(sid);
@@ -318,7 +344,7 @@ export function teamsChatsFromLedger(rows: readonly LedgerReportRow[], configure
     // Finding 2: one bad row can never abort the report -- a chat whose facts cannot be built SHOWS, with the
     // defensively-built facts below.
     try {
-      out.push(chatFacts(chatId, list, ownerIdsAll));
+      out.push(chatFacts(chatId, list, configuredOwnerIds, ownerIdsAll));
     } catch {
       out.push(malformedChatFacts(chatId, list));
     }
@@ -344,13 +370,13 @@ function malformedChatFacts(chatId: string, list: readonly { id: string; c: Team
   return { chatId, chatName: null, kind, messages, latestOther: others[others.length - 1] ?? null, settled: false, ownerMentioned: null, involvement: { hide: false, kind, reason: "cant_tell_malformed" }, webUrl: null, newestMs };
 }
 
-function chatFacts(chatId: string, list: readonly { id: string; c: TeamsContent }[], configuredOwnerIds: readonly string[]): TeamsChatFacts {
+function chatFacts(chatId: string, list: readonly { id: string; c: TeamsContent }[], configuredOwnerIds: readonly string[], crossChatOwnerIds: readonly string[] = []): TeamsChatFacts {
   {
     const sorted = [...list].sort((a, b) => (ms(a.c.at) || 0) - (ms(b.c.at) || 0));
     const contents = sorted.map((x) => x.c);
-    const involvement = chatInvolvement(chatId, contents, configuredOwnerIds);
+    const involvement = chatInvolvement(chatId, contents, configuredOwnerIds, crossChatOwnerIds);
     // Finding 5: the SAME owner-id set and normaliser as chatInvolvement (teamsOwnerIds / normTeamsId).
-    const ownerIds = teamsOwnerIds(contents, configuredOwnerIds);
+    const ownerIds = teamsOwnerIds(contents, [...configuredOwnerIds, ...crossChatOwnerIds]);
     const isOwner = (c: TeamsContent) => isOwnerMessage(c, ownerIds);
     const messages: TeamsThreadMessage[] = sorted.map((x) => ({
       id: x.id,
@@ -617,9 +643,9 @@ export function assembleLedgerPlan(
   sinceMs: number,
 ): AssembledLedgerPlan {
   const sent = sentFromLedger(data.rows);
-  const ctx: NeedsYouContext = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), latestSent: latestSentByConversation(sent), sentKnown: sent.length > 0 };
+  const ctx: NeedsYouContext = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), ownerFullNames: ownerFullNames(cfg), latestSent: latestSentByConversation(sent), sentKnown: sent.length > 0 };
   const emailFacts = [...groupEmailConversations(cfg.mailbox, emailMessagesFromLedger(data.rows))].map(([k, msgs]) => conversationFacts(k, msgs, ctx));
-  const teams = teamsChatsFromLedger(data.rows, cfg.teams.ownerSenderIds, ctx.ownerNames);
+  const teams = teamsChatsFromLedger(data.rows, cfg.teams.ownerSenderIds, ctx.ownerFullNames ?? []);
   const meetings = meetingItemsFromLedger(data.rows, data.proposals);
   const signals = resolutionSignals(data.proposals, data.bell, messageLookup(data.rows, cfg.mailbox), cfg.mailbox);
   const fw = forwardsFromLedger(data.rows);

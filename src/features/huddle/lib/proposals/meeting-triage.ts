@@ -76,6 +76,25 @@ export function detailLineOf(line: string): ItemDetail | null {
   return { label: m[1].toLowerCase().replace(/\s+/g, " "), value: m[2].trim().slice(0, 300) };
 }
 
+/**
+ * Loop-2 D-7 (verifier: "- Note: Von to send pricing" was swallowed as a detail and lost): only these labels are
+ * PURE METADATA -- who, when, by when. Any other label ("Note:", "Context:", ...) is a detail only when its line is
+ * indented under an item.
+ */
+const METADATA_LABEL = /^(?:responsible(?: (?:person|party|owner))?|owners?|assignee|assigned to|time ?stamps?|timing|due(?: date)?|deadline)$/;
+/** An action verb in a value ("submit the grant application", "Von to send pricing"): such a line is an ITEM. */
+const ACTION_VERB =
+  /\b(?:send|submit|book|review|prepare|draft|schedule|call|email|e-mail|follow|share|update|create|complete|finish|finali[sz]e|write|reply|respond|contact|check|confirm|fix|deliver|file|sign|pay|order|arrange|organi[sz]e|provide|investigate|plan|coordinate|research|reach|ask|present|upload|approve|set up|build|test|deploy|invite|introduce|circulate|distribute|collect|gather|compile|run|host|attend|meet|discuss|decide|resolve|reconcile|renew|register|apply|purchase|buy|design|document|summari[sz]e|outline|evaluate|assess|analy[sz]e|verify|validate|ship|launch|publish|post|notify|remind|chase|look into|sort out|hand over)(?:s|es|ed|ing)?\b/i;
+
+/** Pure (loop-2 D-7): a detail whose label is pure metadata and whose value states no action (Responsible person:
+ *  Not stated. / Timestamp: (01:01-01:32). / Timing: Beyond two weeks, inferred ...). */
+export function isMetadataDetail(d: ItemDetail): boolean {
+  return METADATA_LABEL.test(d.label) && !ACTION_VERB.test(d.value);
+}
+
+/** Pure: is the raw line indented (leading whitespace before its text / bullet)? */
+const isIndented = (line: string) => /^[ \t ]+\S/.test(String(line ?? ""));
+
 /** Pure: a heading line -> its plain text ("**Pat Doe**:" / "## Pat Doe" / "Pat Doe:" -> "Pat Doe"). */
 export function headingText(line: string): string {
   return line.replace(/^\s*#{1,6}\s+/, "").replace(/\*\*/g, "").replace(/:\s*$/, "").trim().slice(0, 80);
@@ -109,8 +128,11 @@ export function splitActionItems(raw: unknown): SplitResult {
   let lastKept: number | null = null;
   for (const line of lines) {
     if (!line.trim()) continue;
+    // Loop-2 D-7: a labelled line is a DETAIL only when it is pure metadata (no action in its value), or it is
+    // indented under a kept item. Anything else stays an item: never drop content. Pure metadata with no item
+    // above it carries nothing to do and is dropped and counted.
     const detail = detailLineOf(line);
-    if (detail) {
+    if (detail && (isMetadataDetail(detail) || (isIndented(line) && lastKept !== null))) {
       if (lastKept !== null) out.details[lastKept].push(detail);
       else out.dropped.detail++;
       continue;

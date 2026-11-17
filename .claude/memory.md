@@ -7,6 +7,10 @@
 - Still open: the ingest-time bell (`bell.ts`) uses parse-time `fromOwner` (null live = "can't tell"). Configuring
   `teams.ownerSenderIds` fixes every path at once.
 - Settled guard (action-classify.ts): owner wrote last -> a `reply` verdict is not admitted; `both` -> `action`.
+- Loop-2 (verifier VERIFY-actions-accuracy-2): stored verdicts carry `inputVersion`; `CLASSIFIER_INPUT_VERSION`
+  (action-classify.ts, teams 2 / email 1) MUST be bumped for a source whenever its OWNER/OTHER labelling, input
+  text or instructions change, or old verdicts stay listed until the thread gets a new message. Teams de-dup
+  (`collapseDuplicateTeamsItems`) = same chat, or same sender ID + same quote >= 40 chars; never a shared proposal.
 
 ## Agent pace ROOT CAUSE (2026-11-17, measured) -- background agents FREEZE while the main session is idle
 - eds-agent-steps.py (eds-claude-skills #140, live v80) split 5 transcripts: model 1-10% of wall; 73-96% was steps in

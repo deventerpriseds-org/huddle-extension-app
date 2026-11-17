@@ -11,18 +11,21 @@
 // THIS REPO IS PUBLIC: every name, id and sentence below is invented.
 import {
   admitActionVerdict,
+  scrubOwnerStateTodo,
   GROUNDED,
   STEP2_INSTRUCTIONS,
   STEP3_INSTRUCTIONS,
   TEAMS_INSTRUCTIONS,
   teamsQuoteHaystack,
 } from "../src/features/huddle/lib/correspondence/action-classify";
+import { ownerFullNames } from "../src/features/huddle/lib/correspondence/needs-you";
 import { assembleLedgerPlan, foldPersonName, ownerTeamsIdsAcross, teamsChatsFromLedger, type LedgerReportRow } from "../src/features/huddle/lib/correspondence/report-from-ledger";
 import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { teamsSourceItemId, type TeamsContent } from "../src/features/huddle/lib/correspondence/source-item";
 import { CORRECTION_LABEL, CORRECTION_REASONS, makeCorrection, ACTIONS_SETTINGS_DEFAULT, type ActionCandidate } from "../src/features/huddle/lib/actions/actions";
-import { collapseDuplicateTeamsItems, teamsSourceLabel, threadUnits } from "../src/features/huddle/lib/actions/pipeline";
-import { detailLineOf, splitActionItems } from "../src/features/huddle/lib/proposals/meeting-triage";
+import { buildCandidates, collapseDuplicateTeamsItems, currentlyJudgedKeys, runClassify, teamsSourceLabel, threadUnits, verdictIsCurrent, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
+import { CLASSIFIER_INPUT_VERSION, type ActionVerdict } from "../src/features/huddle/lib/correspondence/action-classify";
+import { detailLineOf, isMetadataDetail, splitActionItems } from "../src/features/huddle/lib/proposals/meeting-triage";
 
 let fail = 0;
 let pass = 0;
@@ -63,9 +66,13 @@ const row = (o: Partial<TeamsContent>): LedgerReportRow => {
 // ── R1. SENDER: owner ids across ALL rows, never per chat ────────────────────────────────────────────
 // Live shape (probe 2026-11-17): recent rows carry NO ownerUserId and fromOwner null; the owner id is on OTHER rows.
 const older = row({ chatId: ONE2, messageId: "o1", at: "2026-11-10T10:00:00Z", ownerUserId: OWNER_ID, text: "Synthetic older chat" });
+// Loop-2 D-4: a row id is taken across chats only when it is on rows of 2+ chats, so the fixture carries the
+// owner's id on a second older chat (his own line there, so that chat has nothing to classify).
+const ONE3 = `19:e_f${AT}unq.gbl.spaces`;
+const older2 = row({ chatId: ONE3, messageId: "o2", at: "2026-11-11T10:00:00Z", sender: { id: OWNER_ID, name: "Example, Owen", isApp: false }, ownerUserId: OWNER_ID, text: "Synthetic older owner line" });
 const ask = row({ chatId: ONE, messageId: "q1", at: "2026-11-16T12:00:00Z", text: "Synthetic: can we meet weekly?" });
 const own = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: OWNER_ID, name: "Example, Owen", isApp: false }, text: "Hey, when you're back, please let me know how often you want our synthetic 1:1." });
-const chats = teamsChatsFromLedger([older, ask, own]);
+const chats = teamsChatsFromLedger([older, older2, ask, own]);
 const c1 = chats.find((c) => c.chatId === ONE)!;
 t(
   "R1-1 GUARD: owner id seen on another chat's row labels the owner's own message OWNER (sender not reversed)",
@@ -73,13 +80,13 @@ t(
   [["OTHER", "OWNER"], ask.sourceItemId, true],
 );
 t("R1-2 the owner's own sentence is never in the quote haystack", teamsQuoteHaystack(c1).some((s) => s.includes("when you're back")), false);
-const ownOnly = teamsChatsFromLedger([older, row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: OWNER_ID, name: "x", isApp: false }, text: "Synthetic owner-only note" })]);
+const ownOnly = teamsChatsFromLedger([older, older2, row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: OWNER_ID, name: "x", isApp: false }, text: "Synthetic owner-only note" })]);
 t("R1-3 a chat holding only the owner's message has no latest OTHER (nothing to classify)", ownOnly.find((c) => c.chatId === ONE)!.latestOther, null);
-t("R1-4 ownerTeamsIdsAcross: configured + every row's ownerUserId, normalised", ownerTeamsIdsAcross([older, ask], [" CFG-ID "]).sort(), ["cfg-id", OWNER_ID].sort());
+t("R1-4 ownerTeamsIdsAcross: configured + every row's ownerUserId, normalised", ownerTeamsIdsAcross([older, older2, ask], [" CFG-ID "]).sort(), ["cfg-id", OWNER_ID].sort());
 
 // Through the real assembly (config WITHOUT teams.ownerSenderIds, as live), and into the Actions units.
 const cfgNoIds = parseFeedsConfig(JSON.stringify({ enabled: true, synthetic: false, driveUser: MAILBOX, mailbox: MAILBOX, ownerLogins: ["owner@huddle.example"], teams: {}, correspondence: { ownerNames: ["Owen Example"] } }))!;
-const asm = assembleLedgerPlan({ rows: [older, ask, own], proposals: [], bell: [] }, cfgNoIds, Date.parse("2026-11-09T05:00:00Z"));
+const asm = assembleLedgerPlan({ rows: [older, older2, ask, own], proposals: [], bell: [] }, cfgNoIds, Date.parse("2026-11-09T05:00:00Z"));
 const unit = threadUnits(asm, ACTIONS_SETTINGS_DEFAULT).units.find((u) => u.teams?.chatId === ONE);
 t("R1-5 end to end (assembleLedgerPlan -> threadUnits): the unit's latest OTHER is the other person's message and it is settled", [unit?.refItemId, unit?.teams?.settled], [ask.sourceItemId, true]);
 
@@ -88,7 +95,7 @@ const noIdOwn = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", 
 t("R1-6 GUARD: no id anywhere -> a sender named as the owner ('Last, First' folded) contributes its id", teamsChatsFromLedger([ask, noIdOwn], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER"]);
 t("R1-7 without owner names the same chat stays as stored (no guessing)", teamsChatsFromLedger([ask, noIdOwn]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OTHER"]);
 const twin = row({ chatId: ONE, messageId: "q2", at: "2026-11-16T13:00:00Z", sender: { id: "namesake-guid", name: "Owen Example", isApp: false } });
-t("R1-8 GUARD: once an id is known, a NAMESAKE with another id stays OTHER", teamsChatsFromLedger([older, ask, twin, own], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER", "OTHER"]);
+t("R1-8 GUARD: once an id is known, a NAMESAKE with another id stays OTHER", teamsChatsFromLedger([older, older2, ask, twin, own], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER", "OTHER"]);
 t("R1-9 an app sender with the owner's name never counts", ownerTeamsIdsAcross([row({ sender: { id: "app-guid", name: "Owen Example", isApp: true } })], [], ["Owen Example"]), []);
 t("R1-10 foldPersonName: 'Last, First' -> 'first last'; plain kept", [foldPersonName("Example,  Owen"), foldPersonName(" Owen  Example "), foldPersonName(null)], ["owen example", "owen example", ""]);
 
@@ -158,20 +165,177 @@ const cand = (o: Partial<ActionCandidate> & { quote?: string | null; who?: strin
     ...o,
     display: { title: "x", who: o.who ?? "Pat Example", sourceLabel: "", reasonLine: null, quote: o.quote ?? null, due: null, reply: null, replyAsk: null, teamsLink: null, meetingTitle: null, assignee: null },
   }) as ActionCandidate;
-const dupA = cand({ itemKey: "a", at: "2026-11-16T12:56:00Z", quote: "Please let me know  how often" });
-const dupB = cand({ itemKey: "b", at: "2026-11-16T15:04:00Z", quote: "please let me know how often" });
-const other = cand({ itemKey: "c", at: "2026-11-16T16:00:00Z", quote: "please let me know how often", who: "Sam Example" });
-const email = cand({ itemKey: "e", source: "email", at: "2026-11-16T10:00:00Z", quote: "please let me know how often" });
-const closed = cand({ itemKey: "n", status: "none", at: "2026-11-16T09:00:00Z", quote: "please let me know how often" });
-t("R6-1 GUARD: same sender + same quote in two chats -> ONE row, the newest", collapseDuplicateTeamsItems([dupA, dupB, other, email, closed]).map((c) => c.itemKey), ["b", "c", "e", "n"]);
-t("R6-2 same backing proposal -> one row, the newest", collapseDuplicateTeamsItems([cand({ itemKey: "p1", proposalId: "prop-1", at: "2026-11-16T10:00:00Z" }), cand({ itemKey: "p2", proposalId: "prop-1", at: "2026-11-16T11:00:00Z" })]).map((c) => c.itemKey), ["p2"]);
+const dupA = cand({ itemKey: "a", at: "2026-11-16T12:56:00Z", quote: "Please let me know  how often you want our synthetic 1:1" });
+const dupB = cand({ itemKey: "b", at: "2026-11-16T15:04:00Z", quote: "please let me know how often you want our synthetic 1:1" });
+const other = cand({ itemKey: "c", at: "2026-11-16T16:00:00Z", quote: "please let me know how often you want our synthetic 1:1", who: "Sam Example" });
+const email = cand({ itemKey: "e", source: "email", at: "2026-11-16T10:00:00Z", quote: "please let me know how often you want our synthetic 1:1" });
+const closed = cand({ itemKey: "n", status: "none", at: "2026-11-16T09:00:00Z", quote: "please let me know how often you want our synthetic 1:1" });
+// Loop-2 D-2: the same-sender test is by SENDER ID (senderIdOf), never by display name; a long quote is required.
+const sidOf = (m: Record<string, string>) => (c: ActionCandidate) => m[c.itemKey] ?? null;
+const SIDS = { a: "pat-guid", b: "pat-guid", c: "sam-guid", e: "pat-guid", n: "pat-guid" };
+t("R6-1 GUARD: same sender id + same long quote in two chats -> ONE row, the newest", collapseDuplicateTeamsItems([dupA, dupB, other, email, closed], sidOf(SIDS)).map((c) => c.itemKey), ["b", "c", "e", "n"]);
+t("R6-2 GUARD (loop-2 D-2): a shared backing proposal alone never collapses (different senders, different quotes)", collapseDuplicateTeamsItems([cand({ itemKey: "p1", proposalId: "prop-1", at: "2026-11-16T10:00:00Z", quote: "review the synthetic document for the board pack" }), cand({ itemKey: "p2", proposalId: "prop-1", who: "Sam Example", at: "2026-11-16T11:00:00Z", quote: "please review the synthetic document before Monday" })], sidOf({ p1: "pat-guid", p2: "sam-guid" })).map((c) => c.itemKey), ["p1", "p2"]);
 t("R6-3 different asks are untouched", collapseDuplicateTeamsItems([cand({ itemKey: "x1", quote: "send the synthetic deck" }), cand({ itemKey: "x2", quote: "book the synthetic room" })]).map((c) => c.itemKey), ["x1", "x2"]);
+const shortQ = "Can you take a look at this?";
+t("R6-5 GUARD (loop-2 D-2): same sender, the SAME SHORT generic sentence in two chats -> TWO rows", collapseDuplicateTeamsItems([cand({ itemKey: `teams:${ONE}|m1`, at: "2026-11-16T10:00:00Z", quote: shortQ }), cand({ itemKey: `teams:${GRP}|m2`, at: "2026-11-16T11:00:00Z", quote: shortQ })], () => "pat-guid").length, 2);
+t("R6-6 the same long quote under the same display NAME but no known sender id -> TWO rows (a name is not an id)", collapseDuplicateTeamsItems([dupA, dupB]).map((c) => c.itemKey), ["a", "b"]);
+t("R6-7 two open items from the SAME chat -> one row, the newest", collapseDuplicateTeamsItems([cand({ itemKey: `teams:${ONE}|m1`, at: "2026-11-16T10:00:00Z", quote: "send the synthetic deck" }), cand({ itemKey: `teams:${ONE}|m2`, at: "2026-11-16T11:00:00Z", quote: "book the synthetic room" })]).map((c) => c.itemKey), [`teams:${ONE}|m2`]);
+{
+  // Through buildCandidates: the same long ask from the same person in the 1:1 and in a group chat -> one row; the
+  // sender id comes from the stored rows.
+  const LONG = "Synthetic: please send me the signed vendor form by Friday";
+  const r1 = row({ chatId: ONE, messageId: "a1", at: "2026-11-16T10:00:00Z", text: LONG });
+  const r2 = row({ chatId: GRP, chatName: "Synthetic squad", messageId: "a2", at: "2026-11-16T11:00:00Z", text: LONG, mentionedUserIds: [OWNER_ID] });
+  const r3 = row({ chatId: ONE2, messageId: "a3", at: "2026-11-16T12:00:00Z", sender: { id: "sam-guid", name: "Sam Example", isApp: false }, text: LONG });
+  const rs = [older, older2, r1, r2, r3];
+  const asmD2 = assembleLedgerPlan({ rows: rs, proposals: [], bell: [] }, cfgNoIds, Date.parse("2026-11-09T05:00:00Z"));
+  const us = threadUnits(asmD2, ACTIONS_SETTINGS_DEFAULT).units.filter((x) => x.source === "teams");
+  const vs = new Map<string, ActionVerdict>(us.map((x) => [`${x.storeAt.source}\u0000${x.storeAt.sourceItemId}`, { v: 1, key: x.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "open", kind: "reply", category: "person_request", confidence: "high", todo: "Send the form", due: null, quote: "please send me the signed vendor form by Friday", reason: "Asked.", answeredByReply: false, proposalId: "prop-shared", at: NOW } as ActionVerdict]));
+  const got = buildCandidates({ assembled: asmD2, rows: rs, settings: ACTIONS_SETTINGS_DEFAULT, verdicts: vs, proposals: new Map([["prop-shared", { id: "prop-shared", state: "proposed", title: "Send the form", assignee: null, correction: null }]]), meetingProposals: [], replies: [], isDraftable: () => false }).candidates.filter((c) => c.source === "teams" && c.status === "open");
+  t("R6-8 end to end: Pat's 1:1 + group copy collapse to the newest; Sam's identical ask (other id, same proposal) stays", got.map((c) => [c.display.who, c.at]).sort(), [["Pat Example", "2026-11-16T11:00:00Z"], ["Sam Example", "2026-11-16T12:00:00Z"]]);
+}
 t(
   "R6-4 label: 1:1; a group chat named only after the owner -> 'Teams group chat'; another name kept; no name -> 'Teams'",
   [teamsSourceLabel({ kind: "one_on_one", chatName: null }, ["Owen Example"]), teamsSourceLabel({ kind: "group", chatName: "Example, Owen" }, ["Owen Example"]), teamsSourceLabel({ kind: "group", chatName: "Synthetic squad" }, ["Owen Example"]), teamsSourceLabel({ kind: "group", chatName: null }, [])],
   ["Teams 1:1", "Teams group chat", "Teams, Synthetic squad", "Teams"],
 );
 void GRP;
+
+// ── R7. LOOP-2 D-1: a verdict judged by the OLD labelling is judged again ───────────────────────────
+// The chat's LAST message is the owner's own (so the item key is the same before and after the fix). The verdict
+// the old code stored for that key took the owner's sentence as an ask from someone else.
+{
+  const rowsD1 = [older, older2, ask, own];
+  const u = threadUnits(asm, ACTIONS_SETTINGS_DEFAULT).units.find((x) => x.teams?.chatId === ONE)!;
+  const storeKey = `${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`;
+  const stale: ActionVerdict = { v: 1, key: u.itemKey, status: "open", kind: "action", category: "person_request", confidence: "high", todo: "Tell them how often", due: null, quote: "please let me know how often you want our synthetic 1:1", reason: "Asked directly.", answeredByReply: false, proposalId: "p-stale", at: NOW };
+  const verdicts = new Map<string, ActionVerdict>([[storeKey, stale]]);
+  t("R7-1 GUARD: a stored Teams verdict from before the version (no inputVersion) is NOT counted as judged", currentlyJudgedKeys(verdicts).has(u.itemKey), false);
+  const cands = (vs: ReadonlyMap<string, ActionVerdict>, props: [string, string][]) =>
+    buildCandidates({ assembled: asm, rows: rowsD1, settings: ACTIONS_SETTINGS_DEFAULT, verdicts: vs, proposals: new Map(props.map(([id, title]) => [id, { id, state: "proposed", title, assignee: null, correction: null }])), meetingProposals: [], replies: [], isDraftable: () => false }).candidates.find((c) => c.source === "teams")!;
+  const before = cands(verdicts, [["p-stale", "Tell them how often"]]);
+  t("R7-2 GUARD: until re-judged the stale verdict is not shown (not checked yet), never the owner's own sentence", [before.status, before.display.quote], ["not_checked", null]);
+  const answer = (kind: string) => ({ open_item: true, kind, todo: "Say whether weekly works", due: null, quote: "can we meet weekly?", confidence: "high", reason: "Asked directly.", category: "person_request" });
+  const run = async (kind: string) => {
+    const stored = new Map<string, ActionVerdict>();
+    const deps: ClassifyDeps = {
+      recordCall: async () => {},
+      model: async () => answer(kind),
+      propose: async () => ({ id: "p-new", onBoard: false }),
+      storeVerdict: async (at, v) => void stored.set(`${at.source}\u0000${at.sourceItemId}`, v),
+      addMeetingRows: async () => 0,
+      nowIso: () => NOW,
+    };
+    const r = await runClassify(asm, { ...ACTIONS_SETTINGS_DEFAULT, sources: { ...ACTIONS_SETTINGS_DEFAULT.sources, email: false, meeting: false } }, currentlyJudgedKeys(verdicts), 6, deps);
+    return { r, nv: stored.get(storeKey) };
+  };
+  const { r, nv } = await run("action");
+  // Two Teams threads in this plan (ONE, and the older ONE2 chat which has no verdict at all): both are called.
+  t("R7-3 the old-version thread is judged again (inside the per-pass limit) and stored at the current version", [r.calls, r.alreadyJudged, nv?.inputVersion, nv?.key === u.itemKey], [2, 0, CLASSIFIER_INPUT_VERSION.teams, true]);
+  const after = cands(new Map([[storeKey, nv!]]), [["p-new", "Say whether weekly works"]]);
+  t("R7-4 the corrected sender wins: shown as the OTHER person's ask, quoting the OTHER person's message", [after.status, after.display.who, after.display.quote, after.display.title], ["open", "Pat Example", "can we meet weekly?", "Say whether weekly works"]);
+  const rep = await run("reply");
+  t("R7-5 the re-judged verdict passes the settled guard (owner wrote last): a reply he already gave is not owed", [rep.nv?.status, rep.nv?.answeredByReply], ["none", true]);
+  t("R7-6 a current-version verdict is reused (no call); a verdict for an older item key is not", [currentlyJudgedKeys(new Map([[storeKey, nv!]])).has(u.itemKey), verdictIsCurrent({ ...nv!, key: "teams:x|old" }, u.itemKey, "teams")], [true, false]);
+  t("R7-7 email verdicts without inputVersion stay current (email version not bumped)", verdictIsCurrent({ key: "e|1" }, "e|1", "email"), true);
+}
+
+// ── R9. LOOP-2 D-4: one bad ownerUserId row cannot promote a sender everywhere ─────────────────────
+{
+  const SAM = "sam-guid-0003";
+  const realA = row({ chatId: ONE2, messageId: "r1", at: "2026-11-10T10:00:00Z", ownerUserId: OWNER_ID });
+  const realB = row({ chatId: GRP, messageId: "r2", at: "2026-11-10T11:00:00Z", ownerUserId: OWNER_ID, mentionedUserIds: [OWNER_ID] });
+  const bad = row({ chatId: `19:bad${AT}thread.v2`, messageId: "b1", at: "2026-11-10T12:00:00Z", ownerUserId: SAM });
+  const samAsk = row({ chatId: ONE, messageId: "s1", at: "2026-11-16T12:00:00Z", sender: { id: SAM, name: "Sam Example", isApp: false }, text: "Synthetic: can you send the report?" });
+  t("R9-1 GUARD: an id on ONE chat's row is not taken across chats when the owner's id is on 2+ chats", ownerTeamsIdsAcross([realA, realB, bad, samAsk]), [OWNER_ID]);
+  t("R9-2 so the sender of that bad row stays OTHER in every other chat (his ask still shows)", teamsChatsFromLedger([realA, realB, bad, samAsk]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER"]);
+  t("R9-3 one chat only: the most frequent id (2+ rows, strictly ahead) is taken; a 1-row id is not; a tie takes neither", [ownerTeamsIdsAcross([realA, row({ chatId: ONE2, messageId: "r3", ownerUserId: OWNER_ID })]), ownerTeamsIdsAcross([realA]), ownerTeamsIdsAcross([realA, row({ chatId: ONE2, messageId: "r3", ownerUserId: OWNER_ID }), row({ chatId: ONE2, messageId: "r4", ownerUserId: SAM }), row({ chatId: ONE2, messageId: "r5", ownerUserId: SAM })])], [[OWNER_ID], [], []]);
+  t("R9-4 a configured id always counts; within its OWN chat a row's ownerUserId still labels the owner", [ownerTeamsIdsAcross([bad], ["CFG-1"]), teamsChatsFromLedger([row({ chatId: ONE2, messageId: "x1", sender: { id: OWNER_ID, name: "x", isApp: false }, ownerUserId: OWNER_ID })]).find((c) => c.chatId === ONE2)!.messages.map((m) => m.speaker)], [["cfg-1"], ["OWNER"]]);
+}
+
+// ── R10. LOOP-2 D-5: the uninvolved rule keeps its pre-fix fail-open ─────────────────────────────────
+{
+  const G2 = `19:grp2${AT}thread.v2`;
+  const g1 = row({ chatId: G2, messageId: "g1", at: "2026-11-16T10:00:00Z", fromOwner: false, mentionedUserIds: [] });
+  const g2 = row({ chatId: G2, messageId: "g2", at: "2026-11-16T11:00:00Z", fromOwner: false, mentionedUserIds: [] });
+  const inv = (rs: LedgerReportRow[], cfg: string[] = []) => teamsChatsFromLedger(rs, cfg).find((c) => c.chatId === G2)!.involvement;
+  t("R10-1 GUARD: rows fromOwner:false + mention arrays, NO owner id of the chat's own (ids only on other chats) -> cant_tell_owner_unknown, SHOWN", [inv([older, older2, g1, g2]).reason, inv([older, older2, g1, g2]).hide], ["cant_tell_owner_unknown", false]);
+  t("R10-2 unchanged: with a configured owner id the same chat is uninvolved (hidden)", [inv([g1, g2], [OWNER_ID]).reason, inv([g1, g2], [OWNER_ID]).hide], ["uninvolved", true]);
+  const gOwn = row({ chatId: G2, messageId: "g3", at: "2026-11-16T12:00:00Z", sender: { id: OWNER_ID, name: "x", isApp: false }, fromOwner: null, mentionedUserIds: [] });
+  t("R10-3 the cross-chat ids may still make a chat SHOW: the owner's own message there -> owner_sent", inv([older, older2, g1, gOwn]).reason, "owner_sent");
+}
+
+// ── R11. LOOP-2 D-6: the settled guard scrubs the to-do too ──────────────────────────────────────────
+{
+  const act = (o: Record<string, unknown>, settled = true) => adm({ ...good, kind: "action", ...o }, settled);
+  t(
+    "R11-1 GUARD: settled -> a to-do claiming he has not replied keeps only its action; a pure claim is dropped",
+    ["You have not replied to Pat: send the deck", "You haven't replied yet.", "You still need to resubmit the form", "Reply to Pat - you have not responded"].map((todo) => act({ todo }).todo),
+    ["Send the deck", null, "Resubmit the form", "Reply to Pat"],
+  );
+  t("R11-2 GUARD: settled -> a reason asserting 'you still need to ...' is dropped", act({ reason: "You still need to resubmit the form." }).reason, null);
+  t(
+    "R11-3 no over-reach: normal to-dos and someone else's state are kept; NOT settled is unchanged",
+    [act({ todo: "Send the deck to Pat" }).todo, act({ todo: "Pat still needs the signed form" }).todo, act({ reason: "Pat still needs the form." }).reason, act({ todo: "You have not replied to Pat: send the deck" }, false).todo],
+    ["Send the deck to Pat", "Pat still needs the signed form", "Pat still needs the form.", "You have not replied to Pat: send the deck"],
+  );
+  t("R11-4 scrubOwnerStateTodo leaves null / claim-free input as is", [scrubOwnerStateTodo(null), scrubOwnerStateTodo("Book the room")], [null, "Book the room"]);
+}
+
+// ── R12. LOOP-2 D-7: a real "Label: action" bullet stays an item ─────────────────────────────────────
+{
+  const E = [
+    "**Pat Example**",
+    "- Pat to send the synthetic deck (01:02)",
+    "Responsible person: Not stated.",
+    "Timestamp: (01:01-01:32).",
+    "- Timing the launch with marketing",
+    "- Notes from Jane on budget",
+    "- **Deadline**: submit the synthetic grant application by Dec 1",
+    "- Note: Owen to send synthetic pricing to the client",
+    "Timing: Beyond two weeks, inferred because no date was set.",
+    "  - Context: the client asked twice",
+  ].join("\n");
+  const se = splitActionItems(E);
+  t(
+    "R12-1 GUARD: '- Note: <action>' and '- **Deadline**: <action>' stay ITEMS (content never dropped)",
+    se.items,
+    ["Pat to send the synthetic deck", "Timing the launch with marketing", "Notes from Jane on budget", "Deadline: submit the synthetic grant application by Dec 1", "Note: Owen to send synthetic pricing to the client"],
+  );
+  t(
+    "R12-2 the owner's real metadata lines still attach (Responsible person / Timestamp / Timing), and an indented note attaches",
+    se.details.map((d) => d.map((x) => x.label)),
+    [["responsible person", "timestamp"], [], [], [], ["timing", "context"]],
+  );
+  t("R12-3 isMetadataDetail: metadata label + no action verb only", [isMetadataDetail({ label: "owner", value: "Pat" }), isMetadataDetail({ label: "owner", value: "Pat to send the deck" }), isMetadataDetail({ label: "note", value: "Not stated" })], [true, false, false]);
+}
+
+// ── R8. LOOP-2 D-3: owner FULL names from config, never a bare first name ──────────────────────────
+{
+  const full = ownerFullNames({ mailbox: "owen.example@work.example", ownerLogins: ["owen.example@huddle.example"] });
+  t("R8-1 ownerFullNames: 'first.last' login/mailbox -> 'First Last'; config names need two words; no config -> login only", [full, ownerFullNames({ ownerLogins: ["oexample@x.example"], correspondence: { ownerNames: ["Owen", "Example, Owen", "Owen  Example"] } })], [["Owen Example"], ["Example, Owen", "Owen Example"]]);
+  // The live default: NO correspondence.ownerNames, login first.last. No owner id anywhere (last resort applies).
+  const cfgDefault = parseFeedsConfig(JSON.stringify({ enabled: true, synthetic: false, driveUser: MAILBOX, mailbox: MAILBOX, ownerLogins: ["owen.example@huddle.example"], teams: {} }))!;
+  const ownLF = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: OWNER_ID, name: "Example, Owen", isApp: false }, text: "Synthetic owner line" });
+  const asm3 = assembleLedgerPlan({ rows: [ask, ownLF], proposals: [], bell: [] }, cfgDefault, Date.parse("2026-11-09T05:00:00Z"));
+  t("R8-2 GUARD: default config (no ownerNames): 'Example, Owen' is recognised as the owner via the login's full name", asm3.plan.teams.scan.concat(asm3.plan.teams.hiddenUninvolved).find((c) => c.chatId === ONE)?.messages.map((m) => m.speaker), ["OTHER", "OWNER"]);
+  const sameFirst = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: "near-guid", name: "Owen Other", isApp: false } });
+  const bare = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", sender: { id: "bare-guid", name: "Owen", isApp: false } });
+  t(
+    "R8-3 GUARD: a bare first-name match never marks the sender as the owner (configured 'Owen'; senders 'Owen' and 'Owen Other')",
+    [teamsChatsFromLedger([ask, bare], [], ["Owen"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), teamsChatsFromLedger([ask, sameFirst], [], ["Owen", "Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker)],
+    [["OTHER", "OTHER"], ["OTHER", "OTHER"]],
+  );
+  t(
+    "R8-4 label: a group chat named 'Example, Owen' -> 'Teams group chat' with the full name; a chat named just 'Owen' keeps its name",
+    [teamsSourceLabel({ kind: "group", chatName: "Example, Owen" }, full), teamsSourceLabel({ kind: "group", chatName: "Owen" }, ["Owen", ...full])],
+    ["Teams group chat", "Teams, Owen"],
+  );
+  const grpRow = row({ chatId: GRP, chatName: "Example, Owen", messageId: "g1", at: "2026-11-16T11:00:00Z", text: "Synthetic group line", mentionedUserIds: [OWNER_ID] });
+  const asm4 = assembleLedgerPlan({ rows: [older, older2, grpRow], proposals: [], bell: [] }, cfgDefault, Date.parse("2026-11-09T05:00:00Z"));
+  const g = buildCandidates({ assembled: asm4, rows: [older, older2, grpRow], settings: { ...ACTIONS_SETTINGS_DEFAULT, hideUninvolvedChats: false }, verdicts: new Map(), proposals: new Map(), meetingProposals: [], replies: [], isDraftable: () => false }).candidates.find((c) => c.itemKey.startsWith(`teams:${GRP}`));
+  t("R8-5 end to end with the default config: the group chat named after the owner is labelled 'Teams group chat'", g?.display.sourceLabel, "Teams group chat");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

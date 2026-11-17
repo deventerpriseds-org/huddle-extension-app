@@ -17,6 +17,9 @@
 //             choice in "What counts" (the HUDDLE_ONEDRIVE_FEEDS.correspondence.staleAlerts flag is the switch),
 //             so the settings list and the stored kinds are unchanged. A feed row is listed and counted whenever
 //             one exists; with the flag OFF none is ever written.
+// 2026-11-17: an `ai_quota` SYSTEM kind -- ONE row per owner while OpenAI is out of credit, raised by any background
+//             AI job (lib/ai-quota/ai-quota.ts) and auto-cleared by the next successful model call. Same rules as
+//             `feed`: not an owner choice in "What counts", always listed and counted while open.
 
 export const ATTENTION_KINDS = ["email", "meeting", "appointment", "chat"] as const;
 export type AttentionKind = (typeof ATTENTION_KINDS)[number];
@@ -42,7 +45,7 @@ export const DEFAULT_URGENT_KINDS: AttentionKind[] = ["email", "meeting", "appoi
 export const LATE_KINDS: AttentionKind[] = ["chat"];
 
 /** Kinds the bell always shows when a row exists, outside the owner's "What counts" choice. */
-export const SYSTEM_KINDS = ["feed"] as const;
+export const SYSTEM_KINDS = ["feed", "ai_quota"] as const;
 export type SystemKind = (typeof SYSTEM_KINDS)[number];
 export type BellKind = AttentionKind | SystemKind;
 export const isSystemKind = (v: unknown): v is SystemKind =>
@@ -131,10 +134,11 @@ export function toAttentionItem(r: AttentionRowLike): AttentionItem | null {
   const kind = r.kind ?? "email";
   if (isSystemKind(kind)) {
     // feed: title names the file and how long; detail says which flow to check. No message content.
+    // ai_quota: title names the job that hit it; detail is the fixed "paused until topped up" line.
     return {
       id: r.id,
       kind,
-      title: r.subject?.trim() || "A data feed file needs checking",
+      title: r.subject?.trim() || (kind === "ai_quota" ? "OpenAI is out of credit" : "A data feed file needs checking"),
       detail: r.from_name?.trim() || null,
       huddleId: r.huddle_id || EMAIL_ALERT_HUDDLE,
       at: r.received_at ?? r.created_at ?? null,
