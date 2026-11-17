@@ -52,9 +52,14 @@ export const Route = createFileRoute("/api/public/run-autowork")({
           // catches a "done" the fire-and-forget sync lost. Never throws.
           const { reconcilePushes } = await import("@/features/huddle/lib/tasks/push.server");
           const pushReconcile = await reconcilePushes(userEmail);
-          const result = await runScheduledAutoWork(
+          // Runs as a background AI job: a quota error inside it raises the bell + Iris alert (lib/ai-quota, 2026-11-17).
+          const result = await (await import("@/features/huddle/lib/ai-quota/ai-quota.server")).runAsAiJob(
+            "Auto-work",
+            userEmail,
+            () => runScheduledAutoWork(
             { entra_email: userEmail },
             { timeZone: payload.timeZone, force: !!payload.force, runId: payload.runId },
+          ),
           );
           return json({ ...result, pushReconcile }, result.ok ? 200 : 500);
         } catch (err) {

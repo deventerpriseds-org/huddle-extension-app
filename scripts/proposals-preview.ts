@@ -41,6 +41,7 @@ import type { NewProposal, ProposalStore } from "../src/features/huddle/lib/prop
 import { proposeJudgedTodos } from "../src/features/huddle/lib/proposals/engine";
 import { renderNeedsYouHtml, renderNeedsYouMarkdown, type NeedsYouReport } from "./proposals-preview-render";
 import { extract, judge, EXTRACT_MODEL } from "../src/features/huddle/lib/proposals/proposals.server";
+import { aiFailureKind } from "../src/features/huddle/lib/fallbacks";
 
 /** Parse a feed file WITHOUT ever printing its content: a JSON.parse error message quotes the first characters
  *  of the input (V8: `Unexpected token 'S', "Secret mer"... is not valid JSON`), and these logs are public. A
@@ -116,14 +117,8 @@ const judged: { f: (typeof facts)[number]; o: JudgeOutcome }[] = [];
 let judgeCalls = 0;
 let judgeFailures = 0;
 const judgeFailureKinds: Record<string, number> = {};
-function judgeFailureKind(e: unknown): string {
-  const m = String((e as { message?: unknown })?.message ?? e ?? "");
-  const code = m.match(/\b(insufficient_quota|rate_limit_exceeded|invalid_api_key|model_not_found|context_length_exceeded|invalid_request_error|server_error)\b/)?.[1];
-  const status = m.match(/\b([45]\d\d)\b/)?.[1];
-  if (/timeout/i.test(m)) return "timeout";
-  if (status || code) return [status, code].filter(Boolean).join(" ");
-  return (e as { name?: string })?.name || "Error";
-}
+// The one shared copy lives in lib/fallbacks.ts (2026-11-17), so background jobs log failure kinds identically.
+const judgeFailureKind = aiFailureKind;
 for (const f of facts) {
   // Cap the MODEL calls, not the conversations: settled / owner-only ones cost nothing and are still counted.
   const needsModel = !!f.latestOther && !f.settled;

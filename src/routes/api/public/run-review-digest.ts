@@ -48,9 +48,14 @@ export const Route = createFileRoute("/api/public/run-review-digest")({
           const { runScheduledReviewDigest } = await import(
             "@/features/huddle/lib/tasks/review-digest.server"
           );
-          const result = await runScheduledReviewDigest(
+          // Runs as a background AI job: a quota error inside it raises the bell + Iris alert (lib/ai-quota, 2026-11-17).
+          const result = await (await import("@/features/huddle/lib/ai-quota/ai-quota.server")).runAsAiJob(
+            "Review digest",
+            userEmail,
+            () => runScheduledReviewDigest(
             { entra_email: userEmail },
             { timeZone: payload.timeZone, force: !!payload.force, runId: payload.runId },
+          ),
           );
           return json(result, result.ok ? 200 : 500);
         } catch (err) {

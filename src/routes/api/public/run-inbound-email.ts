@@ -57,7 +57,11 @@ export const Route = createFileRoute("/api/public/run-inbound-email")({
             await import("@/features/huddle/lib/email/inbound-email");
           const { runInboundEmailWatch } =
             await import("@/features/huddle/lib/email/inbound-email.server");
-          const result = await runInboundEmailWatch(
+          // Runs as a background AI job: a quota error inside it raises the bell + Iris alert (lib/ai-quota, 2026-11-17).
+          const result = await (await import("@/features/huddle/lib/ai-quota/ai-quota.server")).runAsAiJob(
+            "Inbound email",
+            userEmail,
+            () => runInboundEmailWatch(
             { entra_email: userEmail },
             {
               timeZone: payload.timeZone,
@@ -68,6 +72,7 @@ export const Route = createFileRoute("/api/public/run-inbound-email")({
               runId: payload.runId,
               resendOwed: payload.resendOwed === true,
             },
+          ),
           );
           return json(result, result.ok ? 200 : 500);
         } catch (err) {

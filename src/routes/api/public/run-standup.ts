@@ -55,7 +55,11 @@ export const Route = createFileRoute("/api/public/run-standup")({
           const { runScheduledStandup } = await import(
             "@/features/huddle/lib/tasks/standup.server"
           );
-          const result = await runScheduledStandup(
+          // Runs as a background AI job: a quota error inside it raises the bell + Iris alert (lib/ai-quota, 2026-11-17).
+          const result = await (await import("@/features/huddle/lib/ai-quota/ai-quota.server")).runAsAiJob(
+            "Stand-up",
+            userEmail,
+            () => runScheduledStandup(
             { entra_email: userEmail },
             {
               timeZone: payload.timeZone,
@@ -63,6 +67,7 @@ export const Route = createFileRoute("/api/public/run-standup")({
               runId: payload.runId,
               deliver: payload.deliver !== false,
             },
+          ),
           );
           return json(result, result.ok ? 200 : 500);
         } catch (err) {

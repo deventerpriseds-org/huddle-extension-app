@@ -351,7 +351,7 @@ export async function listOpenAttention(ownerEmail: string, limit = 50): Promise
     `SELECT id, kind, huddle_id, subject, from_name, from_address, received_at, created_at, needs_context, source_link
        FROM chat.email_replies
       WHERE owner_email = lower($1) AND status IN ('owed','drafted')
-      ORDER BY (kind = 'feed') DESC, coalesce(received_at, created_at) DESC
+      ORDER BY (kind IN ('feed','ai_quota')) DESC, coalesce(received_at, created_at) DESC
       LIMIT $2`,
     [ownerEmail, limit],
   );
@@ -362,12 +362,13 @@ export async function listOpenAttention(ownerEmail: string, limit = 50): Promise
  *  MEETING/APPOINTMENT items settle. Emails keep their own rules (reply detected / Dismiss), and so do Teams
  *  chats: talking to Iris is not answering the Teams chat (a later owner message in THAT chat, or Dismiss).
  *  Feed-staleness rows (2026-11-13) too: talking to Iris does not fix a Power Automate flow -- they clear
- *  when the file updates, or on Dismiss. */
+ *  when the file updates, or on Dismiss. The OpenAI out-of-credit row (kind 'ai_quota', 2026-11-17) too: it lives in
+ *  Iris's chat, and talking to her does not top up the account -- it clears on the next successful model call. */
 export async function settleAttentionForHuddle(ownerEmail: string, huddleId: string): Promise<number> {
   await ensureBootstrapped();
   const r = await getPool().query(
     `UPDATE chat.email_replies SET status = 'replied', settled_at = now(), updated_at = now()
-      WHERE owner_email = lower($1) AND huddle_id = $2 AND kind NOT IN ('email','chat','feed') AND status IN ('owed','drafted')`,
+      WHERE owner_email = lower($1) AND huddle_id = $2 AND kind NOT IN ('email','chat','feed','ai_quota') AND status IN ('owed','drafted')`,
     [ownerEmail, huddleId],
   );
   return r.rowCount ?? 0;
@@ -531,6 +532,49 @@ export async function notePendingFeedAttention(r: {
     [r.id, r.ownerEmail, r.reason, r.huddleId],
   );
   return q.rows[0]?.before === r.reason;
+}
+
+/**
+ * OpenAI is out of credit (lib/ai-quota/ai-quota.ts, 2026-11-17): ONE row per owner (kind 'ai_quota'). The row's
+ * status IS the persisted outage state, so concurrent heartbeats and serverless instances agree:
+ *  - no row, or an auto-cleared row ('replied'): this call opens it and returns true -- the ONE caller that posts
+ *    Iris's notice (Postgres serialises the conflicting upserts, so exactly one sees a write);
+ *  - an open row: nothing is written (returns false) -- the same outage;
+ *  - a dismissed row: stays dismissed (returns false) -- the owner saw this outage; only a success ends it.
+ * `graph_message_id` holds the job that first hit it. Never touches a non-'ai_quota' row.
+ */
+export async function raiseAiQuotaAttention(r: {
+  id: string;
+  ownerEmail: string;
+  job: string;
+  title: string;
+  detail: string;
+  huddleId: string;
+}): Promise<boolean> {
+  await ensureBootstrapped();
+  const q = await getPool().query(
+    `INSERT INTO chat.email_replies AS e
+       (id, owner_email, mailbox, graph_message_id, subject, from_name, received_at, kind, huddle_id)
+     VALUES ($1, lower($2), '', $3, $4, $5, now(), 'ai_quota', $6)
+     ON CONFLICT (id) DO UPDATE SET
+       graph_message_id = EXCLUDED.graph_message_id, subject = EXCLUDED.subject, from_name = EXCLUDED.from_name,
+       received_at = now(), status = 'owed', settled_at = NULL, updated_at = now()
+     WHERE e.kind = 'ai_quota' AND e.owner_email = lower($2) AND e.status = 'replied'`,
+    [r.id, r.ownerEmail, r.job.slice(0, 120), r.title.slice(0, 300), r.detail.slice(0, 300), r.huddleId],
+  );
+  return (q.rowCount ?? 0) > 0;
+}
+
+/** A model call succeeded: the open OR dismissed out-of-credit row settles 'replied' (auto-cleared), ending the
+ *  outage so the next quota error raises a new one. Returns whether THIS call ended it (exactly one caller does). */
+export async function clearAiQuotaAttention(id: string, ownerEmail: string): Promise<boolean> {
+  await ensureBootstrapped();
+  const q = await getPool().query(
+    `UPDATE chat.email_replies SET status = 'replied', settled_at = now(), updated_at = now()
+      WHERE id = $1 AND owner_email = lower($2) AND kind = 'ai_quota' AND status IN ('owed','drafted','dismissed')`,
+    [id, ownerEmail],
+  );
+  return (q.rowCount ?? 0) > 0;
 }
 
 export async function getUrgentKinds(ownerEmail: string): Promise<unknown> {
