@@ -43,3 +43,32 @@ NOT PROVEN risks (inference, not executed):
    pass can enqueue a second work turn (different id) for the task the live path just moved to DOING was not
    exercised offline.
 
+## C7 F6 board-claim honesty -- REFUTED (false rewrites of performed actions)
+Summary strings the predicates key on DO match what dispatch records (read huddle.functions.ts):
+`journey-voice · ok` (5232/6918), `deferred — task assigned to X, not Y` (5193), `“T” → Huddle board + journey`
+(3320), `created N/M → Huddle board + journey` (3547), `... — skipped duplicate` (3185/3203), `Huddle-only` (3591).
+Wiring: presentedReplies = presentBoardClaims(presentNexusWriteTurn(...), toolUses) at huddle.functions.ts:2384;
+toolUses is turn-level and resumed across chunks (`resume ? [...resume.toolUses]`, :1040).
+Mutation: agent scoping `toolUses.filter(u => u.agentId === r.agentId)` -> `toolUses`:
+FIRED (control EQUIVALENT) on 'another agent's write never backs this agent's claim'.
+
+Probe (docs/qc-evidence/verify-handoff-confirm-flow-4-c7-probe.ts, `bun` it) -- 13/19 MISS:
+FALSE REWRITES of TRUE statements (the agent DID the thing; the owner is told it did nothing):
+| reply | the agent's toolUse | presented as |
+|---|---|---|
+| "I moved the task to Thursday." | move_task_to_day, journey-voice · ok | "Nothing was changed on the board for that." |
+| "I moved that task to 3pm tomorrow." | reschedule_task, journey-voice · ok | "Nothing was changed on the board for that." |
+| "I set a reminder for that task at 3pm." | schedule_reminder ok | "Nothing was changed on the board for that." |
+| "I created a research brief for the task." | create_artifact ok, /artifacts/abc | "Nothing was added to the board for that." |
+| "I completed the research for that task — the brief is attached." | create_artifact ok | "Nothing was changed on the board for that." |
+Cause: STATUS_TOOLS = {update_task, batch_update_tasks} only; journey's catalog
+(journey-voice supabase/functions/_shared/tool-definitions.ts:97/112/127/320) also exposes reschedule_task,
+schedule_task, unschedule_task, move_task_to_day, and STATUS_CLAIM_RE fires on any "I set/moved/completed" next to
+the word "task". OFF_BOARD_RE excludes email/notes but not reminders, calendars, documents, briefs.
+(Inference, not executed: that journey's catalog fed to huddle via ensureJourneyTools is this tool-definitions.ts.)
+UNDER-MATCH (false claims passed unchanged): "All set — it's marked as complete.", "Task moved to Done.",
+"✅ Marked done.", "I've gone ahead and marked it done.", "I went ahead and moved it to Done.",
+"I've now added it to your board.", "It's been added to your board.", "We marked it done."
+The S-B reference cases pass ("I marked 'Order Nike Pegasus Premium' done." rewritten; "I'm proceeding with the
+research." rewritten; deferred update -> "passed to the task's owner").
+
