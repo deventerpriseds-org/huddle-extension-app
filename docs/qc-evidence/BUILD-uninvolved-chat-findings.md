@@ -95,3 +95,43 @@ Public repo: synthetic ids and text only. No message bodies are logged by any ch
 - Tests: VF6-1 (known " k1 " + listed "k1" -> ONE meeting, `both`; known "k2\t" + listed " k2" -> one; blank and
   null known ids and a blank listed id skipped; listed " l1 " emitted as "l1"), VF6-2 (normaliser). fireflies-list
   7 -> 9 passed, 0 failed. `npx tsc --noEmit` rc=0.
+
+### Test hardening before the mutation runs (commit 39dc9221)
+
+- VF2-2's second probe called `chatInvolvement` unguarded, so a mutation that removed the try/catch would have
+  crashed the test file instead of naming VF2-2. It now goes through a `safeHide` wrapper.
+- New VF2-4: a malformed chat counts in `plan.teams.cantTell` (nothing pinned `cant_tell_malformed` there before).
+  Suite 61 -> 62 passed.
+
+## Mutation proofs (mutate.sh, test cmd `bun scripts/report-from-ledger.test.ts`, file report-from-ledger.ts)
+
+The coordinator cut the budget, so only the 3 highest-risk guards were proved. Anchors were kept in files under the
+session scratchpad.
+
+| guard | mutation | must-fail test | verdict | exit |
+|---|---|---|---|---|
+| F1 @Everyone / unresolved mention shows the chat | delete `if (messages.some(maybeMentionsOwner)) return {... "owner_maybe_mentioned" }` | VF1-5 | FIRED (control EQUIVALENT); restored, tree clean | 0 |
+| F2 Array.isArray before .some | `Array.isArray(m.mentionedUserIds) && m.mentionedUserIds.some(` -> `(m.mentionedUserIds as string[]).some(` | VF2-1 | FIRED (control EQUIVALENT); restored, tree clean | 0 |
+| F2 per-chat try/catch in teamsChatsFromLedger | `catch { out.push(malformedChatFacts(...)) }` -> `catch (e) { throw e; }` | VF2-3 | FIRED (control EQUIVALENT); restored, tree clean | 0 |
+
+NOT PROVEN (no mutation run; each has a named test that should catch it, but that is not proven):
+- F1 parser: `unresolved = true` for a non-user mention (VF1-1) and for an unmatched body `<at>` tag (VF1-4);
+  the parser storing `unresolvedMention` (VF1-1); `teamsContent` copying it (VF1-9); `maybeMentionsOwner`'s
+  `unresolvedMention === true` line (VF1-6) and its legacy `<at` text check (VF1-7); facts `ownerMentioned`
+  null when maybe-mentioned (VF1-5); `owner_maybe_mentioned` in the can't-tell count (VF1-5).
+- F2: the rule-level try/catch in `chatInvolvement` (VF2-2); `cant_tell_malformed` in the can't-tell count (VF2-4).
+- F4: stored non-string mention entry -> maybe-mentioned (VF4-3); parser trim / string-type check on user id (VF4-1).
+- F5: `normTeamsId` trim (VF5-3) and lower-case (VF5-2); facts using `teamsOwnerIds` (VF5-2); facts counting
+  `mentionsOwner` (VF5-5); sender id normalised in `isOwnerMessage` (VF5-4).
+- F6: `normMeetingId` on the known side and the listed side (VF6-1); its trim (VF6-2).
+
+## Final runs (head after this commit)
+
+| suite | result |
+|---|---|
+| bun scripts/report-from-ledger.test.ts | 62 passed, 0 failed |
+| bun scripts/fireflies-list.test.ts | 9 passed, 0 failed |
+| bun scripts/correspondence-ingest.test.ts | 186 passed, 0 failed |
+| npx tsc --noEmit | rc=0 |
+
+Findings 3 and 7 were deliberately left unchanged.
