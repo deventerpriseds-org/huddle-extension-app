@@ -11,6 +11,11 @@
   The owner saw the toggle missing because his app had the pre-deploy bundle loaded: a full reload is needed after a deploy.
 - Hardening: a UAT check that only asserts a control EXISTS proves nothing. A range/filter control's UAT must click it,
   assert the visible result changes, then restore the saved setting (actions-view-checks.mjs AT-1..AT-P6 now do).
+- Independent verification on main: docs/qc-evidence/VERIFY-report-saves-verdicts-1.md (FIX FIRST -> fixed),
+  VERIFY-report-saves-verdicts-2.md (wording only -> fixed def27a2b), VERIFY-actions-all-time-1.md (7/7 CONFIRMED,
+  LIVE-OK on 5cf3c26b; 4,000-case comparison vs pre-#274 selection, 0 differences in judged rows).
+- Owner 2026-11-17 (after reload): automated notices (Figma/Azure DevOps/Sheets invites, workflow mailer, SOS polls)
+  still listed as actions; and yesterday's emails he expects are missing. Investigation in progress.
 - Mechanism added org-wide: eds-claude-skills #146 (parity AC: one store, same-window count comparison, no silent backlog).
 - Open quality observation (not yet raised as a fix): automated notices (sheet-share invites, safety-alert polls) still
   land in "Needs your reply".
