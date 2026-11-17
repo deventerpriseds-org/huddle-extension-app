@@ -1,0 +1,55 @@
+
+  // ── VERIFIER LOOP 2 (adversarial, synthetic): AC8 under load, GATED (15 first-wave answers released together) ──────────────────────────────────────────
+  {
+    const { assembleLedgerPlan } = await import("../src/features/huddle/lib/correspondence/report-from-ledger");
+    const { loadLedgerReportData } = await import("../src/features/huddle/lib/correspondence/report-from-ledger.server");
+    const { parseFeedsConfig } = await import("../src/features/huddle/lib/external-feeds/onedrive-feed");
+    const { runClassify, threadUnits } = await import("../src/features/huddle/lib/actions/pipeline");
+    const { ACTIONS_SETTINGS_DEFAULT } = await import("../src/features/huddle/lib/actions/actions");
+    const N = 12;
+    const chats = Array.from({ length: N }, (_, i) => `19:v2stress${i}${"@"}unq.gbl.spaces`);
+    const askOf = (i: number) => `Could you please send the synthetic report number ${i} by Friday?`;
+    await L.storeContent(O, chats.map((ch, i) => ({
+      ...item(teamsSourceItemId(ch, "1")), threadId: ch, at: "2026-11-16T17:00:00.000Z",
+      content: { kind: "teams", chatId: ch, chatName: null, messageId: "1", at: "2026-11-16T17:00:00.000Z", sender: { id: "other-guid", name: "Pat Example", isApp: false }, fromOwner: false, text: askOf(i), webUrl: null, mentionedUserIds: [], ownerUserId: "owner-guid-0001" },
+    })) as never);
+    const asm = assembleLedgerPlan(await loadLedgerReportData([O]), parseFeedsConfig(process.env.HUDDLE_ONEDRIVE_FEEDS)!, Date.parse("2026-11-09T05:00:00.000Z"));
+    const S8 = { ...ACTIONS_SETTINGS_DEFAULT, dailyCap: 10000, sources: { email: false, teams: true, meeting: false } };
+    const units = threadUnits(asm, S8).units;
+    const targets = units.filter((x) => chats.includes(x.teams?.chatId ?? ""));
+    const judged = new Set(units.filter((x) => !targets.includes(x)).map((x) => x.itemKey));
+    console.log(`INFO V2-AC8 targets=${targets.length}`);
+    const PASSES = 3; let arrivedG = 0; let releaseG: () => void = () => {}; const gateG = new Promise<void>((r) => (releaseG = r));
+    let maxTotal = 0, maxWaiting = 0;
+    const sampler = setInterval(() => { maxTotal = Math.max(maxTotal, pool.totalCount); maxWaiting = Math.max(maxWaiting, pool.waitingCount); }, 2);
+    const answer = (pass: number) => async (_sys: string, inp: string) => {
+      if (++arrivedG === 15) releaseG(); await gateG;
+      let i = -1;
+      for (let k = 0; k < N; k++) if (String(inp).includes(`report number ${k} by`)) i = k;
+      return { open_item: true, kind: "action", todo: `Test-pass${pass} wording ${["alpha", "bravo", "charlie"][pass]} item ${i}`, due: "Friday", quote: askOf(i), confidence: "high", reason: "Asked directly.", category: "person_request" };
+    };
+    const base = await A.classifyDepsFor(O, [O]);
+    let peakHolders = 0, holders = 0;
+    const counted = { ...base, lockThread: async (u: any, fn: any) => base.lockThread!(u, async (tx: any) => { holders++; peakHolders = Math.max(peakHolders, holders); try { return await fn(tx); } finally { holders--; } }) };
+    const t0 = Date.now();
+    const timeout = new Promise((r) => setTimeout(() => r("TIMEOUT"), 30000));
+    const out: any = await Promise.race([Promise.all(Array.from({ length: PASSES }, (_, p) => runClassify(asm, S8, judged, N, { ...counted, concurrency: 5, model: answer(p) } as any))), timeout]);
+    clearInterval(sampler);
+    const ms = Date.now() - t0;
+    if (out === "TIMEOUT") {
+      t("V2-AC8-1 3 passes x 12 threads x concurrency 5 complete (no pool deadlock)", "TIMEOUT", "done");
+    } else {
+      const props = await pool.query<{ sid: string; n: string }>(`SELECT source_item_id sid, count(DISTINCT proposal_id) n FROM chat.task_proposal_refs WHERE owner_email = $1 AND source = 'teams' AND source_item_id = ANY($2) GROUP BY 1`, [O, targets.map((x) => x.refItemId)]);
+      const verd = await pool.query<{ ok: number }>(`SELECT count(*)::int ok FROM chat.correspondence_ledger l WHERE source='teams' AND source_item_id = ANY($1) AND result_ids->'action'->>'proposalId' IN (SELECT proposal_id FROM chat.task_proposal_refs r WHERE r.source_item_id = l.source_item_id)`, [targets.map((x) => x.storeAt.sourceItemId)]);
+      const sum = (k: string) => out.reduce((a: number, r: any) => a + r[k], 0);
+      console.log(`INFO V2-AC8 ms=${ms} peak_pool_total=${maxTotal} peak_pool_waiting=${maxWaiting} peak_lock_holders_inside_fn=${peakHolders} THREAD_LOCK_HOLDERS_MAX=${A.THREAD_LOCK_HOLDERS_MAX}`);
+      t("V2-AC8-1 3 passes x 12 threads x concurrency 5: done, 36 calls, 12 stored open, 24 adopted, 0 failures", [sum("calls"), sum("open"), sum("alreadyJudged") - PASSES * judged.size, sum("failures")], [36, 12, 24, 0]);
+      t("V2-AC8-2 exactly ONE proposal per thread (12 threads, all count 1)", [props.rows.length, props.rows.every((r) => Number(r.n) === 1)], [12, true]);
+      t("V2-AC8-3 each stored verdict points at that thread's proposal", verd.rows[0].ok, 12);
+      t("V2-AC8-4 pool never above its max (8)", maxTotal <= 8, true);
+    }
+    const cnt = async () => Number((await pool.query(`SELECT count(*) n FROM chat.task_proposals WHERE owner_email=$1`, [O])).rows[0].n);
+    const before = await cnt();
+    const r3 = await runClassify(asm, S8, new Set(judged), N, { ...counted, concurrency: 5, model: answer(0) } as any);
+    t("V2-AC8-5 a pass that did not see the store (stale judged set) adds 0 proposals: all adopted inside the lock", [r3.calls, r3.open, (await cnt()) - before], [12, 0, 0]);
+  }
