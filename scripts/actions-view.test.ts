@@ -11,7 +11,9 @@
 import {
   actionSectionFor,
   admitActionVerdict,
+  emailQuoteHaystack,
   quoteIsVerbatim,
+  teamsQuoteHaystack,
   type ActionVerdict,
 } from "../src/features/huddle/lib/correspondence/action-classify";
 import { assembleLedgerPlan, chatInvolvement, type LedgerReportRow } from "../src/features/huddle/lib/correspondence/report-from-ledger";
@@ -61,6 +63,13 @@ t("A-5 typographic quotes / whitespace fold", quoteIsVerbatim("could  you confir
 t("A-6 open_item false -> none; settled -> answeredByReply", [adm({ ...good, open_item: false }).status, adm({ ...good, open_item: false }, HAY, true).answeredByReply], ["none", true]);
 t("A-7 bad shapes -> not_checked (bad_shape)", [null, [], "x", { ...good, open_item: "yes" }, { ...good, kind: "maybe" }, { ...good, category: "spam" }].map((r) => adm(r).notCheckedReason), ["bad_shape", "bad_shape", "bad_shape", "bad_shape", "bad_shape", "bad_shape"]);
 t("A-8 open_item true with kind none -> not_checked", adm({ ...good, kind: "none" }).status, "not_checked");
+// Loop-2 D1 (VERIFY-actions-view-2 Q15 / Q21): a quote stitched across two pieces must NOT pass.
+const STITCH_CHAT = { messages: [{ speaker: "OTHER", text: "ok see you there" }, { speaker: "OWNER", text: "x" }, { speaker: "OTHER", text: "please send the deck" }] } as never;
+t("A-9 GUARD: teams quote stitched across two OTHER messages -> not_checked", [quoteIsVerbatim("see you there please send the deck", teamsQuoteHaystack(STITCH_CHAT)), adm({ ...good, quote: "see you there please send the deck" }, teamsQuoteHaystack(STITCH_CHAT) as never).status], [false, "not_checked"]);
+const FW_FACTS = { latestOther: { id: "feed:m2", text: "Pat here, see below" } } as never;
+const FW_MAP = new Map([["feed:m2", "From: someone\n\nplease send the signed form by Friday"]]);
+t("A-10 GUARD: email quote stitched across the body and its forwarded part -> not_checked", [quoteIsVerbatim("see below from: someone", emailQuoteHaystack(FW_FACTS, FW_MAP)), adm({ ...good, quote: "see below From: someone" }, emailQuoteHaystack(FW_FACTS, FW_MAP) as never).status], [false, "not_checked"]);
+t("A-11 quote inside ONE piece still admits (teams 2nd message; email body; email forwarded part)", [adm({ ...good, quote: "please send the deck" }, teamsQuoteHaystack(STITCH_CHAT) as never).status, adm({ ...good, quote: "Pat here, see below" }, emailQuoteHaystack(FW_FACTS, FW_MAP) as never).status, adm({ ...good, quote: "send the signed form by Friday" }, emailQuoteHaystack(FW_FACTS, FW_MAP) as never).status], ["open", "open", "open"]);
 
 // ── B. SECTIONS (AC-E-6) ─────────────────────────────────────────────────────────────────────────────
 t(

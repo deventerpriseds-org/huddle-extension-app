@@ -155,14 +155,19 @@ export function teamsActionInput(c: TeamsChatFacts, ownerNames: readonly string[
   return [head, "CHAT (oldest first):", ...kept].join("\n");
 }
 
-/** Pure: the text a quote must be found in. Email: the latest OTHER message and its forwarded part. Teams: every
- *  OTHER message of the chat. */
-export function emailQuoteHaystack(f: ConversationFacts, forwards: ReadonlyMap<string, string>): string {
-  if (!f.latestOther) return "";
-  return `${f.latestOther.text}\n${forwards.get(f.latestOther.id) ?? ""}`;
+/** Pure: the SEPARATE texts a quote must be found in. Email: the latest OTHER message, and its forwarded part as a
+ *  second piece. Teams: each OTHER message of the chat as its own piece. Loop-2 D1 (2026-11-17): these used to be
+ *  joined into one string, and the whitespace folding turned the join into a space, so a "quote" stitched from the
+ *  end of one message and the start of the next was admitted although it exists in NO single message. A quote must
+ *  now be a span of ONE piece. */
+export type QuoteHaystack = readonly string[];
+export function emailQuoteHaystack(f: ConversationFacts, forwards: ReadonlyMap<string, string>): QuoteHaystack {
+  if (!f.latestOther) return [];
+  const fw = forwards.get(f.latestOther.id);
+  return fw ? [f.latestOther.text, fw] : [f.latestOther.text];
 }
-export function teamsQuoteHaystack(c: TeamsChatFacts): string {
-  return c.messages.filter((m) => m.speaker === "OTHER").map((m) => m.text).join("\n");
+export function teamsQuoteHaystack(c: TeamsChatFacts): QuoteHaystack {
+  return c.messages.filter((m) => m.speaker === "OTHER").map((m) => m.text);
 }
 
 // ── THE ADMISSION GUARD (Tier 1) ──────────────────────────────────────────────────────────────────────
@@ -179,10 +184,13 @@ export const canonQuote = (s: string) =>
 
 export const MIN_QUOTE_CHARS = 8;
 
-/** Pure, THE verbatim rule: is `quote` (at least MIN_QUOTE_CHARS after folding) a span of `haystack`? */
-export function quoteIsVerbatim(quote: string | null | undefined, haystack: string): boolean {
+/** Pure, THE verbatim rule: is `quote` (at least MIN_QUOTE_CHARS after folding) a span of `haystack`? A list is
+ *  checked piece by piece (each piece folded on its own, never joined): the quote must lie inside ONE piece. */
+export function quoteIsVerbatim(quote: string | null | undefined, haystack: string | QuoteHaystack): boolean {
   const q = canonQuote(quote ?? "");
-  return q.length >= MIN_QUOTE_CHARS && canonQuote(haystack).includes(q);
+  if (q.length < MIN_QUOTE_CHARS) return false;
+  const pieces = typeof haystack === "string" ? [haystack] : haystack;
+  return pieces.some((piece) => canonQuote(piece ?? "").includes(q));
 }
 
 /** What is stored per classification key (ledger result_ids.action). `open` is the only status ever listed. */
@@ -219,7 +227,7 @@ const str = (v: unknown, max = 300) => (typeof v === "string" && v.trim() ? v.tr
  *  - open_item false -> none (answeredByReply when the thread was settled);
  *  - otherwise open.
  */
-export function admitActionVerdict(raw: unknown, haystack: string, a: { key: string; settled: boolean; nowIso: string }): ActionVerdict {
+export function admitActionVerdict(raw: unknown, haystack: string | QuoteHaystack, a: { key: string; settled: boolean; nowIso: string }): ActionVerdict {
   const base: ActionVerdict = { v: 1, key: a.key, status: "not_checked", notCheckedReason: "bad_shape", kind: null, category: null, confidence: null, todo: null, due: null, quote: null, reason: null, answeredByReply: false, proposalId: null, at: a.nowIso };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return base;
   const o = raw as Record<string, unknown>;

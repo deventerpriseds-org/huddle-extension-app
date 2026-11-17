@@ -70,3 +70,16 @@ hits the cap (150). After that: roughly the number of email conversations + Team
 someone else in a day, minus Teams group chats he is not part of (skipped before any call). Measured volume is not
 known to this session; the hard ceiling is the daily cap (150) and the throughput ceiling is 6 per 10 minutes
 (864/day theoretical, never reached because of the cap). Meeting items make NO model call.
+
+## Loop-2 fixes
+
+Fixes for the defects in `VERIFY-actions-view-2.md` (verifier probes copied to
+`docs/qc-evidence/verify-actions-view-2-probes/`, paths made repo-relative). Started 2026-11-17.
+
+- Merge: `origin/main` 19903a7e (#261, stored forwarded part) merged first (cf1700ba); one conflict in the
+  `report-from-ledger.ts` imports, resolved as the union (branch's needs-you imports + main's `forwardedPartText`).
+- **D1 FIXED** (`action-classify.ts`): `emailQuoteHaystack` / `teamsQuoteHaystack` now return a LIST of pieces
+  (email: latest-OTHER body, and the stored forwarded part as its own piece; Teams: each OTHER message), and
+  `quoteIsVerbatim` checks each piece separately -- never a joined string. Tests A-9 (Teams stitch), A-10 (body +
+  forwarded-part stitch), A-11 (a quote inside one piece still admits). Probe `quote.ts`: Q15 and Q21 now `false` /
+  `not_checked`. `actions-view` 65/65.
