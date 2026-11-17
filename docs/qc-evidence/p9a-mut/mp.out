@@ -1,0 +1,7 @@
+INERT: 'the primary (1:1) run goes through runHandoffAware' still PASSED with its defect reinstated.
+       The mutation DID apply and the suite exited 0, so this is a real result: the guard
+       protects nothing. Before rewriting it, check whether the mutation is behaviourally
+       EQUIVALENT -- a mutation that cannot change behaviour correctly fails to fail, and
+       the honest report is 'not proven', not 'guard is broken'.
+restored: src/features/huddle/lib/huddle.functions.ts matches HEAD
+tree clean: 'the primary (1:1) run goes through runHandoffAware' passes again on the restored tree (build output regenerated)

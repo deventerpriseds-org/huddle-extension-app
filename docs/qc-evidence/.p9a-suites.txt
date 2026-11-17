@@ -1,0 +1,42 @@
+== test:handoff-lane-a
+ 204 pass
+ 0 fail
+ 264 expect() calls
+Ran 204 tests across 1 file. [41.00ms]
+rc=0
+== test:handoff-lane-b
+ 7 pass
+ 0 fail
+ 7 expect() calls
+Ran 7 tests across 1 file. [143.00ms]
+rc=0
+== test:board-claims
+ 79 pass
+ 0 fail
+ 80 expect() calls
+Ran 79 tests across 1 file. [14.00ms]
+rc=0
+== test:not-ai-task
+ 6 pass
+ 0 fail
+ 10 expect() calls
+Ran 6 tests across 1 file. [10.00ms]
+rc=0
+== test:one-request-one-task
+ 40 pass
+ 0 fail
+ 44 expect() calls
+Ran 40 tests across 1 file. [19.00ms]
+rc=0
+== test:mode
+PASS  the owner judge never re-assigns an unassigned task
+PASS  the writeback derives tags via groomTags
+
+70/70 passed
+rc=0
+== test:router
+  PASS F2-45 'buy paper towels' is not a coursework ask — holders []
+  PASS F2-45 'assign the grocery run' is not captured by 'assignment' — word-start match only
+
+==================== 39 passed, 0 failed ====================
+rc=0

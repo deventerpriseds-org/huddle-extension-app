@@ -1,0 +1,1 @@
+      toolUses: [...first.toolUses, ...second.toolUses],
