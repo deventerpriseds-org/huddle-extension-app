@@ -281,6 +281,17 @@ try {
   await setActionsSettingsRaw(O, resolveActionsSettings({ dailyCap: 6 }));
   const capPage2 = await A.getActionsPage({ entra_email: O });
   t("CAP-S2 GUARD: the owner raises the limit to 6 -> no notice, used still 5", capPage2.status === "ok" ? [capPage2.capUsedToday, capPage2.capNotice] : capPage2.status, [5, null]);
+
+  // ── 2026-11-17 app_invite (BUILD-actions-app-invite.md): settings stored BEFORE the category existed (raw JSON with
+  // no knownHideCategories) read back through the REAL page read with app_invite hidden; the owner switching it on
+  // through the REAL save is kept on the next read.
+  await setActionsSettingsRaw(O, { hideCategories: ["meeting_invite", "timekeeping", "verification_code"], dailyCap: 6 });
+  const legacyPage = await A.getActionsPage({ entra_email: O });
+  const legacyS = legacyPage.status === "ok" ? legacyPage.settings : null;
+  t("APPINV-S1 GUARD (real SQL): settings saved before app_invite existed -> hidden by default, saved cap kept", [legacyS?.hideCategories.includes("app_invite"), legacyS?.dailyCap], [true, 6]);
+  const saved = legacyS ? await A.saveActionsSettings({ entra_email: O }, { ...legacyS, hideCategories: legacyS.hideCategories.filter((c) => c !== "app_invite") }) : null;
+  const afterSave = await A.getActionsPage({ entra_email: O });
+  t("APPINV-S2 GUARD (real SQL): the owner switching app invitations ON is kept on the next read", [saved?.ok, afterSave.status === "ok" ? afterSave.settings.hideCategories.includes("app_invite") : afterSave.status], [true, false]);
   setSystemTime();
 
   // ── AC8 (verifier VERIFY-report-saves-verdicts-1): two passes (heartbeat + report) judge the SAME unjudged thread
