@@ -87,6 +87,16 @@ const parse = (t: string): unknown => {
   }
 };
 
+// 2026-11-17 (owner-approved): steps 2 + 3 on the LEDGER run the app's own classify pass and SAVE its verdicts into
+// the Actions view's store (PREVIEW_SAVE, default on; "0" keeps this run's results in memory only), then render the
+// report from the store. It loads its own data through the app's plan assembly, so it branches off here.
+if (process.env.PREVIEW_STEP === "action" && source === "ledger") {
+  const { runStoredActionScan } = await import("./action-scan-steps");
+  await runStoredActionScan({ cfg, token, drive, enc, sinceMs, maxCalls, save: process.env.PREVIEW_SAVE !== "0" });
+  process.exit(process.exitCode ?? 0);
+}
+if (process.env.PREVIEW_STEP === "action" && process.env.PREVIEW_SAVE !== "0") console.log("save: OFF -- source=files has no ledger rows to store a verdict on (report only)");
+
 const newest = (f: ConversationFacts) => Math.max(...f.messages.map((m) => Date.parse(String(m.at ?? ""))).filter(Number.isFinite), -Infinity);
 let facts: ConversationFacts[];
 let ctx: NeedsYouContext;
@@ -136,7 +146,8 @@ if (source === "files") {
   );
 }
 
-// ── Steps 2 + 3 (PREVIEW_STEP=action) run instead of step 1 and exit there.
+// ── Steps 2 + 3 (PREVIEW_STEP=action) run instead of step 1 and exit there (this point is reached for source=files
+// only: the ledger source branched off above).
 if (process.env.PREVIEW_STEP === "action") {
   const { runActionScan } = await import("./action-scan-steps");
   await runActionScan({ facts, rawRecords, cfg, ctx, token, drive, enc, sinceMs, maxCalls, newest, ledger: ledgerPart });

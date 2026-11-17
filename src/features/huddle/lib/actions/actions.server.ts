@@ -30,7 +30,7 @@ import {
   type ActionsSettings,
   type OwnerCorrection,
 } from "./actions";
-import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
+import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, runReportClassify, inMemoryWrites, type ClassifyDeps, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
 
 /** The feed config when the correspondence ingest is on (the Actions view reads what the ingest stored). */
 export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | null {
@@ -49,7 +49,7 @@ const lower = (xs: readonly string[]) => [...new Set(xs.map((x) => String(x ?? "
 
 // ── stored verdicts ──────────────────────────────────────────────────────────────────────────────────
 
-async function loadVerdicts(owners: readonly string[]): Promise<Map<string, ActionVerdict>> {
+export async function loadVerdicts(owners: readonly string[]): Promise<Map<string, ActionVerdict>> {
   const r = await getSharedPool().query<{ source: string; source_item_id: string; action: ActionVerdict }>(
     `SELECT source, source_item_id, result_ids->'action' AS action FROM chat.correspondence_ledger
       WHERE owner_email = ANY($1::text[]) AND result_ids ? 'action'`,
@@ -169,30 +169,7 @@ export function runActionsClassify(): Promise<ClassifyResult | null> {
       const judged = currentlyJudgedKeys(verdicts);
       const used = await usedTodayFor(cfg.ownerLogins, now, s.timeZone);
       const left = classifyCallsLeft(used, s.dailyCap);
-      const { proposeFromSource } = await import("../proposals/engine");
-      const { deps } = await import("../proposals/proposals.server");
-      const pd = await deps(cfg.owner);
-      const res = await runClassify(assembled, s, judged, left, {
-        recordCall: (at) => recordActionCall(owners, at, new Date().toISOString()),
-        model,
-        nowMs: () => Date.now(),
-        deadlineMs: now + CLASSIFY_BUDGET_MS,
-        nowIso: () => new Date().toISOString(),
-        storeVerdict: (at, v) => storeVerdict(owners, at, v),
-        propose: async (u, v, text) => {
-          const src = { source: u.source, sourceItemId: u.refItemId, at: u.at, context: (u.email?.latestOther?.subject ?? u.teams?.chatName ?? "").slice(0, 160) || null, text };
-          // The admitted to-do through the EXISTING validators; when its wording is not grounded in the quote (a
-          // "reply to ..." title), the quote itself is the title (always grounded). Nothing else is invented.
-          const titles = [v.todo, v.quote].filter((t): t is string => !!t);
-          for (const title of titles) {
-            const r = await proposeFromSource(cfg.owner, src, { ...pd, extract: async () => ({ tasks: [{ task: title.slice(0, 200), evidence: v.quote, assignee: null, due_text: v.due }] }) });
-            if (r.ids.length) return { id: r.ids[0], onBoard: false };
-            if (r.onBoard || r.suppressed) return { id: null, onBoard: true };
-          }
-          return { id: null, onBoard: false };
-        },
-        addMeetingRows: (m, items) => addMeetingRows(cfg.owner, m, items),
-      });
+      const res = await runClassify(assembled, s, judged, left, { ...(await classifyDepsFor(cfg.owner, owners)), nowMs: () => Date.now(), deadlineMs: now + CLASSIFY_BUDGET_MS });
       if (res.calls || res.meetingRows || res.failures)
         console.log(
           `[actions] classify calls=${res.calls} open=${res.open} none=${res.none} not_checked=${res.notChecked} failures=${res.failures} over_cap=${res.overCap} already=${res.alreadyJudged} meeting_rows=${res.meetingRows} uninvolved_skipped=${res.uninvolvedSkipped} used_today=${used + res.calls}/${s.dailyCap}`,
@@ -206,6 +183,60 @@ export function runActionsClassify(): Promise<ClassifyResult | null> {
     }
   })();
   return classifying;
+}
+
+/**
+ * THE real classify deps (2026-11-17: factored out of runActionsClassify, unchanged, so the action-scan report runs
+ * the SAME pass with the SAME writes): attempt record, model, proposal backing through the EXISTING proposeFromSource,
+ * verdict store on the ledger, meeting triage rows. The caller adds its own deadline / concurrency.
+ */
+export async function classifyDepsFor(owner: string, owners: readonly string[]): Promise<ClassifyDeps> {
+  const { proposeFromSource } = await import("../proposals/engine");
+  const { deps } = await import("../proposals/proposals.server");
+  const pd = await deps(owner);
+  return {
+    recordCall: (at) => recordActionCall(owners, at, new Date().toISOString()),
+    model,
+    nowIso: () => new Date().toISOString(),
+    storeVerdict: (at, v) => storeVerdict(owners, at, v),
+    propose: async (u, v, text) => {
+      const src = { source: u.source, sourceItemId: u.refItemId, at: u.at, context: (u.email?.latestOther?.subject ?? u.teams?.chatName ?? "").slice(0, 160) || null, text };
+      // The admitted to-do through the EXISTING validators; when its wording is not grounded in the quote (a
+      // "reply to ..." title), the quote itself is the title (always grounded). Nothing else is invented.
+      const titles = [v.todo, v.quote].filter((t): t is string => !!t);
+      for (const title of titles) {
+        const r = await proposeFromSource(owner, src, { ...pd, extract: async () => ({ tasks: [{ task: title.slice(0, 200), evidence: v.quote, assignee: null, due_text: v.due }] }) });
+        if (r.ids.length) return { id: r.ids[0], onBoard: false };
+        if (r.onBoard || r.suppressed) return { id: null, onBoard: true };
+      }
+      return { id: null, onBoard: false };
+    },
+    addMeetingRows: (m, items) => addMeetingRows(owner, m, items),
+  };
+}
+
+/**
+ * The action-scan REPORT's pass (scripts/action-scan-steps.ts, step=action, source=ledger): the app's own plan over
+ * the report's window, the app's own classify pass (runReportClassify -> runClassify), verdicts read back from the
+ * store. `save` false = no verdict / proposal / meeting row written (inMemoryWrites; the attempt is still recorded).
+ * Report calls are recorded and counted exactly like in-app
+ * calls, and the report is bounded by what the owner's daily cap has left. No wall-clock deadline: the report runs
+ * in a GitHub job, not under the ~45s server ceiling. COUNTS ONLY are logged by the caller.
+ */
+export async function runReportPassFor(cfg: OneDriveFeedsConfig, a: { sinceMs: number; maxCalls: number; save: boolean; concurrency?: number }) {
+  const owner = String(cfg.ownerLogins[0] ?? "").toLowerCase();
+  if (!owner) throw new Error("no_owner_login");
+  const owners = lower(cfg.ownerLogins);
+  const s = await settingsFor(owner);
+  const { loadLedgerReportData } = await import("../correspondence/report-from-ledger.server");
+  const data = await loadLedgerReportData(cfg.ownerLogins);
+  const assembled = assembleLedgerPlan(data, cfg, a.sinceMs);
+  const now = Date.now();
+  const usedBefore = await usedTodayFor(cfg.ownerLogins, now, s.timeZone);
+  const real = await classifyDepsFor(owner, owners);
+  const io = a.save ? { deps: real, loadVerdicts: () => loadVerdicts(owners) } : inMemoryWrites(real, () => loadVerdicts(owners));
+  const pass = await runReportClassify({ assembled, settings: s, usedToday: usedBefore, maxCalls: a.maxCalls, concurrency: a.concurrency, loadVerdicts: io.loadVerdicts, deps: io.deps });
+  return { ...pass, assembled, settings: s, unavailable: data.unavailable, usedBefore, classifyOn: classifyEnabled(s, true) };
 }
 
 /** Meeting items -> the EXISTING untriaged triage rows (refs make a repeat a no-op). Only items not seen before. */

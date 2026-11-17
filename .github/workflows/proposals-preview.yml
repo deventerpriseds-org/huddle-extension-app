@@ -12,6 +12,9 @@ name: Task proposals preview (owner's OneDrive only)
 #             already resolved and Teams group/meeting chats he is not part of; source=files keeps the OneDrive
 #             files path. With the ledger the job logs in to Azure and opens a temporary DB firewall rule for this
 #             runner only (removed at the end), as correspondence-backfill.yml does. Counts only in this log.
+#             2026-11-17: step=action (ledger) runs the Actions view's own classify pass and SAVES its verdicts into
+#             the view's store (input save_verdicts, default on); threads already judged cost no AI call. Its calls
+#             count toward the owner's daily AI limit like in-app calls.
 # SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 # EVIDENCE:   .claude/actions.md ACT:correspondence-checklist.
 
@@ -57,6 +60,11 @@ on:
         description: "Tuning step to run instead of the full preview: blank = full preview; reply = step 1 (which emails need a reply); action = steps 2+3 (open items when you are on To; actions when CC'd or on a list)"
         required: false
         default: ""
+      save_verdicts:
+        description: "step=action with source=ledger: SAVE the AI verdicts into Huddle's Actions view (on by default). Off = the same check, nothing stored. Already-judged conversations cost no AI call either way."
+        required: false
+        type: boolean
+        default: true
       probe:
         description: "Run the counts-only correspondence probes (scripts/correspondence-probes.ts) INSTEAD of the preview"
         required: false
@@ -190,6 +198,8 @@ jobs:
           PREVIEW_STEP: ${{ inputs.step }}
           PREVIEW_AS_OF: ${{ inputs.as_of }}
           PREVIEW_SOURCE: ${{ inputs.source }}
+          # 2026-11-17: step=action (ledger) saves its verdicts into the Actions view's store unless switched off.
+          PREVIEW_SAVE: ${{ inputs.save_verdicts && '1' || '0' }}
           FIREFLIES_API_KEY: ${{ inputs.probe && secrets.FIREFLIES_API_KEY || '' }}
         run: |
           TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \

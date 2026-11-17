@@ -283,6 +283,55 @@ export async function runClassify(
   return res;
 }
 
+// ── REPORT PASS (2026-11-17, owner: "the report must save its verdicts into the Actions view's store") ──────────
+// The action-scan HTML report (scripts/action-scan-steps.ts, step=action) runs THIS, not a classify loop of its own:
+// the same skip rule (currentlyJudgedKeys), the same cap rule (classifyCallsLeft), the same pass (runClassify: one
+// admission guard, one key scheme, one store), and its rows are then read BACK from the store.
+
+/** Model calls the report starts together (owner brief 2026-11-17). */
+export const REPORT_CONCURRENCY = CLASSIFY_PARALLEL;
+
+export interface ReportPassResult {
+  res: ClassifyResult;
+  /** Calls the pass was allowed to start: min(maxCalls, what the daily cap has left). */
+  callsLeft: number;
+  /** The stored verdicts AFTER the pass (re-read from the store): what the report renders. */
+  verdicts: Map<string, ActionVerdict>;
+}
+
+/**
+ * Pure orchestration of the report's pass (all I/O injected). `loadVerdicts` reads the store (the same map the page
+ * reads: "<source>\u0000<ledger id>" -> verdict); it is read BEFORE the pass (what is already judged costs 0 calls)
+ * and AFTER it (the report renders what was stored, never what the model said). `usedToday` = the daily cap's own
+ * count (attempts since the owner's local midnight).
+ */
+export async function runReportClassify(a: {
+  assembled: AssembledLedgerPlan;
+  settings: ActionsSettings;
+  usedToday: number;
+  maxCalls: number;
+  concurrency?: number;
+  loadVerdicts(): Promise<Map<string, ActionVerdict>>;
+  deps: ClassifyDeps;
+}): Promise<ReportPassResult> {
+  const before = await a.loadVerdicts();
+  const judged = currentlyJudgedKeys(before);
+  const callsLeft = classifyCallsLeft(a.usedToday, a.settings.dailyCap, Math.max(0, Math.floor(a.maxCalls)));
+  const res = await runClassify(a.assembled, a.settings, judged, callsLeft, { ...a.deps, concurrency: a.concurrency ?? REPORT_CONCURRENCY });
+  return { res, callsLeft, verdicts: await a.loadVerdicts() };
+}
+
+/** Pure: the report's deps when saving is switched OFF. The SAME pass runs, but its results (proposal, verdict,
+ *  meeting rows) land in memory only, and the verdicts it reads are the stored ones overlaid with these. The ATTEMPT
+ *  is still recorded (base.recordCall): spend is spend, so it counts toward the daily cap either way. */
+export function inMemoryWrites(base: ClassifyDeps, stored: () => Promise<Map<string, ActionVerdict>>): { deps: ClassifyDeps; loadVerdicts(): Promise<Map<string, ActionVerdict>> } {
+  const mem = new Map<string, ActionVerdict>();
+  return {
+    deps: { ...base, propose: async () => ({ id: null, onBoard: false }), storeVerdict: async (at, v) => void mem.set(`${at.source}\u0000${at.sourceItemId}`, v), addMeetingRows: async () => 0 },
+    loadVerdicts: async () => new Map([...(await stored()), ...mem]),
+  };
+}
+
 // ── CANDIDATES (page read) ──────────────────────────────────────────────────────────────────────────
 
 export interface ProposalLite {
