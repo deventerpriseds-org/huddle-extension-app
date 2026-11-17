@@ -17,7 +17,7 @@ PUBLIC REPO: counts only. No names, addresses, ids or message content.
 | `bun scripts/actions-view.test.ts` | 96 passed, 0 failed, exit 0 |
 | `bun scripts/actions-view-server.test.ts` (throwaway local PostgreSQL 16) | 29 passed, 0 failed, exit 0 |
 | loop-1 adversarial file, RETARGETED to this head (see note) | 22 passed, 0 failed, exit 0 |
-| `npx tsc --noEmit` | (pending) |
+| `npx tsc --noEmit` | exit 0 |
 
 Note on the loop-1 adversarial file: it hard-codes the loop-1 worktree path (`agent-a5d3...`), so run unchanged it
 tests the OLD code (543df6af) -- and it hung there on V5-4 (the NaN case), which is the loop-1 bug, not this head.
