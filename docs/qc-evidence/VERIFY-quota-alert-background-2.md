@@ -90,3 +90,62 @@ openai-responses.server chunk imports only ./hooks-De6XJlLT.js (no node import)
 ```
 So no browser chunk loads `node:async_hooks` because of this change. The lazy server chunk sits in the client
 directory in the same way base already ships `turns.server-*.js` there. That is the existing pattern, not a new leak.
+
+## C3 Dedupe and state across processes -- CONFIRMED, two LOW gaps
+
+- Builder suites (re-run): ai-quota-alert 49/0; ai-quota-alert-sql 12/0 on real local PG through the real
+  `email-replies.server` module and its bootstrap (D1 concurrent raise across 4 instances -> exactly one alerted, D6
+  dismissed not reopened, D7 concurrent successes -> one cleared, D8 next outage reopens the same row).
+- Own probe `scratchpad/probe-state.ts`: two monitors (two instances) share a fake store that copies the SQL `WHERE`
+  semantics (times in ms):
+```
+t=0      A quota                              alerted       row=owed      notices=outage
+t=5000   owner dismisses
+t=6000   B quota (same outage)                already_open  row=dismissed notices=outage
+t=70000  A quota (after throttle)             already_open  row=dismissed notices=outage
+t=80000  B success                            cleared       row=replied   notices=outage,recovered
+t=90000  A quota (2nd outage)                 throttled     row=replied
+t=100000 B quota (2nd outage)                 alerted       row=owed      notices=outage,recovered,outage
+t=110000 B non-quota 500                      not_quota     row=owed      (no new notice)
+```
+- SQL reading: `raiseAiQuotaAttention` upserts only `WHERE e.kind='ai_quota' AND e.owner_email=lower($2) AND
+  e.status='replied'`. An open or dismissed row writes nothing and returns false. `clearAiQuotaAttention` moves
+  owed/drafted/dismissed to replied. `settleAttentionForHuddle` now excludes `ai_quota`. Every other `UPDATE` or
+  `SELECT` on `chat.email_replies` is filtered by id or by `kind IN ('email'|'chat'|'feed')`, so no email or chat
+  sweep can touch the row, even though it stores the job name in `graph_message_id`.
+- LOW gap 1 (throttle): the instance that raised outage 1 throttles its own quota errors for 60 s. If another
+  instance clears outage 1 and outage 2 starts inside that window, a lone error there is dropped
+  (`C quota (outage 2, only error) -> throttled, row=replied`). The next quota error after 60 s alerts. In a real
+  outage the errors repeat, so the alert is late by up to 60 s, not lost.
+- LOW gap 2 (owner): heartbeat jobs (meeting minutes, correspondence, proposals, confirm-asks) pass no owner and fall
+  back to `getFeedsConfig()?.ownerLogins[0]`. With `HUDDLE_ONEDRIVE_FEEDS` unset that is null, so a quota error in
+  Fireflies minutes logs `kind=... quota=true` and returns `no_owner`, with no bell row. Correspondence and proposals
+  are off without that config anyway. Whether prod sets it is UNPROVEN here, because I did not read live config.
+  feed-staleness uses the same `ownerLogins[0]` owner, so this follows an existing pattern.
+- Raw-fetch path (`probe-response.ts`, synthetic 429 `Response`, PG URL unset so the store fails safely):
+  `[ai-job] job=Grooming failed kind=429 insufficient_quota quota=true`, then `[ai-quota] raise failed Error`. A
+  hypothetical site that reads the body BEFORE the lazily imported hook clones it logs `kind=429` with no quota flag,
+  so the quota error is missed. All four edited sites (groom, focus, ceremony-script, and actions/proposals through
+  callOpenAIRouter) do NOT read the body on `!ok`, so none is affected today. This is a latent trap for future sites.
+
+## C5 Logs never echo input -- CONFIRMED
+
+All new log lines in the diff: `aiFailureLogLine` (job sanitised `[^\w:./ -]` and capped at 60, plus kind),
+`raise/clear/notice failed <ErrorName>`, `alert raised/cleared job=<job>` (job is a constant or `agentTurnJob`'s
+letters-only prefix). `aiFailureKind` returns a status, a known code, `timeout`, or the error class name only.
+Probe: 0 log lines contained the body marker `USERTEXT-SHOULD-NOT-LOG`, and probe-state's `"secret user text"` 500
+logged 0 lines with "secret". `scripts/proposals-preview.ts` swaps its private `judgeFailureKind` for the shared
+`aiFailureKind`, which has the same body (diff read: the moved function is byte-identical).
+
+## Mutation proofs (`mutate.sh`, anchors in files under scratchpad/mut, exit code read)
+
+| guard | mutation | test name | verdict | exit |
+|---|---|---|---|---|
+| G1 (bundle, builder unproven) | openai-responses.server imports `./ai-quota/ai-quota.server` instead of hooks | `G1 the shared helper imports the client-safe hooks, never ai-quota.server` | FIRED (control EQUIVALENT) | 0 |
+| C2 (bundle, builder unproven) | registry assignment replaced by `void ({...} satisfies AiQuotaHooks)` | `C2 registry filled by the server module` | FIRED (control EQUIVALENT) | 0 |
+| dedupe | `if (!opened) return "already_open"` -> `if (false) ...` | `Q2 still one notice` | FIRED (control EQUIVALENT) | 0 |
+| dismiss (real PG) | raise WHERE `status='replied'` -> `IN ('replied','dismissed')` | `D6 dismissed row is not reopened` | FIRED (control EQUIVALENT) | 0 |
+| non-quota | `if (!quota) return "not_quota"` -> `if (false) ...` | `Q5 no notice` | FIRED (control EQUIVALENT) | 0 |
+
+Every restore was asserted against HEAD by mutate.sh. Caveat on G1: it is a source-text guard. It proves that the
+helper's import line is checked. It does not prove the bundle property, which C4 measures directly.
