@@ -51,7 +51,8 @@ report (step=action, source=ledger)
 - One admission path (`admitActionVerdict` inside `runClassify`), one key scheme (`threadUnits` item keys), one store
   (`result_ids.action`), one cap count (`recordActionCall` / `actionCallsToday`).
 - Switch: workflow input `save_verdicts` (default true) -> `PREVIEW_SAVE`. OFF = the SAME `runClassify`, but its
-  store / propose / recordCall write to memory only; it still READS the stored verdicts, so already-judged threads
+  verdict / proposal / meeting-row writes go to memory only [CORRECTED loop 1: the attempt record is still written,
+  so AI calls still count toward today's limit]; it still READS the stored verdicts, so already-judged threads
   still cost 0 calls.
 - `source=files` cannot save (no ledger rows to store on): the old loop is kept for that comparison path only and
   says so in the log.

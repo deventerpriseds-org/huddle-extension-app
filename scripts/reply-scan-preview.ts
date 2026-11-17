@@ -88,7 +88,7 @@ const parse = (t: string): unknown => {
 };
 
 // 2026-11-17 (owner-approved): steps 2 + 3 on the LEDGER run the app's own classify pass and SAVE its verdicts into
-// the Actions view's store (PREVIEW_SAVE, default on; "0" keeps this run's results in memory only), then render the
+// the Actions view's store (PREVIEW_SAVE, default on; "0" = verdicts are not saved; AI calls still count toward today's limit), then render the
 // report from the store. It loads its own data through the app's plan assembly, so it branches off here.
 if (process.env.PREVIEW_STEP === "action" && source === "ledger") {
   const { runStoredActionScan } = await import("./action-scan-steps");

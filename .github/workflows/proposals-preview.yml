@@ -61,7 +61,7 @@ on:
         required: false
         default: ""
       save_verdicts:
-        description: "step=action with source=ledger: SAVE the AI verdicts into Huddle's Actions view (on by default). Off = the same check, nothing stored. Already-judged conversations cost no AI call either way."
+        description: "step=action with source=ledger: SAVE the AI verdicts into Huddle's Actions view (on by default). Off = verdicts are not saved; AI calls still count toward today's limit. Already-judged conversations cost no AI call either way."
         required: false
         type: boolean
         default: true

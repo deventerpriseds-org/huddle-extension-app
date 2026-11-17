@@ -235,8 +235,9 @@ export async function runReportPassFor(cfg: OneDriveFeedsConfig, a: { sinceMs: n
   const usedBefore = await usedTodayFor(cfg.ownerLogins, now, s.timeZone);
   const real = await classifyDepsFor(owner, owners);
   const io = a.save ? { deps: real, loadVerdicts: () => loadVerdicts(owners) } : inMemoryWrites(real, () => loadVerdicts(owners));
-  const pass = await runReportClassify({ assembled, settings: s, usedToday: usedBefore, maxCalls: a.maxCalls, concurrency: a.concurrency, loadVerdicts: io.loadVerdicts, deps: io.deps });
-  return { ...pass, assembled, settings: s, unavailable: data.unavailable, usedBefore, classifyOn: classifyEnabled(s, true) };
+  const classifyOn = classifyEnabled(s, true);
+  const pass = await runReportClassify({ assembled, settings: s, sortingOn: classifyOn, usedToday: usedBefore, maxCalls: a.maxCalls, concurrency: a.concurrency, loadVerdicts: io.loadVerdicts, deps: io.deps });
+  return { ...pass, assembled, settings: s, unavailable: data.unavailable, usedBefore, classifyOn };
 }
 
 /** Meeting items -> the EXISTING untriaged triage rows (refs make a repeat a no-op). Only items not seen before. */

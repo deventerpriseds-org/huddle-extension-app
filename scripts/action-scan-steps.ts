@@ -26,7 +26,7 @@
 // (actions.server.ts runReportPassFor -> pipeline.ts runReportClassify -> runClassify: one admission guard, one key
 // scheme, one store, the daily cap's own count) and renders the HTML FROM THE STORED VERDICTS
 // (scripts/action-report-html.ts). A thread that already holds a current verdict costs 0 model calls. PREVIEW_SAVE=0
-// runs the same pass with its results kept in memory. The loop in runActionScan below is kept ONLY for
+// runs the same pass but its verdicts are not saved (AI calls still count toward today's limit). The loop in runActionScan below is kept ONLY for
 // PREVIEW_SOURCE=files (OneDrive files: no ledger rows to store a verdict on), and stores nothing.
 // Build notes: docs/qc-evidence/BUILD-report-saves-verdicts.md.
 import type { ConversationFacts, NeedsYouContext } from "../src/features/huddle/lib/correspondence/needs-you";
@@ -248,7 +248,7 @@ export async function runStoredActionScan(a: { cfg: OneDriveFeedsConfig; token: 
   const rowsNone = rows.step2.length + rows.step3.length + rows.teamsRows.length - rowsOpen;
   const rowsNotChecked = rows.notCheckedEmail.length + rows.notCheckedTeams.length;
   console.log(
-    `report pass: save ${a.save ? "ON" : "OFF (results kept in memory)"} | model calls ${r.calls} | already judged (0 calls) ${r.alreadyJudged} | ` +
+    `report pass: save ${a.save ? "ON" : "OFF (verdicts are not saved; AI calls still count toward today's limit)"}${p.sortingOff ? " | AI sorting is OFF in Huddle: no AI calls, stored verdicts only" : ""} | model calls ${r.calls} | already judged (0 calls) ${r.alreadyJudged} | ` +
       `verdicts stored this run: open ${r.open} none ${r.none} not_checked ${r.notChecked} | failures ${r.failures} | over cap ${r.overCap} | ` +
       `meeting rows ${r.meetingRows} | uninvolved skipped ${r.uninvolvedSkipped} | calls allowed ${p.callsLeft} | used today before ${p.usedBefore}, after ${p.usedBefore + r.calls} of cap ${p.settings.dailyCap} | ` +
       `in-app sorting ${p.classifyOn ? "on" : "off"} | sources email ${p.settings.sources.email} teams ${p.settings.sources.teams} meeting ${p.settings.sources.meeting}`,
@@ -271,9 +271,11 @@ export async function runStoredActionScan(a: { cfg: OneDriveFeedsConfig; token: 
     ledger,
     notCheckedTitle: "Not checked yet: no current AI verdict is stored",
     notCheckedNote: "Over today's AI limit or this run's max_sources, an AI call failed, or the AI's quote was not found word-for-word (never shown in Huddle). They are judged again on the next run or by Huddle's own sorting.",
-    storeNote: a.save
-      ? "Verdicts are saved in Huddle: the Actions view lists the same items, and a conversation already judged is not sent to the AI again."
-      : "Saving was switched off for this run: nothing new was stored in Huddle.",
+    storeNote: p.sortingOff
+      ? "AI sorting is switched off in Huddle, so this run asked the AI nothing: it shows only the verdicts already stored."
+      : a.save
+        ? "Verdicts are saved in Huddle: the Actions view lists the same items, and a conversation already judged is not sent to the AI again."
+        : "Saving was switched off for this run: verdicts are not saved; AI calls still count toward today's limit.",
   });
   for (const l of logLines) console.log(l);
   await publishReport(html, { cfg: a.cfg, token: a.token, drive: a.drive, enc: a.enc, sinceMs: a.sinceMs });

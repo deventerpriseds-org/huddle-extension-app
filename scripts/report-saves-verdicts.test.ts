@@ -15,7 +15,7 @@ import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/oned
 import type { EmailContent, TeamsContent } from "../src/features/huddle/lib/correspondence/source-item";
 import { teamsSourceItemId } from "../src/features/huddle/lib/correspondence/source-item";
 import { ACTIONS_SETTINGS_DEFAULT, type ActionsSettings } from "../src/features/huddle/lib/actions/actions";
-import { inMemoryWrites, runReportClassify, threadUnits, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
+import { inMemoryWrites, runClassify, runReportClassify, threadUnits, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
 import { renderActionReportHtml, rowsFromStoredVerdicts, type ReportRows } from "./action-report-html";
 
 let fail = 0;
@@ -82,7 +82,7 @@ function fakeStore(answer: Answer) {
   return { store, log, deps, loadVerdicts: async () => new Map(store) };
 }
 const pass1 = (f: ReturnType<typeof fakeStore>, o: { usedToday?: number; maxCalls?: number; settings?: ActionsSettings } = {}) =>
-  runReportClassify({ assembled: asm, settings: o.settings ?? S(), usedToday: o.usedToday ?? 0, maxCalls: o.maxCalls ?? 250, loadVerdicts: f.loadVerdicts, deps: f.deps });
+  runReportClassify({ assembled: asm, settings: o.settings ?? S(), sortingOn: true, usedToday: o.usedToday ?? 0, maxCalls: o.maxCalls ?? 250, loadVerdicts: f.loadVerdicts, deps: f.deps });
 const storedAt = (store: ReadonlyMap<string, ActionVerdict>, i: number) => store.get(`${UNITS[i].storeAt.source}\u0000${UNITS[i].storeAt.sourceItemId}`);
 
 // ── (a) ONE ADMISSION GUARD on the report path ────────────────────────────────────────────────────────
@@ -119,13 +119,13 @@ const storedAt = (store: ReadonlyMap<string, ActionVerdict>, i: number) => store
   // save OFF: the same pass, nothing written to the store; attempts still recorded; already-judged still costs 0.
   const off = fakeStore(honest);
   const io = inMemoryWrites(off.deps, off.loadVerdicts);
-  const ro = await runReportClassify({ assembled: asm, settings: S(), usedToday: 0, maxCalls: 250, loadVerdicts: io.loadVerdicts, deps: io.deps });
+  const ro = await runReportClassify({ assembled: asm, settings: S(), sortingOn: true, usedToday: 0, maxCalls: 250, loadVerdicts: io.loadVerdicts, deps: io.deps });
   t("RB-6 save OFF: nothing stored, no proposal written, but every attempt recorded and the report still has 3 verdicts", [off.store.size, off.log.propose, off.log.record, ro.verdicts.size], [0, 0, 3, 3]);
   const off2 = fakeStore(honest);
   await pass1(off2);
   const io2 = inMemoryWrites(off2.deps, off2.loadVerdicts);
   const before = off2.log.model;
-  const ro2 = await runReportClassify({ assembled: asm, settings: S(), usedToday: 0, maxCalls: 250, loadVerdicts: io2.loadVerdicts, deps: io2.deps });
+  const ro2 = await runReportClassify({ assembled: asm, settings: S(), sortingOn: true, usedToday: 0, maxCalls: 250, loadVerdicts: io2.loadVerdicts, deps: io2.deps });
   t("RB-7 save OFF still reads the store: threads already judged cost 0 calls", [ro2.res.calls, off2.log.model - before], [0, 0]);
 }
 
@@ -166,6 +166,34 @@ const step3NoAction = (html: string) => between(html, "Step 3 &mdash; AI says no
   const html4 = render(rn);
   t("RC-6 GUARD: a stored not_checked (quote not found) is not in the open section; it is listed as not checked and counted", [step2Open(html4).includes("open items (0)"), rn.notCheckedEmail.length, rn.notAdmitted], [true, 1, 1]);
   t("RC-7 an empty store -> every unit listed as not checked, nothing open", [rowsFromStoredVerdicts(asm, S(), new Map()).notCheckedEmail.length, rowsFromStoredVerdicts(asm, S(), new Map()).notCheckedTeams.length], [2, 1]);
+}
+
+// ── Verifier loop 1, finding 1: the owner's "AI sorting off" switch stops the report's pass ───────────────────
+{
+  const f = fakeStore(honest);
+  await pass1(f); // three verdicts already stored
+  const k0 = `${UNITS[0].storeAt.source}\u0000${UNITS[0].storeAt.sourceItemId}`;
+  f.store.delete(k0); // one thread NOT judged yet: with sorting on it would cost a call
+  const before = { ...f.log };
+  const r = await runReportClassify({ assembled: asm, settings: S({ classify: false }), sortingOn: false, usedToday: 0, maxCalls: 250, loadVerdicts: f.loadVerdicts, deps: f.deps });
+  t("RS-1 GUARD: sorting OFF -> 0 model calls, 0 attempts, 0 proposals, nothing stored, even with an unjudged thread", [f.log.model - before.model, f.log.record - before.record, f.log.propose - before.propose, f.store.size, r.res.calls, r.callsLeft, r.sortingOff], [0, 0, 0, 2, 0, 0, true]);
+  const rows = rowsFromStoredVerdicts(asm, S(), r.verdicts);
+  t("RS-2 sorting OFF -> the report renders only the stored verdicts (2 rows, the unjudged thread listed not checked)", [rows.step3.length + rows.teamsRows.length, rows.notCheckedEmail.length], [2, 1]);
+  const on = await runReportClassify({ assembled: asm, settings: S(), sortingOn: true, usedToday: 0, maxCalls: 250, loadVerdicts: f.loadVerdicts, deps: f.deps });
+  t("RS-3 control: sorting ON over the same store -> exactly the 1 unjudged thread costs a call", [on.res.calls, on.sortingOff], [1, false]);
+}
+
+// ── Verifier loop 1, finding 3: max_sources that is not a finite positive number -> 0 calls, never a hang ─────
+const within = <T,>(p: Promise<T>, ms = 2000) => Promise.race([p, new Promise<"HUNG">((res) => setTimeout(() => res("HUNG"), ms))]);
+for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+  const f = fakeStore(honest);
+  const r = await within(runReportClassify({ assembled: asm, settings: S(), sortingOn: true, usedToday: 0, maxCalls: bad, loadVerdicts: f.loadVerdicts, deps: f.deps }));
+  t(`RM-1 GUARD: maxCalls ${bad} -> callsLeft 0, 0 model calls, all 3 over cap, returns`, r === "HUNG" ? "HUNG" : [r.callsLeft, f.log.model, r.res.overCap], [0, 0, 3]);
+}
+{
+  const f = fakeStore(honest);
+  const r = await within(runClassify(asm, S(), new Set(), Number.NaN, { ...f.deps, concurrency: 5 }));
+  t("RM-2 GUARD: runClassify given a NaN allowance returns (0 calls, all over cap) instead of looping forever", r === "HUNG" ? "HUNG" : [r.calls, r.overCap, f.log.model], [0, 3, 0]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -227,14 +227,16 @@ export async function runClassify(
     else res.notChecked++;
     return true;
   };
+  // A non-finite allowance is 0 (verifier loop 1: NaN made every batch empty and the loop never advanced).
+  const limit = Number.isFinite(callsLeft) ? Math.max(0, Math.floor(callsLeft)) : 0;
   let i = 0;
   while (i < pending.length && !stop) {
-    if (res.calls >= callsLeft || (deps.deadlineMs !== undefined && deps.nowMs && deps.nowMs() >= deps.deadlineMs)) {
+    if (res.calls >= limit || (deps.deadlineMs !== undefined && deps.nowMs && deps.nowMs() >= deps.deadlineMs)) {
       res.overCap += pending.length - i;
       break;
     }
     // Never start more calls than the cap has left: the batch is sized by the remaining allowance.
-    const batch = pending.slice(i, i + Math.min(conc, callsLeft - res.calls));
+    const batch = pending.slice(i, i + Math.min(conc, limit - res.calls));
     i += batch.length;
     const recorded = await Promise.all(batch.map(judgeOne));
     if (recorded.includes(false)) stop = true;
@@ -262,8 +264,10 @@ export const REPORT_CONCURRENCY = CLASSIFY_PARALLEL;
 
 export interface ReportPassResult {
   res: ClassifyResult;
-  /** Calls the pass was allowed to start: min(maxCalls, what the daily cap has left). */
+  /** Calls the pass was allowed to start: min(maxCalls, what the daily cap has left); 0 when sorting is off. */
   callsLeft: number;
+  /** The owner switched AI sorting off (settings.classify === false): no model call, nothing written. */
+  sortingOff: boolean;
   /** The stored verdicts AFTER the pass (re-read from the store): what the report renders. */
   verdicts: Map<string, ActionVerdict>;
 }
@@ -277,6 +281,8 @@ export interface ReportPassResult {
 export async function runReportClassify(a: {
   assembled: AssembledLedgerPlan;
   settings: ActionsSettings;
+  /** classifyEnabled(settings, isConfiguredOwner): the SAME switch the heartbeat obeys. */
+  sortingOn: boolean;
   usedToday: number;
   maxCalls: number;
   concurrency?: number;
@@ -285,9 +291,17 @@ export async function runReportClassify(a: {
 }): Promise<ReportPassResult> {
   const before = await a.loadVerdicts();
   const judged = currentlyJudgedKeys(before);
-  const callsLeft = classifyCallsLeft(a.usedToday, a.settings.dailyCap, Math.max(0, Math.floor(a.maxCalls)));
+  // Verifier loop 1, finding 1: the owner's "AI sorting off" switch stops the report too (the heartbeat returns early
+  // on it). No model call, no attempt, no proposal, no meeting row: the report shows only what is already stored.
+  if (!a.sortingOn) {
+    const res: ClassifyResult = { calls: 0, open: 0, none: 0, notChecked: 0, failures: 0, overCap: 0, alreadyJudged: judged.size, meetingRows: 0, uninvolvedSkipped: 0 };
+    return { res, callsLeft: 0, sortingOff: true, verdicts: before };
+  }
+  // Verifier loop 1, finding 3: a non-finite or negative max_sources is 0 calls, never NaN (NaN once hung the pass).
+  const maxCalls = Number.isFinite(a.maxCalls) && a.maxCalls > 0 ? Math.floor(a.maxCalls) : 0;
+  const callsLeft = classifyCallsLeft(a.usedToday, a.settings.dailyCap, maxCalls);
   const res = await runClassify(a.assembled, a.settings, judged, callsLeft, { ...a.deps, concurrency: a.concurrency ?? REPORT_CONCURRENCY });
-  return { res, callsLeft, verdicts: await a.loadVerdicts() };
+  return { res, callsLeft, sortingOff: false, verdicts: await a.loadVerdicts() };
 }
 
 /** Pure: the report's deps when saving is switched OFF. The SAME pass runs, but its results (proposal, verdict,
