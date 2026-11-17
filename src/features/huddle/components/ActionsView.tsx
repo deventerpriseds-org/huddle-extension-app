@@ -44,6 +44,7 @@ import {
   CORRECTION_LABEL,
   CORRECTION_REASONS,
   CORRECTION_TEXT_MAX,
+  DAILY_CAP_MAX,
   HIDEABLE_CATEGORIES,
   HIDEABLE_CATEGORY_LABEL,
   type ActionRow,
@@ -173,6 +174,19 @@ export function ActionsView() {
         ) : null
       }
     >
+      {ok?.capNotice && (
+        // Owner 2026-11-17: say WHY items stopped being checked and where to change it. The app's existing notice band
+        // (PolishView's "You edited the polished text..." band: border-warning/40 + bg-band-cream), tokens only. Text is
+        // text-foreground, not PolishView's text-warning-foreground, which is near-black on the dark-theme band.
+        <div role="status" className="flex flex-wrap items-center gap-2 border-b border-warning/40 bg-band-cream px-3 py-2 text-[12px] text-foreground sm:px-6" data-testid="actions-cap-notice">
+          <span className="flex-[1_1_220px]">{ok.capNotice}</span>
+          {!showSettings && (
+            <button type="button" onClick={() => setShowSettings(true)} className={cn(ROW_BTN, "min-h-9 md:min-h-0")} data-testid="actions-cap-open-settings">
+              Change limit
+            </button>
+          )}
+        </div>
+      )}
       {ok && (
         <div className="flex items-center gap-2 border-b border-hairline bg-surface px-3 py-2 sm:px-6">
           {/* The ViewSwitcher inline pill anatomy; scrolls sideways inside itself on a phone (AC-G-2). */}
@@ -820,12 +834,13 @@ function WhatShows({
         <input
           type="number"
           min={0}
-          max={2000}
+          max={DAILY_CAP_MAX}
           defaultValue={settings.dailyCap}
           onBlur={(e) => {
             const n = Math.floor(Number(e.target.value));
-            if (Number.isFinite(n) && n !== settings.dailyCap) onChange({ ...settings, dailyCap: Math.max(0, Math.min(2000, n)) });
+            if (Number.isFinite(n) && n !== settings.dailyCap) onChange({ ...settings, dailyCap: Math.max(0, Math.min(DAILY_CAP_MAX, n)) });
           }}
+          data-testid="actions-daily-limit"
           className="w-20 rounded border border-hairline bg-background px-1.5 py-0.5 text-xs tabular-nums"
         />
         <span className="text-muted-foreground">AI checks a day</span>

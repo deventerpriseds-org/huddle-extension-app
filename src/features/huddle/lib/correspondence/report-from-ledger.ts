@@ -161,7 +161,7 @@ export interface ChatInvolvement {
  * UNINVOLVED_CHAT_RULE (owner decision 2026-11-16), pure and reusable by the in-app judge:
  *   A Teams GROUP, MEETING or CHANNEL chat is HIDDEN when the owner never sent a message in it AND was never
  *   @mentioned in it. 1:1 chats ALWAYS show. Chats of unknown kind are not covered by the decision and show.
- *   Team / channel / tag mentions name no user (teams-log mentionUserIds skips them), so they are not the owner.
+ *   Team / channel / tag mentions name no user and are not aimed at the owner (owner decision 2026-11-17, below).
  *   ONE implementation: the open-items report and the Actions view (lib/actions) both call this.
  * Identity: the owner's Teams ids are the configured `teams.ownerSenderIds` plus every stored message's line
  * `ownerUserId`; mention ids are the same GUID format; all compared case-insensitively.
@@ -172,6 +172,10 @@ export interface ChatInvolvement {
  * channel, an empty or malformed entry (stored `unresolvedMention: true`), or, on rows stored before that flag
  * existed, an `<at>` tag left in the stored text with no stored user mention -- MAY address the owner, so the chat
  * SHOWS ("owner_maybe_mentioned"; verifier report-from-ledger-1, finding 1).
+ * EXCEPT (owner decision 2026-11-17): a message whose only such mentions are provably team / channel / tag mentions
+ * (stored `groupMentionOnly: true, chatWideMention: false`) is not aimed at the owner and does not show the chat.
+ * @Everyone (`chatWideMention: true`) IS aimed at him and still shows; rows stored without the kind flags show.
+ * Spelling table: docs/qc-evidence/BUILD-actions-cap-tag-rule.md.
  * `messages` = every stored message of the chat (not only the window's): "never sent" means never, in the data held.
  */
 export function chatInvolvement(chatId: string, messages: readonly TeamsContent[], configuredOwnerIds: readonly string[] = []): ChatInvolvement {
@@ -228,11 +232,14 @@ function mentionsOwnerId(m: TeamsContent, ownerIds: ReadonlySet<string>): boolea
  *  New rows: the parser's `unresolvedMention` flag. Rows stored before the flag existed: an `<at` tag still present
  *  in the stored text (only an escaped `&lt;at&gt;` survives the HTML-to-text step) with no stored user mention. */
 export function maybeMentionsOwner(m: TeamsContent): boolean {
-  if (m.unresolvedMention === true) return true;
+  // Owner decision 2026-11-17: an unresolved mention that is ONLY team / channel / tag mentions is not aimed at him.
+  // Both per-kind flags must be stored and say so; an older row (no kind flags) or @Everyone still SHOWS.
+  const groupOnly = m.groupMentionOnly === true && m.chatWideMention === false;
+  if (m.unresolvedMention === true && !groupOnly) return true;
   // Finding 4: a stored mention entry that is not a non-empty string (empty id, null, a number) names someone we
   // cannot compare -> unknown -> the chat shows. (The parser no longer writes such entries; older writers might.)
   if (Array.isArray(m.mentionedUserIds) && m.mentionedUserIds.some((id) => typeof id !== "string" || !id.trim())) return true;
-  if (m.unresolvedMention === false) return false;
+  if (m.unresolvedMention === true || m.unresolvedMention === false) return false;
   const users = Array.isArray(m.mentionedUserIds) ? m.mentionedUserIds.length : 0;
   return users === 0 && /<at\b/i.test(typeof m.text === "string" ? m.text : "");
 }
