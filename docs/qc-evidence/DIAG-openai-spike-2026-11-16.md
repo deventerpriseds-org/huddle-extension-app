@@ -166,3 +166,63 @@ settings) **and by `proposals-preview.yml`**. Their spend lands on the same key.
 
 Whether journey's live app (Iris uses OpenAI Realtime), or any other app, shares the same OpenAI org or project
 **cannot be checked from here**.
+
+---
+
+## F5 — When the quota ran out, and whether 11-16 was unusual for the app
+
+Source: `azure-pg-query.yml` run 44014096512. The query returned counts only. Where a `quota` text match was used,
+it ran inside the WHERE clause, and only the count was printed.
+
+- **The first app turn carrying a quota failure is in the 11-16 20:00 ET hour (UTC 11-17 01:00): 3 turns.**
+  Every turn in every earlier hour of the window completed with no quota text. The first 429 on the Actions side
+  was 11-16 19:37 ET (F1). **So the quota ran out between about 19:10 and 19:37 ET on 11-16, which is UTC 11-17
+  00:10 to 00:37.** It was usable again by UTC 11-17 03:31 (F1).
+- **Durable turns per day over 30 days (ET):**
+  - 10-28 to 11-11: 22 to 42 per day. Examples: 11-05 = 40, 11-08 = 42, 11-09 = 38.
+  - 11-12: 23. 11-13: 22. 11-14: 23. 11-15: 28. **11-16: 41.**
+  - **11-16 is within the normal range of the previous three weeks**, not a spike.
+- **Reasoning effort:** every `gpt-5.6-luna` turn on every day (11-12 to 11-16) ran at `high`. Nothing changed on
+  11-16 apart from a single `gpt-5.6-terra/medium` turn.
+- **Stand-ups:** 13 ceremony runs in all of November so far. The 4 on 11-15 ET included 29 tool rows (23 ok,
+  6 failed).
+- No other job table shows a burst. On 11-16, `email_replies` saw 20 created and 15 dismissed at 15:00 ET; these
+  look like owner actions in the bell. Fireflies saw 2 summarize events.
+
+**Observed:** by its own records, Huddle's turn volume on 11-16 was normal, and the exhaustion happened at about
+UTC midnight 11-16 to 11-17.
+
+**Inferred (confidence medium):** `insufficient_quota` means the prepaid credit or the spend limit was reached. It
+is not a per-minute rate limit. The balance could have been worn down over many days, and 11-16 is simply the day
+it crossed zero. That fits normal app volume better than a single burst does. Only OpenAI's own usage and billing
+pages can confirm it.
+
+---
+
+## SYNTHESIS — top identifiable drivers on the OpenAI dashboard day 2026-11-16 (UTC)
+
+| UTC 11-16 window (ET) | source | approx. calls | observed or inferred |
+|---|---|---|---|
+| 00:05 to 02:07 (11-15 19:05 to 21:07) | **4 UAT stand-ups** via verify-uat, run against the LIVE app | 37 agent turns (`gpt-5.6-luna`, high effort) over 4 group turns; 18 spoken agent blocks; 41 embeddings; 4 `gpt-realtime` sessions of about 7 min each, with `gpt-4o-mini-transcribe`; 29 tool calls | turns, rows and embeddings **observed**; Realtime session length **inferred** from run duration and code |
+| 03:14 to 03:41 (11-15 22:14 to 22:41) | **proposals-preview** action scans, 2 runs | **265** small calls (137 + 128), `gpt-5.6-luna` | **observed** (log lines) |
+| 11:00 to 23:59 (11-16 06:00 to 18:59) | scheduler-driven 1:1 turns: autowork, review, schedule, priority, inbound, groom | about 30 turns, each 1 agent call at high effort, plus a router call (unrecorded) | turns **observed**; router calls **inferred** |
+| 11-16, all day | paths this DB does not record: LLM router, review and approach gates, proposals in the app, Fireflies, embeddings on retrieval | unknown | **not measurable from here** |
+| 11-16, all day | any other app or session on the same OpenAI org or key (journey Iris Realtime, other projects) | unknown | **not measurable from here** |
+| 11-17 00:37 to 01:58 (11-16 19:37 to 20:58) | proposals-preview after exhaustion | 218 calls, **all 429** | **observed**; probably not billed |
+
+**Conclusion (calibrated).** None of the sources this repo can see adds up to a quota-sized spike. The biggest
+Huddle-side contributors to the UTC 11-16 dashboard day are the 4 UAT stand-ups and 265 preview calls. Both are
+in the low hundreds of calls. **Not proven:** which source the dashboard's spike belongs to. That needs OpenAI's own
+per-model, per-key breakdown (see below).
+
+## What the owner should pull from platform.openai.com
+
+1. **Usage, grouped by model and by API key or project, hourly in UTC, for 2026-11-15 to 2026-11-17.** The
+   dashboard groups by UTC day, so compare 11-15 and 11-16 against 11-12 and 11-13.
+2. Whether the spike is in **`gpt-realtime` audio tokens**, **`gpt-5.6-luna` reasoning or output tokens**,
+   **`text-embedding-3-large`**, **`gpt-4o-mini-transcribe`**, or **a model Huddle does not use at all**. A model
+   Huddle does not use points to another app on the same key.
+3. **Which API key** carried the spend. The app and `proposals-preview.yml` share the `OPENAI_API_KEY` secret.
+   If the spend sits on a different key, it is not Huddle.
+4. The **billing page**: was it a prepaid credit balance reaching 0, or a monthly budget cap? When was the last
+   top-up, and how much was it? This decides between "a burst" and "a slow drain that crossed zero on 11-16".
