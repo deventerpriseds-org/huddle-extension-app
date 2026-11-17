@@ -146,3 +146,22 @@ Fixes for the defects in `VERIFY-actions-view-2.md` (verifier probes copied to
   tested), re-run -> **FIRED (control EQUIVALENT)**, exit 0; d6b the verdict query drops the `proposalId` match ->
   D6-S1 FIRED (control EQUIVALENT); d6c the meeting query drops the item match -> D6-S6 FIRED (control EQUIVALENT).
   Tree clean afterwards.
+- **D5 FIXED** (4fdadfb9): `actOnProposal` honours the client's `from:"actions"` only when
+  `proposalBacksActionsRow(owners, ledgerOwners, id)` says so on the server: the proposal is the caller's AND either
+  one of the owner's stored thread verdicts is `open` and points at it, or it has its own transcript ref (a meeting
+  triage row). Otherwise the call is treated exactly as one without `from`: no flag bypass, no triage without
+  `meetingTriage`, no bell settle. A read error answers false (fail closed). The order is now: config (either switch)
+  -> sign-in -> confirm -> the flag checks.
+  Tests: `actions-view-server` (real PG, the REAL `actOnProposal`, only identity mocked) 26/26, new D5-S0..S5:
+  the backing check (verdict-backed yes / unbacked no / meeting row yes / other owner no); flag OFF + `from` on an
+  unbacked proposal -> refused, proposal and bell row untouched; flag OFF + `from` on a backed one -> applied and its
+  Teams bell row settled; a meeting row triages with `meetingTriage` OFF; flag ON + `from` does NOT unlock triage for
+  an unbacked proposal; flag ON + unbacked + `from` -> the normal dismiss applies but the bell row is NOT settled.
+  Untouched suites re-run: task-proposals 199, task-proposals-sql 45, meeting-triage 69, meeting-triage-sql 34,
+  meeting-triage-server 7. `tsc` exit 0.
+  Mutations (all `FIRED (control EQUIVALENT)`, exit 0, tree clean afterwards): d5a the confirmation replaced by
+  `true` -> D5-S1; d5a2 the same -> D5-S4; d5a3 the same -> D5-S5; d5b the verdict branch drops the `proposalId`
+  match -> D5-S1; d5c the meeting branch drops the `proposal_id` match -> D5-S1.
+- **D3 ACCEPTED, not built (no lease):** with D2 each attempt is recorded at call time, so only passes that START
+  on two instances in the same moment overrun; measured (`actions-view` D3-MEASURE: 2 instances, cap 5, 3 used) 4
+  calls -> 7 for the day, bound = (instances - 1) x min(6, cap - used) extra calls per overlapping 10-minute pass.
