@@ -120,6 +120,11 @@ t("C-1 entities decoded in the forwarded body", ip.body.includes("Please confirm
 t("C-2 hidden text ignored in the forwarded body", !ip.body.includes("HIDDEN-TRACKER"), ip.body);
 t("C-3 tag-span fix kept (no `b\">` fragment glued to the next word)", ip.body.includes("Second line stays.") && !ip.body.includes('b">'), ip.body);
 t("C-4 the forward's OWN older history is cut (next Outlook marker)", !ip.body.includes("OLDER-HISTORY"), ip.body);
+// C-4 is cut one layer up (forwardedText stops at the next Outlook marker). For a PLAIN-TEXT forward the forwarded
+// part's own older history is cut only by forwardedPart's newTextOnly call -- this pins that layer in English
+// (mutation M1b, docs/qc-evidence/BUILD-correspondence-tuning-fixes.md).
+const en = forwardedPart("FW: Synthetic", `${PLAIN}\n\n-----Original Message-----\nFrom: Older Sender\nSent: Sunday\n\nOLDER-PLAIN-HISTORY`, false)!;
+t("C-4b plain-text forward: its OWN older history is cut", en.body === "Please send the synthetic timesheet today.", en.body);
 const de = "Siehe unten.\n\n-----Ursprüngliche Nachricht-----\nVon: Synthetisches Team\nGesendet: Montag\nBetreff: Synthetisch\n\nBitte bis Freitag ausfüllen.\n\nVon: Älterer Absender\nGesendet: Sonntag\nALTE-HISTORIE";
 const dp = forwardedPart("WG: Synthetisch", de, false)!;
 t("C-5 German header labels map to from/sent/subject", dp.from === "Synthetisches Team" && dp.sent === "Montag" && dp.subject === "Synthetisch", dp);
