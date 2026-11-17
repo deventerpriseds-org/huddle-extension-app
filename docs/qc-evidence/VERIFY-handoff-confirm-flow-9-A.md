@@ -36,4 +36,31 @@ copy satisfies it. 844f1f4b's comment-proofing did not reach this assertion. Sam
 Product impact today: none -- HEAD calls `runHandoffAware` in code (MP2 proves the guard fires on a plain bypass).
 Not UNSAFE; it is a weaker guard than claimed ("comment-proof guards").
 
-## C6 -- IN PROGRESS
+## C6 -- regression -- VERDICT: CONFIRMED for the hand-off paths (reduced depth); one radius challenge
+Observed:
+- DB: the only DDL in `git diff origin/main...HEAD -- src/` is three
+  `ALTER TABLE tasks.task_engagement_state ADD COLUMN IF NOT EXISTS ...` (live_start_at, live_start_via, live_started_at).
+  No DROP/RENAME/TRUNCATE/CREATE TABLE and no removed DDL line. Additive only.
+- Internal turns never spawn follow-ups: the only `deliverOwnerFollowup(` call (7424) sits inside
+  `if (data.scope !== "group" && !data.internal && followupTurnIntent === "perform")` (7407); the follow-up
+  payload sets `internal: true` (2138). The retry `needsHandoffConfirmRetry` itself requires `internal` + `handoff`.
+- Group scope on the hand-off work: `oneToOneNowKeeps` returns false on `data.scope === "group" || data.internal`
+  (2076), so the new "do it NOW here" lane directive cannot fire in a group; the pre-existing
+  `else if (data.scope !== "group" && !data.internal ...)` lane branch is textually unchanged. Group primary goes
+  through `runHandoffAware`, which is exactly `runBounded` when `data.handoff` is absent (predicate false ->
+  `return first`); group payloads never carry `handoff` (only deliverOwnerFollowup sets it).
+- Suites covering create paths (board-claims 79/0, one-request-one-task 40/0, not-ai-task 6/0) green at e45abd80.
+
+RADIUS CHALLENGE (not tested to depth, budget): `presentedReplies` now wraps EVERY reply, group included, in
+`presentBoardClaims(..., toolUses)` (F6). That is a group-visible behaviour change on this branch. If C6's
+"group scope unchanged" is meant branch-wide rather than hand-off-only, it is NOT PROVEN by this pass and
+belongs with whichever sibling owns F6/board-claims (0ea0a387/e45abd80 touched board-claims.ts).
+Not reached: per-function read of capabilities.ts / create-task-core.ts group create paths beyond the suites.
+
+## Summary
+| Claim | Verdict | Key evidence |
+|---|---|---|
+| C3 row 2 ON | CONFIRMED (product); guard gap found | switch true; M12a/M12b/MS/MP2 FIRED controlled; MP (comment-preserved bypass of runHandoffAware) INERT -- test at handoff-lane-a.test.ts:483 reads raw source |
+| C6 regression | CONFIRMED for hand-off paths; group-wide NOT PROVEN (F6 presenter) | additive-only DDL; follow-up gated on !internal; group cannot reach doItNowHere or the retry |
+
+LOOP-9-A-COMPLETE
