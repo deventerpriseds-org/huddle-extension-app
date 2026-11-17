@@ -12,6 +12,19 @@
   text or instructions change, or old verdicts stay listed until the thread gets a new message. Teams de-dup
   (`collapseDuplicateTeamsItems`) = same chat, or same sender ID + same quote >= 40 chars; never a shared proposal.
 
+## Hand-off / confirm flow DEPLOYED (2026-11-17, #265 -> main 9982fc62, deploy-swa run 44031158506 SUCCESS) -- NOT owner-confirmed live
+- Feature status: rows 1-9 + "Not an AI task" button are LIVE. Row 2 (hand-off creates the task + Confirm buttons) is ON;
+  rollback = `HANDOFF_TASK_AND_BUTTONS = false` in `lib/handoff-followup.ts`. Owner chose option A: ship, then tune the
+  free-text checks ("do it now" urgency, teammate-deferral strip) from real use.
+- Verified: independent verifier loops 1-9 (branches `claude_verify-handoff-confirm-flow-*`): C3/C4/C5/C6/C10 CONFIRMED;
+  C1/C2/C7/C8 redesigned as fail-safe allowlists, every found defect fixed + mutation-proved; C9 harness can no longer
+  write into real threads (`isTestThread` guard at all 3 real-dm enqueue sites).
+- Active work: live E2E with `Test-` tasks is BLOCKED on the OpenAI account quota (429 insufficient_quota); browser UAT
+  (verify-uat.yml) dispatched after the merge. Owner live confirmation pending.
+- Root causes found this round: (1) free-text matchers listed unsafe spellings (open set) -- fixed by flipping to
+  allowlists; (2) a tool's own free text (flag_blocker "blocked: <reason>") was scanned for "not performed" words --
+  now per-tool fixed strings; (3) background agents freeze while the main session is idle (other session's finding).
+
 ## Agent pace ROOT CAUSE (2026-11-17, measured) -- background agents FREEZE while the main session is idle
 - eds-agent-steps.py (eds-claude-skills #140, live v80) split 5 transcripts: model 1-10% of wall; 73-96% was steps in
   different agents ending within 1-33 s of each other. Every freeze window = main session had ZERO events; each ended
