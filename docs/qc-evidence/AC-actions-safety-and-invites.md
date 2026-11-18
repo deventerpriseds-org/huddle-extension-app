@@ -337,3 +337,78 @@ Documented by = `foldPersonName` source (trim, `\s+` collapse, lower case, one "
 Gaps: this covers Teams senders only. An EMAIL from his second account's address is decided by `ownerAddresses`
 (needs-you.ts), not by name, and was not opened in this pass. If the second account also sends email, the matching
 setting is an address list, not this one. Unicode NFC vs NFD for the same visible name was not measured.
+
+---
+
+## F5. Items held by the safety check get their own visible group, with Add as task and Dismiss
+
+**Read in source:** `admitActionVerdict` stores held items as `status: "not_checked"` with
+`notCheckedReason: "quote_not_found"`, and keeps `todo`, `quote`, `reason`, `kind` and `category`, with
+`proposalId: null`. `runClassify` calls `propose` ONLY when `v.status === "open"`, so a held item has no proposal.
+`buildCandidates` (pipeline.ts) copies `status` but NOT `notCheckedReason` into `ActionCandidate`. It sets `preview`
+only when there is NO current verdict, so a held item shows `title` = the model's `todo` (or the subject) and no
+preview. `selectActionItems` puts every `not_checked` candidate in `unchecked` through `pushUnchecked`, after the
+same What-shows switches. ActionsView renders `unchecked` in a `CollapsibleSection` "Not checked yet"
+(`defaultOpen={false}`, ActionsView.tsx line 316), using the read-only `UncheckedRowItem`. Row buttons elsewhere call
+`actOnProposalFn({ id: row.id })`, whose id must match `/^prop-[0-9a-f]{1,32}$/` (PropId), so a held row (id `""`)
+cannot use them today.
+
+**The rule (SD marked):**
+1. A candidate is HELD when its current verdict is `not_checked` AND `notCheckedReason === "quote_not_found"`.
+   `bad_shape`, over the cap, and never judged stay in "Not checked yet", unchanged. (`bad_shape` has no usable to-do.)
+2. `ActionCandidate` gains `notCheckedReason`. `ActionsSelection` gains `held: ActionRow[]` and
+   `heldCounts: { all, email, teams, meeting }`. A held item is in `held`, never in `unchecked`, and never in `rows`.
+3. The What-shows switches apply to held items in the SAME order as today (`hiddenBySettings`): one rule for every
+   item (SD, keeping the existing "a switch that hides an item hides it whether or not it has been judged" rule).
+4. A held row shows: the AI's suggested to-do (`todo`, else the subject), who and where it came from, and a plain-words
+   reason from a FIXED code-written map, never model text: `quote_not_found` reads "Held back: the AI's supporting
+   quote didn't match the message word for word, so it wasn't added automatically." The model's `quote` is shown
+   labelled "AI's quote (not found in the message)" so he can judge it. It never claims the quote is real.
+5. Add as task / Dismiss: SD, the proposal is created at click time through the EXISTING `proposeFromSource`, then the
+   EXISTING `actOnProposalFn` action runs on it (approve or dismiss). The proposal id is written back onto the stored
+   verdict (`proposalId`), status still `not_checked`. One thin server function may wrap these two existing calls. It
+   is not a second proposal store and not a second action path (the header rule).
+6. The group is titled "Held by the safety check", is shown expanded (not a collapsed section), sits after the judged
+   sections and before "Not checked yet", and is absent when empty.
+
+| # | Given / When / Then | Category | Observed via | Guard |
+|---|---|---|---|---|
+| F5-1 | Given a current verdict `{status: not_checked, notCheckedReason: quote_not_found, todo: "Send the weekly notes"}` and default settings, when `selectActionItems` runs, then the item is in `held` (length 1), NOT in `unchecked`, NOT in `rows`, and `heldCounts.all === 1`. | happy | unit | **mutation-proved** (send held to `unchecked` must fail) |
+| F5-2 | Given a verdict `{status: not_checked, notCheckedReason: bad_shape}`, and an item with no verdict, when selected, then both are in `unchecked`, not `held`. | regression | unit | **mutation-proved** (treat every not_checked as held must fail) |
+| F5-3 | Given the page renders with 1 held item, when it loads, then the text "Held by the safety check" is visible WITHOUT a click, the row shows the to-do text, the fixed reason sentence, and two buttons "Add as task" and "Dismiss". | happy | Playwright (verify-uat, synthetic fixture account) or component test | -- |
+| F5-4 | Given 0 held items, when the page renders, then no "Held by the safety check" heading exists. | edge | component test | -- |
+| F5-5 | Given a held item, when the owner clicks Add as task, then exactly one proposal is created via `proposeFromSource`, `actOnProposalFn` approves it with `from: "actions"`, a board task exists, the stored verdict's `proposalId` equals the new id, and on the next page read the item is in none of `held`, `unchecked` or `rows`. | happy | offline test with injected propose/act deps + one live UAT | **mutation-proved** (skip writing `proposalId` back must fail: the item reappears) |
+| F5-6 | Given a held item, when the owner clicks Dismiss, then a proposal is created and dismissed, and on the next read the item is gone and stays gone across a re-judge of the SAME item key (X-5). | happy / regression | offline `runClassify` re-judge test | covered by X-5 (mutation-proved there) |
+| F5-7 | Given Add as task is clicked twice quickly (double click, two tabs), when both requests run, then only ONE proposal exists for the item key (the existing per-thread lock / `proposeFromSource` de-dup), and the second click returns the first proposal's result. | edge | offline concurrency test | -- |
+| F5-8 | Given `proposeFromSource` fails, when Add as task is clicked, then the row stays in "Held", an error toast shows plain words ("Couldn't add that. Try again."), no verdict is changed, and no half state (proposal created but verdict not updated) is left: the next click re-uses the created proposal if one exists. | error | offline test with a throwing dep | -- |
+| F5-9 | Given a held item whose `category` is `meeting_invite` and the meeting-invite hide switch is ON, when selected, then it is counted in `hidden.categories.meeting_invite` and is not in `held` (rule 3). Given the switch OFF, then it is in `held`. | edge | unit | -- |
+| F5-10 | Given 2 open rows (email), 1 held (teams) and 3 not-checked (email), when `tabCounts` runs, then All = 6, Email = 5, Teams = 1. Each tab counts open + held + not-checked of that type. `notChecked === unchecked.length` still holds, and `notChecked` does NOT include held items. | reconciliation | unit on `tabCounts` and the selection | **mutation-proved** (drop held from `tabCounts` must fail) |
+| F5-11 | Given the Teams tab is selected, when the page renders, then the held group lists only Teams held items. | edge | component test with `filterRows` | -- |
+| F5-12 | Given a held row is rendered, when its reason is read, then it is the FIXED code sentence for `quote_not_found`. The model's `reason` field is not shown as the held reason. | security | unit on the reason map | -- |
+| F5-13 | Given Add as task / Dismiss on a held item run, when they log, then logs carry only the reason code, the source and counts, never the to-do, the quote or a name (X-7). | security | grep of the diff | -- |
+| F5-14 | Given the classifier is re-run at a new version (X-2) and the held item now passes (F1 fragments), when re-judged, then it becomes `open`, gets ONE proposal (or keeps the rescue proposal per X-5), and moves from `held` to `rows`. It is never listed in both. | regression | offline `runClassify` + selection test | -- |
+| F5-15 | Given 200 held items, when the page is read, then the read adds no extra DB round trip per item (the held selection uses the verdicts already loaded) and the page read stays under its current p95 + 100 ms. | performance | offline count of store calls; timed read | -- |
+
+F5 is not a parser or matcher, so it has no spelling table. Its only "matching" is the fixed equality
+`notCheckedReason === "quote_not_found"`, pinned by F5-1 / F5-2.
+
+---
+
+## Guard summary (mutation-proved, `scripts/mutate.sh`, every FIRED controlled)
+
+X-1, X-2, X-5; F1-1, F1-2, F1-3, F1-5; F2-1, F2-2, F2-6; F3-1, F3-2, F3-3, F3-6; F4-1, F4-2, F4-4; F5-1, F5-2, F5-5,
+F5-10. Everything else is an ordinary test or an eval.
+
+## Safe defaults taken (no owner question needed; each is reversible)
+
+- F2: the ask-in-invite rule is a carve-out in the existing `meeting_invite` definition (the `app_invite` pattern), plus
+  a code check that a `meeting_invite` verdict of kind `reply` is never listed. No new category, no new switch.
+- F3: prompt rule plus a SHORT exact-match phrase backstop. Its errors fail toward showing an item, never hiding one.
+- F4: no fuzzy name matching (middle initials, suffixes and accents must be listed by him); an empty saved list is
+  respected; Teams senders only. A namesake with his EXACT full name is an accepted, documented risk.
+- F5: held = `quote_not_found` only; the What-shows switches still apply; the proposal is created at click time
+  through the existing propose + act path; the reason is a fixed code sentence, never model text.
+
+Open questions for the owner: none truly undecidable. The one judgement he may want to see is F4-13, whether a change
+to "Names that are you" re-checks past items at once (costs model calls) or only applies from the next re-check
+(SD chosen: next re-check, and the panel says so).
