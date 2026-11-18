@@ -2033,6 +2033,7 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+- [2026-11-18] Schedule tab This Week: the star on a STARRED row of the live tab is now a "Remove from This Week" button (same runPush unstar as the Priorities ⋮). It was decorative before. #280 `eaf3019`, NOT owner-confirmed. Pre-existing red: schedule-today-band T5 fails on main.
 
 ### Task pick-up fit (2026-11-04, branch `claude_task-pickup-fit`)
 - Owner rule: agents take tickets they can FINISH end to end; a reminder only when the user says "remind me to…"; research is just done; for user-last-click tasks (subscribe/sign up/order/start a course) do the legwork — exact link on the card, comparisons always with reviews + forum feedback.
