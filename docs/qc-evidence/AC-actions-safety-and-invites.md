@@ -201,3 +201,67 @@ Gaps: whether the live model follows the carve-out can only be shown by the opt-
 model calls. Microsoft's Graph `meetingMessageType` (meetingRequest / meetingCancelled / meetingAccepted) was NOT read
 in this session, so whether code already gets a deterministic "this is a calendar reply" signal is unknown. If it
 does, S2-12 should be decided by code, not the model.
+
+---
+
+## F3. Momentary chat coordination is not an open item
+
+**Read in source:** TEAMS_INSTRUCTIONS counts anything "promised by him in his own messages" as an open item, and
+says "when genuinely unsure, answer true". STEP2 has the same "anything he promised in his own messages". Nothing
+excludes live logistics, so the owner's own "be right there" reads as a promise, and the model writes the to-do
+"Be right there as you promised X". `admitActionVerdict` only checks that the quote is verbatim from an OTHER
+message. A logistics line ("see you this afternoon") passes that check.
+
+**The rule (SD marked):** two layers, both extending existing code. (a) Prompt: one shared constant
+`MOMENTARY_RULE`, appended to TEAMS_INSTRUCTIONS and COMMON: "Momentary coordination is not an open item: where
+someone is right now, arriving, running late, 'on my way', 'be right there', 'see you soon / this afternoon',
+greetings, thanks and pleasantries. A promise is an open item only when it names something to DELIVER or DO later
+(send, share, review, call back about a named topic)." (b) SD deterministic backstop in `admitActionVerdict`, so the
+model's mistake is caught by code: when the folded WHOLE quote, after removing trailing punctuation and emoji, is
+EXACTLY one entry (or a sequence of entries) of a small fixed list `MOMENTARY_PHRASES`, the verdict is `none` with
+reason code `momentary`. It is matched by exact phrase, never as a substring, so "I'll be right there with the deck
+tomorrow" is never matched. The list lives in one constant and is data, never compiled from message text.
+
+| # | Given / When / Then | Category | Observed via | Guard |
+|---|---|---|---|---|
+| F3-1 | Given TEAMS_INSTRUCTIONS and COMMON, when read, then both contain `MOMENTARY_RULE` (one constant). | regression | unit `includes` | **mutation-proved** |
+| F3-2 | Given a Teams chat whose OTHER message is "See you this afternoon!" and a stubbed model output `open_item: true, kind: reply, quote: "See you this afternoon!"`, when admitted, then status `none` and the item is in neither `rows` nor `unchecked`. | happy | unit on `admitActionVerdict` + `selectActionItems` | **mutation-proved** (remove the backstop must fail) |
+| F3-3 | Given the OTHER message "Can you send me the deck tomorrow?", the owner's reply "Be right there. I'll send you the deck tomorrow.", and a model output quoting the OTHER message, when admitted, then status `open` (a real deliverable). | regression | unit | **mutation-proved** (a substring matcher that drops this must fail) |
+| F3-4 | Given the quote "No worries, thank you!", when admitted, then `none` / `momentary`. | edge | unit | covered by F3-2 pair |
+| F3-5 | Given the quote "on my way, see you soon" (two list entries joined by a comma), when admitted, then `none`. | edge | unit | -- |
+| F3-6 | Given a quote containing a list phrase AND more ("Running late, can you start the review without me and send notes after?"), when admitted, then it is NOT dropped by the backstop (not an exact match). It is still `open` if the model said so. | edge (over-match) | unit | **mutation-proved** (turn exact match into `includes` must fail) |
+| F3-7 | Given the backstop drops a verdict, when the stored verdict is read, then it carries a code-only reason (`reason` null or a fixed code-written sentence), never model text claiming anything about the owner. Nothing logs the quote (X-7). | security | unit; grep | -- |
+| F3-8 | Given an existing open item whose proposal P was already created from a momentary line before this change, when re-judged at the new version (X-2) and now `none`, then P is not shown again as undecided and no second proposal is made (X-5). P's own state is not rewritten (a dismissal by the owner stays a dismissal). | regression | X-5 test variant | covered by X-5 |
+| F3-9 | Given an email thread (not Teams) with only "Thanks, see you there!", when admitted, then the same backstop applies: `none`. One rule for both sources. | reconciliation | unit with an email haystack | -- |
+| F3-10 | Given 0 model calls are made for the backstop, when a momentary verdict is dropped, then the daily-cap counter still counts the ONE model call that produced it (the backstop costs no call and refunds none). | performance | offline `runClassify` count | -- |
+| F3-11 | Given the owner's OWN message "be right there" is the latest message and the latest OTHER message asks "Are you joining?", when the model returns `open_item: false, reason: Answered by your reply`, then status `none`, `answeredByReply` true (existing settled path, unchanged). | regression | existing settled tests | existing |
+
+### F3 spelling table (quote spellings; synthetic)
+
+Documented by = `MOMENTARY_RULE` / `MOMENTARY_PHRASES` as specified above, and `canonQuote` folding (lower case,
+`\s+` collapse, curly to straight apostrophe). "Backstop" = the deterministic check; "model" = left to the prompt.
+
+| # | Quote spelling | Documented by | Expected verdict | Wrong answer would be |
+|---|---|---|---|---|
+| S3-1 | `Be right there` | list entry | NONE (backstop) | FALSE PASS (to-do shown) |
+| S3-2 | `be right there!!` | trailing punctuation stripped | NONE | FALSE PASS |
+| S3-3 | `BRT` | NOT in the list (SD: abbreviations are left to the model; the list is not guessed at) | model decides | n/a |
+| S3-4 | `On my way 🙂` | trailing emoji stripped (Unicode `\p{Extended_Pictographic}`) | NONE | FALSE PASS |
+| S3-5 | `See you this afternoon!` | list entry | NONE | FALSE PASS |
+| S3-6 | `See you soon` / `See you there` / `See you tomorrow` | list entries | NONE | FALSE PASS |
+| S3-7 | `No worries, thank you!` | list entries joined | NONE | FALSE PASS |
+| S3-8 | `Thanks!` / `Thank you so much` / `Sounds good` / `👍` | list entries; emoji-only = empty after stripping, so NONE | NONE | FALSE PASS |
+| S3-9 | `Running 5 minutes late` | list pattern with a number (SD: `running \d{1,2} (min|mins|minutes) late` is the ONE pattern entry, anchored both ends) | NONE | FALSE PASS |
+| S3-10 | `I'll send you the deck tomorrow` | a real promised deliverable (over-match negative) | OPEN | FALSE REFUSAL |
+| S3-11 | `Be right there, and I'll bring the signed contract` | exact-match only (over-match negative: prefix) | OPEN (model) | FALSE REFUSAL |
+| S3-12 | `See you this afternoon. Please have the budget ready.` | sentence 2 is an ask (over-match negative) | OPEN | FALSE REFUSAL |
+| S3-13 | `Thanks, can you review this by Friday?` | an ask after thanks (over-match negative) | OPEN | FALSE REFUSAL |
+| S3-14 | `See you at the review. Bring the Q3 slides.` | an ask (over-match negative) | OPEN | FALSE REFUSAL |
+| S3-15 | `on my way to drop off the keys you asked for` | NOT an exact match; model decides (likely none, as it is momentary) | model decides | n/a, recorded so a verifier does not widen the backstop |
+| S3-16 | `Thank you for the intro, let's set up a call next week` | a follow-up to arrange (over-match negative) | OPEN | FALSE REFUSAL |
+| S3-17 | `be  right  there` (double spaces), `Be right there.` | `\s+` folding, punctuation strip | NONE | FALSE PASS |
+| S3-18 | `Be right there` in the OWNER's message only, the OTHER message "Can you join now?" | the OTHER quote is a live join ask: momentary (SD: `Can you join now?` is a list entry) | NONE | FALSE PASS |
+
+Gaps: the phrase list is a judgement, not a documented grammar. It is deliberately SHORT and exact-match, so its
+errors are FALSE PASSES left to the prompt (an item still shows) rather than FALSE REFUSALS (a real item hidden).
+Recall matters most, per the instructions. The full list must be in the PR, reviewed by the red-team pre-pass.
