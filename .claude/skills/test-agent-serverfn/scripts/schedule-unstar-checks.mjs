@@ -14,11 +14,24 @@
 
 const TITLE = process.env.UAT_UNSTAR_TITLE || "Test-unstar check 1118";
 
+/** Schedule lives under Modules since 2026-11-16 (ModulesLauncher.tsx): open Modules, then its Schedule
+ *  item -- the same path actions-view-checks.mjs drives. A direct "Schedule" button is tried first. */
 async function openView(page, label) {
-  const btn = page.getByRole("button", { name: new RegExp(`^${label}$`, "i") }).first();
-  if (!(await btn.count())) return false;
-  await btn.click().catch(() => {});
-  await page.waitForTimeout(400);
+  const direct = page.getByRole("button", { name: new RegExp(`^${label}$`, "i") }).first();
+  if (await direct.count()) {
+    await direct.click().catch(() => {});
+    await page.waitForTimeout(400);
+    return true;
+  }
+  const modules = page.locator('[aria-label="Modules"]').first();
+  if (!(await modules.count())) return false;
+  await modules.click().catch(() => {});
+  const pop = page.locator('[data-testid="modules-popover"]').first();
+  if (!(await pop.waitFor({ state: "visible", timeout: 6000 }).then(() => true).catch(() => false))) return false;
+  const item = pop.locator("li").filter({ hasText: label }).locator("button").first();
+  if (!(await item.count())) return false;
+  await item.click().catch(() => {});
+  await page.waitForTimeout(1200);
   return true;
 }
 
@@ -51,8 +64,15 @@ export const checks = [
     }
     await screenshot("schedule-after-tap");
     check("tapping it shows 'Removed from This Week.'", toast, "no success toast within 15s");
-    await page.waitForTimeout(5000); // runPush re-reads now and again at 2.5s (mirror lag)
-    const still = await page.getByRole("button", { name: `Remove "${TITLE}" from This Week` }).count();
+    // runPush re-reads now and again at 2.5s; each re-read also fetches the Outlook calendar, which took
+    // longer than 5s on the first live run (journey + mirror were already correct at the tap's second).
+    let still = 1;
+    const t3 = Date.now() + 25000;
+    while (Date.now() < t3) {
+      still = await page.getByRole("button", { name: `Remove "${TITLE}" from This Week` }).count();
+      if (still === 0) break;
+      await page.waitForTimeout(1000);
+    }
     await screenshot("schedule-after-reread");
     check("after the re-read the row no longer has a remove star", still === 0, `${still} still present`);
   },
