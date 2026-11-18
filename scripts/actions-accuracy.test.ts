@@ -411,5 +411,35 @@ void GRP;
   t("RT-14b GUARD foldPersonName strips zero-width / format characters (U+200B, U+FEFF, U+2060)", [foldPersonName("Samuel​ Okafor﻿"), foldPersonName("Okafor,⁠ Samuel")], ["samuel okafor", "samuel okafor"]);
 }
 
+// ── Verifier VERIFY-actions-safety-invites-1 (F3 FAILS-CLOSED): the Teams wiring gives the backstop the WHOLE unanswered tail ──
+{
+  const TV = `19:tv_x${AT}unq.gbl.spaces`;
+  const LEE = { id: "other-guid-0003", name: "Lee Example", isApp: false };
+  const OWN = { id: OWNER_ID, name: "Example, Owen", isApp: false };
+  const runTail = async (chat: LedgerReportRow[], quote = "Thanks!") => {
+    const asmT = assembleLedgerPlan({ rows: [older, older2, ...chat], proposals: [], bell: [] }, cfgNoIds, Date.parse("2026-11-09T05:00:00Z"));
+    const stored = new Map<string, ActionVerdict>();
+    const deps: ClassifyDeps = {
+      recordCall: async () => {},
+      model: async () => ({ open_item: true, kind: "action", todo: "Send the signed contract", due: null, quote, confidence: "high", reason: "Asked directly.", category: "person_request" }),
+      propose: async () => ({ id: "p-tv", onBoard: false }),
+      storeVerdict: async (at, v) => void stored.set(`${at.source}\u0000${at.sourceItemId}`, v),
+      addMeetingRows: async () => 0,
+      nowIso: () => NOW,
+    };
+    await runClassify(asmT, { ...ACTIONS_SETTINGS_DEFAULT, sources: { ...ACTIONS_SETTINGS_DEFAULT.sources, email: false, meeting: false } }, new Set(), 6, deps);
+    const u = threadUnits(asmT, ACTIONS_SETTINGS_DEFAULT).units.find((x) => x.teams?.chatId === TV);
+    return u ? stored.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`)?.status : "no-unit";
+  };
+  const askPat = row({ chatId: TV, messageId: "t1", at: "2026-11-16T12:00:00Z", text: "Can you send me the signed contract by Friday?" });
+  const thanksPat = row({ chatId: TV, messageId: "t2", at: "2026-11-16T12:01:00Z", text: "Thanks!" });
+  const thanksLee = row({ chatId: TV, messageId: "t3", at: "2026-11-16T12:02:00Z", sender: LEE, text: "Thanks!" });
+  t("F3V-1 GUARD same sender: an ask then 'Thanks!' (model quotes 'Thanks!') is NOT dropped", (await runTail([askPat, thanksPat])) !== "none", true);
+  t("F3V-2 GUARD another sender: Pat asks, Lee says 'Thanks!' -> NOT dropped", (await runTail([askPat, thanksLee])) !== "none", true);
+  const brt = row({ chatId: TV, messageId: "t4", at: "2026-11-16T12:03:00Z", sender: OWN, text: "Be right there" });
+  const nw = row({ chatId: TV, messageId: "t5", at: "2026-11-16T12:04:00Z", text: "No worries, thank you!" });
+  t("F3V-3 the owner's 'Be right there' then only 'No worries, thank you!' since -> dropped (momentary)", await runTail([askPat, brt, nw], "No worries, thank you!"), "none");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

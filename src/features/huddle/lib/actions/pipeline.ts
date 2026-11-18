@@ -218,12 +218,15 @@ export async function runClassify(
     }
     const haystack = u.email ? emailQuoteHaystack(u.email, a.forwards) : teamsQuoteHaystack(u.teams!);
     const settled = u.email ? u.email.settled : u.teams!.settled;
-    // RT-7 (F3 fails open): for Teams, the momentary backstop compares against each OTHER sender's LATEST message.
+    // RT-7 + verifier VERIFY-actions-safety-invites-1 (F3 fails open): for Teams, the momentary backstop is given
+    // EVERY OTHER message since the owner last wrote (the unanswered tail), not just each sender's latest -- so an ask
+    // followed by "Thanks!" (same or another sender) keeps the item.
     let latestMessages: string[] | undefined;
     if (!u.email && u.teams) {
-      const bySender = new Map<string, string>();
-      for (const m of u.teams.messages) if (m.speaker === "OTHER") bySender.set(String(m.name ?? ""), m.text ?? "");
-      latestMessages = [...bySender.values()];
+      const msgs = u.teams.messages;
+      let lastOwner = -1;
+      msgs.forEach((m, i) => { if (m.speaker === "OWNER") lastOwner = i; });
+      latestMessages = msgs.slice(lastOwner + 1).filter((m) => m.speaker === "OTHER").map((m) => m.text ?? "");
     }
     let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source], latestMessages });
     /** Propose (when open) then store. Inside the thread lock (AC8) it first re-reads the thread's stored verdict:
