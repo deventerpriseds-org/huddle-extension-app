@@ -44,4 +44,16 @@ UPDATE chat.email_replies SET status = 'owed', settled_at = NULL, updated_at = n
 
 ## RESULTS
 
-(filled in after the run)
+Run 2026-11-18 18:57 UTC, azure-pg-query run 44374957433 (job 135051536015):
+
+| measure | value |
+|---|---|
+| owed email replies before | 20 |
+| rows updated | `UPDATE 7` (exactly the 7 ids) |
+| owed email replies after | 13 |
+| meeting-minutes rows still owed | 0 |
+
+AC-50 (exactly 7 before the write): met. AC-51 (by id only, rowCount 7, undo SQL above): met. AC-52: owed dropped by
+exactly 7; "Settled today" is unaffected because settled_at = received_at (all before today except 34c1ddfbfef92bf9 and
+8c217760feaa0232, received 2026-11-18, which DO count as settled today: +2, not +7). AC-53 (stay dismissed on the next
+run) is checked after deploy.
