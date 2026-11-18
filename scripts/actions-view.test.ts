@@ -1037,5 +1037,45 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   t("F5-13 the held action logs only the action, the source and ok (no to-do, quote, name or id)", [(heldFn.match(/console\.(log|error|warn)\(/g) ?? []).length, heldFn.includes("console.log(`[actions] held ${input.action} source=${u.source} ok=${r.ok}`)")], [1, true]);
 }
 
+// ── RED-TEAM pre-pass 2026-11-18 (docs/qc-evidence/REDTEAM-actions-safety-invites.md): F5 held group + actOnHeldItem.
+// A row that FAILS is an attack that SUCCEEDED (correct behaviour asserted, source NOT fixed). Synthetic data only. ──
+{
+  const { actOnHeldItem } = await import("../src/features/huddle/lib/actions/pipeline");
+  const { isHeldCandidate } = await import("../src/features/huddle/lib/actions/actions");
+  const { CLASSIFIER_INPUT_VERSION } = await import("../src/features/huddle/lib/correspondence/action-classify");
+  const KEY = "email:rt-thread|rt-msg";
+  const unit = { source: "email", itemKey: KEY, storeAt: { source: "email", sourceItemId: "rt-msg" }, refItemId: "rt-msg", at: null, uninvolved: false, email: { messages: [{ text: "Synthetic: please send the weekly notes by Monday to the team." }], latestOther: { id: "rt-msg", text: "Synthetic: please send the weekly notes by Monday to the team." } } } as never;
+  const heldV = (o: Record<string, unknown> = {}) => ({ v: 1, key: KEY, inputVersion: CLASSIFIER_INPUT_VERSION.email, status: "not_checked", notCheckedReason: "quote_not_found", kind: "action", category: "person_request", confidence: "high", todo: "Send the weekly notes", due: null, quote: "Invented quote words here", reason: null, answeredByReply: false, proposalId: null, at: "2026-11-18T10:00:00Z", ...o });
+  const run = async (cur: Record<string, unknown> | null, action: "approve" | "dismiss" = "approve") => {
+    const log = { propose: 0, act: [] as string[], stored: [] as unknown[] };
+    const r = await actOnHeldItem(unit, action, {
+      lockThread: async (_u, fn) => fn({ current: async () => cur as never, store: async (v) => void log.stored.push(v) }),
+      propose: async () => (log.propose++, { id: "prop-0000aaaa", onBoard: false }),
+      act: async (id) => (log.act.push(id), { ok: true }),
+    });
+    return { r, log };
+  };
+  const decided = await run(heldV({ proposalId: "prop-decided01" }), "dismiss");
+  t("RT-21 F5-7 a held item whose rescue proposal already exists: 0 new proposals, the action runs on THAT id", [decided.log.propose, decided.log.act, decided.log.stored.length], [0, ["prop-decided01"], 0]);
+  const bad = await run(heldV({ notCheckedReason: "bad_shape" }));
+  t("RT-22 F5 D5 gate: a bad_shape not_checked item is NOT actionable (0 propose, 0 act)", [bad.r.ok, bad.log.propose, bad.log.act.length], [false, 0, 0]);
+  const stale = await run(heldV({ inputVersion: 1 }));
+  t("RT-23 F5 D5 gate: a held verdict from an OLDER classifier version is not actionable", [stale.r.ok, stale.log.propose, stale.log.act.length], [false, 0, 0]);
+  const other = await run(heldV({ key: "email:someone-else|m9" }));
+  t("RT-24 F5 a verdict for a DIFFERENT item key (another thread) is not actionable through this item", [other.r.ok, other.log.propose, other.log.act.length], [false, 0, 0]);
+  const openV = await run(heldV({ status: "open", notCheckedReason: undefined }));
+  t("RT-25 F5 D5 gate: an OPEN verdict is not acted on as held", [openV.r.ok, openV.log.propose], [false, 0]);
+  const fresh = await run(heldV());
+  t("RT-26 F5-5 a fresh held item: exactly 1 proposal, id written back with status still not_checked", [fresh.log.propose, fresh.log.act, (fresh.log.stored[0] as { proposalId?: string; status?: string })?.proposalId, (fresh.log.stored[0] as { status?: string })?.status], [1, ["prop-0000aaaa"], "prop-0000aaaa", "not_checked"]);
+  // Selection
+  t("RT-27 F5 isHeldCandidate: only not_checked + quote_not_found", [isHeldCandidate({ status: "not_checked", notCheckedReason: "quote_not_found" }), isHeldCandidate({ status: "not_checked", notCheckedReason: "bad_shape" }), isHeldCandidate({ status: "not_checked", notCheckedReason: null }), isHeldCandidate({ status: "none", notCheckedReason: "quote_not_found" } as never), isHeldCandidate({ status: "open", notCheckedReason: "quote_not_found" } as never)], [true, false, false, false, false]);
+  const hc = (o: Partial<ActionCandidate>) => cand({ status: "not_checked", notCheckedReason: "quote_not_found", proposalId: null, proposalState: null, ...o } as Partial<ActionCandidate>);
+  const sel = selectActionItems([hc({ itemKey: "h|1" }), hc({ itemKey: "h|2", proposalId: "prop-dismissed1", proposalState: "dismissed" }), hc({ itemKey: "h|3", proposalId: "prop-approved1", proposalState: "approved" }), hc({ itemKey: "h|4", onBoard: true }), hc({ itemKey: "h|5", source: "teams", proposalId: "prop-retry0001", proposalState: "proposed" })], S());
+  t("RT-28 F5 decided / on-board held items leave the page; an undecided rescue stays held; none leak into unchecked or rows", [sel.held.map((r) => r.itemKey).sort(), sel.unchecked.length, sel.rows.length], [["h|1", "h|5"], 0, 0]);
+  t("RT-29 F5-10 counts: heldCounts match the held rows; tabCounts include held; notChecked excludes held", [sel.held.length, sel.heldCounts.all, sel.heldCounts.email, sel.heldCounts.teams, sel.notChecked, tabCounts(sel.rows, sel.unchecked, sel.held).all], [2, 2, 1, 1, 0, 2]);
+  const hiddenMeet = selectActionItems([hc({ itemKey: "h|m", category: "meeting_invite" })], S());
+  t("RT-30 F5-9 a held meeting_invite is hidden by the default switch, counted, not held", [hiddenMeet.held.length, hiddenMeet.hidden.categories.meeting_invite ?? 0], [0, 1]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -267,6 +267,13 @@ for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INF
   await runClassify(asm, S1, judged, 5, withLock(gone));
   const vg = gone.store.get(k0);
   t("X-5b prior {open, proposalId P}, re-judge -> none (F3 momentary): P stays attached, 0 proposals made", [gone.log.propose, vg?.status, vg?.dropReason, vg?.proposalId], [0, "none", "momentary", "prop-decided-earlier"]);
+  // RED-TEAM RT-31 (REDTEAM-actions-safety-invites.md, F5-14): a HELD item rescued by the owner (P written back) that
+  // the re-judge now ADMITS as open keeps P -- never a second proposal, never listed twice.
+  const rescued = fakeStore(honest);
+  rescued.store.set(k0, { ...stale(directKey), status: "not_checked", notCheckedReason: "quote_not_found", proposalId: "prop-rescued-earlier" } as ActionVerdict);
+  await runClassify(asm, S1, judged, 5, withLock(rescued));
+  const vr = rescued.store.get(k0);
+  t("RT-31 X-5/F5-14 prior held {not_checked, P}, re-judge -> open: P kept, 0 proposals made", [rescued.log.propose, vr?.status, vr?.proposalId], [0, "open", "prop-rescued-earlier"]);
 }
 
 // ── F4 / X-6 (AC-actions-safety-and-invites): the REPORT pass uses the SAME "Names that are you" ───────────────────

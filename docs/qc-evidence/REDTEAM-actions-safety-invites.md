@@ -32,3 +32,26 @@ FAILS now. The source code was NOT changed.
 | RT-18 | F4 S4-11 | `Okafor Samuel` (no comma) | OTHER unless listed | OTHER | held |
 | RT-19 | F4-6 | app sender named `Samuel Okafor` | OTHER | OTHER | held |
 | RT-20 | F4 S4-10 | `Samuel Okafor (External)` | OTHER unless listed | OTHER | held |
+| RT-21 | F5-7 | `actOnHeldItem` on a held verdict that already carries rescue proposal P (already decided, second tab) | 0 new proposals; the action runs on P (actOnProposal then decides; not offline-testable here) | as expected | held |
+| RT-22 | F5 D5 gate | `actOnHeldItem` on `not_checked` / `bad_shape` | refused, 0 propose, 0 act | as expected | held |
+| RT-23 | F5 D5 gate | held verdict at an OLDER `inputVersion` | refused | refused (`verdictIsCurrent`) | held |
+| RT-24 | F5 | stored verdict whose key is ANOTHER thread's item key | refused | refused | held |
+| RT-25 | F5 D5 gate | `status: open` verdict sent to the held action | refused | refused | held |
+| RT-26 | F5-5 | fresh held item | exactly 1 proposal, id written back, status stays `not_checked` | as expected | held |
+| RT-27 | F5-1/2 | `isHeldCandidate` with bad_shape / null / status none / status open + quote_not_found | only not_checked + quote_not_found | as expected | held |
+| RT-28 | F5 selection | held items with P dismissed, P approved, onBoard, P still proposed | dismissed / approved / onBoard leave; undecided rescue stays held; none leak to unchecked or rows | as expected | held |
+| RT-29 | F5-10 | counts over that selection | heldCounts = held rows; tabCounts include held; notChecked excludes held | as expected | held |
+| RT-30 | F5-9 | held `meeting_invite`, default switches | hidden + counted, not held | as expected | held |
+| RT-31 | X-5 / F5-14 | prior held `{not_checked, P}`, re-judge comes back `open` | P kept, 0 proposals | as expected | held |
+
+Not attacked offline (needs a live store / caller): `actOnHeldItemFor` acting on another owner's item. Read in source:
+it is gated by `ownedScope(caller, cfg)` and loads only `cfg.ownerLogins` data, then finds the unit by `itemKey` in
+that plan, so a foreign item key is "That item isn't in your list." (inference from reading, not executed here).
+A held row whose rescue proposal P was DELETED from the store reads as `proposalId: null` on the page but `cur.proposalId`
+= P in `actOnHeldItem`, so every click re-acts on the missing P and fails (a stuck row). Recorded, not tested.
+
+## Summary
+
+BROKEN (failing tests, source untouched): RT-1, RT-2, RT-3, RT-7, RT-11, RT-13, RT-14. Most serious: RT-7 (F3 hides a
+real ask outright because the backstop reads only the model's quote) and RT-11 (a bare invite of kind `both` lands in
+Needs your reply). RT-1 is a spec-level question (S1-14 allows mid-sentence elision).
