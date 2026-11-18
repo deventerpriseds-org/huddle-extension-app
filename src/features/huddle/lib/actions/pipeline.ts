@@ -35,7 +35,7 @@ import { meetingItemIsOwnersOrUnassigned } from "../proposals/meeting-triage";
 import { REJECT_REASONS, titleKey, type RejectReason } from "../proposals/proposals";
 import type { ProposeResult } from "../proposals/engine";
 import { safeLink } from "../attention/attention";
-import { correctionFor, HELD_REASONS, plainPreview, proposalStateListed, type ActionCandidate, type ActionsSettings } from "./actions";
+import { correctionFor, correctionHides, HELD_REASONS, plainPreview, proposalStateListed, type ActionCandidate, type ActionsSettings } from "./actions";
 
 const stripFeed = (id: string) => (id.startsWith(FEED_ID_PREFIX) ? id.slice(FEED_ID_PREFIX.length) : id);
 
@@ -506,6 +506,11 @@ export interface HeldActDeps {
    *  proposal the page does not list (decided: dismissed / completed / approved / delegated) is refused like every
    *  other not-listed item. Throws on a read failure (the click fails, nothing stored). Absent = not checked. */
   proposalState?(proposalId: string): Promise<string | null>;
+  /** FIX verify-1 (2026-11-18): the owner-scoped stored owner_correction column of a kept proposal (null when none).
+   *  A kept id the owner corrected with Wrong? on THIS item version is listed only under Corrected (ownerDecided:
+   *  correctionHides(correctionFor(...))), so the held click refuses it the same way. Throws on a read failure (the
+   *  click fails, nothing stored). Absent = not checked. */
+  proposalCorrection?(proposalId: string): Promise<unknown>;
 }
 
 export type HeldActResult = { ok: true; proposalId: string | null; note?: string } | { ok: false; error: string; proposalId?: string };
@@ -529,6 +534,8 @@ export async function actOnHeldItem(u: ThreadUnit, action: HeldAction, deps: Hel
         // NORT-7: the page lists this item only while its kept proposal is in a listed state (selectActionItems'
         // ownerDecided). A decided one is not in the list, so the click is refused the same way, before act().
         if (deps.proposalState && !proposalStateListed(await deps.proposalState(cur.proposalId))) return { kind: "not_held" };
+        // FIX verify-1: a Wrong? on this item version puts it under Corrected, not held (the same rule ownerDecided uses).
+        if (deps.proposalCorrection && correctionHides(correctionFor(await deps.proposalCorrection(cur.proposalId), u.itemKey), u.itemKey)) return { kind: "not_held" };
         return { kind: "id", id: cur.proposalId };
       }
       const p = await deps.propose(u, heldProposalCandidates(cur.todo, cur.quote, (u.email ?? u.teams)?.latestOther?.text ?? null), heldThreadText(u));

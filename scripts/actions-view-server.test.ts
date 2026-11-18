@@ -560,6 +560,23 @@ try {
       [g7held, inPlan7, g7, c7, (await nProps()) - n7, JSON.stringify(await stored(k7.chat)) === v7, JSON.stringify(await propRow(k7.id)) === r7],
       [["held"], true, [], { ok: false, error: "That item isn't in your list." }, 0, true, true],
     );
+    // FIX verify-1 FIX FIRST 2 (real SQL): the same legitimate G4-b held item, its kept proposal still `proposed`, but
+    // corrected with Wrong? on THIS item version (the stored per-item map). The page lists it only under Corrected; the
+    // held click is refused: 0 proposals made, nothing written (state still proposed, correction kept).
+    const k8 = await keptHeld("corr8");
+    const g8held = groupsOf(await page(), k8.u.itemKey);
+    await pool.query(`UPDATE chat.task_proposals SET owner_correction = $2::jsonb WHERE id = $1`, [k8.id, JSON.stringify({ v: 2, items: { [k8.u.itemKey]: { reason: "not_mine", text: null, itemKey: k8.u.itemKey, at, withdrawnAt: null } } })]);
+    const inPlan8 = (await unitsNow()).units.some((x) => x.itemKey === k8.u.itemKey);
+    const n8 = await nProps();
+    const v8 = JSON.stringify(await stored(k8.chat));
+    const r8 = JSON.stringify(await propRow(k8.id));
+    const g8 = groupsOf(await page(), k8.u.itemKey);
+    const c8 = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: k8.u.itemKey, action: "dismiss" });
+    t(
+      "NO-CORR-S1 GUARD (real SQL): a held item whose kept proposal (still proposed) was corrected with Wrong? on this item version -> only in Corrected; the held click is refused, 0 proposals made, nothing written",
+      [g8held, inPlan8, g8, c8, (await nProps()) - n8, JSON.stringify(await stored(k8.chat)) === v8, JSON.stringify(await propRow(k8.id)) === r8, (await propRow(k8.id))?.state],
+      [["held"], true, ["corrected"], { ok: false, error: "That item isn't in your list." }, 0, true, true, "proposed"],
+    );
     t("NO-S17 observed (real PostgreSQL): ->> on a JSON null is SQL NULL, and NULL IN (...) is NULL (not true)", [nullCheck?.isnull, nullCheck?.inlist], [true, null]);
     // AC-7: the classify heartbeat line carries counts only.
     const logs: string[] = [];

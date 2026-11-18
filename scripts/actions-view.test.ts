@@ -1253,7 +1253,7 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   t("NO-G4b-1 GUARD: an open item with a live proposal but no section is HELD (row id = that proposal), not unchecked", [g4bSel.held.map((r) => [r.itemKey, r.id, r.heldReason]), g4bSel.unchecked.length], [[["g4b|1", "prop-g4b", A.HELD_REASON_TEXT.no_section]], 0]);
 
   // ── C. the held click ──
-  const world = (cur: ActionVerdict | null, o: { exists?: (id: string) => Promise<boolean>; state?: (id: string) => Promise<string | null>; propose?: () => Promise<{ id: string | null; onBoard: boolean }> } = {}) => {
+  const world = (cur: ActionVerdict | null, o: { exists?: (id: string) => Promise<boolean>; state?: (id: string) => Promise<string | null>; correction?: (id: string) => Promise<unknown>; propose?: () => Promise<{ id: string | null; onBoard: boolean }> } = {}) => {
     const log = { propose: 0, act: [] as string[], stored: [] as ActionVerdict[] };
     const deps = {
       lockThread: async <T,>(_u: unknown, fn: (tx: import("../src/features/huddle/lib/actions/pipeline").ThreadTx) => Promise<T>) => fn({ current: async () => cur, store: async (v: ActionVerdict) => void log.stored.push(v) }),
@@ -1261,6 +1261,7 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
       act: async (id: string, a: string) => (log.act.push(`${a}:${id}`), { ok: true }),
       ...(o.exists ? { proposalExists: o.exists } : {}),
       ...(o.state ? { proposalState: o.state } : {}),
+      ...(o.correction ? { proposalCorrection: o.correction } : {}),
     };
     return { log, deps };
   };
@@ -1354,6 +1355,23 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   }
   const rt7t = world(sv({ proposalId: "prop-k", kind: "none" }), { exists: async () => true, state: async () => { throw new Error("read failed"); } });
   t("NORT-7c GUARD: listed states (proposed, untriaged) are re-used and acted on; a failing state read -> the fixed error, no act", [rt7l, await P.actOnHeldItem(unit, "approve", rt7t.deps as never), rt7t.log.act], [[["proposed", { ok: true, proposalId: "prop-k" }, ["approve:prop-k"]], ["untriaged", { ok: true, proposalId: "prop-k" }, ["approve:prop-k"]]], { ok: false, error: P.HELD_ACTION_ERROR }, []]);
+  // FIX verify-1 (VERIFY-actions-no-orphans-1 FIX FIRST 2): a kept proposal still `proposed` but corrected with Wrong? on
+  // THIS item version is listed only under Corrected, so the held click refuses it (no act, nothing stored). The same
+  // rule as ownerDecided: a withdrawn correction, or one made on ANOTHER item version, does not hide it (still acted on).
+  const corr = (itemKey: string, withdrawnAt: string | null = null) => ({ v: 2, items: { [itemKey]: { reason: "not_mine", text: null, itemKey, at: NOW, withdrawnAt } } });
+  const wc: [string, unknown, boolean][] = [["this version", corr(KEY), true], ["pre-D4 single shape", { reason: "not_mine", text: null, itemKey: KEY, at: NOW, withdrawnAt: null }, true], ["withdrawn", corr(KEY, NOW), false], ["other version", corr(`${KEY}-older`), false], ["none", null, false]];
+  const wcGot = [];
+  for (const [id, stored] of wc) {
+    for (const v of [sv({ proposalId: "prop-k", kind: "none" }), sv({ status: "not_checked", notCheckedReason: "no_task_record", proposalId: "prop-k" })]) {
+      const w = world(v, { exists: async () => true, state: async () => "proposed", correction: async () => stored });
+      const r = await P.actOnHeldItem(unit, "approve", w.deps as never);
+      wcGot.push([id, v.status, r, w.log.act, w.log.propose, w.log.stored.length]);
+    }
+  }
+  const wcWant = wc.flatMap(([id, , refusedWant]) => ["open", "not_checked"].map((st) => [id, st, refusedWant ? { ok: false, error: "That item isn't in your list." } : { ok: true, proposalId: "prop-k" }, refusedWant ? [] : ["approve:prop-k"], 0, 0]));
+  t("NO-CORR-1 GUARD: a kept proposal corrected with Wrong? on THIS item version -> held click refused (no act, nothing stored); withdrawn / other version / none -> acted on", wcGot, wcWant);
+  const wcT = world(sv({ proposalId: "prop-k", kind: "none" }), { exists: async () => true, state: async () => "proposed", correction: async () => { throw new Error("read failed"); } });
+  t("NO-CORR-2 a failing correction read -> the fixed error, no act, nothing stored", [await P.actOnHeldItem(unit, "approve", wcT.deps as never), wcT.log.act, wcT.log.stored.length], [{ ok: false, error: P.HELD_ACTION_ERROR }, [], 0]);
   // NORT-8: one item, one group, across the new shapes mixed with the onBoard / proposalMissing flags.
   const rt8 = selectActionItems([
     op({ itemKey: "rt8|a", proposalMissing: true, onBoard: true }),

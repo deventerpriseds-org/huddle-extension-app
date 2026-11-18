@@ -648,17 +648,20 @@ export async function actOnHeldItemFor(
   const { actOnProposal } = await import("../proposals/proposals.server");
   // ONE owner-scoped read of a kept proposal's state per id (null = no row), shared by the existence check (G4-a) and
   // the listed-state check (NORT-7). A read error throws: the click fails, nothing stored.
-  const stateReads = new Map<string, Promise<string | null>>();
-  const proposalStateOf = (id: string) => {
-    let p = stateReads.get(id);
+  // FIX verify-1: the same one read also carries owner_correction, for the Wrong?-on-this-version check.
+  const rowReads = new Map<string, Promise<{ state: string; correction: unknown } | null>>();
+  const proposalRowOf = (id: string) => {
+    let p = rowReads.get(id);
     if (!p) {
       p = getSharedPool()
-        .query<{ state: string }>(`SELECT state FROM chat.task_proposals WHERE id = $1 AND owner_email = ANY($2::text[])`, [id, owners.map((o) => o.toLowerCase())])
-        .then((r) => r.rows[0]?.state ?? null);
-      stateReads.set(id, p);
+        .query<{ state: string; owner_correction: unknown }>(`SELECT state, owner_correction FROM chat.task_proposals WHERE id = $1 AND owner_email = ANY($2::text[])`, [id, owners.map((o) => o.toLowerCase())])
+        .then((r) => (r.rows[0] ? { state: r.rows[0].state, correction: r.rows[0].owner_correction ?? null } : null));
+      rowReads.set(id, p);
     }
     return p;
   };
+  const proposalStateOf = async (id: string) => (await proposalRowOf(id))?.state ?? null;
+  const proposalCorrectionOf = async (id: string) => (await proposalRowOf(id))?.correction ?? null;
   const r = await actOnHeldItem(u, input.action, {
     lockThread: (unit, fn) => withThreadLock(ledgerOwners, unit, fn),
     propose: (unit, cands, text) => proposeHeldWith(cfg.owner, pd, unit, cands, text),
@@ -666,6 +669,7 @@ export async function actOnHeldItemFor(
     // A deleted rescue proposal is replaced, not retried forever. A read error throws: the click fails, nothing stored.
     proposalExists: async (id) => (await proposalStateOf(id)) !== null,
     proposalState: proposalStateOf,
+    proposalCorrection: proposalCorrectionOf,
   });
   console.log(`[actions] held ${input.action} source=${u.source} ok=${r.ok}`);
   return r;
