@@ -15,7 +15,8 @@ import { assembleLedgerPlan, type LedgerReportRow } from "../src/features/huddle
 import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import type { EmailContent, TeamsContent } from "../src/features/huddle/lib/correspondence/source-item";
 import { teamsSourceItemId } from "../src/features/huddle/lib/correspondence/source-item";
-import { ACTIONS_SETTINGS_DEFAULT, type ActionsSettings } from "../src/features/huddle/lib/actions/actions";
+import { ACTIONS_SETTINGS_DEFAULT, resolveActionsSettings, type ActionsSettings } from "../src/features/huddle/lib/actions/actions";
+import { ownerFullNames } from "../src/features/huddle/lib/correspondence/needs-you";
 import { inMemoryWrites, runClassify, runReportClassify, threadUnits, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
 import { renderActionReportHtml, rowsFromStoredVerdicts, type ReportRows } from "./action-report-html";
 
@@ -247,6 +248,32 @@ for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INF
   moved.store.set(k0, stale(`${directKey}|an-older-message-version`));
   await runClassify(asm, S1, judged, 5, withLock(moved));
   t("RK-2 a NEW message (different item key) is proposed afresh, not glued to the old proposal", [moved.log.propose, moved.store.get(k0)?.proposalId === "prop-decided-earlier"], [1, false]);
+}
+
+// ── F4 / X-6 (AC-actions-safety-and-invites): the REPORT pass uses the SAME "Names that are you" ───────────────────
+// The owner's second Teams account (another id, his configured full name) replies after the ask. With the resolved
+// ownNames (here the seed: the configured full name) the report's model input labels it OWNER and the chat settled;
+// with a saved EMPTY list it is labelled OTHER, as before F4.
+{
+  const SECOND = `19:f4_rep${AT}unq.gbl.spaces`;
+  const f4rows: LedgerReportRow[] = [
+    trow(SECOND, "1", "2026-11-10T17:00:00Z"),
+    trow(SECOND, "2", "2026-11-10T17:05:00Z", { sender: { id: "owner-second-guid", name: "Owen Example", isApp: false }, fromOwner: null, ownerUserId: undefined, text: "Synthetic: yes, go ahead." }),
+  ];
+  const inputsFor = async (ownNames: string[] | undefined) => {
+    const a = assembleLedgerPlan({ rows: f4rows, proposals: [], bell: [] }, cfg, SINCE, ownNames);
+    const seen: string[] = [];
+    const { deps, loadVerdicts } = fakeStore(() => ({ open_item: false, kind: "none", todo: null, due: null, quote: null, confidence: "high", reason: "Answered by your reply", category: "person_request" }));
+    await runReportClassify({ assembled: a, settings: S(), sortingOn: true, usedToday: 0, maxCalls: 5, loadVerdicts, deps: { ...deps, model: async (sys, input, name) => (seen.push(input), deps.model(sys, input, name)) } });
+    return seen.find((x) => x.includes("CHAT (oldest first)")) ?? "";
+  };
+  const seeded = await inputsFor(resolveActionsSettings({}, ownerFullNames(cfg)).ownNames);
+  const cleared = await inputsFor(resolveActionsSettings({ ownNames: [] }, ownerFullNames(cfg)).ownNames);
+  t(
+    "F4-R GUARD (X-6): the report pass labels the owner's second account OWNER (chat settled) with the resolved names; a saved empty list keeps it OTHER",
+    [seeded.includes("--- [2] OWNER |"), seeded.includes('"owner_already_replied_after_latest_other":true'), cleared.includes("--- [2] OTHER (Owen Example)"), cleared.includes('"owner_already_replied_after_latest_other":false')],
+    [true, true, true, true],
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
