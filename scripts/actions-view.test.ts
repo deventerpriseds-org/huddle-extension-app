@@ -824,6 +824,22 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   const reSel = wr.page();
   t("F5-14 re-judged into open: keeps the rescue proposal (0 new proposals), listed in rows, not in held", [rj.open, proposed, wr.store.get(storeKey)?.status, wr.store.get(storeKey)?.proposalId, reSel.rows.length, reSel.held.length], [1, 0, "open", "prop-f5000001", 1, 0]);
 
+  // X-5 follow-up (coordinator 2026-11-18): part A's re-judge keeps the earlier proposal id WHATEVER the new status, so
+  // a not-checked or held verdict can carry a proposal the owner already decided.
+  const DECIDED = ["approved", "completed", "dismissed", "delegated", "corrected"];
+  const ncWith = (state: string, i: number) => cand({ status: "not_checked", notCheckedReason: "bad_shape", proposalId: `prop-dd0${i}`, proposalState: state, section: null, itemKey: `nc-${state}|1` });
+  const selNc = selectActionItems([...DECIDED.map(ncWith), ncWith("proposed", 9)], S());
+  const selHd = selectActionItems([...DECIDED.map((st, i) => held({ proposalId: `prop-ee0${i}`, proposalState: st, itemKey: `hd-${st}|1` })), held({ proposalId: "prop-ee09", proposalState: "proposed", itemKey: "hd-proposed|1" })], S());
+  t("XF-1 GUARD: a NOT-CHECKED item whose kept proposal the owner already decided (approved/completed/dismissed/delegated/corrected) is not listed; one still 'proposed' is", [selNc.unchecked.map((r) => r.itemKey), selNc.notChecked, selNc.rows.length], [["nc-proposed|1"], 1, 0]);
+  t("XF-2 a HELD item whose kept proposal was decided is not listed; one still 'proposed' stays held with that id", [selHd.held.map((r) => [r.itemKey, r.id]), selHd.unchecked.length], [[["hd-proposed|1", "prop-ee09"]], 0]);
+  const wrongC = { reason: "not_an_action" as const, text: null, itemKey: "hw|1", at: NOW, withdrawnAt: null };
+  const selW = selectActionItems([held({ proposalId: "prop-ff01", proposalState: "proposed", itemKey: "hw|1", correction: wrongC }), cand({ status: "not_checked", proposalId: "prop-ff02", proposalState: "proposed", section: null, itemKey: "nw|1", correction: { ...wrongC, itemKey: "nw|1" } })], S());
+  t("XF-3 a Wrong? on the same item version keeps a held / not-checked item in Corrected (with Undo), never listed", [selW.corrected.map((r) => r.itemKey).sort(), selW.held.length, selW.unchecked.length], [["hw|1", "nw|1"], 0, 0]);
+  const wk = mkWorld();
+  wk.store.set(storeKey, { ...heldV, proposalId: "prop-cafe0001" });
+  const kept = await actOnHeldItem(hU, "dismiss", wk.deps);
+  t("XF-4 GUARD: a held verdict that already carries a proposal (kept by the re-judge) re-uses it at Add / Dismiss: 0 new proposals, the action runs on that id", [kept, wk.calls.propose, wk.calls.act, wk.store.get(storeKey)?.proposalId], [{ ok: true, proposalId: "prop-cafe0001" }, 0, ["dismiss:prop-cafe0001"], "prop-cafe0001"]);
+
   const hc = heldProposalCandidates("Test-Send your first notes by Monday", "Please send your weekly notes by Monday", ASKH);
   t("F5 heldProposalCandidates: every evidence is verbatim from the message (never the AI's quote); the to-do first; a grounded fallback sentence last", [hc.every((c) => ASKH.includes(c.evidence)), hc.some((c) => c.evidence.includes("weekly notes")), hc[0].task, hc[hc.length - 1], heldProposalCandidates(null, null, ""), heldProposalCandidates("x", null, null)], [true, false, "Test-Send your first notes by Monday", { task: "Please send your first notes by Monday.", evidence: "Please send your first notes by Monday." }, [], []]);
 

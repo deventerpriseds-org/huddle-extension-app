@@ -496,7 +496,21 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     out.hidden.total++;
     return true;
   };
+  /** X-5 follow-up (2026-11-18): a re-judge keeps the item's earlier proposal id WHATEVER the new status, so a
+   *  not-checked or held verdict can carry a proposal the owner already decided. That decision stands: a proposal
+   *  that left the listed states (approved / completed / dismissed / delegated / corrected) is resolved, and a Wrong?
+   *  on this same item version keeps it in the Corrected list (with Undo). Returns true when the item is not listed. */
+  const ownerDecided = (c: ActionCandidate): boolean => {
+    if (!c.proposalId) return false;
+    if (!LISTED_STATES.has(c.proposalState ?? "")) return true;
+    if (correctionHides(c.correction, c.itemKey)) {
+      out.corrected.push(toRow(c, c.section ?? "needs_reply"));
+      return true;
+    }
+    return false;
+  };
   const pushUnchecked = (c: ActionCandidate) => {
+    if (ownerDecided(c)) return;
     if (!hiddenBySettings(c)) out.unchecked.push(toRow(c, c.section ?? "needs_reply"));
   };
   /** F5: a HELD item. Resolved once the owner decided it (Add as task / Dismiss wrote a proposal id back and that
@@ -505,7 +519,7 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
    *  after it was created) keeps the row, with that id, so the next click re-uses it (F5-8). */
   const pushHeld = (c: ActionCandidate) => {
     if (c.onBoard) return;
-    if (c.proposalId && !LISTED_STATES.has(c.proposalState ?? "")) return;
+    if (ownerDecided(c)) return;
     if (hiddenBySettings(c)) return;
     const reason = c.notCheckedReason as HeldReason;
     out.held.push({ ...toRow(c, c.section ?? "needs_reply"), heldReason: HELD_REASON_TEXT[reason] });
