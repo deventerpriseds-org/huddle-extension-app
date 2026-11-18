@@ -12,6 +12,7 @@
 
 import type { ActionCategory, ActionKind, ActionSection } from "../correspondence/action-classify";
 import { ACTION_SECTION_ORDER } from "../correspondence/action-classify";
+import { foldPersonName } from "../correspondence/report-from-ledger";
 
 // ── SETTINGS ("What shows") ─────────────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,34 @@ export interface ActionsSettings {
   /** Which correspondence the page lists AND the classifier judges (owner 2026-11-17: "an option for all time vs this
    *  week"). "week" = since Monday 00:00 (the original behaviour, default); "all" = everything still stored. */
   range: ActionsRange;
+  /** F4 (AC-actions-safety-and-invites, owner-approved 2026-11-18) "Names that are you": the owner's own display
+   *  names. A Teams sender whose folded name is one of these (2+ name words) is the OWNER, even when his ids are
+   *  known (his second account). Seeded from the configured full names (ownerFullNames) until he saves the field;
+   *  a saved empty list is kept. Takes effect from the next re-check (F4-13). */
+  ownNames: string[];
+}
+
+/** F4 bounds: at most this many names, each at most OWN_NAME_CHARS characters after trim. */
+export const OWN_NAMES_MAX = 10;
+export const OWN_NAME_CHARS = 80;
+/** F4-13 (safe default): a change applies from the next re-check, and the panel says so in these words. */
+export const OWN_NAMES_NOTE = "Applies to new messages and the next re-check.";
+
+/** Pure (F4 rule 4): trim, bound to OWN_NAME_CHARS, drop blanks and duplicates (by folded form), keep at most
+ *  OWN_NAMES_MAX. One-word names are KEPT (display) but never match (ownerTeamsIdsAcross needs 2+ words). */
+export function cleanOwnNames(xs: readonly unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const x of xs) {
+    if (typeof x !== "string") continue;
+    const t = x.trim().replace(/\s+/g, " ").slice(0, OWN_NAME_CHARS).trim();
+    const k = foldPersonName(t);
+    if (!t || !k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+    if (out.length >= OWN_NAMES_MAX) break;
+  }
+  return out;
 }
 
 export type ActionsRange = "week" | "all";
@@ -90,6 +119,7 @@ export const ACTIONS_SETTINGS_DEFAULT: ActionsSettings = {
   dailyCap: DAILY_CAP_DEFAULT,
   timeZone: "America/New_York",
   range: "week",
+  ownNames: [],
 };
 
 const isZone = (z: unknown): z is string => {
@@ -102,8 +132,9 @@ const isZone = (z: unknown): z is string => {
   }
 };
 
-/** Pure: stored JSON (anything) -> complete settings. Unknown / bad fields fall back to the default, field by field. */
-export function resolveActionsSettings(raw: unknown): ActionsSettings {
+/** Pure: stored JSON (anything) -> complete settings. Unknown / bad fields fall back to the default, field by field.
+ *  `seed` (F4): the configured full names, used for `ownNames` ONLY when the stored settings have no such field. */
+export function resolveActionsSettings(raw: unknown, seed: readonly string[] = []): ActionsSettings {
   const d = ACTIONS_SETTINGS_DEFAULT;
   const o = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const isHideable = (c: unknown): c is HideableCategory => (HIDEABLE_CATEGORIES as readonly string[]).includes(c as string);
@@ -128,6 +159,8 @@ export function resolveActionsSettings(raw: unknown): ActionsSettings {
     dailyCap: cap,
     timeZone: isZone(o.timeZone) ? o.timeZone : d.timeZone,
     range: (ACTIONS_RANGES as readonly unknown[]).includes(o.range) ? (o.range as ActionsRange) : d.range,
+    // F4 rule 2: a stored list (even []) is used exactly; no stored field -> the seed.
+    ownNames: cleanOwnNames(Array.isArray(o.ownNames) ? o.ownNames : seed),
   };
 }
 
@@ -302,6 +335,8 @@ export interface ActionCandidate {
   source: ActionSource;
   /** open = admitted; none = not open; not_checked = no admitted verdict (unclassified, refused, over cap). */
   status: "open" | "none" | "not_checked";
+  /** F5: why a current verdict is not_checked (the stored verdict's notCheckedReason); null / absent otherwise. */
+  notCheckedReason?: "quote_not_found" | "bad_shape" | null;
   answeredByReply: boolean;
   /** Admitted but the to-do is already open on the board. */
   onBoard: boolean;
@@ -353,6 +388,8 @@ export interface ActionRow extends ActionDisplay {
   at: string | null;
   fromList: boolean;
   listSender: string | null;
+  /** F5: on a held row only, the fixed reason sentence (HELD_REASON_TEXT); absent elsewhere. */
+  heldReason?: string;
 }
 
 export interface ActionsSelection {
@@ -368,6 +405,27 @@ export interface ActionsSelection {
   unchecked: ActionRow[];
   /** Per-source counts of `unchecked`; the type tabs show counts.x + uncheckedCounts.x. */
   uncheckedCounts: { all: number; email: number; teams: number; meeting: number };
+  /** F5 (AC-actions-safety-and-invites, owner-approved 2026-11-18): items the safety check HELD (the AI said open but
+   *  its quote was not found word for word), newest first. Never in `rows`, never in `unchecked`; shown in their own
+   *  expanded group with Add as task / Dismiss. Each row's `heldReason` is the fixed code sentence. */
+  held: ActionRow[];
+  heldCounts: { all: number; email: number; teams: number; meeting: number };
+}
+
+/** F5 rule 1: the one reason that makes a not-checked item HELD. bad_shape / over cap / never judged stay "Not checked". */
+export const HELD_REASONS = ["quote_not_found"] as const;
+export type HeldReason = (typeof HELD_REASONS)[number];
+/** F5 rule 4 / F5-12: the plain-words reason shown on a held row. Fixed, written in code; never model text. */
+export const HELD_REASON_TEXT: Record<HeldReason, string> = {
+  quote_not_found: "Held back: the AI's supporting quote didn't match the message word for word, so it wasn't added automatically.",
+};
+/** F5 rule 4: the label over the model's quote on a held row (it never claims the quote is real). */
+export const HELD_QUOTE_LABEL = "AI's quote (not found in the message)";
+/** F5 rule 6: the group's title. */
+export const HELD_GROUP_LABEL = "Held by the safety check";
+/** Pure (F5-1 / F5-2): is this candidate HELD (current verdict not_checked for quote_not_found)? */
+export function isHeldCandidate(c: Pick<ActionCandidate, "status" | "notCheckedReason">): boolean {
+  return c.status === "not_checked" && (HELD_REASONS as readonly string[]).includes(c.notCheckedReason ?? "");
 }
 
 const LISTED_STATES = new Set(["proposed", "untriaged"]);
@@ -402,6 +460,8 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     notChecked: 0,
     unchecked: [],
     uncheckedCounts: { all: 0, email: 0, teams: 0, meeting: 0 },
+    held: [],
+    heldCounts: { all: 0, email: 0, teams: 0, meeting: 0 },
   };
   const hiddenCats = new Set<string>(s.hideCategories);
   const hiddenSenders = new Set(s.hiddenSenders);
@@ -436,10 +496,39 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     out.hidden.total++;
     return true;
   };
+  /** X-5 follow-up (2026-11-18): a re-judge keeps the item's earlier proposal id WHATEVER the new status, so a
+   *  not-checked or held verdict can carry a proposal the owner already decided. That decision stands: a proposal
+   *  that left the listed states (approved / completed / dismissed / delegated / corrected) is resolved, and a Wrong?
+   *  on this same item version keeps it in the Corrected list (with Undo). Returns true when the item is not listed. */
+  const ownerDecided = (c: ActionCandidate): boolean => {
+    if (!c.proposalId) return false;
+    if (!LISTED_STATES.has(c.proposalState ?? "")) return true;
+    if (correctionHides(c.correction, c.itemKey)) {
+      out.corrected.push(toRow(c, c.section ?? "needs_reply"));
+      return true;
+    }
+    return false;
+  };
   const pushUnchecked = (c: ActionCandidate) => {
+    if (ownerDecided(c)) return;
     if (!hiddenBySettings(c)) out.unchecked.push(toRow(c, c.section ?? "needs_reply"));
   };
+  /** F5: a HELD item. Resolved once the owner decided it (Add as task / Dismiss wrote a proposal id back and that
+   *  proposal left the listed states) or it is already on the board; otherwise the What-shows switches apply (same
+   *  order as every item, F5 rule 3) and it is listed in `held`. A rescue proposal still `proposed` (its action failed
+   *  after it was created) keeps the row, with that id, so the next click re-uses it (F5-8). */
+  const pushHeld = (c: ActionCandidate) => {
+    if (c.onBoard) return;
+    if (ownerDecided(c)) return;
+    if (hiddenBySettings(c)) return;
+    const reason = c.notCheckedReason as HeldReason;
+    out.held.push({ ...toRow(c, c.section ?? "needs_reply"), heldReason: HELD_REASON_TEXT[reason] });
+  };
   for (const c of cands) {
+    if (isHeldCandidate(c)) {
+      pushHeld(c);
+      continue;
+    }
     if (c.status === "not_checked") {
       pushUnchecked(c);
       continue;
@@ -466,6 +555,11 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
   out.rows.sort((a, b) => (order.get(a.section) ?? 9) - (order.get(b.section) ?? 9) || ms(b.at) - ms(a.at));
   out.answered.sort((a, b) => ms(b.at) - ms(a.at));
   out.unchecked.sort((a, b) => ms(b.at) - ms(a.at));
+  out.held.sort((a, b) => ms(b.at) - ms(a.at));
+  for (const r of out.held) {
+    out.heldCounts.all++;
+    out.heldCounts[r.source]++;
+  }
   for (const r of out.unchecked) {
     out.notChecked++;
     out.uncheckedCounts.all++;
@@ -494,10 +588,10 @@ export function plainPreview(text: string | null | undefined): string | null {
 }
 
 /** Pure (2026-11-17): the type-tab counts. A tab counts the open judged rows AND the not-checked items of that type,
- *  so a tab never reads 0 while the "Not checked yet" section under it lists items. */
-export function tabCounts(open: readonly ActionRow[], unchecked: readonly ActionRow[]): Record<"all" | ActionSource, number> {
+ *  so a tab never reads 0 while the "Not checked yet" section under it lists items. F5-10: and the HELD items. */
+export function tabCounts(open: readonly ActionRow[], unchecked: readonly ActionRow[], held: readonly ActionRow[] = []): Record<"all" | ActionSource, number> {
   const c: Record<"all" | ActionSource, number> = { all: 0, email: 0, teams: 0, meeting: 0 };
-  for (const r of [...open, ...unchecked]) {
+  for (const r of [...open, ...unchecked, ...held]) {
     c.all++;
     c[r.source]++;
   }

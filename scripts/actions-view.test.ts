@@ -16,6 +16,14 @@ import {
   TEAMS_INSTRUCTIONS,
   actionSectionFor,
   admitActionVerdict,
+  canonQuote,
+  COMMON,
+  DROP_REASON_TEXT,
+  isMomentaryQuote,
+  MEETING_ASK_RULE,
+  MOMENTARY_PHRASES,
+  MOMENTARY_RULE,
+  STEP2_ATTENDING_RULE,
   emailQuoteHaystack,
   quoteIsVerbatim,
   teamsQuoteHaystack,
@@ -92,6 +100,85 @@ const FW_FACTS = { latestOther: { id: "feed:m2", text: "Pat here, see below" } }
 const FW_MAP = new Map([["feed:m2", "From: someone\n\nplease send the signed form by Friday"]]);
 t("A-10 GUARD: email quote stitched across the body and its forwarded part -> not_checked", [quoteIsVerbatim("see below from: someone", emailQuoteHaystack(FW_FACTS, FW_MAP)), adm({ ...good, quote: "see below From: someone" }, emailQuoteHaystack(FW_FACTS, FW_MAP) as never).status], [false, "not_checked"]);
 t("A-11 quote inside ONE piece still admits (teams 2nd message; email body; email forwarded part)", [adm({ ...good, quote: "please send the deck" }, teamsQuoteHaystack(STITCH_CHAT) as never).status, adm({ ...good, quote: "Pat here, see below" }, emailQuoteHaystack(FW_FACTS, FW_MAP) as never).status, adm({ ...good, quote: "send the signed form by Friday" }, emailQuoteHaystack(FW_FACTS, FW_MAP) as never).status], ["open", "open", "open"]);
+
+// ── F1. QUOTE MADE OF VERBATIM FRAGMENTS, IN ORDER (AC-actions-safety-and-invites.md F1) ────────────────
+{
+  const MSG = "Hi Sam. Here's the outline of topics I want from you each week. The room is booked. Please send your first notes by Monday.";
+  const st = (quote: unknown, hay: string | readonly string[] = MSG) => {
+    const v = admitActionVerdict({ ...good, quote }, hay as never, { key: "k|1", settled: false, nowIso: NOW });
+    return v.notCheckedReason ? `${v.status}/${v.notCheckedReason}` : v.status;
+  };
+  t("F1-1 GUARD: two verbatim sentences with one left out between them -> open (whole-quote alone would refuse)", [MSG.toLowerCase().includes("here's the outline of topics i want from you each week. please send your first notes by monday."), st("Here's the outline of topics I want from you each week. Please send your first notes by Monday.")], [false, "open"]);
+  t("F1-2 GUARD: the same two sentences out of order -> not_checked / quote_not_found", st("Please send your first notes by Monday. Here's the outline of topics I want from you each week."), "not_checked/quote_not_found");
+  const CHAT = teamsQuoteHaystack({ messages: [{ speaker: "OTHER", text: "Here's the outline of topics I want from you each week." }, { speaker: "OWNER", text: "ok" }, { speaker: "OTHER", text: "Please send your first notes by Monday." }] } as never);
+  const FWH = emailQuoteHaystack({ latestOther: { id: "feed:f1", text: "Here's the outline of topics I want from you each week." } } as never, new Map([["feed:f1", "Please send your first notes by Monday. Thanks."]]));
+  t("F1-3 GUARD: fragments from two Teams OTHER messages, or from the email body + its forward -> quote_not_found", [st("Here's the outline of topics I want from you each week. Please send your first notes by Monday.", CHAT), st("Here's the outline of topics I want from you each week. Please send your first notes by Monday.", FWH)], ["not_checked/quote_not_found", "not_checked/quote_not_found"]);
+  t("F1-4 one paraphrased fragment -> quote_not_found", st("Here's the outline of topics I want from you each week. Please send your notes by Monday."), "not_checked/quote_not_found");
+  const TWICE = "Please confirm the venue. The caterer called. Please confirm the venue.";
+  t("F1-5 GUARD: a repeat needs a repeat occurrence ('Thanks. ... Thanks.' vs one Thanks -> refused); two real occurrences -> open", [quoteIsVerbatim("Thanks. ... Thanks.", "Hi. Thanks. See below.") ? "verbatim" : "not_checked/quote_not_found", st("Please confirm the venue. ... Please confirm the venue.", TWICE), st("Please confirm the venue. ... Please confirm the venue.", "Please confirm the venue. The caterer called.")], ["not_checked/quote_not_found", "open", "not_checked/quote_not_found"]);
+  t("F1-7 null / empty / under 8 folded chars -> quote_not_found as today", [st(null), st(""), st("by Mon.")], ["not_checked/quote_not_found", "not_checked/quote_not_found", "not_checked/quote_not_found"]);
+  const SEVEN = "Alpha one here. Bravo two here. Charlie three. Delta four here. Echo five here. Foxtrot six. Golf seven here.";
+  t("F1-8 seven one-sentence fragments, all present in order -> quote_not_found (rule 6); six -> open", [st("Alpha one here. Bravo two here. ... Delta four here. Echo five here. Foxtrot six. Golf seven here. Charlie three.", SEVEN), st("Alpha one here. Bravo two here. Charlie three. ... Echo five here. Foxtrot six. Golf seven here.", SEVEN), st("Alpha one here. Bravo two here. Charlie three. ... Echo five here. Foxtrot six. ... Golf seven here. Alpha one here.", SEVEN)], ["not_checked/quote_not_found", "open", "not_checked/quote_not_found"]);
+  t("F1-9 a zero-width space inside the message text is folded away -> open", st("review the deck by Friday", "Could you re​view the deck by Friday?"), "open");
+  t("F1-12 performance: 1,000 checks of a 6-fragment quote on a 16k-char text, each well under 5 ms", (() => {
+    const big = `${"Lorem ipsum dolor sit amet. ".repeat(580)}Here's the outline. The room is booked. Bring the slides. Send the notes. Book the venue. Call the caterer.`;
+    const q = "Here's the outline. ... Bring the slides. ... Book the venue. Call the caterer. Send the notes. The room is booked.";
+    const t0 = performance.now();
+    for (let i = 0; i < 1000; i++) quoteIsVerbatim(i % 2 ? q : "Here's the outline. ... Bring the slides. Send the notes. ... Call the caterer.", [big]);
+    return [big.length > 16_000, (performance.now() - t0) / 1000 < 5];
+  })(), [true, true]);
+  // The F1 spelling table (S1-*), haystack H with a curly apostrophe and a U+2026 ellipsis.
+  const H = "Hi Sam. Here’s the outline of topics I want from you each week. The room is booked… Please send your first notes by Monday. Thanks.";
+  const H2 = "Hi Sam. Here’s the outline of topics I want from you each week. Café notes are due too. Cafés notes are due Friday.";
+  const SPELL: [string, unknown, string | readonly string[], string][] = [
+    ["S1-1", "Please send your first notes by Monday.", H, "open"],
+    ["S1-2", "Here's the outline of topics I want from you each week. Please send your first notes by Monday.", H, "open"],
+    ["S1-3", "Here's the outline of topics I want from you each week ... Please send your first notes by Monday", H, "open"],
+    ["S1-4a", "The room is booked… Please send your first notes by Monday.", H, "open"],
+    ["S1-4b", "The room is booked... Please send your first notes by Monday.", H, "open"],
+    ["S1-5", "Here’s the outline   of topics\nI want from you each week.", H, "open"],
+    ["S1-6", "PLEASE SEND YOUR FIRST NOTES BY MONDAY.", H, "open"],
+    ["S1-7", "Please send your first notes by Monday. Here's the outline of topics I want from you each week.", H, "not_checked/quote_not_found"],
+    ["S1-8", "Please send your notes by Monday.", H, "not_checked/quote_not_found"],
+    ["S1-9", "Here's the outline. Please send the final contract by Monday.", H, "not_checked/quote_not_found"],
+    ["S1-10", "Hi Sam. Thanks.", H, "not_checked/quote_not_found"],
+    // S1-11: the quote rule refuses it (F1-5 pins quoteIsVerbatim = false); since F3 the momentary backstop drops a
+    // "Thanks. Thanks." verdict to none before the quote check. 2026-11-18 red-team RT-7: the backstop FAILS OPEN and
+    // drops only when the momentary line is the WHOLE latest message; H holds a real ask, so it is not dropped and the
+    // quote rule holds it (not_checked, the held group), never open.
+    ["S1-11", "Thanks. Thanks.", H, "not_checked/quote_not_found"],
+    ["S1-12", "ere's the outline of topics I want from you each week. lease send your first notes", H, "not_checked/quote_not_found"],
+    ["S1-13", "end your first notes by Monday", H, "open"],
+    // S1-14 / S1-14b / S1-x1: 2026-11-18 red-team RT-1, AC S1-14 tightened (owner-approved safe default): an ellipsis
+    // may only stand for skipped WHOLE sentences. These elide words inside a sentence, so they are held, not admitted.
+    ["S1-14", "Here's the outline [...] by Monday.", H, "not_checked/quote_not_found"],
+    ["S1-14b", "Here's the outline […] by Monday.", H, "not_checked/quote_not_found"],
+    ["S1-14c", "Here's the outline of topics I want from you each week. [...] Please send your first notes by Monday.", H, "open"],
+    ["S1-15", "Here's the outline. Please. Send. Your. First. Notes. By Monday.", H, "not_checked/quote_not_found"],
+    ["S1-16", "Here's the outline of topics I want from you each week. Please send your first notes by Monday.", CHAT, "not_checked/quote_not_found"],
+    ["S1-17", "Here's the outline of topics I want from you each week. Please send your first notes by Monday.", FWH, "not_checked/quote_not_found"],
+    ["S1-18", "Please send your first notes by Monday. ... Thanks.", FWH, "open"],
+    ["S1-19", "Please send your first notes by Monday.", teamsQuoteHaystack({ messages: [{ speaker: "OWNER", text: H }, { speaker: "OTHER", text: "ok" }] } as never), "not_checked/quote_not_found"],
+    // S1-20 (AC wording): "Café notes are due Friday" vs "Cafés notes are due Friday". As written in the AC the
+    // whole quote is NOT a span either (the "s" sits between é and the space), so both paths refuse it; the
+    // Unicode-boundary behaviour itself is pinned by S1-20b, where only the boundary separates admit from refuse.
+    ["S1-20", "Café notes are due Friday", "Cafés notes are due Friday", "not_checked/quote_not_found"],
+    ["S1-20b", "Here's the outline of topics I want from you each week. ... Notes are due Friday. ... Bring the café", H2.replace("Cafés notes are due Friday.", "Notes are due Friday. Bring the cafés list."), "not_checked/quote_not_found"],
+    ["S1-21a", "review the​ deck by Friday", "Could you review the deck by Friday?", "open"],
+    ["S1-21b", "review the deck by Friday", "Could you review the​ deck by Fri­day?", "open"],
+    ["S1-22a", "“Please send your first notes by Monday.”", H, "open"],
+    ["S1-22b", '"Please send your first notes by Monday."', H, "open"],
+    ["S1-23a", "…", H, "not_checked/quote_not_found"],
+    ["S1-23b", "... ... ... ...", H, "not_checked/quote_not_found"],
+    ["S1-x1", "Please send your first notes...", H, "not_checked/quote_not_found"],
+    ["S1-x2", "Please send your first notes by Monday. ...", H, "open"],
+    ["S1-x3", "Hi Sam. ... The room is booked… ...", H, "open"],
+  ];
+  t("F1 spelling table S1-1..S1-23 (each row: id -> verdict)", SPELL.map(([id, q, hay]) => `${id}:${st(q, hay)}`), SPELL.map(([id, , , want]) => `${id}:${want}`));
+  t("F1-10 de-dup still keys on canonQuote of the WHOLE stored quote: two different fragment quotes fold to different keys", [canonQuote("Here's the outline. ... Please send your first notes by Monday.") === canonQuote("Here's the outline. ... The room is booked."), canonQuote("Re​view THE  deck") === "review the deck"], [false, true]);
+  t("F1-11 the legacy judgeConversation check is the SAME function (needs-you imports quoteIsVerbatim; no second verbatim rule)", (await import("node:fs")).readFileSync("src/features/huddle/lib/correspondence/needs-you.ts", "utf8").includes("quoteIsVerbatim(ask.quote"), true);
+  t("F1-12b quote text is never compiled into a RegExp in the guard", /new RegExp\(/.test((await import("node:fs")).readFileSync("src/features/huddle/lib/correspondence/action-classify.ts", "utf8")), false);
+}
 
 // ── B. SECTIONS (AC-E-6) ─────────────────────────────────────────────────────────────────────────────
 t(
@@ -401,7 +488,8 @@ t("RANGE-2 week window = since Monday 00:00 (unchanged behaviour)", actionsWindo
   const pageRead = body("export async function getActionsPage(");
   t(
     "RANGE-5 GUARD: page read and classify pass both window with actionsWindowStartMs(now, s), neither with a bare sinceMondayMs",
-    [classify.includes("assembleLedgerPlan(data, cfg, actionsWindowStartMs(now, s))"), pageRead.includes("const sinceMs = actionsWindowStartMs(now, s);") && pageRead.includes("assembleLedgerPlan(data, cfg, sinceMs)"), /sinceMondayMs\(/.test(srv)],
+    // F4 (2026-11-18): both calls also pass the resolved "Names that are you" (s.ownNames) as the 4th argument.
+    [classify.includes("assembleLedgerPlan(data, cfg, actionsWindowStartMs(now, s), s.ownNames)"), pageRead.includes("const sinceMs = actionsWindowStartMs(now, s);") && pageRead.includes("assembleLedgerPlan(data, cfg, sinceMs, s.ownNames)"), /sinceMondayMs\(/.test(srv)],
     [true, true, false],
   );
   const view = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
@@ -503,7 +591,8 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   const view = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
   t(
     "U-13 the view lists the not-checked items (read-only rows), feeds unchecked into the tab counts, and resets the tab on a range change",
-    [view.includes('data-testid="actions-not-checked-row"'), view.includes("tabCounts(openRows, unchecked)"), view.includes("setFilter((f) => tabAfterRangeChange(f, ok.settings.range, r))"), (/function UncheckedRowItem\([\s\S]*?\n}\n/.exec(view)?.[0] ?? "act(").match(/act\(|Add as task|Dismiss|Wrong\?|actOnProposalFn|correctActionFn/)?.[0] ?? null],
+    // F5 (2026-11-18): the tabs also count the held items (3rd argument).
+    [view.includes('data-testid="actions-not-checked-row"'), view.includes("tabCounts(openRows, unchecked, held)"), view.includes("setFilter((f) => tabAfterRangeChange(f, ok.settings.range, r))"), (/function UncheckedRowItem\([\s\S]*?\n}\n/.exec(view)?.[0] ?? "act(").match(/act\(|Add as task|Dismiss|Wrong\?|actOnProposalFn|correctActionFn/)?.[0] ?? null],
     [true, true, true, null],
   );
   const pipe = readFileSync(new URL("../src/features/huddle/lib/actions/pipeline.ts", import.meta.url), "utf8");
@@ -586,10 +675,428 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
     ["email\u0000old-none", { ...verdictFor(TABLE[0]), key: "e-old|1", inputVersion: undefined }],
     ["email\u0000old-1", { ...verdictFor(TABLE[0]), key: "e-v1|1", inputVersion: 1 }],
     ["teams\u0000old-2", { ...verdictFor(TABLE[0]), key: "t-v2|1", inputVersion: 2 }],
+    // X-1 / X-2 (AC-actions-safety-and-invites.md): the previous versions (email 2, teams 3) are no longer current.
+    ["email\u0000old-2", { ...verdictFor(TABLE[0]), key: "e-v2|1", inputVersion: 2 }],
+    ["teams\u0000old-3", { ...verdictFor(TABLE[0]), key: "t-v3|1", inputVersion: 3 }],
     ["email\u0000cur", { ...verdictFor(TABLE[0]), key: "e-cur|1" }],
     ["teams\u0000cur", { ...verdictFor(TABLE[0]), key: "t-cur|1", inputVersion: CLASSIFIER_INPUT_VERSION.teams }],
   ]);
-  t("AI-14 GUARD: the version bump forces a re-judge (email < 2, teams < 3 are not current; the new versions are)", [CLASSIFIER_INPUT_VERSION, [...currentlyJudgedKeys(store)].sort()], [{ email: 2, teams: 3 }, ["e-cur|1", "t-cur|1"]]);
+  t("AI-14 / X-1 GUARD: CLASSIFIER_INPUT_VERSION is exactly { email: 3, teams: 4 }; older versions (email < 3, teams < 4) are not current", [CLASSIFIER_INPUT_VERSION, [...currentlyJudgedKeys(store)].sort()], [{ email: 3, teams: 4 }, ["e-cur|1", "t-cur|1"]]);
+}
+
+// ── F2. MEETING INVITES THAT CARRY A REAL ASK (AC-actions-safety-and-invites.md F2) ──────────────────
+{
+  t("F2-1 GUARD: the meeting_invite carve-out is ONE constant inside the email (COMMON, so steps 2 + 3) and the Teams definitions", [COMMON.includes(MEETING_ASK_RULE), STEP2_INSTRUCTIONS.includes(MEETING_ASK_RULE), STEP3_INSTRUCTIONS.includes(MEETING_ASK_RULE), TEAMS_INSTRUCTIONS.includes(MEETING_ASK_RULE), MEETING_ASK_RULE.includes("SPECIFIC named thing beyond attending") && MEETING_ASK_RULE.includes("never meeting_invite")], [true, true, true, true, true]);
+  t("F2-2 GUARD: step 2 no longer makes attending alone an open item; preparing a SPECIFIC thing still is", [STEP2_INSTRUCTIONS.includes("attending or preparing for something"), STEP2_INSTRUCTIONS.includes(STEP2_ATTENDING_RULE), STEP2_ATTENDING_RULE.includes("attending a meeting is not an open item by itself")], [false, true, true]);
+  const INVITE = "Weekly sync. Join on the meeting link. Here's the outline of topics I want from you each week. Please bring your first draft to Thursday's call.";
+  const raw = (category: string, kind: string, quote = "Please bring your first draft to Thursday's call.") => ({ open_item: true, kind, todo: "Bring the first draft", due: "Thursday", quote, confidence: "high", reason: "Asked.", category });
+  const admitI = (r: unknown, settled = false) => admitActionVerdict(r, [INVITE], { key: "inv|1", settled, nowIso: NOW, inputVersion: CLASSIFIER_INPUT_VERSION.email });
+  const candOf = (v: ActionVerdict) => cand({ status: v.status, kind: v.kind, category: v.category, answeredByReply: v.answeredByReply, section: v.status === "open" ? actionSectionFor("email", v.kind, "direct") : null, itemKey: v.key, proposalId: v.status === "open" ? "prop-0f2a" : null });
+  const ask = admitI(raw("person_request", "both"));
+  const sel3 = selectActionItems([candOf(ask)], ACTIONS_SETTINGS_DEFAULT);
+  t("F2-3 an invite carrying a specific deliverable, judged person_request -> listed (needs_reply / todo), not counted as a hidden meeting invite", [ask.status, sel3.rows.length, sel3.rows[0]?.section, sel3.hidden.categories.meeting_invite ?? 0], ["open", 1, "needs_reply", 0]);
+  const bare = admitActionVerdict({ ...raw("meeting_invite", "action", "Weekly sync. Join on the meeting link."), todo: "Attend the weekly sync" }, ["Weekly sync. Join on the meeting link."], { key: "bare|1", settled: false, nowIso: NOW });
+  const sel4 = selectActionItems([candOf(bare)], ACTIONS_SETTINGS_DEFAULT);
+  t("F2-4 a bare invite (meeting_invite) with default settings -> not a row, not unchecked, hidden.categories.meeting_invite = 1", [sel4.rows.length, sel4.unchecked.length, sel4.hidden.categories.meeting_invite], [0, 0, 1]);
+  const SHOW_INVITES: ActionsSettings = { ...ACTIONS_SETTINGS_DEFAULT, hideCategories: ACTIONS_SETTINGS_DEFAULT.hideCategories.filter((c) => c !== "meeting_invite") };
+  const dinner = admitActionVerdict({ open_item: false, kind: "none", todo: null, due: null, quote: null, confidence: "high", reason: "Just an invitation.", category: "meeting_invite" }, ["Dinner Friday at 7, hope you can make it!"], { key: "din|1", settled: false, nowIso: NOW });
+  const sel5 = selectActionItems([candOf(dinner)], SHOW_INVITES);
+  t("F2-5 invites un-hidden + a bare dinner invite judged meeting_invite / open_item false -> no row, not in Answered", [dinner.status, sel5.rows.length, sel5.answered.length, sel5.unchecked.length], ["none", 0, 0, 0]);
+  const DIN = "Dinner Friday at 7, hope you can make it!";
+  const dReply = admitActionVerdict(raw("meeting_invite", "reply", DIN), [DIN], { key: "din|2", settled: false, nowIso: NOW });
+  const dAction = admitActionVerdict(raw("meeting_invite", "action", DIN), [DIN], { key: "din|3", settled: false, nowIso: NOW });
+  const dBoth = admitActionVerdict(raw("meeting_invite", "both", DIN), [DIN], { key: "din|4", settled: false, nowIso: NOW });
+  const sel6 = selectActionItems([candOf(dReply)], SHOW_INVITES);
+  t("F2-6 GUARD: meeting_invite + kind reply is never listed (code: status none, fixed reason); action / both keep today's path", [dReply.status, dReply.dropReason, dReply.reason, dReply.answeredByReply, sel6.rows.length, sel6.answered.length, dAction.status, dBoth.status], ["none", "meeting_invite_reply", DROP_REASON_TEXT.meeting_invite_reply, false, 0, 0, "open", "open"]);
+  t("F2-6b a person_request of kind reply inside an invite is NOT touched by that rule", admitI(raw("person_request", "reply")).status, "open");
+  t("F2-10 the hide switch constants are unchanged (no new hideable category, no migration)", [HIDEABLE_CATEGORIES, HIDEABLE_CATEGORY_LABEL.meeting_invite], [["meeting_invite", "timekeeping", "verification_code", "app_invite"], "Meeting invites and calendar replies"]);
+}
+
+// ── F3. MOMENTARY CHAT COORDINATION IS NOT AN OPEN ITEM (AC-actions-safety-and-invites.md F3) ────────
+{
+  t("F3-1 GUARD: MOMENTARY_RULE is one constant in the email (COMMON, steps 2 + 3) and Teams instructions", [COMMON.includes(MOMENTARY_RULE), STEP2_INSTRUCTIONS.includes(MOMENTARY_RULE), STEP3_INSTRUCTIONS.includes(MOMENTARY_RULE), TEAMS_INSTRUCTIONS.includes(MOMENTARY_RULE), MOMENTARY_RULE.includes("names something to DELIVER or DO later")], [true, true, true, true, true]);
+  const teamsAdm = (quote: string, texts: string[], o: Record<string, unknown> = {}) => admitActionVerdict({ open_item: true, kind: "reply", todo: "Synthetic to-do", due: null, quote, confidence: "high", reason: "Synthetic.", category: "person_request", ...o }, teamsQuoteHaystack({ messages: texts.map((text, i) => ({ speaker: i % 2 ? "OWNER" : "OTHER", text })) } as never), { key: "tm|1", settled: false, nowIso: NOW, inputVersion: CLASSIFIER_INPUT_VERSION.teams });
+  const m2 = teamsAdm("See you this afternoon!", ["See you this afternoon!"]);
+  const sel2 = selectActionItems([cand({ source: "teams", status: m2.status, kind: m2.kind, section: null, proposalId: null, itemKey: m2.key })], ACTIONS_SETTINGS_DEFAULT);
+  t("F3-2 GUARD: 'See you this afternoon!' quoted as an open reply -> none (momentary), in neither rows nor unchecked", [m2.status, m2.dropReason, m2.reason, sel2.rows.length, sel2.unchecked.length], ["none", "momentary", DROP_REASON_TEXT.momentary, 0, 0]);
+  const m3 = teamsAdm("Can you send me the deck tomorrow?", ["Can you send me the deck tomorrow?", "Be right there. I'll send you the deck tomorrow."]);
+  const m3b = teamsAdm("Thanks! Can you send me the deck tomorrow?", ["Thanks! Can you send me the deck tomorrow?", "Be right there."]);
+  t("F3-3 GUARD: a real deliverable ask (owner answered 'Be right there. I'll send ...'), also one opening with 'Thanks!', stays open", [m3.status, m3.dropReason ?? null, m3b.status, m3b.dropReason ?? null], ["open", null, "open", null]);
+  t("F3-4 'No worries, thank you!' -> none / momentary", teamsAdm("No worries, thank you!", ["No worries, thank you!"]).dropReason, "momentary");
+  t("F3-5 'on my way, see you soon' (two entries, comma) -> none", teamsAdm("on my way, see you soon", ["on my way, see you soon"]).status, "none");
+  const Q6 = "Running late, can you start the review without me and send notes after?";
+  t("F3-6 GUARD: a list phrase plus more is NOT dropped (exact match only) -> still open", [isMomentaryQuote(Q6), teamsAdm(Q6, [Q6]).status], [false, "open"]);
+  t("F3-7 a dropped verdict carries only the code reason (never model text) and the code drop reason", [m2.reason === DROP_REASON_TEXT.momentary, m2.todo, JSON.stringify(m2).includes("Synthetic.")], [true, "Synthetic to-do", false]);
+  const em = admitActionVerdict({ open_item: true, kind: "reply", todo: "Reply", due: null, quote: "Thanks, see you there!", confidence: "low", reason: "x", category: "person_request" }, emailQuoteHaystack({ latestOther: { id: "feed:e3", text: "Thanks, see you there!" } } as never, new Map()), { key: "e3|1", settled: false, nowIso: NOW, latestMessages: [] });
+  // 2026-11-18 verifier loops 3/4: the code backstop is TEAMS-ONLY; runClassify passes [] for email, so email is never
+  // dropped by code (MOMENTARY_RULE in the instructions still applies there). Fails toward showing an item.
+  t("F3-9 (amended) email gets no code backstop: what runClassify passes ([]) never drops an email pleasantry", [em.status, em.dropReason ?? null], ["open", null]);
+  // F3 spelling table (S3-*): the backstop verdict per quote spelling. false rows are NOT matched (left to the prompt).
+  const SP: [string, string, boolean][] = [
+    ["S3-1", "Be right there", true],
+    ["S3-2", "be right there!!", true],
+    ["S3-3", "BRT", false],
+    ["S3-4", "On my way \u{1F642}", true],
+    ["S3-5", "See you this afternoon!", true],
+    ["S3-6a", "See you soon", true],
+    ["S3-6b", "See you there", true],
+    ["S3-6c", "See you tomorrow", true],
+    ["S3-7", "No worries, thank you!", true],
+    ["S3-8a", "Thanks!", true],
+    ["S3-8b", "Thank you so much", true],
+    ["S3-8c", "Sounds good", true],
+    ["S3-8d", "\u{1F44D}", true],
+    ["S3-9", "Running 5 minutes late", true],
+    ["S3-9b", "Running 123 minutes late", false],
+    ["S3-10", "I'll send you the deck tomorrow", false],
+    ["S3-11", "Be right there, and I'll bring the signed contract", false],
+    ["S3-12", "See you this afternoon. Please have the budget ready.", false],
+    ["S3-13", "Thanks, can you review this by Friday?", false],
+    ["S3-14", "See you at the review. Bring the Q3 slides.", false],
+    ["S3-15", "on my way to drop off the keys you asked for", false],
+    ["S3-16", "Thank you for the intro, let's set up a call next week", false],
+    ["S3-17a", "be  right  there", true],
+    ["S3-17b", "Be right there.", true],
+    ["S3-18", "Can you join now?", true],
+    ["S3-x1", "I'll be right there with the deck tomorrow", false],
+    ["S3-x2", "", false],
+    ["S3-x3", "...", false],
+  ];
+  t("F3 spelling table S3-1..S3-18 (isMomentaryQuote; true = dropped by the backstop)", SP.map(([id, q]) => `${id}:${isMomentaryQuote(q)}`), SP.map(([id, , w]) => `${id}:${w}`));
+  t("F3 the phrase list is short, folded, and no entry names a deliverable", [MOMENTARY_PHRASES.length <= 30, MOMENTARY_PHRASES.every((p) => p === canonQuote(p)), MOMENTARY_PHRASES.some((p) => /send|share|review|bring|deck|call back/.test(p))], [true, true, false]);
+  t("F3-11 settled path unchanged: open_item false 'Answered by your reply' on a settled chat -> none, answeredByReply", (() => {
+    const v = admitActionVerdict({ open_item: false, kind: "none", todo: null, due: null, quote: null, confidence: "high", reason: "Answered by your reply.", category: "person_request" }, ["Are you joining?"], { key: "s|1", settled: true, nowIso: NOW });
+    return [v.status, v.answeredByReply, v.dropReason ?? null];
+  })(), ["none", true, null]);
+}
+
+// ── F4 (AC-actions-safety-and-invites): "Names that are you" -- the owner's other name / account is the OWNER ─────
+// Synthetic owner "Sam Okafor" (configured) whose second Teams account shows "Samuel Okafor". "Sam Rivera" is a
+// made-up namesake sharing only the first name.
+{
+  const { ownerTeamsIdsAcross, teamsChatsFromLedger, foldPersonName } = await import("../src/features/huddle/lib/correspondence/report-from-ledger");
+  const { ownerFullNames } = await import("../src/features/huddle/lib/correspondence/needs-you");
+  const { cleanOwnNames, OWN_NAMES_MAX, OWN_NAME_CHARS, OWN_NAMES_NOTE } = await import("../src/features/huddle/lib/actions/actions");
+  const A = "@";
+  const C1 = `19:f4a_one${A}unq.gbl.spaces`;
+  const C2 = `19:f4b_two${A}unq.gbl.spaces`;
+  const C3 = `19:f4c_three${A}unq.gbl.spaces`;
+  const ID_A = "f4-main-account";
+  const ID_B = "f4-second-account";
+  const tm = (o: Partial<TeamsContent>): LedgerReportRow => {
+    const c: TeamsContent = { kind: "teams", chatId: C3, chatName: null, messageId: "1", at: "2026-11-16T15:00:00Z", sender: { id: "f4-pat", name: "Pat Example", isApp: false }, fromOwner: null, text: "Synthetic text", webUrl: null, mentionedUserIds: [], ...o };
+    return { source: "teams", sourceItemId: teamsSourceItemId(c.chatId, c.messageId), threadId: c.chatId, at: c.at, content: c };
+  };
+  // The main account's id is known from 2+ chats (loop-2 D-4), so ids WERE found before any name is consulted.
+  const known = [
+    tm({ chatId: C1, messageId: "a1", at: "2026-11-12T10:00:00Z", sender: { id: ID_A, name: "Sam Okafor", isApp: false }, ownerUserId: ID_A }),
+    tm({ chatId: C2, messageId: "a2", at: "2026-11-12T11:00:00Z", sender: { id: ID_A, name: "Sam Okafor", isApp: false }, ownerUserId: ID_A }),
+  ];
+  const ask = tm({ messageId: "p1", at: "2026-11-16T12:00:00Z", text: "Synthetic: can you send the deck?" });
+  const second = tm({ messageId: "b1", at: "2026-11-16T12:30:00Z", sender: { id: ID_B, name: "Samuel Okafor", isApp: false }, text: "Synthetic: on it, sending today." });
+  const rows = [...known, ask, second];
+  const speakers = (rs: LedgerReportRow[], names: string[]) => teamsChatsFromLedger(rs, [], names).find((c) => c.chatId === C3)!.messages.map((m) => m.speaker);
+  t("F4-1 GUARD: main id known (2+ chats) AND ownNames ['Samuel Okafor'] -> the result holds BOTH ids, and id-B's message is OWNER", [ownerTeamsIdsAcross(rows, [], ["Samuel Okafor"]).sort(), speakers(rows, ["Samuel Okafor"])], [[ID_A, ID_B].sort(), ["OTHER", "OWNER"]]);
+  t("F4-2 GUARD: a saved EMPTY list is respected (not re-seeded): resolve keeps [], and id-B stays OTHER", [resolveActionsSettings({ ownNames: [] }, ["Samuel Okafor"]).ownNames, ownerTeamsIdsAcross(rows, [], resolveActionsSettings({ ownNames: [] }, ["Samuel Okafor"]).ownNames), speakers(rows, resolveActionsSettings({ ownNames: [] }, ["Samuel Okafor"]).ownNames)], [[], [ID_A], ["OTHER", "OTHER"]]);
+  const cfgF4 = (names: string[], login = "sokafor@huddle.example") =>
+    ({ mailbox: "sokafor@work.example", ownerLogins: [login], correspondence: { ownerNames: names } }) as Parameters<typeof ownerFullNames>[0];
+  t(
+    "F4-3 seed: no stored field -> ownNames = configured full names; config 'Sam' only + login sokafor@ -> []",
+    [resolveActionsSettings({ dailyCap: 9 }, ownerFullNames(cfgF4(["Sam Okafor", "Samuel Okafor"]))).ownNames, resolveActionsSettings(null, ownerFullNames(cfgF4(["Sam"]))).ownNames, resolveActionsSettings({}, ["Sam Okafor"]).ownNames],
+    [["Sam Okafor", "Samuel Okafor"], [], ["Sam Okafor"]],
+  );
+  const rivera = tm({ messageId: "r1", at: "2026-11-16T12:45:00Z", sender: { id: "f4-rivera", name: "Sam Rivera", isApp: false }, text: "Synthetic: can you review this?" });
+  // Mutation-proof note: "Sam Rivera" alone cannot prove the 2-word rule (it never folds equal to "sam"); a sender whose
+  // Teams display name is only "Sam" is the case the rule protects.
+  const bareSam = tm({ messageId: "r2", at: "2026-11-16T12:50:00Z", sender: { id: "f4-bare", name: "Sam", isApp: false }, text: "Synthetic: can you look at this?" });
+  t("F4-4 GUARD: namesakes are OTHER even with ['Sam Okafor','Sam'] listed: 'Sam Rivera' (first name only shared) and a sender shown only as 'Sam' (one-word names never match)", [speakers([...known, ask, rivera, bareSam], ["Sam Okafor", "Sam"]), ownerTeamsIdsAcross([...known, ask, rivera, bareSam], [], ["Sam Okafor", "Sam"])], [["OTHER", "OTHER", "OTHER"], [ID_A]]);
+  const commaB = tm({ messageId: "b2", at: "2026-11-16T12:30:00Z", sender: { id: ID_B, name: "Okafor, Samuel", isApp: false } });
+  t("F4-5 'Okafor, Samuel' against ['Samuel Okafor'] is the OWNER (Last, First fold)", speakers([...known, ask, commaB], ["Samuel Okafor"]), ["OTHER", "OWNER"]);
+  const appB = tm({ messageId: "b3", at: "2026-11-16T12:30:00Z", sender: { id: "f4-app", name: "Samuel Okafor", isApp: true } });
+  t("F4-6 an app sender named 'Samuel Okafor' is never added", [ownerTeamsIdsAcross([...known, ask, appB], [], ["Samuel Okafor"]), speakers([...known, ask, appB], ["Samuel Okafor"])], [[ID_A], ["OTHER", "OTHER"]]);
+  // F4-7: the only message after the latest true OTHER message is from id-B -> settled (the owner wrote after it).
+  const chatSettled = teamsChatsFromLedger(rows, [], ["Samuel Okafor"]).find((c) => c.chatId === C3)!;
+  const chatUnsettled = teamsChatsFromLedger(rows, [], []).find((c) => c.chatId === C3)!;
+  const vSettled = admitActionVerdict({ open_item: false, kind: "none", todo: null, due: null, quote: null, confidence: "high", reason: "Answered by your reply", category: "person_request" }, teamsQuoteHaystack(chatSettled), { key: "f4|b1", settled: chatSettled.settled, nowIso: NOW });
+  t("F4-7 settled: id-B wrote after the latest OTHER -> settled true, latest OTHER is the real other person, answered by reply (no 'Reply to <his name>' item)", [chatSettled.settled, chatSettled.latestOther?.id, chatUnsettled.settled, chatUnsettled.latestOther?.id, vSettled.status, vSettled.answeredByReply], [true, ask.sourceItemId, false, second.sourceItemId, "none", true]);
+  const many = Array.from({ length: 12 }, (_, i) => `Synthetic Name${String.fromCharCode(65 + i)} Example`);
+  const resolved = resolveActionsSettings({ ownNames: [...many, "x".repeat(120) + " Long", "   ", "", "sam okafor", "Sam  Okafor", 7, null] }).ownNames;
+  t("F4-8 bounds: at most 10, each trimmed to 80, no blanks, no duplicates by folded form", [resolved.length, resolved.every((n) => n.length <= OWN_NAME_CHARS && !!n.trim()), OWN_NAMES_MAX, cleanOwnNames(["sam okafor", "Sam  Okafor", "Okafor, Sam", " ", "Pat Example"]), cleanOwnNames(["y".repeat(120)])[0].length], [10, true, 10, ["sam okafor", "Pat Example"], 80]);
+  // F4-9 / X-6: ONE resolver. All three passes (heartbeat, page read, report) hand the resolved s.ownNames to the ONE
+  // assembly, which uses it for Teams identity AND the model's owner-name context.
+  const { readFileSync } = await import("node:fs");
+  const srvF4 = readFileSync(new URL("../src/features/huddle/lib/actions/actions.server.ts", import.meta.url), "utf8");
+  const cfgSam = parseFeedsConfig(JSON.stringify({ enabled: true, synthetic: false, driveUser: "sokafor@work.example", mailbox: "sokafor@work.example", ownerLogins: ["sokafor@huddle.example"], teams: {}, correspondence: { ownerNames: ["Sam Okafor"] } }))!;
+  const asmSeed = assembleLedgerPlan({ rows, proposals: [], bell: [] }, cfgSam, Date.parse("2026-11-09T05:00:00Z"));
+  const asmOwn = assembleLedgerPlan({ rows, proposals: [], bell: [] }, cfgSam, Date.parse("2026-11-09T05:00:00Z"), ["Sam Okafor", "Samuel Okafor"]);
+  const spk = (a: typeof asmOwn) => a.plan.teams.scan.concat(a.plan.teams.resolved.map((r) => r.c)).find((c) => c.chatId === C3)?.messages.map((m) => m.speaker) ?? null;
+  t(
+    "F4-9 GUARD (X-6): heartbeat, page read, report (and the F5 held action) all pass s.ownNames into assembleLedgerPlan; with it id-B is OWNER, the seed alone keeps it OTHER; names reach the model context",
+    [
+      (srvF4.match(/assembleLedgerPlan\(data, cfg, .*, s\.ownNames\);/g) ?? []).length,
+      (srvF4.match(/assembleLedgerPlan\(/g) ?? []).length,
+      spk(asmSeed),
+      spk(asmOwn),
+      asmOwn.ctx.ownerNames.includes("Samuel Okafor"),
+      asmOwn.ctx.ownerFullNames,
+      asmSeed.ctx.ownerFullNames,
+    ],
+    [4, 4, ["OTHER", "OTHER"], ["OTHER", "OWNER"], true, ["Sam Okafor", "Samuel Okafor"], ["Sam Okafor"]],
+  );
+  const viewF4 = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
+  t("F4-10 / F4-13 the What shows panel has the 'Names that are you' field (resolved list, saved through onChange) and says when it applies", [viewF4.includes("Names that are you"), viewF4.includes('data-testid="actions-own-names"'), viewF4.includes("defaultValue={settings.ownNames.join(\"\\n\")}"), viewF4.includes("onChange({ ...settings, ownNames: next })"), viewF4.includes("{OWN_NAMES_NOTE}"), OWN_NAMES_NOTE], [true, true, true, true, true, "Applies to new messages and the next re-check."]);
+  // F4 spelling table S4-1..S4-16 (sender display-name spellings against ownNames ["Samuel Okafor", "Sam Okafor"]).
+  const OWN = ["Samuel Okafor", "Sam Okafor"];
+  const S4: [string, string, unknown, boolean, "OWNER" | "OTHER"][] = [
+    ["S4-1", "exact", "Samuel Okafor", false, "OWNER"],
+    ["S4-2", "case + spaces", "samuel  OKAFOR", false, "OWNER"],
+    ["S4-3", "Last, First", "Okafor, Samuel", false, "OWNER"],
+    ["S4-4", "trim", " Sam Okafor ", false, "OWNER"],
+    ["S4-5", "bare first name", "Sam", false, "OTHER"],
+    ["S4-6", "bare first name", "Samuel", false, "OTHER"],
+    ["S4-7", "first-name namesake", "Sam Rivera", false, "OTHER"],
+    ["S4-8", "prefix", "Samuel Okafor-Diaz", false, "OTHER"],
+    ["S4-9", "middle initial not folded", "Samuel J. Okafor", false, "OTHER"],
+    ["S4-10", "suffix not stripped", "Samuel Okafor (External)", false, "OTHER"],
+    ["S4-11", "no comma, no swap", "Okafor Samuel", false, "OTHER"],
+    ["S4-12", "accents not stripped", "Sámuel Okafor", false, "OTHER"],
+    ["S4-13", "two commas", "Okafor, Samuel, Jr", false, "OTHER"],
+    ["S4-14", "app sender", "Samuel Okafor", true, "OTHER"],
+    ["S4-15", "exact full-name namesake (accepted risk)", "Samuel Okafor", false, "OWNER"],
+    ["S4-16", "empty / missing name", "", false, "OTHER"],
+  ];
+  const s4got: string[] = [];
+  const s4want: string[] = [];
+  for (const [id, , name, isApp] of S4) {
+    const r = tm({ messageId: `s4-${id}`, at: "2026-11-16T12:30:00Z", sender: { id: `f4-${id.toLowerCase()}`, name: name as string, isApp } });
+    s4got.push(`${id}:${speakers([...known, ask, r], OWN)[1]}`);
+  }
+  for (const [id, , , , want] of S4) s4want.push(`${id}:${want}`);
+  const missingName = tm({ messageId: "s4-missing", at: "2026-11-16T12:30:00Z", sender: { id: "f4-missing", isApp: false } as never });
+  t("F4 spelling table S4-1..S4-16 (Teams sender names vs ['Samuel Okafor','Sam Okafor'])", [s4got, speakers([...known, ask, missingName], OWN)[1], foldPersonName("Okafor, Samuel, Jr")], [s4want, "OTHER", "okafor, samuel, jr"]);
+}
+
+// ── F5 (AC-actions-safety-and-invites): items HELD by the safety check, their own group, Add as task / Dismiss ──────
+{
+  const { HELD_REASON_TEXT, HELD_GROUP_LABEL, HELD_QUOTE_LABEL, isHeldCandidate } = await import("../src/features/huddle/lib/actions/actions");
+  const { actOnHeldItem, heldProposalCandidates, isHeldVerdict, HELD_ACTION_ERROR } = await import("../src/features/huddle/lib/actions/pipeline");
+  const held = (o: Partial<ActionCandidate> = {}) => cand({ status: "not_checked", notCheckedReason: "quote_not_found", proposalId: null, proposalState: null, section: "todo", kind: "action", itemKey: "h|1", display: { ...disp, title: "Test-Send the weekly notes", quote: "Test-invented quote", reasonLine: "Model text that must not be the held reason." }, ...o });
+  const sel1 = selectActionItems([held()], S());
+  t("F5-1 GUARD: a current quote_not_found verdict is HELD: in held (1), not unchecked, not rows; heldCounts.all 1", [sel1.held.length, sel1.unchecked.length, sel1.rows.length, sel1.heldCounts.all, sel1.notChecked], [1, 0, 0, 1, 0]);
+  const sel2 = selectActionItems([held({ notCheckedReason: "bad_shape", itemKey: "b|1" }), cand({ status: "not_checked", proposalId: null, section: null, itemKey: "n|1" })], S());
+  t("F5-2 GUARD: bad_shape and never-judged stay in unchecked, never held", [sel2.held.length, sel2.unchecked.map((r) => r.itemKey).sort(), isHeldCandidate({ status: "not_checked", notCheckedReason: "bad_shape" }), isHeldCandidate({ status: "open", notCheckedReason: "quote_not_found" })], [0, ["b|1", "n|1"], false, false]);
+  const inv = held({ category: "meeting_invite", itemKey: "mi|1" });
+  const hid = selectActionItems([inv], S());
+  const shown = selectActionItems([inv], S({ hideCategories: [] }));
+  const teamsOff = selectActionItems([held({ source: "teams", itemKey: "t|1" })], S({ sources: { email: true, teams: false, meeting: true } }));
+  t("F5-9 the What-shows switches apply to held items: meeting_invite hidden by default (counted), shown when switched off; a source switch hides too", [hid.held.length, hid.hidden.categories.meeting_invite, shown.held.length, teamsOff.held.length, teamsOff.hidden.sources], [0, 1, 1, 0, 1]);
+  const mix = [
+    cand({ itemKey: "o|1" }),
+    cand({ itemKey: "o|2" }),
+    held({ source: "teams", itemKey: "h|t" }),
+    cand({ status: "not_checked", proposalId: null, section: null, itemKey: "n|1" }),
+    cand({ status: "not_checked", proposalId: null, section: null, itemKey: "n|2" }),
+    cand({ status: "not_checked", proposalId: null, section: null, itemKey: "n|3" }),
+  ];
+  const selM = selectActionItems(mix, S());
+  t("F5-10 GUARD: tabs count open + held + not-checked (All 6, Email 5, Teams 1); notChecked === unchecked.length and excludes held", [tabCounts(selM.rows, selM.unchecked, selM.held), selM.notChecked, selM.unchecked.length, selM.heldCounts], [{ all: 6, email: 5, teams: 1, meeting: 0 }, 3, 3, { all: 1, email: 0, teams: 1, meeting: 0 }]);
+  t("F5-11 the Teams tab lists only Teams held items", filterRows(selectActionItems([held({ itemKey: "he|1" }), held({ source: "teams", itemKey: "ht|1" })], S()).held, "teams").map((r) => r.itemKey), ["ht|1"]);
+  t("F5-12 the held reason is the FIXED code sentence, never the model's reason", [sel1.held[0].heldReason, sel1.held[0].heldReason === sel1.held[0].reasonLine, HELD_REASON_TEXT.quote_not_found], [HELD_REASON_TEXT.quote_not_found, false, "Held back: the AI's supporting quote didn't match the message word for word, so it wasn't added automatically."]);
+  const decided = selectActionItems([held({ proposalId: "prop-aa01", proposalState: "approved", itemKey: "d|1" }), held({ proposalId: "prop-aa02", proposalState: "dismissed", itemKey: "d|2" }), held({ onBoard: true, itemKey: "d|3" }), held({ proposalId: "prop-aa03", proposalState: "proposed", itemKey: "d|4" })], S());
+  t("F5-5/F5-8 selection: a held item whose rescue proposal was decided (approved / dismissed) or is on the board is gone; one still 'proposed' stays held with that id", [decided.held.map((r) => [r.itemKey, r.id]), decided.unchecked.length, decided.rows.length], [[["d|4", "prop-aa03"]], 0, 0]);
+
+  // The rescue path through the real plan (a synthetic 1:1 Teams chat) with an in-memory thread store.
+  const HC = `19:f5_held${"@"}unq.gbl.spaces`;
+  const ASKH = "Hi Sam. Here is the outline of topics I want from you each week. Please send your first notes by Monday.";
+  const hRow: LedgerReportRow = { source: "teams", sourceItemId: teamsSourceItemId(HC, "1"), threadId: HC, at: "2026-11-16T12:00:00Z", content: { kind: "teams", chatId: HC, chatName: null, messageId: "1", at: "2026-11-16T12:00:00Z", sender: { id: "f5-pat", name: "Pat Example", isApp: false }, fromOwner: false, text: ASKH, webUrl: null, mentionedUserIds: [], ownerUserId: "f5-owner" } as TeamsContent };
+  const hAsm = assembleLedgerPlan({ rows: [hRow], proposals: [], bell: [] }, cfg, SINCE);
+  const hU = threadUnits(hAsm, S()).units.find((x) => x.teams?.chatId === HC)!;
+  const heldV = admitActionVerdict({ open_item: true, kind: "action", todo: "Test-Send your first notes by Monday", due: "Monday", quote: "Please send your weekly notes by Monday", confidence: "high", reason: "Asked.", category: "person_request" }, teamsQuoteHaystack(hU.teams!), { key: hU.itemKey, settled: false, nowIso: NOW, inputVersion: CLASSIFIER_INPUT_VERSION.teams });
+  t("F5 setup: the paraphrased quote is HELD (not_checked / quote_not_found) and isHeldVerdict says so", [heldV.status, heldV.notCheckedReason, isHeldVerdict(heldV, hU)], ["not_checked", "quote_not_found", true]);
+  const storeKey = `${hU.storeAt.source}\u0000${hU.storeAt.sourceItemId}`;
+  const mkWorld = (opts: { proposeThrows?: boolean; actFails?: boolean } = {}) => {
+    const store = new Map<string, ActionVerdict>([[storeKey, { ...heldV }]]);
+    const proposals = new Map<string, { id: string; state: string; title: string; assignee: null; correction: null }>();
+    const calls = { propose: 0, act: [] as string[] };
+    let chain = Promise.resolve();
+    const deps = {
+      lockThread: <T,>(u: typeof hU, fn: (tx: { current(): Promise<ActionVerdict | null>; store(v: ActionVerdict): Promise<void> }) => Promise<T>): Promise<T> => {
+        const k = `${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`;
+        const run = chain.then(async () => {
+          const snapshot = store.get(k) ?? null;
+          let pending: ActionVerdict | null = null;
+          const out = await fn({ current: async () => store.get(k) ?? null, store: async (v) => void (pending = v) });
+          if (pending) store.set(k, pending); // commit only when fn returned (a throw rolls back)
+          void snapshot;
+          return out;
+        });
+        chain = run.then(() => undefined, () => undefined);
+        return run;
+      },
+      propose: async (_u: typeof hU, cands: readonly { task: string; evidence: string }[], text: string) => {
+        calls.propose++;
+        if (opts.proposeThrows) throw new Error("proposals:store_failed");
+        if (!cands.length || !cands.every((c) => text.includes(c.evidence))) return { id: null, onBoard: false };
+        const id = "prop-f5000001";
+        proposals.set(id, { id, state: "proposed", title: cands[0].task, assignee: null, correction: null });
+        return { id, onBoard: false };
+      },
+      act: async (id: string, action: "approve" | "dismiss") => {
+        calls.act.push(`${action}:${id}`);
+        if (opts.actFails) return { ok: false, error: "Couldn't add that task to your board." };
+        const p = proposals.get(id);
+        if (p) p.state = action === "approve" ? "approved" : "dismissed";
+        return { ok: true };
+      },
+    };
+    const page = () => selectActionItems(buildCandidates({ assembled: hAsm, rows: [hRow], settings: S(), verdicts: store, proposals, meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
+    return { store, proposals, calls, deps, page };
+  };
+  const w = mkWorld();
+  const before = w.page();
+  const add = await actOnHeldItem(hU, "approve", w.deps);
+  const after = w.page();
+  t(
+    "F5-5 GUARD: Add as task -> ONE proposal via propose, approved via act, its id written back on the stored verdict (still not_checked); next read: in none of held / unchecked / rows",
+    [before.held.length, add.ok, w.calls.propose, w.calls.act, w.store.get(storeKey)?.proposalId, w.store.get(storeKey)?.status, w.store.get(storeKey)?.notCheckedReason, after.held.length, after.unchecked.length, after.rows.length],
+    [1, true, 1, ["approve:prop-f5000001"], "prop-f5000001", "not_checked", "quote_not_found", 0, 0, 0],
+  );
+  const wd = mkWorld();
+  const dis = await actOnHeldItem(hU, "dismiss", wd.deps);
+  t("F5-6 Dismiss -> a proposal is created and dismissed; the item is gone on the next read", [dis.ok, wd.calls.act, wd.proposals.get("prop-f5000001")?.state, wd.page().held.length], [true, ["dismiss:prop-f5000001"], "dismissed", 0]);
+  const wc = mkWorld();
+  const [c1, c2] = await Promise.all([actOnHeldItem(hU, "approve", wc.deps), actOnHeldItem(hU, "approve", wc.deps)]);
+  t("F5-7 a double click (two at once): ONE propose, the second click re-uses the first proposal's id", [c1.ok, c2.ok, wc.calls.propose, c1.ok && c2.ok && c1.proposalId === c2.proposalId, wc.proposals.size], [true, true, 1, true, 1]);
+  const wt = mkWorld({ proposeThrows: true });
+  const thr = await actOnHeldItem(hU, "approve", wt.deps);
+  t("F5-8 propose fails -> plain error, verdict unchanged (no proposalId), item still held", [thr, wt.store.get(storeKey)?.proposalId, wt.page().held.length], [{ ok: false, error: HELD_ACTION_ERROR }, null, 1]);
+  // 2026-11-18 red-team untested finding: the written-back rescue proposal was DELETED from the store. The held action
+  // must make a fresh proposal (and write its id back), never retry the missing id forever.
+  const wg = mkWorld();
+  wg.store.set(storeKey, { ...(wg.store.get(storeKey) as ActionVerdict), proposalId: "prop-gone0001" });
+  (wg.deps as Record<string, unknown>).proposalExists = async (id: string) => wg.proposals.has(id);
+  const gone = await actOnHeldItem(hU, "approve", wg.deps);
+  t("F5-DEL GUARD: a held item whose written-back proposal no longer exists -> ONE fresh proposal, acted on, its id written back", [gone.ok, wg.calls.propose, wg.calls.act, wg.store.get(storeKey)?.proposalId], [true, 1, ["approve:prop-f5000001"], "prop-f5000001"]);
+  const wex = mkWorld();
+  wex.store.set(storeKey, { ...(wex.store.get(storeKey) as ActionVerdict), proposalId: "prop-f5000001" });
+  wex.proposals.set("prop-f5000001", { id: "prop-f5000001", state: "proposed", title: "Synthetic", assignee: null, correction: null });
+  (wex.deps as Record<string, unknown>).proposalExists = async (id: string) => wex.proposals.has(id);
+  const exKept = await actOnHeldItem(hU, "approve", wex.deps);
+  t("F5-DEL-b an existing written-back proposal is still re-used (0 propose)", [exKept.ok, wex.calls.propose, wex.calls.act], [true, 0, ["approve:prop-f5000001"]]);
+  const wf = mkWorld({ actFails: true });
+  const f1 = await actOnHeldItem(hU, "approve", wf.deps);
+  const stillHeld = wf.page().held;
+  wf.deps.act = async (id: string, action: "approve" | "dismiss") => {
+    wf.calls.act.push(`${action}:${id}`);
+    const p = wf.proposals.get(id);
+    if (p) p.state = "approved";
+    return { ok: true };
+  };
+  const f2 = await actOnHeldItem(hU, "approve", wf.deps);
+  t("F5-8 the action fails after the proposal was created -> row stays held WITH that id; the next click re-uses it (no 2nd propose)", [f1.ok, stillHeld.map((r) => r.id), f2.ok, wf.calls.propose, wf.calls.act, wf.page().held.length], [false, ["prop-f5000001"], true, 1, ["approve:prop-f5000001", "approve:prop-f5000001"], 0]);
+  const wn = mkWorld();
+  wn.store.set(storeKey, { ...heldV, status: "open", notCheckedReason: undefined, proposalId: null });
+  t("F5 a verdict that is not held (open) is refused: no propose, no act", [await actOnHeldItem(hU, "approve", wn.deps), wn.calls.propose, wn.calls.act.length], [{ ok: false, error: "That item isn't in your list." }, 0, 0]);
+
+  // F5-14: re-judged at a new version and now admitted -> open, KEEPS the rescue proposal (runClassify keepId), moves
+  // from held to rows, never both.
+  const wr = mkWorld({ actFails: true });
+  await actOnHeldItem(hU, "approve", wr.deps); // rescue proposal created, still 'proposed'
+  wr.store.set(storeKey, { ...wr.store.get(storeKey)!, inputVersion: 1 }); // judged at an OLDER version
+  let proposed = 0;
+  const rj = await runClassify(hAsm, S(), currentlyJudgedKeys(wr.store), 5, {
+    recordCall: async () => {},
+    model: async () => ({ open_item: true, kind: "action", todo: "Test-Send your first notes by Monday", due: "Monday", quote: "Please send your first notes by Monday.", confidence: "high", reason: "Asked.", category: "person_request" }),
+    propose: async () => (proposed++, { id: "prop-f5ffffff", onBoard: false }),
+    storeVerdict: async () => {},
+    addMeetingRows: async () => 0,
+    nowIso: () => NOW,
+    lockThread: wr.deps.lockThread as never,
+  });
+  const reSel = wr.page();
+  t("F5-14 re-judged into open: keeps the rescue proposal (0 new proposals), listed in rows, not in held", [rj.open, proposed, wr.store.get(storeKey)?.status, wr.store.get(storeKey)?.proposalId, reSel.rows.length, reSel.held.length], [1, 0, "open", "prop-f5000001", 1, 0]);
+
+  // X-5 follow-up (coordinator 2026-11-18): part A's re-judge keeps the earlier proposal id WHATEVER the new status, so
+  // a not-checked or held verdict can carry a proposal the owner already decided.
+  const DECIDED = ["approved", "completed", "dismissed", "delegated", "corrected"];
+  const ncWith = (state: string, i: number) => cand({ status: "not_checked", notCheckedReason: "bad_shape", proposalId: `prop-dd0${i}`, proposalState: state, section: null, itemKey: `nc-${state}|1` });
+  const selNc = selectActionItems([...DECIDED.map(ncWith), ncWith("proposed", 9)], S());
+  const selHd = selectActionItems([...DECIDED.map((st, i) => held({ proposalId: `prop-ee0${i}`, proposalState: st, itemKey: `hd-${st}|1` })), held({ proposalId: "prop-ee09", proposalState: "proposed", itemKey: "hd-proposed|1" })], S());
+  t("XF-1 GUARD: a NOT-CHECKED item whose kept proposal the owner already decided (approved/completed/dismissed/delegated/corrected) is not listed; one still 'proposed' is", [selNc.unchecked.map((r) => r.itemKey), selNc.notChecked, selNc.rows.length], [["nc-proposed|1"], 1, 0]);
+  t("XF-2 a HELD item whose kept proposal was decided is not listed; one still 'proposed' stays held with that id", [selHd.held.map((r) => [r.itemKey, r.id]), selHd.unchecked.length], [[["hd-proposed|1", "prop-ee09"]], 0]);
+  const wrongC = { reason: "not_an_action" as const, text: null, itemKey: "hw|1", at: NOW, withdrawnAt: null };
+  const selW = selectActionItems([held({ proposalId: "prop-ff01", proposalState: "proposed", itemKey: "hw|1", correction: wrongC }), cand({ status: "not_checked", proposalId: "prop-ff02", proposalState: "proposed", section: null, itemKey: "nw|1", correction: { ...wrongC, itemKey: "nw|1" } })], S());
+  t("XF-3 a Wrong? on the same item version keeps a held / not-checked item in Corrected (with Undo), never listed", [selW.corrected.map((r) => r.itemKey).sort(), selW.held.length, selW.unchecked.length], [["hw|1", "nw|1"], 0, 0]);
+  const wk = mkWorld();
+  wk.store.set(storeKey, { ...heldV, proposalId: "prop-cafe0001" });
+  const kept = await actOnHeldItem(hU, "dismiss", wk.deps);
+  t("XF-4 GUARD: a held verdict that already carries a proposal (kept by the re-judge) re-uses it at Add / Dismiss: 0 new proposals, the action runs on that id", [kept, wk.calls.propose, wk.calls.act, wk.store.get(storeKey)?.proposalId], [{ ok: true, proposalId: "prop-cafe0001" }, 0, ["dismiss:prop-cafe0001"], "prop-cafe0001"]);
+
+  const hc = heldProposalCandidates("Test-Send your first notes by Monday", "Please send your weekly notes by Monday", ASKH);
+  t("F5 heldProposalCandidates: every evidence is verbatim from the message (never the AI's quote); the to-do first; a grounded fallback sentence last", [hc.every((c) => ASKH.includes(c.evidence)), hc.some((c) => c.evidence.includes("weekly notes")), hc[0].task, hc[hc.length - 1], heldProposalCandidates(null, null, ""), heldProposalCandidates("x", null, null)], [true, false, "Test-Send your first notes by Monday", { task: "Please send your first notes by Monday.", evidence: "Please send your first notes by Monday." }, [], []]);
+
+  const { readFileSync } = await import("node:fs");
+  const viewF5 = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
+  t(
+    "F5-3/F5-4 the view renders the held group expanded (no CollapsibleSection), with the fixed reason, the labelled quote, Add as task and Dismiss, only when non-empty, before Not checked yet",
+    [
+      viewF5.includes("const heldGroup = held.length ? ("),
+      /heldGroup = held\.length \? \(\s*<section/.test(viewF5),
+      viewF5.includes("{HELD_GROUP_LABEL}"),
+      viewF5.includes("{row.heldReason}"),
+      viewF5.includes("{HELD_QUOTE_LABEL}"),
+      viewF5.includes('data-testid="actions-held-add"') && viewF5.includes("Add as task"),
+      viewF5.includes('data-testid="actions-held-dismiss"'),
+      viewF5.indexOf("{heldGroup}") > 0 && viewF5.indexOf("{heldGroup}") < viewF5.lastIndexOf("{notChecked}"),
+      viewF5.includes("tabCounts(openRows, unchecked, held)"),
+      HELD_GROUP_LABEL,
+      HELD_QUOTE_LABEL,
+    ],
+    [true, true, true, true, true, true, true, true, true, "Held by the safety check", "AI's quote (not found in the message)"],
+  );
+  const srvF5 = readFileSync(new URL("../src/features/huddle/lib/actions/actions.server.ts", import.meta.url), "utf8");
+  const heldFn = srvF5.slice(srvF5.indexOf("export async function actOnHeldItemFor("), srvF5.indexOf("/** X-6: the bell rows"));
+  t("F5-13 the held action logs only the action, the source and ok (no to-do, quote, name or id)", [(heldFn.match(/console\.(log|error|warn)\(/g) ?? []).length, heldFn.includes("console.log(`[actions] held ${input.action} source=${u.source} ok=${r.ok}`)")], [1, true]);
+}
+
+// ── RED-TEAM pre-pass 2026-11-18 (docs/qc-evidence/REDTEAM-actions-safety-invites.md): F5 held group + actOnHeldItem.
+// A row that FAILS is an attack that SUCCEEDED (correct behaviour asserted, source NOT fixed). Synthetic data only. ──
+{
+  const { actOnHeldItem } = await import("../src/features/huddle/lib/actions/pipeline");
+  const { isHeldCandidate } = await import("../src/features/huddle/lib/actions/actions");
+  const { CLASSIFIER_INPUT_VERSION } = await import("../src/features/huddle/lib/correspondence/action-classify");
+  const KEY = "email:rt-thread|rt-msg";
+  const unit = { source: "email", itemKey: KEY, storeAt: { source: "email", sourceItemId: "rt-msg" }, refItemId: "rt-msg", at: null, uninvolved: false, email: { messages: [{ text: "Synthetic: please send the weekly notes by Monday to the team." }], latestOther: { id: "rt-msg", text: "Synthetic: please send the weekly notes by Monday to the team." } } } as never;
+  const heldV = (o: Record<string, unknown> = {}) => ({ v: 1, key: KEY, inputVersion: CLASSIFIER_INPUT_VERSION.email, status: "not_checked", notCheckedReason: "quote_not_found", kind: "action", category: "person_request", confidence: "high", todo: "Send the weekly notes", due: null, quote: "Invented quote words here", reason: null, answeredByReply: false, proposalId: null, at: "2026-11-18T10:00:00Z", ...o });
+  const run = async (cur: Record<string, unknown> | null, action: "approve" | "dismiss" = "approve") => {
+    const log = { propose: 0, act: [] as string[], stored: [] as unknown[] };
+    const r = await actOnHeldItem(unit, action, {
+      lockThread: async (_u, fn) => fn({ current: async () => cur as never, store: async (v) => void log.stored.push(v) }),
+      propose: async () => (log.propose++, { id: "prop-0000aaaa", onBoard: false }),
+      act: async (id) => (log.act.push(id), { ok: true }),
+    });
+    return { r, log };
+  };
+  const decided = await run(heldV({ proposalId: "prop-decided01" }), "dismiss");
+  t("RT-21 F5-7 a held item whose rescue proposal already exists: 0 new proposals, the action runs on THAT id", [decided.log.propose, decided.log.act, decided.log.stored.length], [0, ["prop-decided01"], 0]);
+  const bad = await run(heldV({ notCheckedReason: "bad_shape" }));
+  t("RT-22 F5 D5 gate: a bad_shape not_checked item is NOT actionable (0 propose, 0 act)", [bad.r.ok, bad.log.propose, bad.log.act.length], [false, 0, 0]);
+  const stale = await run(heldV({ inputVersion: 1 }));
+  t("RT-23 F5 D5 gate: a held verdict from an OLDER classifier version is not actionable", [stale.r.ok, stale.log.propose, stale.log.act.length], [false, 0, 0]);
+  const other = await run(heldV({ key: "email:someone-else|m9" }));
+  t("RT-24 F5 a verdict for a DIFFERENT item key (another thread) is not actionable through this item", [other.r.ok, other.log.propose, other.log.act.length], [false, 0, 0]);
+  const openV = await run(heldV({ status: "open", notCheckedReason: undefined }));
+  t("RT-25 F5 D5 gate: an OPEN verdict is not acted on as held", [openV.r.ok, openV.log.propose], [false, 0]);
+  const fresh = await run(heldV());
+  t("RT-26 F5-5 a fresh held item: exactly 1 proposal, id written back with status still not_checked", [fresh.log.propose, fresh.log.act, (fresh.log.stored[0] as { proposalId?: string; status?: string })?.proposalId, (fresh.log.stored[0] as { status?: string })?.status], [1, ["prop-0000aaaa"], "prop-0000aaaa", "not_checked"]);
+  // Selection
+  t("RT-27 F5 isHeldCandidate: only not_checked + quote_not_found", [isHeldCandidate({ status: "not_checked", notCheckedReason: "quote_not_found" }), isHeldCandidate({ status: "not_checked", notCheckedReason: "bad_shape" }), isHeldCandidate({ status: "not_checked", notCheckedReason: null }), isHeldCandidate({ status: "none", notCheckedReason: "quote_not_found" } as never), isHeldCandidate({ status: "open", notCheckedReason: "quote_not_found" } as never)], [true, false, false, false, false]);
+  const hc = (o: Partial<ActionCandidate>) => cand({ status: "not_checked", notCheckedReason: "quote_not_found", proposalId: null, proposalState: null, ...o } as Partial<ActionCandidate>);
+  const sel = selectActionItems([hc({ itemKey: "h|1" }), hc({ itemKey: "h|2", proposalId: "prop-dismissed1", proposalState: "dismissed" }), hc({ itemKey: "h|3", proposalId: "prop-approved1", proposalState: "approved" }), hc({ itemKey: "h|4", onBoard: true }), hc({ itemKey: "h|5", source: "teams", proposalId: "prop-retry0001", proposalState: "proposed" })], S());
+  t("RT-28 F5 decided / on-board held items leave the page; an undecided rescue stays held; none leak into unchecked or rows", [sel.held.map((r) => r.itemKey).sort(), sel.unchecked.length, sel.rows.length], [["h|1", "h|5"], 0, 0]);
+  t("RT-29 F5-10 counts: heldCounts match the held rows; tabCounts include held; notChecked excludes held", [sel.held.length, sel.heldCounts.all, sel.heldCounts.email, sel.heldCounts.teams, sel.notChecked, tabCounts(sel.rows, sel.unchecked, sel.held).all], [2, 2, 1, 1, 0, 2]);
+  const hiddenMeet = selectActionItems([hc({ itemKey: "h|m", category: "meeting_invite" })], S());
+  t("RT-30 F5-9 a held meeting_invite is hidden by the default switch, counted, not held", [hiddenMeet.held.length, hiddenMeet.hidden.categories.meeting_invite ?? 0], [0, 1]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

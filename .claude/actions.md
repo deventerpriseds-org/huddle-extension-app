@@ -5459,8 +5459,22 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
       also for settings saved before it existed), classifier versions email 2 / teams 3 (stored verdicts re-judged).
       Evidence: docs/qc-evidence/BUILD-actions-app-invite.md (spelling table, 10 mutation proofs FIRED/control EQUIVALENT,
       suites green, tsc + build rc 0).
-- [ ] Merge + deploy; owner confirms live that the invites are gone from the list and counted under "hidden".
+- [x] Merged #277 (e0120b93), deploy-swa run 44215818540 SUCCESS; one-time re-check run 44216034230 SUCCESS (left
+      not checked: email 6, teams 3). Three verifier loops (VERIFY-actions-app-invite-1..3, final SHIP).
+- [ ] Owner confirms live that the invites are gone from the list and counted under "hidden".
 - [ ] Open question for the owner: travel-security polls rely on the existing "system mail has no open item" rule; if
       the model still marks one open it stays listed (automated_notice is not hideable).
 ## ACT:actions-missing-yesterday — owner expects action items from yesterday's emails that are not listed (2026-11-17) — OPEN
-- [ ] Ground-truth: ingest vs verdict vs hidden vs answered.
+- [x] Ground-truth (2026-11-18, read the stored emails + verdicts via huddle-pg-mcp-write): two asks from his manager on
+      Nov 16 were hidden two ways -- (1) a strong person_request held as not_checked/quote_not_found because the model's
+      quote joined two non-adjacent sentences; (2) a weekly-1:1 outline labelled meeting_invite (hidden by his settings).
+- [x] Owner: "Apply and deploy fix 1 and fix 2"; also raised: held items invisible, his legal first name on a 2nd Teams
+      account treated as someone else, "be right there" made a to-do, a bare dinner invite must not be a reply item.
+- [x] Built on branch `claude_actions-held-names` (ACT:actions-safety-invites): F1 quote by verbatim fragments in order
+      (gaps only between whole sentences), F2 invite with a specific deliverable = person_request (bare invite stays
+      hidden; meeting_invite is never a reply item), F3 momentary chat lines are no open item (fail open), F4 "Names
+      that are you" setting, F5 visible "held by the safety check" group with Add as task / Dismiss. Versions email 3 /
+      teams 4. AC: docs/qc-evidence/AC-actions-safety-and-invites.md; builds BUILD-actions-safety-invites-A.md,
+      BUILD-actions-held-names-B.md; red-team REDTEAM-actions-safety-invites.md (7 of 31 broke, all fixed:
+      FIX-redteam-actions-safety-invites.md).
+- [ ] Independent verifier -> merge -> deploy -> re-check -> UAT; owner confirms live that the two asks now show.

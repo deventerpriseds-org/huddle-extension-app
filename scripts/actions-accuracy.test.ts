@@ -95,7 +95,12 @@ const noIdOwn = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", 
 t("R1-6 GUARD: no id anywhere -> a sender named as the owner ('Last, First' folded) contributes its id", teamsChatsFromLedger([ask, noIdOwn], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER"]);
 t("R1-7 without owner names the same chat stays as stored (no guessing)", teamsChatsFromLedger([ask, noIdOwn]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OTHER"]);
 const twin = row({ chatId: ONE, messageId: "q2", at: "2026-11-16T13:00:00Z", sender: { id: "namesake-guid", name: "Owen Example", isApp: false } });
-t("R1-8 GUARD: once an id is known, a NAMESAKE with another id stays OTHER", teamsChatsFromLedger([older, older2, ask, twin, own], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER", "OTHER"]);
+// SUPERSEDED 2026-11-18 by F4 (AC-actions-safety-and-invites, owner-approved): R1-8 used to say "once an id is known, a
+// sender with the owner's EXACT full name and another id stays OTHER". F4 makes the owner's own names count ALWAYS (his
+// second account has its own id), and AC S4-15 accepts the exact-full-name namesake risk: the owner controls the list.
+// What still holds, and is pinned here: a namesake sharing only the FIRST name stays OTHER.
+const firstOnly = row({ chatId: ONE, messageId: "q3", at: "2026-11-16T13:05:00Z", sender: { id: "rivera-guid", name: "Owen Rivera", isApp: false } });
+t("R1-8 (F4) once an id is known, a sender with the owner's exact FULL name is the owner (his 2nd account); a first-name namesake stays OTHER", teamsChatsFromLedger([older, older2, ask, twin, firstOnly, own], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER", "OWNER", "OTHER"]);
 t("R1-9 an app sender with the owner's name never counts", ownerTeamsIdsAcross([row({ sender: { id: "app-guid", name: "Owen Example", isApp: true } })], [], ["Owen Example"]), []);
 t("R1-10 foldPersonName: 'Last, First' -> 'first last'; plain kept", [foldPersonName("Example,  Owen"), foldPersonName(" Owen  Example "), foldPersonName(null)], ["owen example", "owen example", ""]);
 
@@ -240,9 +245,9 @@ void GRP;
   // 2026-11-17 (app_invite, BUILD-actions-app-invite.md): the email instructions changed, so email was bumped to 2 and
   // teams to 3. Every verdict judged before is judged again; only the current version is reused.
   t(
-    "R7-7 GUARD: email bumped to 2, teams to 3 -- older email (none / 1) and teams (2) verdicts are re-judged",
-    [verdictIsCurrent({ key: "e|1" }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 1 }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 2 }, "e|1", "email"), verdictIsCurrent({ key: "t|1", inputVersion: 2 }, "t|1", "teams"), verdictIsCurrent({ key: "t|1", inputVersion: 3 }, "t|1", "teams")],
-    [false, false, true, false, true],
+    "R7-7 GUARD (updated for X-1, 2026-11-18): email at 3, teams at 4 -- older email (none / 1 / 2) and teams (2 / 3) verdicts are re-judged",
+    [verdictIsCurrent({ key: "e|1" }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 1 }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 2 }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 3 }, "e|1", "email"), verdictIsCurrent({ key: "t|1", inputVersion: 2 }, "t|1", "teams"), verdictIsCurrent({ key: "t|1", inputVersion: 3 }, "t|1", "teams"), verdictIsCurrent({ key: "t|1", inputVersion: 4 }, "t|1", "teams")],
+    [false, false, false, true, false, false, true],
   );
 }
 
@@ -351,6 +356,97 @@ void GRP;
   t("R13-3 ordinary lowercase 'other' is untouched", plainRoles("Review the other draft."), "Review the other draft.");
   t("R13-4 null stays null", plainRoles(null), null);
   t("R13-5 the instructions tell the model not to write the labels", GROUNDED.includes("Never write the words OWNER or OTHER"), true);
+}
+
+// ── RED-TEAM pre-pass 2026-11-18 (docs/qc-evidence/REDTEAM-actions-safety-invites.md). A row that FAILS here is an
+// attack that SUCCEEDED: the test asserts the CORRECT behaviour and the source was deliberately NOT fixed. ──
+{
+  const { quoteIsVerbatim, isMomentaryQuote, actionSectionFor } = await import("../src/features/huddle/lib/correspondence/action-classify");
+  const A = { key: "k|rt", settled: false, nowIso: NOW };
+  const ask = (quote: string, o: Record<string, unknown> = {}) => ({ open_item: true, kind: "action", category: "person_request", confidence: "high", todo: "Synthetic to-do", quote, reason: "Synthetic reason", ...o });
+  // F1 (quote admission)
+  t("RT-1 F1 an ellipsis must not elide a negation inside one sentence (quote inverts 'do not send')", quoteIsVerbatim("Please do ... send the contract to the client.", ["Please do not send the contract to the client. Thanks."]), false);
+  t("RT-2 F1 rule 4: a fragment must not end mid-word on a combining mark (NFD 'cafe\\u0301')", quoteIsVerbatim("We reviewed the cafe ... notes are due Friday", ["We reviewed the café menu. The notes are due Friday."]), false);
+  t("RT-3 F1 the same visible text in NFC (quote) and NFD (message) is admitted", quoteIsVerbatim("The café notes are due Friday", ["The café notes are due Friday."]), true);
+  t("RT-4 F1 fragments are never stitched across two OTHER messages", quoteIsVerbatim("Here is the outline of topics. Please send your first notes by Monday.", ["Here is the outline of topics.", "Please send your first notes by Monday."]), false);
+  t("RT-5 F1 one occurrence cannot back a repeated fragment", quoteIsVerbatim("Please confirm the venue. ... Please confirm the venue.", ["Please confirm the venue. Thanks."]), false);
+  t("RT-6 F1 a 7-sentence quote that is ONE contiguous span is still admitted by the whole-quote path (rule 1)", quoteIsVerbatim("One two. Three. Four. Five. Six. Seven. Eight nine ten.", ["One two. Three. Four. Five. Six. Seven. Eight nine ten."].map((s) => s + " x")), true);
+  t("RT-6b F1 ... but 7 fragments with a gap are rejected", quoteIsVerbatim("One two. Three. Four. Five. Six. Seven. ... Eight nine ten eleven.", ["One two. Three. Four. Five. Six. Seven. Gap. Eight nine ten eleven."]), false);
+  // F3 (momentary backstop must fail OPEN)
+  const hidden = admitActionVerdict(ask("Thanks!", { todo: "Send the signed contract" }), ["Thanks! Can you send me the signed contract by Friday?"], A);
+  t("RT-7 F3 a pleasantry QUOTE on a message that carries a real ask must not hide the item (fail open: held or open, never none)", hidden.status !== "none", true);
+  t("RT-8 F3 'Thanks — can you send the deck' (em dash) is not momentary", isMomentaryQuote("Thanks — can you send the deck"), false);
+  t("RT-9 F3 'Running late… can you start the review' is not momentary", isMomentaryQuote("Running late… can you start the review"), false);
+  t("RT-10 F3 'See you there; bring the contract' is not momentary", isMomentaryQuote("See you there; bring the contract"), false);
+  // F2-6 (a bare invite must never become a reply item)
+  const dinner = "Dinner Friday at 7, hope you can make it! The venue is the synthetic bistro on Example Street.";
+  const both = admitActionVerdict(ask("Dinner Friday at 7, hope you can make it!", { kind: "both", category: "meeting_invite" }), [dinner], A);
+  t("RT-11 F2-6 a bare dinner invite judged meeting_invite + kind BOTH is not listed under Needs your reply", both.status === "open" && actionSectionFor("email", both.kind) === "needs_reply", false);
+  const realAsk = admitActionVerdict(ask("Please bring your first draft to Thursday's call.", { kind: "action", category: "meeting_invite" }), ["Join link. Please bring your first draft to Thursday's call."], A);
+  t("RT-12 F2-6 a meeting_invite of kind ACTION with a real ask keeps today's path (open)", realAsk.status, "open");
+  // F4 ("Names that are you")
+  const OA = "owner-guid-rt-a";
+  const base = [row({ chatId: ONE2, messageId: "rt1", sender: { id: OA, name: "Sam Okafor", isApp: false }, ownerUserId: OA }), row({ chatId: ONE3, messageId: "rt2", sender: { id: OA, name: "Sam Okafor", isApp: false }, ownerUserId: OA })];
+  const second = (name: string, isApp = false, names = ["Samuel Okafor", "Sam Okafor"]) =>
+    ownerTeamsIdsAcross([...base, row({ chatId: ONE, messageId: "rt3", sender: { id: "second-acct-rt-b", name, isApp } })], [], names).includes("second-acct-rt-b");
+  t("RT-13 F4 his second account in NFD ('Sa\\u0301muel Okafor') vs the list in NFC ('S\\u00E1muel Okafor') is the OWNER", second("Sámuel Okafor", false, ["Sámuel Okafor"]), true);
+  t("RT-14 F4 a display name with a trailing zero-width space is still his name", second("Samuel Okafor​"), true);
+  t("RT-15 F4 'Okafor , Samuel' (space before the comma) is the OWNER", second("Okafor , Samuel"), true);
+  t("RT-16 F4 namesake 'Sam Rivera' with a bare 'Sam' in the list is OTHER", second("Sam Rivera", false, ["Sam", "Sam Okafor"]), false);
+  t("RT-17 F4 'Samuel Okafor-Diaz' (prefix namesake) is OTHER", second("Samuel Okafor-Diaz"), false);
+  t("RT-18 F4 'Okafor Samuel' (no comma) is OTHER unless listed", second("Okafor Samuel"), false);
+  t("RT-19 F4 an app sender named after him is never the OWNER", second("Samuel Okafor", true), false);
+  t("RT-20 F4 'Samuel Okafor (External)' is OTHER unless listed (SD)", second("Samuel Okafor (External)"), false);
+  // ── FIX pass 2026-11-18 (docs/qc-evidence/FIX-redteam-actions-safety-invites.md): one guard per fix, each isolates ONE rule.
+  t("RT-1b GUARD F1 a sentence-split gap may not skip words inside a sentence ('Please do. Send the contract.' vs '... Do not send the contract.')", quoteIsVerbatim("Please do. Send the contract to the client.", ["Please do. Do not send the contract to the client."]), false);
+  t("RT-1c F1 an ellipsis that skips WHOLE sentences is still admitted", quoteIsVerbatim("Here is the plan. ... Send the draft by Friday.", ["Here is the plan. The room is booked. Send the draft by Friday."]), true);
+  t("RT-2b GUARD F1 rule 4: a non-composing combining mark (q + U+0307) after a fragment's last letter is mid-word", quoteIsVerbatim("Here is the plan. Send the draft to q", ["Here is the plan. Ignore this. Send the draft to q̇x now."]), false);
+  t("RT-3b GUARD F1 an NFC quote matches the NFD message even as one contiguous span", quoteIsVerbatim("Please review the café menu", ["Please review the café menu today."]), true);
+  const latest = (msgs: string[]) => admitActionVerdict(ask("Thanks!", { todo: "Send the signed contract" }), msgs, { ...A, latestMessages: msgs.slice(-1) });
+  t("RT-7b F3 a Teams sender whose LATEST message is wholly 'Thanks!' is dropped (momentary)", [latest(["Can you send the signed contract by Friday?", "Thanks!"]).status, latest(["Can you send the signed contract by Friday?", "Thanks!"]).dropReason], ["none", "momentary"]);
+  t("RT-7c GUARD F3 'Thanks!' quoted from an EARLIER message while the sender's latest carries a real ask is not dropped", latest(["Thanks!", "Can you send the signed contract by Friday?"]).status !== "none", true);
+  t("RT-11b GUARD F2-6 meeting_invite + kind both is admitted as kind action (To-do, not Needs your reply)", [both.status, both.kind], ["open", "action"]);
+  t("RT-11c F2-6 kind both on another category is unchanged", admitActionVerdict(ask("Dinner Friday at 7, hope you can make it!", { kind: "both", category: "person_request" }), [dinner], A).kind, "both");
+  t("RT-13b GUARD foldPersonName NFC: NFD and NFC spellings fold to one name", foldPersonName("Sámuel Okafor") === foldPersonName("Sámuel Okafor"), true);
+  t("RT-14b GUARD foldPersonName strips zero-width / format characters (U+200B, U+FEFF, U+2060)", [foldPersonName("Samuel​ Okafor﻿"), foldPersonName("Okafor,⁠ Samuel")], ["samuel okafor", "samuel okafor"]);
+}
+
+// ── Verifier VERIFY-actions-safety-invites-1 (F3 FAILS-CLOSED): the Teams wiring gives the backstop the WHOLE unanswered tail ──
+{
+  const TV = `19:tv_x${AT}unq.gbl.spaces`;
+  const LEE = { id: "other-guid-0003", name: "Lee Example", isApp: false };
+  const OWN = { id: OWNER_ID, name: "Example, Owen", isApp: false };
+  const runTail = async (chat: LedgerReportRow[], quote = "Thanks!") => {
+    const asmT = assembleLedgerPlan({ rows: [older, older2, ...chat], proposals: [], bell: [] }, cfgNoIds, Date.parse("2026-11-09T05:00:00Z"));
+    const stored = new Map<string, ActionVerdict>();
+    const deps: ClassifyDeps = {
+      recordCall: async () => {},
+      model: async () => ({ open_item: true, kind: "action", todo: "Send the signed contract", due: null, quote, confidence: "high", reason: "Asked directly.", category: "person_request" }),
+      propose: async () => ({ id: "p-tv", onBoard: false }),
+      storeVerdict: async (at, v) => void stored.set(`${at.source}\u0000${at.sourceItemId}`, v),
+      addMeetingRows: async () => 0,
+      nowIso: () => NOW,
+    };
+    await runClassify(asmT, { ...ACTIONS_SETTINGS_DEFAULT, sources: { ...ACTIONS_SETTINGS_DEFAULT.sources, email: false, meeting: false } }, new Set(), 6, deps);
+    const u = threadUnits(asmT, ACTIONS_SETTINGS_DEFAULT).units.find((x) => x.teams?.chatId === TV);
+    return u ? stored.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`)?.status : "no-unit";
+  };
+  const askPat = row({ chatId: TV, messageId: "t1", at: "2026-11-16T12:00:00Z", text: "Can you send me the signed contract by Friday?" });
+  const thanksPat = row({ chatId: TV, messageId: "t2", at: "2026-11-16T12:01:00Z", text: "Thanks!" });
+  const thanksLee = row({ chatId: TV, messageId: "t3", at: "2026-11-16T12:02:00Z", sender: LEE, text: "Thanks!" });
+  t("F3V-1 GUARD same sender: an ask then 'Thanks!' (model quotes 'Thanks!') is NOT dropped", ["open", "not_checked"].includes(String(await runTail([askPat, thanksPat]))), true);
+  t("F3V-2 GUARD another sender: Pat asks, Lee says 'Thanks!' -> NOT dropped", ["open", "not_checked"].includes(String(await runTail([askPat, thanksLee]))), true);
+  const brt = row({ chatId: TV, messageId: "t4", at: "2026-11-16T12:03:00Z", sender: OWN, text: "Be right there" });
+  const nw = row({ chatId: TV, messageId: "t5", at: "2026-11-16T12:04:00Z", text: "No worries, thank you!" });
+  t("F3V-3 GUARD (loop 2 A7) an ask, the owner's 'Be right there', then 'No worries, thank you!' -> NOT dropped by code (the ask is in the chat)", ["open", "not_checked"].includes(String(await runTail([askPat, brt, nw], "No worries, thank you!"))), true);
+  const deckAsk = row({ chatId: TV, messageId: "t6", at: "2026-11-16T12:00:00Z", text: "Can you send me the deck tomorrow?" });
+  const ownDeck = row({ chatId: TV, messageId: "t7", at: "2026-11-16T12:01:00Z", sender: OWN, text: "Be right there. I'll send you the deck tomorrow." });
+  const seeYou = row({ chatId: TV, messageId: "t8", at: "2026-11-16T12:02:00Z", text: "Thanks, see you soon!" });
+  t("F3V-5 GUARD (loop 2 A8) a promised deliverable then 'Thanks, see you soon!' -> NOT dropped", ["open", "not_checked"].includes(String(await runTail([deckAsk, ownDeck, seeYou], "Thanks, see you soon!"))), true);
+  const okPat = row({ chatId: TV, messageId: "t9", at: "2026-11-16T12:00:00Z", text: "See you this afternoon!" });
+  const brt2 = row({ chatId: TV, messageId: "t10", at: "2026-11-16T12:01:00Z", sender: OWN, text: "Be right there" });
+  const nw2 = row({ chatId: TV, messageId: "t11", at: "2026-11-16T12:02:00Z", text: "No worries, thank you!" });
+  t("F3V-4 a chat that is ONLY logistics and pleasantries (both speakers) -> dropped (momentary)", await runTail([okPat, brt2, nw2], "No worries, thank you!"), "none");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

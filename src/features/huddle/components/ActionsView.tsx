@@ -36,7 +36,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { CollapsibleSection, WidgetPage } from "./JourneyWidgets";
 import { useHuddleStore } from "../store";
-import { getActionsFn, correctActionFn, setActionsSettingsFn } from "../lib/actions/actions.functions";
+import { getActionsFn, correctActionFn, setActionsSettingsFn, actOnHeldItemFn } from "../lib/actions/actions.functions";
 import { actOnProposalFn } from "../lib/proposals/proposals.functions";
 import { saveEmailReplyDraftFn } from "../lib/email/email-replies.functions";
 import { ACTION_SECTION_LABEL, ACTION_SECTION_ORDER, type ActionSection } from "../lib/correspondence/action-classify";
@@ -49,6 +49,12 @@ import {
   DAILY_CAP_MAX,
   HIDEABLE_CATEGORIES,
   HIDEABLE_CATEGORY_LABEL,
+  HELD_GROUP_LABEL,
+  HELD_QUOTE_LABEL,
+  OWN_NAME_CHARS,
+  OWN_NAMES_MAX,
+  OWN_NAMES_NOTE,
+  cleanOwnNames,
   filterRows,
   tabAfterRangeChange,
   tabCounts,
@@ -148,9 +154,12 @@ export function ActionsView() {
   // 2026-11-17: the tabs count the not-checked items too (owner: All time showed "120 not checked yet" while every
   // tab still read the This-week numbers). The selection already applied the What-shows switches to both lists.
   const unchecked = useMemo(() => (ok ? ok.unchecked.filter((r) => ok.settings.sources[r.source]) : []), [ok]);
-  const counts = useMemo(() => tabCounts(openRows, unchecked), [openRows, unchecked]);
+  // F5: items held by the safety check count on the tabs too, and follow the tab (F5-10 / F5-11).
+  const held = useMemo(() => (ok ? (ok.held ?? []).filter((r) => ok.settings.sources[r.source]) : []), [ok]);
+  const counts = useMemo(() => tabCounts(openRows, unchecked, held), [openRows, unchecked, held]);
   const visible = ok ? ok.rows.filter((r) => (filter === "all" || r.source === filter) && ok.settings.sources[r.source]) : [];
   const visibleUnchecked = filterRows(unchecked, filter);
+  const visibleHeld = filterRows(held, filter);
 
   async function saveSettings(next: ActionsSettings) {
     if (!ok || !caller) return;
@@ -273,6 +282,7 @@ export function ActionsView() {
           page={ok!}
           visible={visible}
           unchecked={visibleUnchecked}
+          held={visibleHeld}
           openCount={openRows.length}
           local={local}
           patch={patch}
@@ -289,6 +299,7 @@ function ActionsBody({
   page,
   visible,
   unchecked,
+  held,
   openCount,
   local,
   patch,
@@ -300,6 +311,8 @@ function ActionsBody({
   visible: ActionRow[];
   /** The not-checked items under the current type tab (already through the What-shows switches). */
   unchecked: ActionRow[];
+  /** F5: the items held by the safety check under the current type tab (already through the What-shows switches). */
+  held: ActionRow[];
   openCount: number;
   local: Record<string, RowLocal>;
   patch: (id: string, p: RowLocal) => void;
@@ -331,6 +344,20 @@ function ActionsBody({
       </CollapsibleSection>
     </div>
   ) : null;
+  // F5 (owner-approved 2026-11-18): items the safety check held, in their own group, EXPANDED (not a collapsed
+  // section), after the judged sections and before "Not checked yet". Absent when empty.
+  const heldGroup = held.length ? (
+    <section className="border-t border-hairline" data-testid="actions-held" data-count={held.length}>
+      <h3 className="px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground sm:px-6" data-testid="actions-held-heading">
+        {HELD_GROUP_LABEL} <span className="tabular-nums">{held.length}</span>
+      </h3>
+      <ul className="divide-y divide-hairline" data-testid="actions-held-list">
+        {held.map((r) => (
+          <HeldRowItem key={r.itemKey} row={r} caller={caller} tz={tz} reload={reload} />
+        ))}
+      </ul>
+    </section>
+  ) : null;
   // AC-B-7: never "caught up" when nothing was ever sorted.
   if (!page.rows.length && page.neverClassified) {
     return (
@@ -348,6 +375,10 @@ function ActionsBody({
         (page.notChecked ? (
           <p className="px-3 py-4 text-[12px] text-muted-foreground sm:px-6" data-testid="actions-nothing-sorted-open">
             Nothing checked so far needs you. {page.notChecked} {page.notChecked === 1 ? "item hasn’t" : "items haven’t"} been checked yet (below).
+          </p>
+        ) : held.length ? (
+          <p className="px-3 py-4 text-[12px] text-muted-foreground sm:px-6" data-testid="actions-nothing-sorted-open">
+            Nothing checked so far needs you for sure. {held.length} {held.length === 1 ? "item was" : "items were"} held back for you to decide (below).
           </p>
         ) : (
           <p className="px-3 py-4 text-[12px] text-muted-foreground sm:px-6" data-testid="actions-caught-up">
@@ -416,8 +447,65 @@ function ActionsBody({
           </ul>
         </CollapsibleSection>
       )}
+      {heldGroup}
       {notChecked}
     </div>
+  );
+}
+
+/** F5: an item the safety check HELD. Shows the AI's suggested to-do, who / where, the FIXED reason sentence, and
+ *  the AI's quote labelled as not found. Add as task / Dismiss create the proposal at click time (actOnHeldItemFn ->
+ *  the existing proposeFromSource + actOnProposal). */
+function HeldRowItem({ row, caller, tz, reload }: { row: ActionRow; caller: Caller; tz: string; reload: () => Promise<void> }) {
+  const Icon = SOURCE_ICON[row.source];
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<null | "approve" | "dismiss">(null);
+  const meta = [row.who, row.sourceLabel, when(row.at, tz)].filter(Boolean).join(" · ");
+  const signedOut = !caller?.entra_email;
+  async function act(action: "approve" | "dismiss") {
+    if (busy || done) return;
+    setBusy(true);
+    const r = await actOnHeldItemFn({ data: { caller, itemKey: row.itemKey, action } }).catch(() => null);
+    setBusy(false);
+    if (!r?.ok) {
+      toast.error(r?.error ?? "Couldn't add that. Try again.");
+      return;
+    }
+    setDone(action);
+    if (r.note) toast(r.note);
+    else toast.success(action === "approve" ? "Added to your board." : "Dismissed.");
+    void reload();
+  }
+  return (
+    <li className="px-3 py-2.5 sm:px-6" data-testid="actions-held-row" data-source={row.source}>
+      <div className="flex items-start gap-2">
+        <Icon size={14} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className={cn("break-words text-[13px] font-medium leading-snug", done ? "text-muted-foreground line-through" : "text-foreground")} data-testid="actions-held-title">
+            {row.title || "(no subject)"}
+          </p>
+          <p className="break-words text-[11px] text-muted-foreground">{done ? (done === "approve" ? STATE_LABEL.approved : STATE_LABEL.dismissed) : meta}</p>
+          <p className="mt-0.5 text-[12px] text-foreground/80" data-testid="actions-held-reason">
+            {row.heldReason}
+          </p>
+          {row.quote ? (
+            <p className="mt-0.5 break-words text-[12px] text-muted-foreground" data-testid="actions-held-quote">
+              {HELD_QUOTE_LABEL}: “{row.quote}”
+            </p>
+          ) : null}
+          {!done && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5" data-testid="actions-held-buttons">
+              <button type="button" className={cn(ROW_BTN, "min-h-11 md:min-h-0")} disabled={busy || signedOut} onClick={() => void act("approve")} data-testid="actions-held-add">
+                {busy ? <Loader2 size={11} className="animate-spin" aria-hidden /> : <Plus size={11} aria-hidden />} Add as task
+              </button>
+              <button type="button" className={cn(ROW_BTN, "min-h-11 md:min-h-0")} disabled={busy || signedOut} onClick={() => void act("dismiss")} data-testid="actions-held-dismiss">
+                <X size={11} aria-hidden /> Dismiss
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </li>
   );
 }
 
@@ -924,6 +1012,27 @@ function WhatShows({
           Hide group and meeting chats I never wrote in
           <span className="block text-[11px] text-muted-foreground">Unless someone @mentioned you.{hidden.uninvolved ? ` ${hidden.uninvolved} hidden.` : ""}</span>
         </span>
+      </label>
+      {/* F4 (owner-approved 2026-11-18): "Names that are you". One name per line; seeded from the configured full
+          names until saved. A Teams sender with one of these full names is you (your other account), never someone
+          asking you. Saved like every other setting here (setActionsSettingsFn). */}
+      <label className="block text-xs" data-testid="actions-own-names-field">
+        <span className="block">Names that are you</span>
+        <span className="block text-[11px] text-muted-foreground">
+          One full name per line (first and last). A Teams message from one of these names counts as yours. {OWN_NAMES_NOTE}
+        </span>
+        <textarea
+          key={settings.ownNames.join("\n")}
+          defaultValue={settings.ownNames.join("\n")}
+          rows={Math.max(2, Math.min(OWN_NAMES_MAX, settings.ownNames.length + 1))}
+          maxLength={OWN_NAMES_MAX * (OWN_NAME_CHARS + 1)}
+          onBlur={(e) => {
+            const next = cleanOwnNames(e.target.value.split("\n"));
+            if (next.join("\n") !== settings.ownNames.join("\n")) onChange({ ...settings, ownNames: next });
+          }}
+          data-testid="actions-own-names"
+          className="mt-1 w-full max-w-sm resize-y rounded border border-hairline bg-background px-1.5 py-0.5 text-xs"
+        />
       </label>
       <p className={head}>Sources</p>
       {(["email", "teams", "meeting"] as const).map((s) => (

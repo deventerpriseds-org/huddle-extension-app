@@ -344,6 +344,56 @@ try {
       [2, 1, 1, 1, true, 0],
     );
   }
+
+  // ── F5 (AC-actions-safety-and-invites): a HELD item, end to end through the real server path (actOnHeldItemFor:
+  // the page's own plan, the real thread lock, the real proposeFromSource + proposal store, the real actOnProposal
+  // with from:"actions" and correspondence.proposals OFF). Dismiss only: Add as task reaches journey's create.
+  {
+    const { assembleLedgerPlan } = await import("../src/features/huddle/lib/correspondence/report-from-ledger");
+    const { loadLedgerReportData } = await import("../src/features/huddle/lib/correspondence/report-from-ledger.server");
+    const { parseFeedsConfig } = await import("../src/features/huddle/lib/external-feeds/onedrive-feed");
+    const { threadUnits } = await import("../src/features/huddle/lib/actions/pipeline");
+    const { ACTIONS_SETTINGS_DEFAULT } = await import("../src/features/huddle/lib/actions/actions");
+    const { admitActionVerdict, teamsQuoteHaystack, CLASSIFIER_INPUT_VERSION } = await import("../src/features/huddle/lib/correspondence/action-classify");
+    const HCHAT = `19:f5_srv${"@"}unq.gbl.spaces`;
+    const BCHAT = `19:f5_bad${"@"}unq.gbl.spaces`;
+    const ASKH = "Hi Sam. Here is the outline of topics I want from you each week. Please send your first notes by Monday.";
+    const at = new Date(Date.now() - 60_000).toISOString(); // inside this week's window, whatever day the suite runs
+    const msgRow = (chat: string, text: string) => ({
+      ...item(teamsSourceItemId(chat, "1")),
+      threadId: chat,
+      at,
+      content: { kind: "teams", chatId: chat, chatName: null, messageId: "1", at, sender: { id: "f5-pat", name: "Pat Example", isApp: false }, fromOwner: false, text, webUrl: null, mentionedUserIds: [], ownerUserId: "owner-guid-0001" },
+    });
+    await L.storeContent(O, [msgRow(HCHAT, ASKH), msgRow(BCHAT, "Synthetic: could you please review the attached plan today?")] as never);
+    const cfgF = parseFeedsConfig(process.env.HUDDLE_ONEDRIVE_FEEDS)!;
+    const asm = assembleLedgerPlan(await loadLedgerReportData([O]), cfgF, 0);
+    const units = threadUnits(asm, ACTIONS_SETTINGS_DEFAULT).units;
+    const hu = units.find((x) => x.teams?.chatId === HCHAT)!;
+    const bu = units.find((x) => x.teams?.chatId === BCHAT)!;
+    const heldV = admitActionVerdict({ open_item: true, kind: "action", todo: "Test-Send your first notes by Monday", due: "Monday", quote: "Please send your weekly notes by Monday", confidence: "high", reason: "Asked.", category: "person_request" }, teamsQuoteHaystack(hu.teams!), { key: hu.itemKey, settled: false, nowIso: "2026-11-09T10:00:00.000Z", inputVersion: CLASSIFIER_INPUT_VERSION.teams });
+    const putV = (u: typeof hu, v: unknown) => pool.query(`UPDATE chat.correspondence_ledger SET result_ids = result_ids || jsonb_build_object('action', $3::jsonb) WHERE source = $1 AND source_item_id = $2`, [u.storeAt.source, u.storeAt.sourceItemId, JSON.stringify(v)]);
+    await putV(hu, heldV);
+    const page0 = await A.getActionsPage({ entra_email: O });
+    const heldKeys = (p: typeof page0) => (p.status === "ok" ? p.held.map((r) => r.itemKey) : [p.status]);
+    t("F5-S0 setup (real read): the stored quote_not_found verdict is listed in held, not in unchecked or rows", [heldV.notCheckedReason, heldKeys(page0).includes(hu.itemKey), page0.status === "ok" && page0.unchecked.some((r) => r.itemKey === hu.itemKey), page0.status === "ok" && page0.rows.some((r) => r.itemKey === hu.itemKey)], ["quote_not_found", true, false, false]);
+    const [d1, d2] = await Promise.all([A.actOnHeldItemFor({ entra_email: O }, { itemKey: hu.itemKey, action: "dismiss" }), A.actOnHeldItemFor({ entra_email: O }, { itemKey: hu.itemKey, action: "dismiss" })]);
+    const refs = await pool.query<{ proposal_id: string }>(`SELECT DISTINCT proposal_id FROM chat.task_proposal_refs WHERE owner_email = $1 AND source = 'teams' AND source_item_id = $2`, [O, hu.refItemId]);
+    const sv = (await pool.query<{ a: { status: string; notCheckedReason: string; proposalId: string | null } }>(`SELECT result_ids->'action' a FROM chat.correspondence_ledger WHERE source = 'teams' AND source_item_id = $1`, [hu.storeAt.sourceItemId])).rows[0]?.a;
+    const pState = refs.rows[0] ? (await pool.query<{ state: string }>(`SELECT state FROM chat.task_proposals WHERE id = $1`, [refs.rows[0].proposal_id])).rows[0]?.state : null;
+    const page1 = await A.getActionsPage({ entra_email: O });
+    t(
+      "F5-S1 GUARD (real SQL): Dismiss on a held item, clicked twice at once, flag OFF -> ONE proposal (evidence verbatim), dismissed through actOnProposal, its id written back (still not_checked); gone from the page",
+      [d1.ok, d2.ok, refs.rows.length, sv?.status, sv?.notCheckedReason, sv?.proposalId === refs.rows[0]?.proposal_id, pState, heldKeys(page1).includes(hu.itemKey), page1.status === "ok" && page1.unchecked.some((r) => r.itemKey === hu.itemKey)],
+      [true, true, 1, "not_checked", "quote_not_found", true, "dismissed", false, false],
+    );
+    // D5 extension pinned: a held verdict backs its proposal; a bad_shape verdict pointing at a proposal does NOT.
+    await putV(bu, { v: 1, key: bu.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "not_checked", notCheckedReason: "bad_shape", kind: null, category: null, confidence: null, todo: null, due: null, quote: null, reason: null, answeredByReply: false, proposalId: refs.rows[0]?.proposal_id ?? null, at: "2026-11-09T10:00:00.000Z" });
+    await putV(hu, { ...sv, proposalId: null });
+    t("F5-S2 GUARD (real SQL): proposalBacksActionsRow -- a bad_shape verdict never backs an Actions row; a held one does", [await A.proposalBacksActionsRow([O], [O], refs.rows[0]?.proposal_id ?? ""), await (async () => (await putV(hu, sv), A.proposalBacksActionsRow([O], [O], refs.rows[0]?.proposal_id ?? "")))()], [false, true]);
+    const nh = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: bu.itemKey, action: "dismiss" });
+    t("F5-S3 a non-held (bad_shape) item is refused by the held action", nh, { ok: false, error: "That item isn't in your list." });
+  }
 } catch (e) {
   fail++;
   console.log(`FAIL harness: ${e instanceof Error ? `${e.name}: ${e.message}` : "error"}`);

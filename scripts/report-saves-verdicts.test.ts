@@ -15,7 +15,8 @@ import { assembleLedgerPlan, type LedgerReportRow } from "../src/features/huddle
 import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import type { EmailContent, TeamsContent } from "../src/features/huddle/lib/correspondence/source-item";
 import { teamsSourceItemId } from "../src/features/huddle/lib/correspondence/source-item";
-import { ACTIONS_SETTINGS_DEFAULT, type ActionsSettings } from "../src/features/huddle/lib/actions/actions";
+import { ACTIONS_SETTINGS_DEFAULT, resolveActionsSettings, type ActionsSettings } from "../src/features/huddle/lib/actions/actions";
+import { ownerFullNames } from "../src/features/huddle/lib/correspondence/needs-you";
 import { inMemoryWrites, runClassify, runReportClassify, threadUnits, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
 import { renderActionReportHtml, rowsFromStoredVerdicts, type ReportRows } from "./action-report-html";
 
@@ -111,6 +112,13 @@ const storedAt = (store: ReadonlyMap<string, ActionVerdict>, i: number) => store
   f.store.set(k, { ...f.store.get(k)!, inputVersion: 1 });
   const r3 = await pass1(f);
   t("RB-3 an out-of-date verdict (Teams at input version 1) is re-judged: exactly 1 call", [r3.res.calls, r3.res.alreadyJudged], [1, 2]);
+  // X-2 (AC-actions-safety-and-invites.md): the PREVIOUS versions (email 2, teams 3) are out of date after the bump.
+  const ke = `${UNITS[0].storeAt.source}\u0000${UNITS[0].storeAt.sourceItemId}`;
+  f.store.set(ke, { ...f.store.get(ke)!, inputVersion: 2 });
+  f.store.set(k, { ...f.store.get(k)!, inputVersion: 3 });
+  const calls0 = f.log.model;
+  const r4 = await pass1(f);
+  t("X-2 GUARD: an email verdict at input version 2 and a Teams verdict at 3 are each judged again (2 calls, counted), stored at the new version", [r4.res.calls, f.log.model - calls0, r4.res.alreadyJudged, f.store.get(ke)?.inputVersion, f.store.get(k)?.inputVersion], [2, 2, 1, 3, 4]);
   const c = fakeStore(honest);
   const rc = await pass1(c, { usedToday: ACTIONS_SETTINGS_DEFAULT.dailyCap - 1 });
   t("RB-4 GUARD: the report is bounded by what the owner's daily cap has left (1 left -> 1 call, 2 over cap)", [rc.callsLeft, rc.res.calls, rc.res.overCap], [1, 1, 2]);
@@ -247,6 +255,74 @@ for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INF
   moved.store.set(k0, stale(`${directKey}|an-older-message-version`));
   await runClassify(asm, S1, judged, 5, withLock(moved));
   t("RK-2 a NEW message (different item key) is proposed afresh, not glued to the old proposal", [moved.log.propose, moved.store.get(k0)?.proposalId === "prop-decided-earlier"], [1, false]);
+  // X-5 (AC-actions-safety-and-invites.md): the re-judge keeps P also when it comes back not_checked or none.
+  const held = fakeStore(paraphrase); // the email on To comes back with a non-verbatim quote -> not_checked
+  held.store.set(k0, { ...stale(directKey), status: "not_checked", notCheckedReason: "quote_not_found", proposalId: "prop-rescued-earlier" } as ActionVerdict);
+  await runClassify(asm, S1, judged, 5, withLock(held));
+  const vh = held.store.get(k0);
+  t("X-5 GUARD: prior {not_checked, proposalId P}, re-judge -> quote_not_found: P stays attached, 0 proposals made", [held.log.model, held.log.propose, vh?.status, vh?.notCheckedReason, vh?.proposalId], [1, 0, "not_checked", "quote_not_found", "prop-rescued-earlier"]);
+  const momentary: Answer = (system, input) => (!input.includes("CHAT (oldest first)") && !system.includes("NOT on the To line") ? open("Thanks!", "Reply with thanks") : honest(system, input));
+  const gone = fakeStore(momentary);
+  gone.store.set(k0, stale(directKey));
+  await runClassify(asm, S1, judged, 5, withLock(gone));
+  const vg = gone.store.get(k0);
+  // 2026-11-18 red-team RT-7: the F3 backstop FAILS OPEN. This email holds a real ask besides "Thanks!", so the quote
+  // is no longer dropped to none; it is held (not_checked, the quote is under 8 chars). The X-5 invariants are unchanged:
+  // P stays attached and 0 proposals are made.
+  t("X-5b prior {open, proposalId P}, re-judge -> not open (a 'Thanks!' quote on a message with a real ask is held, RT-7): P stays attached, 0 proposals made", [gone.log.propose, vg?.status, vg?.notCheckedReason, vg?.proposalId], [0, "not_checked", "quote_not_found", "prop-decided-earlier"]);
+  // RED-TEAM RT-31 (REDTEAM-actions-safety-invites.md, F5-14): a HELD item rescued by the owner (P written back) that
+  // the re-judge now ADMITS as open keeps P -- never a second proposal, never listed twice.
+  const rescued = fakeStore(honest);
+  rescued.store.set(k0, { ...stale(directKey), status: "not_checked", notCheckedReason: "quote_not_found", proposalId: "prop-rescued-earlier" } as ActionVerdict);
+  await runClassify(asm, S1, judged, 5, withLock(rescued));
+  const vr = rescued.store.get(k0);
+  t("RT-31 X-5/F5-14 prior held {not_checked, P}, re-judge -> open: P kept, 0 proposals made", [rescued.log.propose, vr?.status, vr?.proposalId], [0, "open", "prop-rescued-earlier"]);
+}
+
+// ── F4 / X-6 (AC-actions-safety-and-invites): the REPORT pass uses the SAME "Names that are you" ───────────────────
+// The owner's second Teams account (another id, his configured full name) replies after the ask. With the resolved
+// ownNames (here the seed: the configured full name) the report's model input labels it OWNER and the chat settled;
+// with a saved EMPTY list it is labelled OTHER, as before F4.
+{
+  const SECOND = `19:f4_rep${AT}unq.gbl.spaces`;
+  const f4rows: LedgerReportRow[] = [
+    trow(SECOND, "1", "2026-11-10T17:00:00Z"),
+    trow(SECOND, "2", "2026-11-10T17:05:00Z", { sender: { id: "owner-second-guid", name: "Owen Example", isApp: false }, fromOwner: null, ownerUserId: undefined, text: "Synthetic: yes, go ahead." }),
+  ];
+  const inputsFor = async (ownNames: string[] | undefined) => {
+    const a = assembleLedgerPlan({ rows: f4rows, proposals: [], bell: [] }, cfg, SINCE, ownNames);
+    const seen: string[] = [];
+    const { deps, loadVerdicts } = fakeStore(() => ({ open_item: false, kind: "none", todo: null, due: null, quote: null, confidence: "high", reason: "Answered by your reply", category: "person_request" }));
+    await runReportClassify({ assembled: a, settings: S(), sortingOn: true, usedToday: 0, maxCalls: 5, loadVerdicts, deps: { ...deps, model: async (sys, input, name) => (seen.push(input), deps.model(sys, input, name)) } });
+    return seen.find((x) => x.includes("CHAT (oldest first)")) ?? "";
+  };
+  const seeded = await inputsFor(resolveActionsSettings({}, ownerFullNames(cfg)).ownNames);
+  const cleared = await inputsFor(resolveActionsSettings({ ownNames: [] }, ownerFullNames(cfg)).ownNames);
+  t(
+    "F4-R GUARD (X-6): the report pass labels the owner's second account OWNER (chat settled) with the resolved names; a saved empty list keeps it OTHER",
+    [seeded.includes("--- [2] OWNER |"), seeded.includes('"owner_already_replied_after_latest_other":true'), cleared.includes("--- [2] OTHER (Owen Example)"), cleared.includes('"owner_already_replied_after_latest_other":false')],
+    [true, true, true, true],
+  );
+}
+
+// ── Verifier VERIFY-actions-safety-invites-2 E1/E1b: an email thread with an earlier ask whose latest message is a pleasantry ──
+{
+  const asmE = (latest: string) =>
+    assembleLedgerPlan({ rows: [erow("e1", "conv-e", "2026-11-10T14:00:00Z", { bodyText: "Could you send me the signed contract by Friday?" }), erow("e2", "conv-e", "2026-11-10T15:00:00Z", { bodyText: latest })], proposals: [], bell: [] }, cfg, SINCE);
+  const runE = async (latest: string) => {
+    const a = asmE(latest);
+    const f = fakeStore(() => open(latest, "Send the signed contract"));
+    await runClassify(a, S({ sources: { email: true, teams: false, meeting: false } }), new Set(), 5, f.deps);
+    const u = threadUnits(a, S()).units.find((x) => x.source === "email" && x.email?.messages.length === 2);
+    return u ? f.store.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`)?.status : "no-unit";
+  };
+  t("F3E-1 GUARD email: an ask then 'Thanks!' as the latest message (model quotes 'Thanks!') is NOT dropped", ["open", "not_checked"].includes(String(await runE("Thanks!"))), true);
+  const asmS = assembleLedgerPlan({ rows: [erow("s1", "conv-s", "2026-11-10T14:00:00Z", { subject: "Please send the signed contract by Friday", bodyText: "Thanks!" })], proposals: [], bell: [] }, cfg, SINCE);
+  const fS = fakeStore(() => open("Thanks!", "Send the signed contract"));
+  await runClassify(asmS, S({ sources: { email: true, teams: false, meeting: false } }), new Set(), 5, fS.deps);
+  const uS = threadUnits(asmS, S()).units.find((x) => x.source === "email" && x.email?.messages.length === 1 && x.itemKey.includes("conv-s"));
+  t("F3E-3 GUARD email (loop 3 E-SUBJECT): an ask only in the subject with body 'Thanks!' is NOT dropped (no code backstop on email)", ["open", "not_checked"].includes(String(uS ? fS.store.get(`${uS.storeAt.source}\u0000${uS.storeAt.sourceItemId}`)?.status : "no-unit")), true);
+  t("F3E-2 GUARD email: an ask then 'Thanks, see you soon!' is NOT dropped", ["open", "not_checked"].includes(String(await runE("Thanks, see you soon!"))), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

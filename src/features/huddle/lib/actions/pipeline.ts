@@ -218,7 +218,12 @@ export async function runClassify(
     }
     const haystack = u.email ? emailQuoteHaystack(u.email, a.forwards) : teamsQuoteHaystack(u.teams!);
     const settled = u.email ? u.email.settled : u.teams!.settled;
-    let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source] });
+    // F3 fails open (verifiers VERIFY-actions-safety-invites-1..5): the momentary code backstop is TEAMS-ONLY and is
+    // given EVERY message of the chat, both speakers; it drops an item only when the WHOLE chat is momentary. Email
+    // passes [] (never dropped by code): the model sees a subject and every message's forward the backstop cannot.
+    // Anything subtler is left to MOMENTARY_RULE in the instructions, so a code mistake only ever shows an item.
+    const latestMessages: string[] = u.email ? [] : u.teams!.messages.map((m) => m.text ?? "");
+    let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source], latestMessages });
     /** Propose (when open) then store. Inside the thread lock (AC8) it first re-reads the thread's stored verdict:
      *  another pass that judged this version while we waited wins, and this one writes nothing (no 2nd proposal). */
     const finish = async (tx?: ThreadTx): Promise<"stored" | "adopted" | "failed"> => {
@@ -232,8 +237,11 @@ export async function runClassify(
       // version) that is still open keeps the proposal it already had, so the owner's decision on it (Wrong?, and
       // any later state) stays attached whatever the model's wording this time -- never a 2nd proposal, never a
       // suppressed reword that loses the link.
+      // X-5 (2026-11-18, AC-actions-safety-and-invites.md): the same holds when the re-judge comes back `none` or
+      // `not_checked` (e.g. F3 now drops a momentary line, F1/F5 hold or rescue an item): the prior proposal stays
+      // attached to the item key, so the owner's decision on it is never lost and no 2nd proposal is ever made.
       const keepId = prior && prior.key === u.itemKey && typeof prior.proposalId === "string" && prior.proposalId ? prior.proposalId : null;
-      if (v.status === "open" && keepId) {
+      if (keepId) {
         v = { ...v, proposalId: keepId };
       } else if (v.status === "open") {
         const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");
@@ -353,6 +361,115 @@ export function inMemoryWrites(base: ClassifyDeps, stored: () => Promise<Map<str
   };
 }
 
+// ── F5 HELD ITEMS: Add as task / Dismiss (AC-actions-safety-and-invites F5, owner-approved 2026-11-18) ──────────
+// A held item has no proposal (runClassify proposes only open verdicts). When the owner clicks Add as task or Dismiss,
+// the proposal is created THEN, through the EXISTING proposeFromSource (deps.propose), its id is written back onto
+// the stored verdict (status stays not_checked), and the EXISTING actOnProposal path acts on it (deps.act). No second
+// proposal store, no second action path. The propose + write-back run inside the thread lock (AC8), so a double click
+// or two tabs re-use ONE proposal (F5-7).
+
+export type HeldAction = "approve" | "dismiss";
+/** One (task, evidence) pair for proposeFromSource: the evidence is always a verbatim span of the message. */
+export interface HeldCandidate {
+  task: string;
+  evidence: string;
+}
+/** F5-8: the plain-words error for any failed held action. */
+export const HELD_ACTION_ERROR = "Couldn't add that. Try again.";
+/** At most this many (task, evidence) tries per click (each is one proposeFromSource validation, no model call). */
+export const HELD_CANDIDATES_MAX = 8;
+
+/** Pure: is this stored verdict the CURRENT held judgement of this unit? */
+export function isHeldVerdict(v: ActionVerdict | null | undefined, u: Pick<ThreadUnit, "itemKey" | "source">): v is ActionVerdict {
+  return !!v && verdictIsCurrent(v, u.itemKey, u.source) && v.status === "not_checked" && v.notCheckedReason === "quote_not_found";
+}
+
+/** Pure: the text proposeFromSource validates against (the thread's messages, as the classify pass passes them). */
+export function heldThreadText(u: Pick<ThreadUnit, "email" | "teams">): string {
+  const msgs: readonly { text?: string | null }[] = u.email ? u.email.messages : u.teams?.messages ?? [];
+  return msgs.map((m) => m.text ?? "").filter(Boolean).join("\n\n");
+}
+
+/**
+ * Pure: the (task, evidence) pairs a held item is proposed with, in order. The AI's quote was NOT found in the
+ * message, so it is never the evidence: every evidence is a verbatim span of the latest OTHER message (the whole
+ * message when short enough, then each sentence). First the AI's to-do with each evidence; then, so the owner's
+ * click is never lost to a to-do worded beyond the message, the sentence that shares most words with the to-do /
+ * quote as its own title (always grounded in itself). proposeFromSource's validators still decide.
+ */
+export function heldProposalCandidates(todo: string | null, quote: string | null, otherText: string | null): HeldCandidate[] {
+  const text = String(otherText ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return [];
+  const okEv = (s: string) => s.length >= 15 && s.length <= 400 && s.split(" ").filter(Boolean).length >= 4;
+  const sentences = text.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(okEv);
+  const evidences = [...new Set([...(okEv(text) ? [text] : []), ...sentences])];
+  const out: HeldCandidate[] = [];
+  const task = String(todo ?? "").trim().slice(0, 200);
+  if (task) for (const evidence of evidences) out.push({ task, evidence });
+  const wordsOf = (s: string) => new Set(s.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []);
+  const want = wordsOf(`${todo ?? ""} ${quote ?? ""}`);
+  const ranked = sentences
+    .filter((s) => s.length <= 200)
+    .map((s, i) => ({ s, i, n: [...wordsOf(s)].filter((w) => want.has(w)).length }))
+    .sort((a, b) => b.n - a.n || a.i - b.i);
+  if (ranked[0] && !out.some((c) => c.task === ranked[0].s)) out.push({ task: ranked[0].s, evidence: ranked[0].s });
+  return out.slice(0, HELD_CANDIDATES_MAX);
+}
+
+export interface HeldActDeps {
+  /** The thread lock (withThreadLock): the propose + write-back step of one thread, serialised. */
+  lockThread<T>(u: ThreadUnit, fn: (tx: ThreadTx) => Promise<T>): Promise<T>;
+  /** The EXISTING proposeFromSource, tried with each candidate in order; the first created / seen id wins. Throws on
+   *  a store failure. */
+  propose(u: ThreadUnit, cands: readonly HeldCandidate[], threadText: string): Promise<{ id: string | null; onBoard: boolean }>;
+  /** The EXISTING actOnProposal (from: "actions"). */
+  act(proposalId: string, action: HeldAction): Promise<{ ok: boolean; error?: string; note?: string; alreadyOnBoard?: boolean }>;
+  /** 2026-11-18 (red-team, untested finding): does the written-back proposal still exist? A held item whose rescue
+   *  proposal was DELETED gets a fresh one instead of retrying the missing id forever. Throws on a read failure (the
+   *  click then fails and nothing is stored). Absent = assume it exists (today's behaviour). */
+  proposalExists?(proposalId: string): Promise<boolean>;
+}
+
+export type HeldActResult = { ok: true; proposalId: string | null; note?: string } | { ok: false; error: string; proposalId?: string };
+
+/** F5: Add as task / Dismiss on a HELD item. Nothing logs (the caller logs only the outcome code). */
+export async function actOnHeldItem(u: ThreadUnit, action: HeldAction, deps: HeldActDeps): Promise<HeldActResult> {
+  type Step = { kind: "not_held" } | { kind: "id"; id: string } | { kind: "on_board" } | { kind: "none" };
+  let step: Step;
+  try {
+    step = await deps.lockThread<Step>(u, async (tx) => {
+      const cur = await tx.current();
+      if (!isHeldVerdict(cur, u)) return { kind: "not_held" };
+      // F5-7 / F5-8: a proposal already created for this item (another click, or a click whose action failed) is re-used.
+      // A written-back id whose proposal no longer exists is NOT re-used: a fresh proposal is made and written back.
+      if (cur.proposalId && (!deps.proposalExists || (await deps.proposalExists(cur.proposalId)))) return { kind: "id", id: cur.proposalId };
+      const p = await deps.propose(u, heldProposalCandidates(cur.todo, cur.quote, (u.email ?? u.teams)?.latestOther?.text ?? null), heldThreadText(u));
+      if (p.id) {
+        await tx.store({ ...cur, proposalId: p.id });
+        return { kind: "id", id: p.id };
+      }
+      if (p.onBoard) {
+        await tx.store({ ...cur, onBoard: true });
+        return { kind: "on_board" };
+      }
+      return { kind: "none" };
+    });
+  } catch {
+    return { ok: false, error: HELD_ACTION_ERROR }; // nothing stored: the transaction rolled back
+  }
+  if (step.kind === "not_held") return { ok: false, error: "That item isn't in your list." };
+  if (step.kind === "on_board") return { ok: true, proposalId: null, note: "It was already on your board." };
+  if (step.kind === "none") return { ok: false, error: HELD_ACTION_ERROR };
+  let r: Awaited<ReturnType<HeldActDeps["act"]>> | null = null;
+  try {
+    r = await deps.act(step.id, action);
+  } catch {
+    r = null;
+  }
+  if (!r?.ok) return { ok: false, error: r?.error || HELD_ACTION_ERROR, proposalId: step.id };
+  return { ok: true, proposalId: step.id, ...(r.note ? { note: r.note } : r.alreadyOnBoard ? { note: "It was already on your board." } : {}) };
+}
+
 // ── CANDIDATES (page read) ──────────────────────────────────────────────────────────────────────────
 
 export interface ProposalLite {
@@ -408,6 +525,8 @@ export function buildCandidates(a: {
       proposalId: p?.id ?? null,
       proposalState: p?.state ?? null,
       status: current?.status ?? ("not_checked" as const),
+      // F5: the held reason travels to the selection (it used to be dropped here).
+      notCheckedReason: current?.status === "not_checked" ? current.notCheckedReason ?? null : null,
       answeredByReply: current?.answeredByReply ?? false,
       onBoard: current?.onBoard === true,
       category: current?.category ?? null,

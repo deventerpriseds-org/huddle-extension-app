@@ -1,5 +1,19 @@
 # Project Memory — huddle-extension-app
 
+## Actions: held items, invites with a real ask, names that are you (2026-11-18, branch claude_actions-held-names, NOT merged, NOT live) -- ACT:actions-missing-yesterday
+- The quote safety check now admits a quote made of verbatim fragments in order; a gap may only skip WHOLE sentences
+  (red-team RT-1: "Please do ... send" from "Please do not send" must fail). NFC + combining marks handled.
+- Items it still holds are shown in their own visible group with the AI's to-do, a fixed reason sentence and Add as
+  task / Dismiss (proposal created at click time via proposeFromSource; id written back under the thread lock).
+- A meeting invite that asks for a SPECIFIC deliverable is person_request (visible); a bare invite stays hidden; a
+  meeting_invite is never a reply item (kind both -> action).
+- Momentary chat logistics ("be right there") are no open item, but only when that line is the sender's WHOLE latest
+  message (fail open, red-team RT-7).
+- "Names that are you" (ActionsSettings.ownNames, seeded from config ownerFullNames, saved empty list kept): a full-name
+  match marks a Teams sender as the owner even when owner ids exist. His legal first name differs from his nickname.
+- Re-judge keeps the item's earlier proposal whatever the new status (X-5); decided proposals are never re-listed.
+- CLASSIFIER_INPUT_VERSION email 3 / teams 4 -> one more re-judge after deploy.
+
 ## Actions: app and workspace invitations (2026-11-17, branch claude_actions-app-invite, NOT merged, NOT live) -- ACT:actions-false-positives
 - New classifier category `app_invite` (an app/platform says he was invited to or can access a team, workspace,
   organization, tool or shared file, even when a person triggered it). No open item by itself; hideable in What shows
