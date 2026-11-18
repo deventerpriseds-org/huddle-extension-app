@@ -2046,6 +2046,7 @@ Every mistake must make the next session more efficient. Append, never delete.
   a non-owner's exclusive-job card. Prompt stays as intent; code enforces. (A firing trap is signal, not silenced.)
 
 ## Active work
+- [2026-11-19] Calendar: TENTATIVE events are excluded like "work block" titles (not stored in journey, dropped from Huddle's Graph AND work-feed reads). journey #130 / Huddle #284. Switch: journey config.calendarIgnoreTentative (default on). Huddle's feed read had no exclusion before this. NOT owner-confirmed.
 - [2026-11-18] Schedule tab This Week: the star on a STARRED row of the live tab is now a "Remove from This Week" button (same runPush unstar as the Priorities ⋮). It was decorative before. #280 `eaf3019`, NOT owner-confirmed. Pre-existing red: schedule-today-band T5 fails on main.
 
 ### Task pick-up fit (2026-11-04, branch `claude_task-pickup-fit`)
