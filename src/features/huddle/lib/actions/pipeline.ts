@@ -35,7 +35,7 @@ import { meetingItemIsOwnersOrUnassigned } from "../proposals/meeting-triage";
 import { REJECT_REASONS, titleKey, type RejectReason } from "../proposals/proposals";
 import type { ProposeResult } from "../proposals/engine";
 import { safeLink } from "../attention/attention";
-import { correctionFor, correctionHides, HELD_REASONS, plainPreview, proposalStateListed, type ActionCandidate, type ActionsSettings } from "./actions";
+import { correctionFor, correctionHides, HELD_REASONS, plainPreview, proposalStateListed, whatShowsHideReason, type ActionCandidate, type ActionsSettings } from "./actions";
 
 const stripFeed = (id: string) => (id.startsWith(FEED_ID_PREFIX) ? id.slice(FEED_ID_PREFIX.length) : id);
 
@@ -736,7 +736,10 @@ export function buildCandidates(a: {
       });
     }
   }
-  return { candidates: collapseDuplicateTeamsItems(out, (c) => senderByItem.get(c.itemKey) ?? null), uninvolvedHidden, meetingOthersHidden };
+  // Verify-2 orphan fix: the collapse ranks items the page will LIST (the same What-shows rule selection applies)
+  // above items it will hide, so a hidden twin never drops a listed one.
+  const whatShows = whatShowsHideReason(a.settings);
+  return { candidates: collapseDuplicateTeamsItems(out, (c) => senderByItem.get(c.itemKey) ?? null, (c) => whatShows(c) === null), uninvolvedHidden, meetingOthersHidden };
 }
 
 // ── 2026-11-17 accuracy fixes (owner report: one Teams ask showed twice, "Teams 1:1" and "Teams, <his own name>") ──
@@ -769,11 +772,18 @@ export function teamsChatOfItemKey(itemKey: string): string | null {
  *  - they come from the SAME chat, or
  *  - the SAME sender id (senderIdOf; null = unknown, never matched) quoted the SAME sentence (folded) of at least
  *    DEDUP_MIN_QUOTE_CHARS characters (posted in a 1:1 and again in a small group chat, or re-posted later).
- * Only the NEWEST (by `at`) is kept. A shared backing proposal is NEVER a reason to collapse: the proposal store
+ * Only ONE is kept per key: an ELIGIBLE item (one the What-shows switches will not hide; `eligible`, from
+ * buildCandidates) before an ineligible one, then the NEWEST by `at`, then the smaller itemKey -- never input order
+ * (verify-2). So an item the page hides never drops one it lists; it only collapses with other hidden twins, which keeps
+ * the hidden counts one per ask as before. A shared backing proposal is NEVER a reason to collapse: the proposal store
  * attaches different senders' to-dos to one proposal by title (proposals-store.server.ts, OQ-9). A display NAME is
  * never a sender id. Nothing else is touched: emails, meetings, and Teams items that are not open keep their place.
  */
-export function collapseDuplicateTeamsItems(cands: readonly ActionCandidate[], senderIdOf: (c: ActionCandidate) => string | null = () => null): ActionCandidate[] {
+export function collapseDuplicateTeamsItems(
+  cands: readonly ActionCandidate[],
+  senderIdOf: (c: ActionCandidate) => string | null = () => null,
+  eligible: (c: ActionCandidate) => boolean = () => true,
+): ActionCandidate[] {
   const keysOf = (c: ActionCandidate): string[] => {
     const k: string[] = [];
     const chat = teamsChatOfItemKey(c.itemKey);
@@ -783,13 +793,21 @@ export function collapseDuplicateTeamsItems(cands: readonly ActionCandidate[], s
     if (sid && q.length >= DEDUP_MIN_QUOTE_CHARS) k.push(`q:${sid}\u0000${q}`);
     return k;
   };
-  const t = (c: ActionCandidate) => (c.at ? Date.parse(c.at) : NaN);
+  const t = (c: ActionCandidate) => (c.at ? Date.parse(c.at) : NaN) || -Infinity;
+  /** true when `c` beats `w`: eligible first, then newest, then the smaller itemKey (a stable id order). */
+  const beats = (c: ActionCandidate, w: ActionCandidate): boolean => {
+    const ec = eligible(c);
+    const ew = eligible(w);
+    if (ec !== ew) return ec;
+    if (t(c) !== t(w)) return t(c) > t(w);
+    return c.itemKey < w.itemKey;
+  };
   const winner = new Map<string, ActionCandidate>();
   for (const c of cands) {
     if (c.source !== "teams" || c.status !== "open") continue;
     for (const k of keysOf(c)) {
       const w = winner.get(k);
-      if (!w || (t(c) || -Infinity) > (t(w) || -Infinity)) winner.set(k, c);
+      if (!w || beats(c, w)) winner.set(k, c);
     }
   }
   return cands.filter((c) => c.source !== "teams" || c.status !== "open" || keysOf(c).every((k) => winner.get(k) === c));

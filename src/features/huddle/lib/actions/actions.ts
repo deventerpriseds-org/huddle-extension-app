@@ -477,6 +477,24 @@ const ms = (iso: string | null) => {
  *   otherwise                                            -> a row.
  * Counts are computed FROM the rows, so Email + Teams + Meetings = All = the sum of the sections (AC-D-2).
  */
+/** Which What-shows switch hides a candidate, or null when none does. */
+export type WhatShowsHideReason = "uninvolved" | "sources" | "category" | "sender";
+
+/** Pure: THE What-shows rule, in its one order (uninvolved chat, source off, hidden category, hidden list sender).
+ *  `selectActionItems` counts with it and `buildCandidates` passes it to the Teams same-ask collapse, so an item the
+ *  page will hide never wins a collapse over one it will list (verify-2 orphan fix, 2026-11-18). */
+export function whatShowsHideReason(s: ActionsSettings): (c: Pick<ActionCandidate, "uninvolved" | "source" | "category" | "listSender">) => WhatShowsHideReason | null {
+  const hiddenCats = new Set<string>(s.hideCategories);
+  const hiddenSenders = new Set(s.hiddenSenders);
+  return (c) => {
+    if (c.uninvolved && s.hideUninvolvedChats) return "uninvolved";
+    if (!s.sources[c.source]) return "sources";
+    if (c.category && hiddenCats.has(c.category)) return "category";
+    if (c.listSender && hiddenSenders.has(c.listSender)) return "sender";
+    return null;
+  };
+}
+
 export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsSettings): ActionsSelection {
   const out: ActionsSelection = {
     rows: [],
@@ -491,9 +509,7 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     held: [],
     heldCounts: { all: 0, email: 0, teams: 0, meeting: 0 },
   };
-  const hiddenCats = new Set<string>(s.hideCategories);
-  const hiddenSenders = new Set(s.hiddenSenders);
-  const toRow = (c: ActionCandidate, section: ActionSection): ActionRow => ({
+  const toRow =(c: ActionCandidate, section: ActionSection): ActionRow => ({
     ...c.display,
     id: c.proposalId ?? "",
     source: c.source,
@@ -506,17 +522,19 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     fromList: !!c.listSender,
     listSender: c.listSender,
   });
+  const whatShows = whatShowsHideReason(s);
   /** The What-shows switches, in ONE order for judged and not-checked items alike: a switch that hides an item hides
    *  it whether or not it has been judged yet (2026-11-17). Counts it in `hidden` and returns true when it hides. */
   const hiddenBySettings = (c: ActionCandidate): boolean => {
-    if (c.uninvolved && s.hideUninvolvedChats) {
+    const why = whatShows(c);
+    if (why === "uninvolved") {
       out.hidden.uninvolved++;
-    } else if (!s.sources[c.source]) {
+    } else if (why === "sources") {
       out.hidden.sources++;
-    } else if (c.category && hiddenCats.has(c.category)) {
+    } else if (why === "category") {
       const k = c.category as HideableCategory;
       out.hidden.categories[k] = (out.hidden.categories[k] ?? 0) + 1;
-    } else if (c.listSender && hiddenSenders.has(c.listSender)) {
+    } else if (why === "sender") {
       out.hidden.senders++;
     } else {
       return false;
