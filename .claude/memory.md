@@ -1,6 +1,7 @@
 # Project Memory — huddle-extension-app
 
-## Iris email alerts: subject exclusion list (2026-11-18, PR #286 verified 7/7, merging; NOT owner-confirmed live) -- ACT:alert-exclusions
+## Iris email alerts: subject exclusion list (2026-11-18, #286 MERGED 3f5fac37, deploy-swa 44376446505 SUCCESS; NOT owner-confirmed live) -- ACT:alert-exclusions
+- **Live dry run** (run-inbound-email 44376789048, 72h): 10 minutes emails `excluded-subject`, 43 real asks still kept. The 19:03 minutes email got no owed row and no Iris turn (azure-pg-query after deploy); owed minutes rows = 0.
 - **Settings writers never write after a failed read (verify loop 1 C4):** `settingsRead()` in actions.server.ts reports `readFailed`; "Stop flagging this list" refuses, the page sets `settingsUnreadable` and ActionsView refuses to save defaults. The 7 already-owed minutes rows were dismissed (DATAFIX-alert-exclusions-owed-minutes.md, undo SQL there).
 - **What was wrong (measured, azure-pg-query run 44369628206):** Huddle's OWN Fireflies minutes emails ("Meeting Minutes: <topic> <date>, <time>", from_name "EDS Dev", subject from `minutesSubject()`) passed `screenMessage` (ASK words / "?"), so each got an Iris 1:1 alert + drafted reply. 9 rows, 7 still owed.
 - **Now (on the branch):** `screenMessage(m, mode, mailbox, excludeSubjects?)` returns `excluded-subject` (every mode, after `self`) when an ORIGINAL subject (Re:/Fw:/Fwd: still screened normally) contains a listed phrase. Literal match, case + whitespace folded, edges must not touch a Unicode letter/digit (JS `\b` misses "minutes:" and wrongly matches inside "réunion").
