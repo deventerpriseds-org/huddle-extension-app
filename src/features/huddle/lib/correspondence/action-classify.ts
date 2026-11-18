@@ -19,6 +19,7 @@
 
 import type { ConversationFacts } from "./needs-you";
 import type { TeamsChatFacts } from "./report-from-ledger";
+import type { RejectReason } from "../proposals/proposals";
 
 /** 2026-11-17 (owner: "hallucination of actions not asked for"; a summary said "you have not replied" and "you still
  *  need to resubmit" with nothing in the messages saying so). ADDED to both the email and the Teams instructions;
@@ -377,8 +378,15 @@ export interface ActionVerdict {
   /** D-1: CLASSIFIER_INPUT_VERSION[source] when judged; absent = 1 (judged before versions existed). */
   inputVersion?: number;
   status: "open" | "none" | "not_checked";
-  /** Why not_checked: quote_not_found | bad_shape. */
-  notCheckedReason?: "quote_not_found" | "bad_shape";
+  /** Why not_checked: quote_not_found | bad_shape | no_task_record (AC-actions-no-orphans: an open verdict whose
+   *  propose step produced no task record is stored HELD with this reason, never open-with-no-proposal). */
+  notCheckedReason?: "quote_not_found" | "bad_shape" | "no_task_record";
+  /** AC-actions-no-orphans AC-6 / G-2: only with notCheckedReason "no_task_record": the proposal validator's
+   *  rejection KINDS (RejectReason keys, sorted, unique), never any text. */
+  noTaskRecordKinds?: RejectReason[];
+  /** AC-actions-no-orphans G-1: set (with onBoard:true) when the to-do was suppressed because the same to-do was
+   *  dismissed from another source (F15). Hidden exactly as onBoard; the marker says why. */
+  suppressedBy?: "dismissed";
   kind: ActionKind | null;
   category: ActionCategory | null;
   confidence: "high" | "medium" | "low" | null;

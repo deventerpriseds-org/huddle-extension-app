@@ -336,7 +336,10 @@ export interface ActionCandidate {
   /** open = admitted; none = not open; not_checked = no admitted verdict (unclassified, refused, over cap). */
   status: "open" | "none" | "not_checked";
   /** F5: why a current verdict is not_checked (the stored verdict's notCheckedReason); null / absent otherwise. */
-  notCheckedReason?: "quote_not_found" | "bad_shape" | null;
+  notCheckedReason?: "quote_not_found" | "bad_shape" | "no_task_record" | null;
+  /** G4-a (AC-actions-no-orphans): the current verdict names a proposal id that the proposal read did not return
+   *  (the row was deleted). The candidate's proposalId is then null. Optional so older candidates stay valid. */
+  proposalMissing?: boolean;
   answeredByReply: boolean;
   /** Admitted but the to-do is already open on the board. */
   onBoard: boolean;
@@ -390,6 +393,8 @@ export interface ActionRow extends ActionDisplay {
   listSender: string | null;
   /** F5: on a held row only, the fixed reason sentence (HELD_REASON_TEXT); absent elsewhere. */
   heldReason?: string;
+  /** AC-actions-no-orphans AC-14: on a held row only, the label over its quote (HELD_QUOTE_LABELS); absent elsewhere. */
+  heldQuoteLabel?: string;
 }
 
 export interface ActionsSelection {
@@ -413,14 +418,29 @@ export interface ActionsSelection {
 }
 
 /** F5 rule 1: the one reason that makes a not-checked item HELD. bad_shape / over cap / never judged stay "Not checked". */
-export const HELD_REASONS = ["quote_not_found"] as const;
+export const HELD_REASONS = ["quote_not_found", "no_task_record"] as const;
 export type HeldReason = (typeof HELD_REASONS)[number];
+/** AC-actions-no-orphans: why a HELD row is held. The stored reasons above, plus two read-time ones for an `open`
+ *  verdict with no home: its proposal row was deleted (G4-a), or it has a proposal but no section (G4-b). The legacy
+ *  open-with-no-proposal rows (AC-12) read as `no_task_record`. */
+export type HeldRowReason = HeldReason | "proposal_gone" | "no_section";
 /** F5 rule 4 / F5-12: the plain-words reason shown on a held row. Fixed, written in code; never model text. */
-export const HELD_REASON_TEXT: Record<HeldReason, string> = {
+export const HELD_REASON_TEXT: Record<HeldRowReason, string> = {
   quote_not_found: "Held back: the AI's supporting quote didn't match the message word for word, so it wasn't added automatically.",
+  no_task_record: "Held back: the AI's to-do couldn't be matched to the message closely enough to add it automatically.",
+  proposal_gone: "Held back: the suggested task for this item was removed, so it isn't on your list automatically.",
+  no_section: "Held back: the AI couldn't tell what kind of item this is, so it wasn't sorted automatically.",
 };
 /** F5 rule 4: the label over the model's quote on a held row (it never claims the quote is real). */
 export const HELD_QUOTE_LABEL = "AI's quote (not found in the message)";
+/** AC-14: the label per held reason. Only quote_not_found says the quote was not found: every other held quote WAS
+ *  admitted as verbatim. Fixed, in code; never model text. */
+export const HELD_QUOTE_LABELS: Record<HeldRowReason, string> = {
+  quote_not_found: HELD_QUOTE_LABEL,
+  no_task_record: "AI's quote",
+  proposal_gone: "AI's quote",
+  no_section: "AI's quote",
+};
 /** F5 rule 6: the group's title. */
 export const HELD_GROUP_LABEL = "Held by the safety check";
 /** Pure (F5-1 / F5-2): is this candidate HELD (current verdict not_checked for quote_not_found)? */
@@ -517,16 +537,15 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
    *  proposal left the listed states) or it is already on the board; otherwise the What-shows switches apply (same
    *  order as every item, F5 rule 3) and it is listed in `held`. A rescue proposal still `proposed` (its action failed
    *  after it was created) keeps the row, with that id, so the next click re-uses it (F5-8). */
-  const pushHeld = (c: ActionCandidate) => {
+  const pushHeld = (c: ActionCandidate, reason: HeldRowReason) => {
     if (c.onBoard) return;
     if (ownerDecided(c)) return;
     if (hiddenBySettings(c)) return;
-    const reason = c.notCheckedReason as HeldReason;
-    out.held.push({ ...toRow(c, c.section ?? "needs_reply"), heldReason: HELD_REASON_TEXT[reason] });
+    out.held.push({ ...toRow(c, c.section ?? "needs_reply"), heldReason: HELD_REASON_TEXT[reason], heldQuoteLabel: HELD_QUOTE_LABELS[reason] });
   };
   for (const c of cands) {
     if (isHeldCandidate(c)) {
-      pushHeld(c);
+      pushHeld(c, c.notCheckedReason as HeldReason);
       continue;
     }
     if (c.status === "not_checked") {
@@ -539,8 +558,14 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
       continue;
     }
     if (c.onBoard) continue;
-    if (!c.proposalId || !c.section) {
-      pushUnchecked(c);
+    // AC-actions-no-orphans: an open item with no home is HELD (actionable), never read-only "Not checked yet":
+    // no proposal (the legacy rows, AC-12; or its proposal was deleted, G4-a), or a proposal but no section (G4-b).
+    if (!c.proposalId) {
+      pushHeld(c, c.proposalMissing ? "proposal_gone" : "no_task_record");
+      continue;
+    }
+    if (!c.section) {
+      pushHeld(c, "no_section");
       continue;
     }
     if (!LISTED_STATES.has(c.proposalState ?? "")) continue;

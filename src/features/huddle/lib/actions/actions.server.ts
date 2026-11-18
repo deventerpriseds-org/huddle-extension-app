@@ -32,7 +32,7 @@ import {
   type OwnerCorrection,
 } from "./actions";
 import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, runReportClassify, inMemoryWrites, type ClassifyDeps, type ThreadTx, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
-import { actOnHeldItem, threadUnits, type HeldAction, type HeldActResult, type HeldCandidate } from "./pipeline";
+import { actOnHeldItem, proposeOpenVerdict, threadUnits, type HeldAction, type HeldActResult, type HeldCandidate } from "./pipeline";
 
 /** The feed config when the correspondence ingest is on (the Actions view reads what the ingest stored). */
 export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | null {
@@ -210,13 +210,9 @@ export async function classifyDepsFor(owner: string, owners: readonly string[]):
       const src = { source: u.source, sourceItemId: u.refItemId, at: u.at, context: (u.email?.latestOther?.subject ?? u.teams?.chatName ?? "").slice(0, 160) || null, text };
       // The admitted to-do through the EXISTING validators; when its wording is not grounded in the quote (a
       // "reply to ..." title), the quote itself is the title (always grounded). Nothing else is invented.
-      const titles = [v.todo, v.quote].filter((t): t is string => !!t);
-      for (const title of titles) {
-        const r = await proposeFromSource(owner, src, { ...pd, extract: async () => ({ tasks: [{ task: title.slice(0, 200), evidence: v.quote, assignee: null, due_text: v.due }] }) });
-        if (r.ids.length) return { id: r.ids[0], onBoard: false };
-        if (r.onBoard || r.suppressed) return { id: null, onBoard: true };
-      }
-      return { id: null, onBoard: false };
+      // AC-actions-no-orphans: proposeOpenVerdict decides the outcome (reworded -> the prior id, dismissed -> hidden with
+      // its marker, all rejected -> the rejection kinds, so the pass stores the item HELD instead of homeless).
+      return proposeOpenVerdict(v, (title) => proposeFromSource(owner, src, { ...pd, extract: async () => ({ tasks: [{ task: title.slice(0, 200), evidence: v.quote, assignee: null, due_text: v.due }] }) }));
     },
     addMeetingRows: (m, items) => addMeetingRows(owner, m, items),
     lockThread: (u, fn) => withThreadLock(owners, u, fn),
@@ -592,7 +588,8 @@ export async function proposalBacksActionsRow(owners: string[], ledgerOwners: st
                           AND result_ids->'action'->>'proposalId' = $3
                           AND (result_ids->'action'->>'status' = 'open'
                                -- F5: a HELD item's rescue proposal (written back by actOnHeldItemFor) backs its row too.
-                               OR (result_ids->'action'->>'status' = 'not_checked' AND result_ids->'action'->>'notCheckedReason' = 'quote_not_found')))
+                               -- AC-actions-no-orphans AC-25: and a no_task_record one (exact strings; a JSON null is SQL NULL: no match).
+                               OR (result_ids->'action'->>'status' = 'not_checked' AND result_ids->'action'->>'notCheckedReason' IN ('quote_not_found', 'no_task_record'))))
                OR EXISTS (SELECT 1 FROM chat.task_proposal_refs
                            WHERE proposal_id = $3 AND owner_email = ANY($1::text[]) AND source = 'transcript')) AS ok`,
       [owners.map((o) => o.toLowerCase()), lower(ledgerOwners), proposalId],

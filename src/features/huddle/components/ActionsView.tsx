@@ -490,7 +490,7 @@ function HeldRowItem({ row, caller, tz, reload }: { row: ActionRow; caller: Call
           </p>
           {row.quote ? (
             <p className="mt-0.5 break-words text-[12px] text-muted-foreground" data-testid="actions-held-quote">
-              {HELD_QUOTE_LABEL}: “{row.quote}”
+              {row.heldQuoteLabel ?? HELD_QUOTE_LABEL}: “{row.quote}”
             </p>
           ) : null}
           {!done && (
