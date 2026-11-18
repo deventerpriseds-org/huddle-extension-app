@@ -228,5 +228,26 @@ for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INF
   t("RL-2 GUARD: save OFF never enters the thread lock (its tx.store writes the real store)", [offLock, off.store.size], [0, 0]);
 }
 
+// ── Verifier VERIFY-actions-app-invite-2 B3/B4: a re-judge after a classifier-version bump keeps the item's proposal ──
+{
+  const withLock = (f: ReturnType<typeof fakeStore>): ClassifyDeps => ({
+    ...f.deps,
+    lockThread: async (u, fn) => fn({ current: async () => f.store.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`) ?? null, store: async (v) => void f.store.set(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`, v) }),
+  });
+  const S1 = S({ sources: { email: true, teams: false, meeting: false } });
+  const judged = new Set([UNITS[1].itemKey]); // only the email on To is re-judged
+  const k0 = `${UNITS[0].storeAt.source}\u0000${UNITS[0].storeAt.sourceItemId}`;
+  const stale = (key: string): ActionVerdict => ({ ...(open("x", "Older wording of the ask") as never), status: "open", key, at: NOW, inputVersion: 1, proposalId: "prop-decided-earlier" } as ActionVerdict);
+  const same = fakeStore(honest);
+  same.store.set(k0, stale(directKey));
+  await runClassify(asm, S1, judged, 5, withLock(same));
+  const v0 = same.store.get(k0);
+  t("RK-1 GUARD: re-judge of the SAME item version (old classifier) keeps its proposal -> no new proposal, decision stays attached", [same.log.model, same.log.propose, v0?.proposalId, v0?.status, v0?.inputVersion !== 1], [1, 0, "prop-decided-earlier", "open", true]);
+  const moved = fakeStore(honest);
+  moved.store.set(k0, stale(`${directKey}|an-older-message-version`));
+  await runClassify(asm, S1, judged, 5, withLock(moved));
+  t("RK-2 a NEW message (different item key) is proposed afresh, not glued to the old proposal", [moved.log.propose, moved.store.get(k0)?.proposalId === "prop-decided-earlier"], [1, false]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
