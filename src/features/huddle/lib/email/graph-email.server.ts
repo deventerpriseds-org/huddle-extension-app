@@ -524,6 +524,9 @@ export interface CalendarEvent {
   location: string | null;
   isAllDay: boolean;
   organizer: string | null;
+  /** Graph's availability (busy | tentative | free | oof | workingElsewhere), lower-cased; null when unknown.
+   *  Read so tentative events can be dropped (isIgnoredCalendarEvent). Additive. */
+  showAs?: string | null;
   /** Set only on events from a second source (the work-mailbox OneDrive feed): that mailbox's address.
    *  Absent on EDS Graph events, so every existing reader sees them exactly as before. */
   source?: string;
@@ -573,6 +576,9 @@ export async function getOwnerCalendarEvents(input: {
     console.error("[calendar] work-calendar feed failed", err instanceof Error ? err.message : err);
     feed = { events: [], warnings: ["Work calendar feed could not be read; work meetings are NOT included."] };
   }
+  // The work feed gets the SAME exclusion as the EDS read (work blocks, tentative). It had none: the
+  // owner's 2026-11-18 Schedule screenshot still showed "Work Block 1/2" as MEETING from this path.
+  feed = { ...feed, events: feed.events.filter((e) => !isIgnoredCalendarEvent(e)) };
   if (!feed.events.length && !feed.warnings.length) return r;
   // The EDS failure is still reported (ok:false + its error), but work meetings that DID load are not
   // thrown away with it (verifier D3).
@@ -613,7 +619,7 @@ export async function getGraphCalendarEvents(input: {
     const qs =
       `startDateTime=${encodeURIComponent(input.startISO)}` +
       `&endDateTime=${encodeURIComponent(input.endISO)}` +
-      `&$select=${encodeURIComponent("id,subject,start,end,location,isAllDay,organizer")}` +
+      `&$select=${encodeURIComponent("id,subject,start,end,location,isAllDay,organizer,showAs")}` +
       `&$orderby=${encodeURIComponent("start/dateTime")}` +
       `&$top=${top}`;
     const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/calendarView?${qs}`, {
@@ -642,6 +648,7 @@ export async function getGraphCalendarEvents(input: {
         location?: { displayName?: string };
         isAllDay?: boolean;
         organizer?: { emailAddress?: { name?: string; address?: string } };
+        showAs?: string;
       }>;
     };
     const events: CalendarEvent[] = (j.value ?? []).map((e) => ({
@@ -652,10 +659,12 @@ export async function getGraphCalendarEvents(input: {
       location: e.location?.displayName?.trim() || null,
       isAllDay: !!e.isAllDay,
       organizer: e.organizer?.emailAddress?.name || e.organizer?.emailAddress?.address || null,
+      showAs: e.showAs ? String(e.showAs).toLowerCase() : null,
     }));
     // Owner 2026-11-18: "work block" holds must not appear in TaskOS or Huddle. Same phrase list as journey's
     // _shared/calendar-ignore.ts (DEFAULT_CALENDAR_IGNORE_TITLES); journey's copy is the editable one.
-    return { ok: true, mailbox, events: events.filter((e) => !isIgnoredCalendarTitle(e.subject)) };
+    // Owner 2026-11-19: tentative events join the same exclusion (isIgnoredCalendarEvent).
+    return { ok: true, mailbox, events: events.filter((e) => !isIgnoredCalendarEvent(e)) };
   } catch (err) {
     return { ok: false, mailbox, error: err instanceof Error ? err.message : String(err) };
   }
@@ -666,6 +675,15 @@ export const IGNORED_CALENDAR_TITLES = ["work block"];
 export function isIgnoredCalendarTitle(title: unknown): boolean {
   const t = String(title ?? "").toLowerCase();
   return IGNORED_CALENDAR_TITLES.some((p) => t.includes(p));
+}
+
+/** Owner 2026-11-19: "Items that are tentative on my schedule should be on the same exclusion list as 'work
+ *  block' items." THE one drop decision for every calendar event Huddle reads (EDS Graph AND the work
+ *  feed): an ignored title phrase, or availability 'tentative'. Mirrors journey's
+ *  _shared/calendar-ignore.ts isIgnoredCalendarEvent (default: ignore tentative). */
+export function isIgnoredCalendarEvent(e: { subject?: unknown; showAs?: unknown }): boolean {
+  if (isIgnoredCalendarTitle(e?.subject)) return true;
+  return String(e?.showAs ?? "").toLowerCase() === "tentative";
 }
 
 /**
