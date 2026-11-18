@@ -653,10 +653,19 @@ export async function getGraphCalendarEvents(input: {
       isAllDay: !!e.isAllDay,
       organizer: e.organizer?.emailAddress?.name || e.organizer?.emailAddress?.address || null,
     }));
-    return { ok: true, mailbox, events };
+    // Owner 2026-11-18: "work block" holds must not appear in TaskOS or Huddle. Same phrase list as journey's
+    // _shared/calendar-ignore.ts (DEFAULT_CALENDAR_IGNORE_TITLES); journey's copy is the editable one.
+    return { ok: true, mailbox, events: events.filter((e) => !isIgnoredCalendarTitle(e.subject)) };
   } catch (err) {
     return { ok: false, mailbox, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/** Calendar holds the owner never wants shown (title contains a phrase). Mirrors journey's seed list. */
+export const IGNORED_CALENDAR_TITLES = ["work block"];
+export function isIgnoredCalendarTitle(title: unknown): boolean {
+  const t = String(title ?? "").toLowerCase();
+  return IGNORED_CALENDAR_TITLES.some((p) => t.includes(p));
 }
 
 /**
