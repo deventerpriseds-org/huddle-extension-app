@@ -509,6 +509,22 @@ try {
       [await d5({ notCheckedReason: "no_task_record" }), await d5({ notCheckedReason: "bad_shape" }), await d5({ notCheckedReason: null }), await d5({ notCheckedReason: "No_Task_Record" }), await d5({ notCheckedReason: "no_task_record " }), await d5({ notCheckedReason: "no-task-record" }), (await d5({ notCheckedReason: "no_task_record" }), await A.proposalBacksActionsRow([OTHER], [OTHER], pS.id)), await d5({ status: "open" }), await d5({ notCheckedReason: "quote_not_found" })],
       [true, false, false, false, false, false, false, true, true],
     );
+    // NORT-9 (red-team): D5 with NON-STRING reasons (JSON true / array / object) and a wrong-case status never backs.
+    t("NORT-9 held (real SQL): D5 refuses a JSON true / array / object reason and a 'Not_Checked' status", [await d5({ notCheckedReason: true }), await d5({ notCheckedReason: ["no_task_record"] }), await d5({ notCheckedReason: { r: "no_task_record" } }), await d5({ status: "Not_Checked", notCheckedReason: "no_task_record" })], [false, false, false, false]);
+    // NORT-10 (red-team): the page-read fallback. When the proposals read FAILS, loadProposalsById returns an empty map
+    // (its catch swallows every error), so a DISMISSED item (uL, dismissed above) looks "deleted" and resurfaces as held
+    // proposal_gone. The click must still write nothing (its existence check fails -> the fixed error).
+    await pool.query(`ALTER TABLE chat.task_proposals RENAME TO task_proposals_rt`);
+    let fbGroups: string[] = [], fbClick: unknown = null;
+    const vBefore = JSON.stringify(await stored(CL));
+    try {
+      fbGroups = groupsOf(await page(), uL.itemKey);
+      fbClick = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: uL.itemKey, action: "approve" });
+    } finally {
+      await pool.query(`ALTER TABLE chat.task_proposals_rt RENAME TO task_proposals`);
+    }
+    t("NORT-10a held (real SQL): during a proposals read failure the click on the resurfaced item writes nothing", [JSON.stringify(await stored(CL)) === vBefore, (fbClick as { ok?: boolean })?.ok], [true, false]);
+    t("NORT-10b BROKEN? (real SQL): during a proposals read failure a DISMISSED item must not resurface as held", fbGroups, []);
     t("NO-S17 observed (real PostgreSQL): ->> on a JSON null is SQL NULL, and NULL IN (...) is NULL (not true)", [nullCheck?.isnull, nullCheck?.inlist], [true, null]);
     // AC-7: the classify heartbeat line carries counts only.
     const logs: string[] = [];

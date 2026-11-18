@@ -1292,6 +1292,55 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   const g4b = world(sv({ proposalId: "prop-g4b", kind: "none" }), { exists: async () => true });
   const rG4b = await P.actOnHeldItem(unit, "approve", g4b.deps as never);
   t("NO-G4b-2 GUARD: open + live id + no section -> accepted, the existing proposal is re-used (0 new), action applied to it", [rG4b, g4b.log.propose, g4b.log.stored.length, g4b.log.act], [{ ok: true, proposalId: "prop-g4b" }, 0, 0, ["approve:prop-g4b"]]);
+
+  // ── RED-TEAM pre-pass (docs/qc-evidence/REDTEAM-actions-no-orphans.md). Ids "NORT-<n>". Synthetic data only. ──
+  // NORT-1: the held click on a non-string / mis-spelled reason (S-13) is refused, and the selection keeps it unchecked.
+  const rt1: [string, unknown][] = [["case", "No_Task_Record"], ["space", "no_task_record "], ["dash", "no-task-record"], ["array", ["no_task_record"]], ["bool", true], ["object", { r: "no_task_record" }]];
+  const rt1Got = [];
+  for (const [id, reason] of rt1) {
+    const w = world(sv({ status: "not_checked", notCheckedReason: reason }), { exists: async () => true });
+    const sel = selectActionItems([cand({ itemKey: `rt1|${id}`, status: "not_checked", notCheckedReason: reason as never, proposalId: null })], S());
+    rt1Got.push([id, await P.actOnHeldItem(unit, "approve", w.deps as never), w.log.propose, sel.held.length, sel.unchecked.length]);
+  }
+  t("NORT-1 held: mis-spelled / non-string notCheckedReason -> click refused, 0 proposals; selection unchecked, not held", rt1Got, rt1.map(([id]) => [id, { ok: false, error: "That item isn't in your list." }, 0, 0, 1]));
+  // NORT-2: S-6 a STRING onBoard is NOT on the board, in all three places (selection via the builder, click, write).
+  const rt2 = world(sv({ onBoard: "true" }));
+  t("NORT-2 held: onBoard:\"true\" (string) on an open no-id verdict is held and the click is accepted (=== true everywhere)", [P.isHeldVerdict(sv({ onBoard: "true" }), unit), (await P.actOnHeldItem(unit, "approve", rt2.deps as never)).ok, rt2.log.propose], [true, true, 1]);
+  // NORT-3: the rejection-kind filter drops prototype keys, wrong case and non-strings (AC-6).
+  t("NORT-3 held: storedRejectKinds keeps only exact RejectReason members", P.storedRejectKinds(["__proto__", "constructor", "toString", "EVIDENCE_NOT_IN_SOURCE", 5, null, "evidence_not_in_source", "evidence_not_in_source"] as never), ["evidence_not_in_source"]);
+  // NORT-4: try 1 rejected, try 2 suppressed-dismissed -> hidden with the marker and NO kinds (P-13); a suppression with
+  // no named proposal stays hidden WITHOUT the dismissed marker (the marker never claims a dismissal it did not see).
+  const tries = (rs: unknown[]) => { let i = 0; return async () => rs[i++] as never; };
+  const rt4a = await P.proposeOpenVerdict({ todo: "Test-a", quote: "b" }, tries([{ ids: [], onBoard: 0, suppressed: 0, rejected: { task_not_grounded: 1 } }, { ids: [], onBoard: 0, suppressed: 1, rejected: {}, suppressedBy: [{ id: "prop-dis", reason: "dismissed" }] }]));
+  const rt4b = await P.proposeOpenVerdict({ todo: "Test-a", quote: "b" }, tries([{ ids: [], onBoard: 0, suppressed: 1, rejected: {} }]));
+  const rt4c = await P.proposeOpenVerdict({ todo: "Test-a", quote: "b" }, tries([{ ids: [], onBoard: 0, suppressed: 1, rejected: {}, suppressedBy: [{ id: "", reason: "reworded" }] }]));
+  t("NORT-4 held: rejected-then-dismissed -> onBoard + marker, no kinds; unnamed / empty-id suppressions -> onBoard, NO marker", [rt4a, rt4b, rt4c], [{ id: null, onBoard: true, suppressedBy: "dismissed" }, { id: null, onBoard: true }, { id: null, onBoard: true }]);
+  // NORT-5: a non-string id from the propose step is not a home; an id AND onBoard -> the id wins (a row, not hidden).
+  const vO = sv({});
+  const r5a = P.verdictAfterPropose(vO, { id: 123 as never, onBoard: false });
+  const r5b = P.verdictAfterPropose(vO, { id: "prop-rt5", onBoard: true, suppressedBy: "dismissed" });
+  t("NORT-5 held: numeric id -> held no_task_record; id + onBoard -> open with the id, no onBoard, no dismissed marker", [r5a.status, r5a.notCheckedReason, r5b.status, r5b.proposalId, r5b.onBoard ?? false, (r5b as { suppressedBy?: string }).suppressedBy ?? null], ["not_checked", "no_task_record", "open", "prop-rt5", false, null]);
+  // NORT-6: the store write of a held no_task_record verdict FAILS -> nothing counted as notChecked, a failure counted,
+  // and the item is still pending (a passing error never becomes permanent).
+  const s6f = stub(answerFor);
+  const r6f = await runClassify(asm, S(), new Set(), 10, { ...s6f.deps, propose: noProp({ rejectedKinds: ["task_not_grounded"] }), storeVerdict: async () => { throw new Error("store down"); } });
+  t("NORT-6 held: a failing store of the held verdict -> failures counted, notChecked 0, still pending", [r6f.failures, r6f.notChecked, P.pendingUnitCount(asm, S(), new Set()) > 0], [3, 0, true]);
+  // NORT-7 (G4-b): an open + id + no-section verdict whose proposal is DECIDED is in no group on the page (NO-AC17), so a
+  // held click on its key must be refused like every other not-listed item (AC-24), not routed to act() on the decided
+  // proposal. The held check has no proposal-state input, so it accepts it today.
+  const rt7 = world(sv({ proposalId: "prop-decided", kind: "none" }), { exists: async () => true });
+  const rt7r = await P.actOnHeldItem(unit, "approve", rt7.deps as never);
+  t("NORT-7 BROKEN? G4-b with a DECIDED proposal: not listed, so the held click must be refused (no act on the decided id)", [rt7r, rt7.log.act], [{ ok: false, error: "That item isn't in your list." }, []]);
+  // NORT-8: one item, one group, across the new shapes mixed with the onBoard / proposalMissing flags.
+  const rt8 = selectActionItems([
+    op({ itemKey: "rt8|a", proposalMissing: true, onBoard: true }),
+    cand({ itemKey: "rt8|b", status: "not_checked", notCheckedReason: "no_task_record", proposalId: null, proposalMissing: true }),
+    op({ itemKey: "rt8|c", proposalId: "prop-c8", proposalState: "dismissed", section: null, kind: "none" }),
+    op({ itemKey: "rt8|d", proposalId: "", proposalState: null }),
+    cand({ itemKey: "rt8|e", status: "none", proposalId: null, answeredByReply: true }),
+  ], S());
+  const rt8Groups = [rt8.rows, rt8.unchecked, rt8.held, rt8.corrected, rt8.answered].map((g) => g.map((r) => r.itemKey));
+  t("NORT-8 held: onBoard wins over proposalMissing; a deleted rescue stays held (no_task_record); decided no-section hidden; '' id held; none answered", [rt8Groups, rt8.held.map((r) => r.heldReason)], [[[], [], ["rt8|b", "rt8|d"].sort(), [], ["rt8|e"]], [A.HELD_REASON_TEXT.no_task_record, A.HELD_REASON_TEXT.no_task_record]]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
