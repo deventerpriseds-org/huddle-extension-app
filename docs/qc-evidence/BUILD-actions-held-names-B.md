@@ -92,3 +92,40 @@ F5-14 (re-judged into OPEN) already keeps the rescue proposal through the existi
 Tests added (actions-view.test.ts): F5-1, F5-2, F5-3/4 (source), F5-5, F5-6, F5-7, F5-8 (x2), F5-9, F5-10, F5-11,
 F5-12, F5-13, F5-14, refusal of a non-held verdict, heldProposalCandidates. actions-view 173/0.
 
+Real-PostgreSQL tests added (actions-view-server.test.ts): F5-S0 (the page read lists a stored held verdict in
+`held`), F5-S1 (Dismiss clicked twice at once with `correspondence.proposals` OFF -> ONE proposal, dismissed through
+`actOnProposal`, id written back, gone from the page), F5-S2 (D5 extension: bad_shape never backs a row, held does),
+F5-S3 (a bad_shape item is refused). Report pass (report-saves-verdicts.test.ts): F4-R (the report's model input labels
+the second account OWNER with the resolved names; a saved empty list keeps it OTHER).
+
+### X-5 follow-up (coordinator, after part A finished; commit 4)
+
+Part A's X-5 keeps an item's earlier proposal id on a re-judge WHATEVER the new status, so a `not_checked` or held
+verdict can carry a proposal the owner already decided. `selectActionItems` now has one `ownerDecided` check used by
+BOTH the held and the not-checked paths: a kept proposal that left the listed states (approved / completed / dismissed /
+delegated / corrected) is not listed; a Wrong? on the same item version puts it in Corrected (with Undo). Add as task /
+Dismiss on a held verdict that already carries a proposal re-use it (`actOnHeldItem` re-reads the verdict inside the
+thread lock; 0 new proposals). Tests XF-1..XF-4.
+
+### Mutation proofs (`mutate.sh`, anchors in scratchpad `sinv-B/`; every FIRED has its comment-only control)
+
+| AC / test | file | mutation (the defect reinstated) | exit | verdict |
+|---|---|---|---|---|
+| F4-1 GUARD | report-from-ledger.ts | names consulted only when no id is known (old `if (!ids.size)`) | 0 | FIRED (control EQUIVALENT) |
+| F4-2 GUARD | actions.ts | a saved `[]` treated as absent (re-seeded) | 0 | FIRED (control EQUIVALENT) |
+| F4-4 GUARD | report-from-ledger.ts | 2-word rule dropped (`>= 1`) | 1 then 0 | first run INERT: the fixture ("Sam Rivera") could never fold equal to "sam", so the rule was not exercised. Test strengthened with a sender shown only as "Sam"; re-run FIRED (control EQUIVALENT) |
+| F4-9 GUARD (X-6) | actions.server.ts | page read stops passing `s.ownNames` | 0 | FIRED (control EQUIVALENT) |
+| F4-R GUARD (X-6, report) | report-from-ledger.ts | assembly ignores the passed names (uses config) | 0 | FIRED (control EQUIVALENT) |
+| F5-1 GUARD | actions.ts | held items sent to `unchecked` | 0 | FIRED (control EQUIVALENT) |
+| F5-2 GUARD | actions.ts | every `not_checked` treated as held | 0 | FIRED (control EQUIVALENT) |
+| F5-5 GUARD | pipeline.ts | proposal id not written back | 0 | FIRED (control EQUIVALENT) |
+| F5-10 GUARD | actions.ts | held dropped from `tabCounts` | 0 | FIRED (control EQUIVALENT) |
+| XF-1 GUARD | actions.ts | not-checked path ignores a decided kept proposal | 0 | FIRED (control EQUIVALENT) |
+| XF-4 GUARD | pipeline.ts | held action ignores a kept proposal id (proposes again) | 0 | FIRED (control EQUIVALENT) |
+| F5-S1 GUARD (real SQL) | actions.server.ts | D5 extension removed (held rescue cannot use from:"actions") | 0 | FIRED (control EQUIVALENT) |
+| F5-S2 GUARD (real SQL) | actions.server.ts | D5 extension widened to every `not_checked` | 0 | FIRED (control EQUIVALENT) |
+
+Hook note: `eds-push-gate` refused pushes of commits touching `scripts/` without a `.claude/` ledger move (G14). The
+brief forbids editing `.claude/` (the session owner keeps the ledgers), so pushes used the gate's documented
+`LEDGER_OPT_OUT` with that reason. The ledger entry is for the session owner to write.
+
