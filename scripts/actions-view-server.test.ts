@@ -528,6 +528,16 @@ try {
     // checked yet" (unchecked), never held. Exact value, so held (the defect) or rows still fail. Once the read works
     // again the dismissed item is in no group.
     t("NORT-10b GUARD (real SQL): during a proposals read failure a DISMISSED item is read-only unchecked, never held; after it, in no group", [fbGroups, groupsOf(await page(), uL.itemKey)], [["unchecked"], []]);
+    // NORT-7 (real SQL, the server's owner-scoped state read): a G4-b verdict (open + id + no section) whose kept proposal
+    // was DISMISSED is in no group, and the held click is refused: no act, no new proposal, state still dismissed.
+    if (vL) await putV(CL, { ...vL, kind: "none" });
+    const nProps = async () => Number((await pool.query<{ n: string }>(`SELECT count(*) AS n FROM chat.task_proposals`)).rows[0]?.n);
+    const n7 = await nProps();
+    const g7 = groupsOf(await page(), uL.itemKey);
+    const c7 = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: uL.itemKey, action: "approve" });
+    const s7 = (await pool.query<{ state: string }>(`SELECT state FROM chat.task_proposals WHERE id = $1`, [vL?.proposalId])).rows[0]?.state;
+    t("NORT-7 GUARD (real SQL): G4-b on a DISMISSED kept proposal -> in no group; held click refused, no new proposal, still dismissed", [g7, c7, (await nProps()) - n7, s7], [[], { ok: false, error: "That item isn't in your list." }, 0, "dismissed"]);
+    if (vL) await putV(CL, vL);
     t("NO-S17 observed (real PostgreSQL): ->> on a JSON null is SQL NULL, and NULL IN (...) is NULL (not true)", [nullCheck?.isnull, nullCheck?.inlist], [true, null]);
     // AC-7: the classify heartbeat line carries counts only.
     const logs: string[] = [];

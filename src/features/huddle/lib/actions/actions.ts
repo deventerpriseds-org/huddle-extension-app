@@ -452,6 +452,11 @@ export function isHeldCandidate(c: Pick<ActionCandidate, "status" | "notCheckedR
 }
 
 const LISTED_STATES = new Set(["proposed", "untriaged"]);
+/** Pure: does the page list an item backed by a proposal in this state? (The ONE listed-states rule; the held click
+ *  reads it too, NORT-7.) Exact strings; null / absent = no. */
+export function proposalStateListed(state: string | null | undefined): boolean {
+  return LISTED_STATES.has(state ?? "");
+}
 const ms = (iso: string | null) => {
   const v = Date.parse(String(iso ?? ""));
   return Number.isFinite(v) ? v : 0;
@@ -525,7 +530,7 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
    *  on this same item version keeps it in the Corrected list (with Undo). Returns true when the item is not listed. */
   const ownerDecided = (c: ActionCandidate): boolean => {
     if (!c.proposalId) return false;
-    if (!LISTED_STATES.has(c.proposalState ?? "")) return true;
+    if (!proposalStateListed(c.proposalState)) return true;
     if (correctionHides(c.correction, c.itemKey)) {
       out.corrected.push(toRow(c, c.section ?? "needs_reply"));
       return true;

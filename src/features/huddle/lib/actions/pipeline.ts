@@ -35,7 +35,7 @@ import { meetingItemIsOwnersOrUnassigned } from "../proposals/meeting-triage";
 import { REJECT_REASONS, titleKey, type RejectReason } from "../proposals/proposals";
 import type { ProposeResult } from "../proposals/engine";
 import { safeLink } from "../attention/attention";
-import { correctionFor, HELD_REASONS, plainPreview, type ActionCandidate, type ActionsSettings } from "./actions";
+import { correctionFor, HELD_REASONS, plainPreview, proposalStateListed, type ActionCandidate, type ActionsSettings } from "./actions";
 
 const stripFeed = (id: string) => (id.startsWith(FEED_ID_PREFIX) ? id.slice(FEED_ID_PREFIX.length) : id);
 
@@ -502,6 +502,10 @@ export interface HeldActDeps {
    *  proposal was DELETED gets a fresh one instead of retrying the missing id forever. Throws on a read failure (the
    *  click then fails and nothing is stored). Absent = assume it exists (today's behaviour). */
   proposalExists?(proposalId: string): Promise<boolean>;
+  /** NORT-7: the owner-scoped state of a kept (written-back) proposal, null when there is no such row. A kept id whose
+   *  proposal the page does not list (decided: dismissed / completed / approved / delegated) is refused like every
+   *  other not-listed item. Throws on a read failure (the click fails, nothing stored). Absent = not checked. */
+  proposalState?(proposalId: string): Promise<string | null>;
 }
 
 export type HeldActResult = { ok: true; proposalId: string | null; note?: string } | { ok: false; error: string; proposalId?: string };
@@ -521,7 +525,12 @@ export async function actOnHeldItem(u: ThreadUnit, action: HeldAction, deps: Hel
       if (!held && !gone) return { kind: "not_held" };
       // F5-7 / F5-8: a proposal already created for this item (another click, or a click whose action failed) is re-used.
       // A written-back id whose proposal no longer exists is NOT re-used: a fresh proposal is made and written back.
-      if (!gone && cur.proposalId && (!deps.proposalExists || (await deps.proposalExists(cur.proposalId)))) return { kind: "id", id: cur.proposalId };
+      if (!gone && cur.proposalId && (!deps.proposalExists || (await deps.proposalExists(cur.proposalId)))) {
+        // NORT-7: the page lists this item only while its kept proposal is in a listed state (selectActionItems'
+        // ownerDecided). A decided one is not in the list, so the click is refused the same way, before act().
+        if (deps.proposalState && !proposalStateListed(await deps.proposalState(cur.proposalId))) return { kind: "not_held" };
+        return { kind: "id", id: cur.proposalId };
+      }
       const p = await deps.propose(u, heldProposalCandidates(cur.todo, cur.quote, (u.email ?? u.teams)?.latestOther?.text ?? null), heldThreadText(u));
       if (p.id) {
         await tx.store({ ...cur, proposalId: p.id });

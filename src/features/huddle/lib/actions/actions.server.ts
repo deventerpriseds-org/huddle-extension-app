@@ -646,18 +646,26 @@ export async function actOnHeldItemFor(
   const { deps } = await import("../proposals/proposals.server");
   const pd = await deps(cfg.owner);
   const { actOnProposal } = await import("../proposals/proposals.server");
+  // ONE owner-scoped read of a kept proposal's state per id (null = no row), shared by the existence check (G4-a) and
+  // the listed-state check (NORT-7). A read error throws: the click fails, nothing stored.
+  const stateReads = new Map<string, Promise<string | null>>();
+  const proposalStateOf = (id: string) => {
+    let p = stateReads.get(id);
+    if (!p) {
+      p = getSharedPool()
+        .query<{ state: string }>(`SELECT state FROM chat.task_proposals WHERE id = $1 AND owner_email = ANY($2::text[])`, [id, owners.map((o) => o.toLowerCase())])
+        .then((r) => r.rows[0]?.state ?? null);
+      stateReads.set(id, p);
+    }
+    return p;
+  };
   const r = await actOnHeldItem(u, input.action, {
     lockThread: (unit, fn) => withThreadLock(ledgerOwners, unit, fn),
     propose: (unit, cands, text) => proposeHeldWith(cfg.owner, pd, unit, cands, text),
     act: (id, action) => actOnProposal(caller, id, action, undefined, undefined, { from: "actions" }),
     // A deleted rescue proposal is replaced, not retried forever. A read error throws: the click fails, nothing stored.
-    proposalExists: async (id) => {
-      const r = await getSharedPool().query<{ ok: boolean }>(
-        `SELECT EXISTS (SELECT 1 FROM chat.task_proposals WHERE id = $1 AND owner_email = ANY($2::text[])) AS ok`,
-        [id, owners.map((o) => o.toLowerCase())],
-      );
-      return r.rows[0]?.ok === true;
-    },
+    proposalExists: async (id) => (await proposalStateOf(id)) !== null,
+    proposalState: proposalStateOf,
   });
   console.log(`[actions] held ${input.action} source=${u.source} ok=${r.ok}`);
   return r;

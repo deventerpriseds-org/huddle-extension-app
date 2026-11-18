@@ -1253,13 +1253,14 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   t("NO-G4b-1 GUARD: an open item with a live proposal but no section is HELD (row id = that proposal), not unchecked", [g4bSel.held.map((r) => [r.itemKey, r.id, r.heldReason]), g4bSel.unchecked.length], [[["g4b|1", "prop-g4b", A.HELD_REASON_TEXT.no_section]], 0]);
 
   // ── C. the held click ──
-  const world = (cur: ActionVerdict | null, o: { exists?: (id: string) => Promise<boolean>; propose?: () => Promise<{ id: string | null; onBoard: boolean }> } = {}) => {
+  const world = (cur: ActionVerdict | null, o: { exists?: (id: string) => Promise<boolean>; state?: (id: string) => Promise<string | null>; propose?: () => Promise<{ id: string | null; onBoard: boolean }> } = {}) => {
     const log = { propose: 0, act: [] as string[], stored: [] as ActionVerdict[] };
     const deps = {
       lockThread: async <T,>(_u: unknown, fn: (tx: import("../src/features/huddle/lib/actions/pipeline").ThreadTx) => Promise<T>) => fn({ current: async () => cur, store: async (v: ActionVerdict) => void log.stored.push(v) }),
       propose: async () => (log.propose++, o.propose ? o.propose() : { id: "prop-fresh001", onBoard: false }),
       act: async (id: string, a: string) => (log.act.push(`${a}:${id}`), { ok: true }),
       ...(o.exists ? { proposalExists: o.exists } : {}),
+      ...(o.state ? { proposalState: o.state } : {}),
     };
     return { log, deps };
   };
@@ -1328,9 +1329,31 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   // NORT-7 (G4-b): an open + id + no-section verdict whose proposal is DECIDED is in no group on the page (NO-AC17), so a
   // held click on its key must be refused like every other not-listed item (AC-24), not routed to act() on the decided
   // proposal. The held check has no proposal-state input, so it accepts it today.
-  const rt7 = world(sv({ proposalId: "prop-decided", kind: "none" }), { exists: async () => true });
+  // FIX (FIX-redteam-actions-no-orphans.md): the red-team world gave the click no proposal-state input, so "DECIDED"
+  // lived only in the id string. The premise is now stated through the click's proposalState dependency.
+  const rt7 = world(sv({ proposalId: "prop-decided", kind: "none" }), { exists: async () => true, state: async () => "dismissed" });
   const rt7r = await P.actOnHeldItem(unit, "approve", rt7.deps as never);
-  t("NORT-7 BROKEN? G4-b with a DECIDED proposal: not listed, so the held click must be refused (no act on the decided id)", [rt7r, rt7.log.act], [{ ok: false, error: "That item isn't in your list." }, []]);
+  t("NORT-7 GUARD: G4-b with a DECIDED proposal: not listed, so the held click is refused (no act on the decided id)", [rt7r, rt7.log.act, rt7.log.propose, rt7.log.stored.length], [{ ok: false, error: "That item isn't in your list." }, [], 0, 0]);
+  // NORT-7b: every decided state refused, on G4-b AND on a stored held verdict with a decided written-back id (the
+  // pre-existing shape, row 7); the listed states (proposed, untriaged) still accepted; a failing state read -> fixed error.
+  const rt7b: [string, ActionVerdict, string | null][] = [];
+  for (const st of ["dismissed", "completed", "approved", "delegated", "Proposed", null]) {
+    rt7b.push([`g4b:${st}`, sv({ proposalId: "prop-k", kind: "none" }), st]);
+    rt7b.push([`ntr:${st}`, sv({ status: "not_checked", notCheckedReason: "no_task_record", proposalId: "prop-k" }), st]);
+  }
+  const rt7bGot = [];
+  for (const [id, v, st] of rt7b) {
+    const w = world(v, { exists: async () => true, state: async () => st });
+    rt7bGot.push([id, await P.actOnHeldItem(unit, "approve", w.deps as never), w.log.act.length, w.log.stored.length]);
+  }
+  t("NORT-7b GUARD: a kept id in any non-listed state (decided, wrong case, no row) is refused, no act, nothing stored", rt7bGot, rt7b.map(([id]) => [id, { ok: false, error: "That item isn't in your list." }, 0, 0]));
+  const rt7l = [];
+  for (const st of ["proposed", "untriaged"]) {
+    const w = world(sv({ proposalId: "prop-k", kind: "none" }), { exists: async () => true, state: async () => st });
+    rt7l.push([st, await P.actOnHeldItem(unit, "approve", w.deps as never), w.log.act]);
+  }
+  const rt7t = world(sv({ proposalId: "prop-k", kind: "none" }), { exists: async () => true, state: async () => { throw new Error("read failed"); } });
+  t("NORT-7c GUARD: listed states (proposed, untriaged) are re-used and acted on; a failing state read -> the fixed error, no act", [rt7l, await P.actOnHeldItem(unit, "approve", rt7t.deps as never), rt7t.log.act], [[["proposed", { ok: true, proposalId: "prop-k" }, ["approve:prop-k"]], ["untriaged", { ok: true, proposalId: "prop-k" }, ["approve:prop-k"]]], { ok: false, error: P.HELD_ACTION_ERROR }, []]);
   // NORT-8: one item, one group, across the new shapes mixed with the onBoard / proposalMissing flags.
   const rt8 = selectActionItems([
     op({ itemKey: "rt8|a", proposalMissing: true, onBoard: true }),
