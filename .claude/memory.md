@@ -1,5 +1,16 @@
 # Project Memory — huddle-extension-app
 
+## Actions: app and workspace invitations (2026-11-17, branch claude_actions-app-invite, NOT merged, NOT live) -- ACT:actions-false-positives
+- New classifier category `app_invite` (an app/platform says he was invited to or can access a team, workspace,
+  organization, tool or shared file, even when a person triggered it). No open item by itself; hideable in What shows
+  as "App and workspace invitations", hidden by default. Someone else's timecard approval is `timekeeping`.
+- Step 2 no longer treats "an account or access he was invited to" as an open item; an account / registration /
+  training his EMPLOYER requires is still open and is `automated_notice`, never `app_invite` (so the hide never eats it).
+- Settings gained `knownHideCategories`: a hideable category added after the owner saved settings takes its default.
+  Without it, every saved settings row would have shown app invitations (whole-object settings store).
+- CLASSIFIER_INPUT_VERSION email 2 / teams 3: all stored verdicts are re-judged after deploy (daily cap bounds it).
+- Evidence: docs/qc-evidence/BUILD-actions-app-invite.md.
+
 ## Actions view: one judge, one store (2026-11-17) -- LIVE, NOT owner-confirmed
 - Root cause of "view shows 1, report shows several": the report (action-scan, same model + instructions as the app)
   judged every thread in one run and STORED NOTHING; the view re-judged 6 per ~10 min. AC-E-1 checked shared CODE,
