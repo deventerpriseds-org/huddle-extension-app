@@ -111,6 +111,13 @@ const storedAt = (store: ReadonlyMap<string, ActionVerdict>, i: number) => store
   f.store.set(k, { ...f.store.get(k)!, inputVersion: 1 });
   const r3 = await pass1(f);
   t("RB-3 an out-of-date verdict (Teams at input version 1) is re-judged: exactly 1 call", [r3.res.calls, r3.res.alreadyJudged], [1, 2]);
+  // X-2 (AC-actions-safety-and-invites.md): the PREVIOUS versions (email 2, teams 3) are out of date after the bump.
+  const ke = `${UNITS[0].storeAt.source}\u0000${UNITS[0].storeAt.sourceItemId}`;
+  f.store.set(ke, { ...f.store.get(ke)!, inputVersion: 2 });
+  f.store.set(k, { ...f.store.get(k)!, inputVersion: 3 });
+  const calls0 = f.log.model;
+  const r4 = await pass1(f);
+  t("X-2 GUARD: an email verdict at input version 2 and a Teams verdict at 3 are each judged again (2 calls, counted), stored at the new version", [r4.res.calls, f.log.model - calls0, r4.res.alreadyJudged, f.store.get(ke)?.inputVersion, f.store.get(k)?.inputVersion], [2, 2, 1, 3, 4]);
   const c = fakeStore(honest);
   const rc = await pass1(c, { usedToday: ACTIONS_SETTINGS_DEFAULT.dailyCap - 1 });
   t("RB-4 GUARD: the report is bounded by what the owner's daily cap has left (1 left -> 1 call, 2 over cap)", [rc.callsLeft, rc.res.calls, rc.res.overCap], [1, 1, 2]);

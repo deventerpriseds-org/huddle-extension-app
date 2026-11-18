@@ -586,10 +586,13 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
     ["email\u0000old-none", { ...verdictFor(TABLE[0]), key: "e-old|1", inputVersion: undefined }],
     ["email\u0000old-1", { ...verdictFor(TABLE[0]), key: "e-v1|1", inputVersion: 1 }],
     ["teams\u0000old-2", { ...verdictFor(TABLE[0]), key: "t-v2|1", inputVersion: 2 }],
+    // X-1 / X-2 (AC-actions-safety-and-invites.md): the previous versions (email 2, teams 3) are no longer current.
+    ["email\u0000old-2", { ...verdictFor(TABLE[0]), key: "e-v2|1", inputVersion: 2 }],
+    ["teams\u0000old-3", { ...verdictFor(TABLE[0]), key: "t-v3|1", inputVersion: 3 }],
     ["email\u0000cur", { ...verdictFor(TABLE[0]), key: "e-cur|1" }],
     ["teams\u0000cur", { ...verdictFor(TABLE[0]), key: "t-cur|1", inputVersion: CLASSIFIER_INPUT_VERSION.teams }],
   ]);
-  t("AI-14 GUARD: the version bump forces a re-judge (email < 2, teams < 3 are not current; the new versions are)", [CLASSIFIER_INPUT_VERSION, [...currentlyJudgedKeys(store)].sort()], [{ email: 2, teams: 3 }, ["e-cur|1", "t-cur|1"]]);
+  t("AI-14 / X-1 GUARD: CLASSIFIER_INPUT_VERSION is exactly { email: 3, teams: 4 }; older versions (email < 3, teams < 4) are not current", [CLASSIFIER_INPUT_VERSION, [...currentlyJudgedKeys(store)].sort()], [{ email: 3, teams: 4 }, ["e-cur|1", "t-cur|1"]]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

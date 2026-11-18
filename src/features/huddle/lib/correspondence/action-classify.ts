@@ -252,8 +252,13 @@ export function quoteIsVerbatim(quote: string | null | undefined, haystack: stri
  *    default in What shows), timecard approvals for someone else became `timekeeping`, and step 2 no longer lists
  *    "an account or access he was invited to" as an open item (only one his EMPLOYER requires). Every stored email
  *    and Teams verdict is judged again (bounded by the daily cap as any call).
+ *  - email 3, teams 4 (2026-11-18, owner-approved, AC-actions-safety-and-invites.md X-1): F2 (a meeting invite that
+ *    asks for a specific deliverable is person_request; attending alone is not an open item; a meeting_invite of kind
+ *    reply is never listed), F3 (momentary chat coordination and pleasantries are not open items: MOMENTARY_RULE plus
+ *    the exact-match MOMENTARY_PHRASES backstop), F1 (a quote made of verbatim fragments in order is admitted), and
+ *    for Teams F4 (the owner's other names / accounts are labelled OWNER). Every stored verdict is judged again once.
  */
-export const CLASSIFIER_INPUT_VERSION = { email: 2, teams: 3 } as const;
+export const CLASSIFIER_INPUT_VERSION = { email: 3, teams: 4 } as const;
 
 /** What is stored per classification key (ledger result_ids.action). `open` is the only status ever listed. */
 export interface ActionVerdict {

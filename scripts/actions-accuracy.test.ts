@@ -240,9 +240,9 @@ void GRP;
   // 2026-11-17 (app_invite, BUILD-actions-app-invite.md): the email instructions changed, so email was bumped to 2 and
   // teams to 3. Every verdict judged before is judged again; only the current version is reused.
   t(
-    "R7-7 GUARD: email bumped to 2, teams to 3 -- older email (none / 1) and teams (2) verdicts are re-judged",
-    [verdictIsCurrent({ key: "e|1" }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 1 }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 2 }, "e|1", "email"), verdictIsCurrent({ key: "t|1", inputVersion: 2 }, "t|1", "teams"), verdictIsCurrent({ key: "t|1", inputVersion: 3 }, "t|1", "teams")],
-    [false, false, true, false, true],
+    "R7-7 GUARD (updated for X-1, 2026-11-18): email at 3, teams at 4 -- older email (none / 1 / 2) and teams (2 / 3) verdicts are re-judged",
+    [verdictIsCurrent({ key: "e|1" }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 1 }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 2 }, "e|1", "email"), verdictIsCurrent({ key: "e|1", inputVersion: 3 }, "e|1", "email"), verdictIsCurrent({ key: "t|1", inputVersion: 2 }, "t|1", "teams"), verdictIsCurrent({ key: "t|1", inputVersion: 3 }, "t|1", "teams"), verdictIsCurrent({ key: "t|1", inputVersion: 4 }, "t|1", "teams")],
+    [false, false, false, true, false, false, true],
   );
 }
 
