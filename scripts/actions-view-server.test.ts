@@ -394,6 +394,203 @@ try {
     const nh = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: bu.itemKey, action: "dismiss" });
     t("F5-S3 a non-held (bad_shape) item is refused by the held action", nh, { ok: false, error: "That item isn't in your list." });
   }
+  // ── AC-actions-no-orphans (Tier 1, 2026-11-18): real SQL, synthetic data only. Real classifyDepsFor (real
+  // proposeFromSource + store + thread lock), real page read, real held click. Only the model is faked. ──
+  {
+    const { assembleLedgerPlan } = await import("../src/features/huddle/lib/correspondence/report-from-ledger");
+    const { loadLedgerReportData } = await import("../src/features/huddle/lib/correspondence/report-from-ledger.server");
+    const { parseFeedsConfig } = await import("../src/features/huddle/lib/external-feeds/onedrive-feed");
+    const { runClassify, threadUnits } = await import("../src/features/huddle/lib/actions/pipeline");
+    const { ACTIONS_SETTINGS_DEFAULT, HELD_REASON_TEXT } = await import("../src/features/huddle/lib/actions/actions");
+    const { CLASSIFIER_INPUT_VERSION } = await import("../src/features/huddle/lib/correspondence/action-classify");
+    const at = new Date(Date.now() - 60_000).toISOString();
+    const ASKN = "Could you please send the synthetic weekly report to Pat by Friday?";
+    const chatN = (n: string) => `19:no_${n}${"@"}unq.gbl.spaces`;
+    const ASKL = "Synthetic: could you please book the larger meeting room for the review on Thursday?";
+    const msgRow = (chat: string, text = ASKN) => ({
+      ...item(teamsSourceItemId(chat, "1")),
+      threadId: chat,
+      at,
+      content: { kind: "teams", chatId: chat, chatName: null, messageId: "1", at, sender: { id: "no-pat", name: "Pat Example", isApp: false }, fromOwner: false, text, webUrl: null, mentionedUserIds: [], ownerUserId: "owner-guid-0001" },
+    });
+    const CR = chatN("reword");
+    const CA = chatN("dis_a");
+    const CB = chatN("dis_b");
+    const CL = chatN("legacy");
+    const CS = chatN("d5");
+    await L.storeContent(O, [msgRow(CR), msgRow(CA), msgRow(CB), msgRow(CL, ASKL), msgRow(CS, `${ASKL} Thanks.`)] as never);
+    const cfgN = parseFeedsConfig(process.env.HUDDLE_ONEDRIVE_FEEDS)!;
+    const SN = { ...ACTIONS_SETTINGS_DEFAULT, sources: { email: false, teams: true, meeting: false } };
+    const unitsNow = async () => threadUnits(assembleLedgerPlan(await loadLedgerReportData([O]), cfgN, 0), SN);
+    // Units are cached per chat: a decided item can leave the plan's units, its ledger row does not move.
+    const uCache = new Map<string, Awaited<ReturnType<typeof unitsNow>>["units"][number]>();
+    const uOf = async (chat: string) => uCache.get(chat) ?? (uCache.set(chat, (await unitsNow()).units.find((x) => x.teams?.chatId === chat)!), uCache.get(chat)!);
+    const asmNow = async () => assembleLedgerPlan(await loadLedgerReportData([O]), cfgN, 0);
+    const base = await A.classifyDepsFor(O, [O]);
+    const judgeOnly = async (chat: string, todo: string) => {
+      const asm = await asmNow();
+      const units = threadUnits(asm, SN).units;
+      const target = units.find((x) => x.teams?.chatId === chat)!;
+      const judged = new Set(units.filter((x) => x !== target).map((x) => x.itemKey));
+      return runClassify(asm, SN, judged, 5, { ...base, model: async () => ({ open_item: true, kind: "action", todo, due: "Friday", quote: ASKN, confidence: "high", reason: "Asked directly.", category: "person_request" }) });
+    };
+    const stored = async (chat: string) => {
+      const u = await uOf(chat);
+      return (await pool.query<{ a: Record<string, unknown> | null }>(`SELECT result_ids->'action' a FROM chat.correspondence_ledger WHERE source = 'teams' AND source_item_id = $1`, [u.storeAt.sourceItemId])).rows[0]?.a ?? null;
+    };
+    const putV = async (chat: string, v: unknown) => {
+      const u = await uOf(chat);
+      await pool.query(`UPDATE chat.correspondence_ledger SET result_ids = result_ids || jsonb_build_object('action', $3::jsonb) WHERE source = $1 AND source_item_id = $2`, [u.storeAt.source, u.storeAt.sourceItemId, JSON.stringify(v)]);
+    };
+    const dropV = async (chat: string) => {
+      const u = await uOf(chat);
+      await pool.query(`UPDATE chat.correspondence_ledger SET result_ids = result_ids - 'action' WHERE source = 'teams' AND source_item_id = $1`, [u.storeAt.sourceItemId]);
+    };
+    const page = async () => {
+      const p = await A.getActionsPage({ entra_email: O });
+      if (p.status !== "ok") throw new Error(`page ${p.status}`);
+      return p;
+    };
+    const groupsOf = (p: Awaited<ReturnType<typeof page>>, key: string) => (["rows", "unchecked", "held", "corrected", "answered"] as const).filter((g) => p[g].some((r) => r.itemKey === key));
+
+    // AC-9: a REWORDED re-extraction of the SAME item links the earlier proposal instead of being hidden.
+    const r1 = await judgeOnly(CR, "Test-Send the synthetic weekly report to Pat");
+    const v1 = await stored(CR);
+    const X = v1?.proposalId as string;
+    await dropV(CR);
+    const r2 = await judgeOnly(CR, "Test-Send the synthetic weekly report");
+    const v2 = await stored(CR);
+    const kR = (await uOf(CR)).itemKey;
+    const pR = await page();
+    const propsR = await pool.query(`SELECT DISTINCT proposal_id FROM chat.task_proposal_refs WHERE owner_email = $1 AND source = 'teams' AND source_item_id = $2`, [O, (await uOf(CR)).refItemId]);
+    t("NO-AC9 GUARD (real SQL): a reworded to-do of the SAME item stores open with the EARLIER proposal id; the page lists ONE row with that id", [r1.open, !!X, r2.open, v2?.status, v2?.proposalId === X, v2?.onBoard ?? false, propsR.rows.length, groupsOf(pR, kR), pR.rows.find((r) => r.itemKey === kR)?.id === X], [1, true, 1, "open", true, false, 1, ["rows"], true]);
+
+    // G4-a: that proposal row is DELETED -> the item is held (not unchecked, not dropped); the click re-proposes.
+    await pool.query(`DELETE FROM chat.task_proposal_refs WHERE proposal_id = $1`, [X]);
+    await pool.query(`DELETE FROM chat.task_proposals WHERE id = $1`, [X]);
+    const before = modelCalls.n;
+    const pG = await page();
+    const heldG = pG.held.find((r) => r.itemKey === kR);
+    t("NO-G4a-S1 GUARD (real page read): an open item whose proposal row was deleted is listed HELD with its own sentence, in no other group, no model call", [groupsOf(pG, kR), heldG?.heldReason, modelCalls.n - before], [["held"], HELD_REASON_TEXT.proposal_gone, 0]);
+    const dG = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: kR, action: "dismiss" });
+    const vG = await stored(CR);
+    const stG = vG?.proposalId ? (await pool.query<{ state: string }>(`SELECT state FROM chat.task_proposals WHERE id = $1`, [vG.proposalId])).rows[0]?.state : null;
+    t("NO-G4a-S2 GUARD (real SQL): Dismiss on it -> a proposal exists again, written back (status still open), dismissed; the item leaves the page", [dG.ok, vG?.status, typeof vG?.proposalId === "string", stG, groupsOf(await page(), kR)], [true, "open", true, "dismissed", []]);
+
+    // AC-10: the same to-do DISMISSED from another source stays hidden (onBoard + marker), in no group.
+    const rA = await judgeOnly(CA, "Test-Send the synthetic weekly report to Pat");
+    const vA = await stored(CA);
+    await pool.query(`UPDATE chat.task_proposals SET state = 'dismissed' WHERE id = $1`, [vA?.proposalId]);
+    const rB = await judgeOnly(CB, "Test-Send the synthetic weekly report to Pat");
+    const vB = await stored(CB);
+    const kB = (await uOf(CB)).itemKey;
+    t("NO-AC10 GUARD (real SQL): a to-do dismissed from ANOTHER source -> stored onBoard + suppressedBy dismissed, in NO group", [rA.open, rB.open, vB?.onBoard, vB?.suppressedBy, vB?.proposalId ?? null, groupsOf(await page(), kB)], [1, 1, true, "dismissed", null, []]);
+
+    // AC-12 / AC-22: a LEGACY stored row (open, no proposal) is held at once on the page read (no re-judge), then
+    // Dismiss works on it through the existing F5 path.
+    const uL = await uOf(CL);
+    await putV(CL, { v: 1, key: uL.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "open", kind: "action", category: "person_request", confidence: "high", todo: "Test-Book the larger meeting room for the review", due: "Thursday", quote: ASKL, reason: "Asked.", answeredByReply: false, proposalId: null, at });
+    const b2 = modelCalls.n;
+    const pL = await page();
+    t("NO-AC12 GUARD (real page read): a stored open verdict with no proposal is listed HELD (no_task_record sentence), not unchecked; no model call", [groupsOf(pL, uL.itemKey), pL.held.find((r) => r.itemKey === uL.itemKey)?.heldReason, modelCalls.n - b2], [["held"], HELD_REASON_TEXT.no_task_record, 0]);
+    const dL = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: uL.itemKey, action: "dismiss" });
+    const vL = await stored(CL);
+    t("NO-AC22 GUARD (real SQL): Dismiss on the legacy item -> ONE proposal written back, status still open, dismissed, gone from the page", [dL.ok, vL?.status, typeof vL?.proposalId === "string", groupsOf(await page(), uL.itemKey)], [true, "open", true, []]);
+
+    // AC-25 / S-17: D5 on the stored shapes, real SQL.
+    const uS = await uOf(CS);
+    const pS = cand("Test-No d5 item", "test-no d5 item", "teams", uS.refItemId);
+    await P.upsert(pS);
+    const vS = (o: Record<string, unknown>) => ({ v: 1, key: uS.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "not_checked", kind: "action", category: "person_request", confidence: "high", todo: "x", due: null, quote: "y", reason: null, answeredByReply: false, proposalId: pS.id, at, ...o });
+    const d5 = async (o: Record<string, unknown>) => (await putV(CS, vS(o)), A.proposalBacksActionsRow([O], [O], pS.id));
+    const nullCheck = (await pool.query<{ isnull: boolean; inlist: boolean | null }>(`SELECT ('{"r":null}'::jsonb->>'r') IS NULL AS isnull, ('{"r":null}'::jsonb->>'r') IN ('quote_not_found','no_task_record') AS inlist`)).rows[0];
+    t(
+      "NO-AC25 GUARD (real SQL): D5 -- no_task_record backs its row; bad_shape, a JSON-null reason (S-17), case/space/dash spellings (S-13) and another owner do NOT; open still does",
+      [await d5({ notCheckedReason: "no_task_record" }), await d5({ notCheckedReason: "bad_shape" }), await d5({ notCheckedReason: null }), await d5({ notCheckedReason: "No_Task_Record" }), await d5({ notCheckedReason: "no_task_record " }), await d5({ notCheckedReason: "no-task-record" }), (await d5({ notCheckedReason: "no_task_record" }), await A.proposalBacksActionsRow([OTHER], [OTHER], pS.id)), await d5({ status: "open" }), await d5({ notCheckedReason: "quote_not_found" })],
+      [true, false, false, false, false, false, false, true, true],
+    );
+    // NORT-9 (red-team): D5 with NON-STRING reasons (JSON true / array / object) and a wrong-case status never backs.
+    t("NORT-9 held (real SQL): D5 refuses a JSON true / array / object reason and a 'Not_Checked' status", [await d5({ notCheckedReason: true }), await d5({ notCheckedReason: ["no_task_record"] }), await d5({ notCheckedReason: { r: "no_task_record" } }), await d5({ status: "Not_Checked", notCheckedReason: "no_task_record" })], [false, false, false, false]);
+    // NORT-10 (red-team): the page-read fallback. When the proposals read FAILS, loadProposalsById returns an empty map
+    // (its catch swallows every error), so a DISMISSED item (uL, dismissed above) looks "deleted" and resurfaces as held
+    // proposal_gone. The click must still write nothing (its existence check fails -> the fixed error).
+    await pool.query(`ALTER TABLE chat.task_proposals RENAME TO task_proposals_rt`);
+    let fbGroups: string[] = [], fbClick: unknown = null;
+    const vBefore = JSON.stringify(await stored(CL));
+    try {
+      fbGroups = groupsOf(await page(), uL.itemKey);
+      fbClick = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: uL.itemKey, action: "approve" });
+    } finally {
+      await pool.query(`ALTER TABLE chat.task_proposals_rt RENAME TO task_proposals`);
+    }
+    t("NORT-10a held (real SQL): during a proposals read failure the click on the resurfaced item writes nothing", [JSON.stringify(await stored(CL)) === vBefore, (fbClick as { ok?: boolean })?.ok], [true, false]);
+    // FIX (FIX-redteam-actions-no-orphans.md): the brief fixes the fallback to the pre-G4-a behaviour, read-only "Not
+    // checked yet" (unchecked), never held. Exact value, so held (the defect) or rows still fail. Once the read works
+    // again the dismissed item is in no group.
+    t("NORT-10b GUARD (real SQL): during a proposals read failure a DISMISSED item is read-only unchecked, never held; after it, in no group", [fbGroups, groupsOf(await page(), uL.itemKey)], [["unchecked"], []]);
+    // NORT-7 (real SQL, the server's owner-scoped state read). FIX verify-1: the old fixture dismissed the kept proposal
+    // through a ref on the SAME thread, which resolves the thread (RESOLVED_PROPOSAL_STATES), so the unit left the plan
+    // and the click was refused at the plan lookup, never at the state check. Now the kept proposal's only ref is on
+    // ANOTHER thread (one proposal backing two threads), so the thread stays in the plan; the item is a legitimate G4-b
+    // held item (open + live id + kind "none" = no section), shown held while the proposal is `proposed`. Then the
+    // proposal is decided elsewhere: the ONLY thing left to refuse the click is the kept-proposal state check.
+    const nProps = async () => Number((await pool.query<{ n: string }>(`SELECT count(*) AS n FROM chat.task_proposals`)).rows[0]?.n);
+    const propRow = async (id: string) => (await pool.query<{ state: string; u: string; c: unknown }>(`SELECT state, updated_at::text AS u, owner_correction AS c FROM chat.task_proposals WHERE id = $1`, [id])).rows[0] ?? null;
+    const ASK7 = "Synthetic: could you please send the venue shortlist for the offsite by Wednesday?";
+    const keptHeld = async (name: string) => {
+      const chat = chatN(name);
+      const ask = `${ASK7} Ref ${name}.`; // each fixture its own text and to-do (no tie with another thread's)
+      await L.storeContent(O, [msgRow(chat, ask)] as never);
+      const u = await uOf(chat);
+      const p = cand(`Test-No ${name} item`, `test-no ${name} item`, "teams", teamsSourceItemId(chatN(`${name}_other`), "1"));
+      await P.upsert(p);
+      await putV(chat, { v: 1, key: u.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "open", kind: "none", category: "person_request", confidence: "high", todo: `Test-Send the venue shortlist ${name}`, due: "Wednesday", quote: ask, reason: "Asked.", answeredByReply: false, proposalId: p.id, at });
+      return { chat, u, id: p.id };
+    };
+    const k7 = await keptHeld("nort7");
+    const g7held = groupsOf(await page(), k7.u.itemKey);
+    await pool.query(`UPDATE chat.task_proposals SET state = 'dismissed' WHERE id = $1`, [k7.id]);
+    const inPlan7 = (await unitsNow()).units.some((x) => x.itemKey === k7.u.itemKey);
+    const n7 = await nProps();
+    const v7 = JSON.stringify(await stored(k7.chat));
+    const r7 = JSON.stringify(await propRow(k7.id));
+    const g7 = groupsOf(await page(), k7.u.itemKey);
+    const c7 = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: k7.u.itemKey, action: "dismiss" });
+    t(
+      "NORT-7 GUARD (real SQL): a legitimate G4-b held item (listed held while proposed, still in the plan) whose kept proposal is then DISMISSED -> in no group; the held click is refused, 0 proposals made, nothing written",
+      [g7held, inPlan7, g7, c7, (await nProps()) - n7, JSON.stringify(await stored(k7.chat)) === v7, JSON.stringify(await propRow(k7.id)) === r7],
+      [["held"], true, [], { ok: false, error: "That item isn't in your list." }, 0, true, true],
+    );
+    // FIX verify-1 FIX FIRST 2 (real SQL): the same legitimate G4-b held item, its kept proposal still `proposed`, but
+    // corrected with Wrong? on THIS item version (the stored per-item map). The page lists it only under Corrected; the
+    // held click is refused: 0 proposals made, nothing written (state still proposed, correction kept).
+    const k8 = await keptHeld("corr8");
+    const g8held = groupsOf(await page(), k8.u.itemKey);
+    await pool.query(`UPDATE chat.task_proposals SET owner_correction = $2::jsonb WHERE id = $1`, [k8.id, JSON.stringify({ v: 2, items: { [k8.u.itemKey]: { reason: "not_mine", text: null, itemKey: k8.u.itemKey, at, withdrawnAt: null } } })]);
+    const inPlan8 = (await unitsNow()).units.some((x) => x.itemKey === k8.u.itemKey);
+    const n8 = await nProps();
+    const v8 = JSON.stringify(await stored(k8.chat));
+    const r8 = JSON.stringify(await propRow(k8.id));
+    const g8 = groupsOf(await page(), k8.u.itemKey);
+    const c8 = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: k8.u.itemKey, action: "dismiss" });
+    t(
+      "NO-CORR-S1 GUARD (real SQL): a held item whose kept proposal (still proposed) was corrected with Wrong? on this item version -> only in Corrected; the held click is refused, 0 proposals made, nothing written",
+      [g8held, inPlan8, g8, c8, (await nProps()) - n8, JSON.stringify(await stored(k8.chat)) === v8, JSON.stringify(await propRow(k8.id)) === r8, (await propRow(k8.id))?.state],
+      [["held"], true, ["corrected"], { ok: false, error: "That item isn't in your list." }, 0, true, true, "proposed"],
+    );
+    t("NO-S17 observed (real PostgreSQL): ->> on a JSON null is SQL NULL, and NULL IN (...) is NULL (not true)", [nullCheck?.isnull, nullCheck?.inlist], [true, null]);
+    // AC-7: the classify heartbeat line carries counts only.
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (...a: unknown[]) => void logs.push(a.map(String).join(" "));
+    try {
+      await A.actOnHeldItemFor({ entra_email: O }, { itemKey: uS.itemKey, action: "dismiss" });
+    } finally {
+      console.log = orig;
+    }
+    t("NO-AC7 the held-click log line carries no to-do, quote or sender", [logs.length > 0, logs.some((l) => /synthetic|Pat|weekly|Test-/i.test(l))], [true, false]);
+  }
+
 } catch (e) {
   fail++;
   console.log(`FAIL harness: ${e instanceof Error ? `${e.name}: ${e.message}` : "error"}`);

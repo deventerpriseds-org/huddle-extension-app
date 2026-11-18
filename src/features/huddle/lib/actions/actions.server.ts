@@ -32,7 +32,7 @@ import {
   type OwnerCorrection,
 } from "./actions";
 import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, runReportClassify, inMemoryWrites, type ClassifyDeps, type ThreadTx, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
-import { actOnHeldItem, threadUnits, type HeldAction, type HeldActResult, type HeldCandidate } from "./pipeline";
+import { actOnHeldItem, proposeOpenVerdict, threadUnits, type HeldAction, type HeldActResult, type HeldCandidate } from "./pipeline";
 
 /** The feed config when the correspondence ingest is on (the Actions view reads what the ingest stored). */
 export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | null {
@@ -210,13 +210,9 @@ export async function classifyDepsFor(owner: string, owners: readonly string[]):
       const src = { source: u.source, sourceItemId: u.refItemId, at: u.at, context: (u.email?.latestOther?.subject ?? u.teams?.chatName ?? "").slice(0, 160) || null, text };
       // The admitted to-do through the EXISTING validators; when its wording is not grounded in the quote (a
       // "reply to ..." title), the quote itself is the title (always grounded). Nothing else is invented.
-      const titles = [v.todo, v.quote].filter((t): t is string => !!t);
-      for (const title of titles) {
-        const r = await proposeFromSource(owner, src, { ...pd, extract: async () => ({ tasks: [{ task: title.slice(0, 200), evidence: v.quote, assignee: null, due_text: v.due }] }) });
-        if (r.ids.length) return { id: r.ids[0], onBoard: false };
-        if (r.onBoard || r.suppressed) return { id: null, onBoard: true };
-      }
-      return { id: null, onBoard: false };
+      // AC-actions-no-orphans: proposeOpenVerdict decides the outcome (reworded -> the prior id, dismissed -> hidden with
+      // its marker, all rejected -> the rejection kinds, so the pass stores the item HELD instead of homeless).
+      return proposeOpenVerdict(v, (title) => proposeFromSource(owner, src, { ...pd, extract: async () => ({ tasks: [{ task: title.slice(0, 200), evidence: v.quote, assignee: null, due_text: v.due }] }) }));
     },
     addMeetingRows: (m, items) => addMeetingRows(owner, m, items),
     lockThread: (u, fn) => withThreadLock(owners, u, fn),
@@ -351,9 +347,11 @@ export type ActionsPage =
 
 const proposalCols = `id, state, title, assignee, owner_correction`;
 
-async function loadProposalsById(owners: string[], ids: string[]): Promise<Map<string, ProposalLite>> {
+/** The proposals named by the stored verdicts. `ok` is false when the read FAILED (table missing, connection error):
+ *  an empty map then means "not read", never "every proposal was deleted" (red-team NORT-10b). G4-a reads `ok`. */
+async function loadProposalsById(owners: string[], ids: string[]): Promise<{ byId: Map<string, ProposalLite>; ok: boolean }> {
   const m = new Map<string, ProposalLite>();
-  if (!ids.length) return m;
+  if (!ids.length) return { byId: m, ok: true };
   try {
     const r = await getSharedPool().query<{ id: string; state: string; title: string; assignee: string | null; owner_correction: OwnerCorrection | null }>(
       `SELECT ${proposalCols} FROM chat.task_proposals WHERE owner_email = ANY($1::text[]) AND id = ANY($2::text[])`,
@@ -361,9 +359,10 @@ async function loadProposalsById(owners: string[], ids: string[]): Promise<Map<s
     );
     for (const x of r.rows) m.set(x.id, { id: x.id, state: x.state, title: x.title, assignee: x.assignee, correction: x.owner_correction ?? null });
   } catch {
-    /* chat.task_proposals not created yet: nothing is backed, so nothing is listed (counted not checked) */
+    /* chat.task_proposals not created yet / unreadable: nothing is backed, so nothing is listed (counted not checked) */
+    return { byId: new Map(), ok: false };
   }
-  return m;
+  return { byId: m, ok: true };
 }
 
 async function loadMeetingProposals(owners: string[], meetingIds: string[]): Promise<MeetingProposalLite[]> {
@@ -407,7 +406,7 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
   const assembled = assembleLedgerPlan(data, cfg, sinceMs, s.ownNames);
   const verdicts = await loadVerdicts(lower(cfg.ownerLogins));
   const proposalIds = [...new Set([...verdicts.values()].map((v) => v.proposalId).filter((x): x is string => !!x))];
-  const proposals = await loadProposalsById(owners, proposalIds);
+  const { byId: proposals, ok: proposalsRead } = await loadProposalsById(owners, proposalIds);
   const meetingProposals = s.sources.meeting ? await loadMeetingProposals(owners, assembled.plan.meetings.inWindow.map((m) => m.meetingId)) : [];
   const emailFacts = assembled.plan.email.scan;
   const { listEmailRepliesFor } = await import("../email/email-replies.server");
@@ -416,7 +415,7 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
     emailFacts.flatMap((f) => f.messages.map((m) => m.id)),
     emailFacts.map((f) => f.conversationId).filter((x): x is string => !!x),
   ).catch(() => []);
-  const { candidates, uninvolvedHidden, meetingOthersHidden } = buildCandidates({ assembled, rows: data.rows, settings: s, verdicts, proposals, meetingProposals, replies, isDraftable: (id) => !isFeedId(id) });
+  const { candidates, uninvolvedHidden, meetingOthersHidden } = buildCandidates({ assembled, rows: data.rows, settings: s, verdicts, proposals, proposalsRead, meetingProposals, replies, isDraftable: (id) => !isFeedId(id) });
   const sel = selectActionItems(candidates, s);
   sel.hidden.uninvolved += uninvolvedHidden;
   sel.hidden.total += uninvolvedHidden;
@@ -592,7 +591,8 @@ export async function proposalBacksActionsRow(owners: string[], ledgerOwners: st
                           AND result_ids->'action'->>'proposalId' = $3
                           AND (result_ids->'action'->>'status' = 'open'
                                -- F5: a HELD item's rescue proposal (written back by actOnHeldItemFor) backs its row too.
-                               OR (result_ids->'action'->>'status' = 'not_checked' AND result_ids->'action'->>'notCheckedReason' = 'quote_not_found')))
+                               -- AC-actions-no-orphans AC-25: and a no_task_record one (exact strings; a JSON null is SQL NULL: no match).
+                               OR (result_ids->'action'->>'status' = 'not_checked' AND result_ids->'action'->>'notCheckedReason' IN ('quote_not_found', 'no_task_record'))))
                OR EXISTS (SELECT 1 FROM chat.task_proposal_refs
                            WHERE proposal_id = $3 AND owner_email = ANY($1::text[]) AND source = 'transcript')) AS ok`,
       [owners.map((o) => o.toLowerCase()), lower(ledgerOwners), proposalId],
@@ -646,18 +646,30 @@ export async function actOnHeldItemFor(
   const { deps } = await import("../proposals/proposals.server");
   const pd = await deps(cfg.owner);
   const { actOnProposal } = await import("../proposals/proposals.server");
+  // ONE owner-scoped read of a kept proposal's state per id (null = no row), shared by the existence check (G4-a) and
+  // the listed-state check (NORT-7). A read error throws: the click fails, nothing stored.
+  // FIX verify-1: the same one read also carries owner_correction, for the Wrong?-on-this-version check.
+  const rowReads = new Map<string, Promise<{ state: string; correction: unknown } | null>>();
+  const proposalRowOf = (id: string) => {
+    let p = rowReads.get(id);
+    if (!p) {
+      p = getSharedPool()
+        .query<{ state: string; owner_correction: unknown }>(`SELECT state, owner_correction FROM chat.task_proposals WHERE id = $1 AND owner_email = ANY($2::text[])`, [id, owners.map((o) => o.toLowerCase())])
+        .then((r) => (r.rows[0] ? { state: r.rows[0].state, correction: r.rows[0].owner_correction ?? null } : null));
+      rowReads.set(id, p);
+    }
+    return p;
+  };
+  const proposalStateOf = async (id: string) => (await proposalRowOf(id))?.state ?? null;
+  const proposalCorrectionOf = async (id: string) => (await proposalRowOf(id))?.correction ?? null;
   const r = await actOnHeldItem(u, input.action, {
     lockThread: (unit, fn) => withThreadLock(ledgerOwners, unit, fn),
     propose: (unit, cands, text) => proposeHeldWith(cfg.owner, pd, unit, cands, text),
     act: (id, action) => actOnProposal(caller, id, action, undefined, undefined, { from: "actions" }),
     // A deleted rescue proposal is replaced, not retried forever. A read error throws: the click fails, nothing stored.
-    proposalExists: async (id) => {
-      const r = await getSharedPool().query<{ ok: boolean }>(
-        `SELECT EXISTS (SELECT 1 FROM chat.task_proposals WHERE id = $1 AND owner_email = ANY($2::text[])) AS ok`,
-        [id, owners.map((o) => o.toLowerCase())],
-      );
-      return r.rows[0]?.ok === true;
-    },
+    proposalExists: async (id) => (await proposalStateOf(id)) !== null,
+    proposalState: proposalStateOf,
+    proposalCorrection: proposalCorrectionOf,
   });
   console.log(`[actions] held ${input.action} source=${u.source} ok=${r.ok}`);
   return r;

@@ -78,6 +78,10 @@ export interface ProposeResult {
   onBoard: number;
   /** Not proposed again: a reworded re-extraction of the same item (F14) or a to-do dismissed elsewhere (F15). */
   suppressed: number;
+  /** AC-actions-no-orphans G-1 (additive): for each suppressed candidate, WHICH prior proposal suppressed it and why
+   *  (reworded = F14, the same source item already has it; dismissed = F15, dismissed from another source). Absent
+   *  when nothing was suppressed, so existing callers and fakes are unchanged. Ids only, never text. */
+  suppressedBy?: { id: string; reason: "reworded" | "dismissed" }[];
   /** Candidates whose store write failed (the item is retried; the others were still stored). */
   failed: number;
   rejected: Partial<Record<RejectReason, number>>;
@@ -119,6 +123,7 @@ export async function proposeFromSource(owner: string, src: ProposalSource, deps
       const dismissed = prior.find((p) => p.state === "dismissed" && p.normTitle === c.normTitle && !p.sameItem);
       if (reworded || dismissed) {
         out.suppressed++;
+        (out.suppressedBy ??= []).push(reworded ? { id: reworded.id, reason: "reworded" } : { id: dismissed!.id, reason: "dismissed" });
         continue;
       }
       const r = await deps.store.upsert({

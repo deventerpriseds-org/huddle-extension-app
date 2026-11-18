@@ -22,7 +22,7 @@ import { ownerFullNames } from "../src/features/huddle/lib/correspondence/needs-
 import { assembleLedgerPlan, foldPersonName, ownerTeamsIdsAcross, teamsChatsFromLedger, type LedgerReportRow } from "../src/features/huddle/lib/correspondence/report-from-ledger";
 import { parseFeedsConfig } from "../src/features/huddle/lib/external-feeds/onedrive-feed";
 import { teamsSourceItemId, type TeamsContent } from "../src/features/huddle/lib/correspondence/source-item";
-import { CORRECTION_LABEL, CORRECTION_REASONS, makeCorrection, ACTIONS_SETTINGS_DEFAULT, type ActionCandidate } from "../src/features/huddle/lib/actions/actions";
+import { CORRECTION_LABEL, CORRECTION_REASONS, makeCorrection, ACTIONS_SETTINGS_DEFAULT, selectActionItems, whatShowsHideReason, type ActionCandidate } from "../src/features/huddle/lib/actions/actions";
 import { buildCandidates, collapseDuplicateTeamsItems, currentlyJudgedKeys, runClassify, teamsSourceLabel, threadUnits, verdictIsCurrent, type ClassifyDeps } from "../src/features/huddle/lib/actions/pipeline";
 import { CLASSIFIER_INPUT_VERSION, type ActionVerdict } from "../src/features/huddle/lib/correspondence/action-classify";
 import { detailLineOf, isMetadataDetail, splitActionItems } from "../src/features/huddle/lib/proposals/meeting-triage";
@@ -198,6 +198,63 @@ t("R6-7 two open items from the SAME chat -> one row, the newest", collapseDupli
   const vs = new Map<string, ActionVerdict>(us.map((x) => [`${x.storeAt.source}\u0000${x.storeAt.sourceItemId}`, { v: 1, key: x.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "open", kind: "reply", category: "person_request", confidence: "high", todo: "Send the form", due: null, quote: "please send me the signed vendor form by Friday", reason: "Asked.", answeredByReply: false, proposalId: "prop-shared", at: NOW } as ActionVerdict]));
   const got = buildCandidates({ assembled: asmD2, rows: rs, settings: ACTIONS_SETTINGS_DEFAULT, verdicts: vs, proposals: new Map([["prop-shared", { id: "prop-shared", state: "proposed", title: "Send the form", assignee: null, correction: null }]]), meetingProposals: [], replies: [], isDraftable: () => false }).candidates.filter((c) => c.source === "teams" && c.status === "open");
   t("R6-8 end to end: Pat's 1:1 + group copy collapse to the newest; Sam's identical ask (other id, same proposal) stays", got.map((c) => [c.display.who, c.at]).sort(), [["Pat Example", "2026-11-16T11:00:00Z"], ["Sam Example", "2026-11-16T12:00:00Z"]]);
+}
+{
+  // Verify-2 orphan fix (2026-11-18): the collapse winner is chosen among items the page will LIST first. The same
+  // What-shows rule the selection applies (whatShowsHideReason) decides eligibility; ties go to the smaller itemKey.
+  const LQ = "Synthetic: please send me the signed quarterly vendor form by Friday afternoon";
+  const A1 = cand({ itemKey: `teams:${ONE}|a1`, proposalId: "pa", proposalState: "proposed", category: "person_request", at: "2026-11-16T10:00:00Z", quote: LQ });
+  const B1 = cand({ itemKey: `teams:${GRP}|b1`, proposalId: "pb", proposalState: "proposed", category: "person_request", at: "2026-11-16T11:00:00Z", quote: LQ });
+  const same = () => "pat-guid";
+  const hideUn = { ...ACTIONS_SETTINGS_DEFAULT, hideUninvolvedChats: true };
+  const elig = (s: typeof ACTIONS_SETTINGS_DEFAULT) => {
+    const w = whatShowsHideReason(s);
+    return (c: ActionCandidate) => w(c) === null;
+  };
+  const where = (sel: ReturnType<typeof selectActionItems>, key: string) => (["rows", "unchecked", "held", "corrected", "answered"] as const).filter((g) => sel[g].some((r) => r.itemKey === key));
+  const run = (cands: ActionCandidate[], s = ACTIONS_SETTINGS_DEFAULT) => {
+    const sel = selectActionItems(collapseDuplicateTeamsItems(cands, same, elig(s)), s);
+    return { A: where(sel, A1.itemKey), B: where(sel, B1.itemKey), hidden: sel.hidden.total };
+  };
+  t("R6-9 GUARD (verify-2 orphan): newer twin uninvolved + Hide uninvolved on -> the older involved twin stays listed", run([A1, { ...B1, uninvolved: true }], hideUn), { A: ["rows"], B: [], hidden: 0 });
+  t("R6-10 GUARD (verify-2 orphan): newer twin in a HIDDEN category -> the older twin stays listed", run([A1, { ...B1, category: "meeting_invite" }]), { A: ["rows"], B: [], hidden: 0 });
+  t("R6-11 GUARD (verify-2 tie): same `at`, both input orders -> the SAME winner (smaller itemKey)", [collapseDuplicateTeamsItems([A1, { ...B1, at: A1.at }], same).map((c) => c.itemKey), collapseDuplicateTeamsItems([{ ...B1, at: A1.at }, A1], same).map((c) => c.itemKey)], [[A1.itemKey], [A1.itemKey]]);
+  t("R6-12 both twins hidden -> still ONE ask (the newest) in the hidden count, as before", run([{ ...A1, uninvolved: true }, { ...B1, uninvolved: true }], hideUn), { A: [], B: [], hidden: 1 });
+  t("R6-13 an older hidden twin never drops the newer listed one", run([{ ...A1, uninvolved: true }, B1], hideUn), { A: [], B: ["rows"], hidden: 0 });
+  // The verifier's probe table (VERIFY-actions-no-orphans-2.md): every row keeps its earlier result except the fixed one.
+  t(
+    "R6-14 verify-2 probe rows unchanged except the fixed one: diff at / B dismissed / B on board / B Wrong? / A legacy held / B legacy held",
+    [
+      run([A1, B1]),
+      run([A1, { ...B1, proposalState: "dismissed" }]),
+      run([A1, { ...B1, onBoard: true }]),
+      run([A1, { ...B1, correction: { itemKey: B1.itemKey, reason: "not_mine", at: "x" } as ActionCandidate["correction"] }]),
+      run([{ ...A1, proposalId: null }, B1]),
+      run([A1, { ...B1, proposalId: null }]),
+    ],
+    [
+      { A: [], B: ["rows"], hidden: 0 },
+      { A: [], B: [], hidden: 0 },
+      { A: [], B: [], hidden: 0 },
+      { A: [], B: ["corrected"], hidden: 0 },
+      { A: [], B: ["rows"], hidden: 0 },
+      { A: [], B: ["held"], hidden: 0 },
+    ],
+  );
+  // End to end through buildCandidates (the wiring the page uses): Pat's 1:1 ask, and the same ask newer in an
+  // involved group chat that the classifier put in a hidden category -> the 1:1 ask is listed.
+  const LONG = "Synthetic: please send me the signed vendor form by Friday";
+  const r1 = row({ chatId: ONE, messageId: "v1", at: "2026-11-16T10:00:00Z", text: LONG });
+  const r2 = row({ chatId: GRP, chatName: "Synthetic squad", messageId: "v2", at: "2026-11-16T11:00:00Z", text: LONG, mentionedUserIds: [OWNER_ID] });
+  const rs = [older, older2, r1, r2];
+  const asmV = assembleLedgerPlan({ rows: rs, proposals: [], bell: [] }, cfgNoIds, Date.parse("2026-11-09T05:00:00Z"));
+  const us = threadUnits(asmV, ACTIONS_SETTINGS_DEFAULT).units.filter((x) => x.source === "teams" && (x.teams?.chatId === ONE || x.teams?.chatId === GRP));
+  const grp = (x: (typeof us)[number]) => x.teams?.chatId === GRP;
+  const vs = new Map<string, ActionVerdict>(us.map((x) => [`${x.storeAt.source}\u0000${x.storeAt.sourceItemId}`, { v: 1, key: x.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "open", kind: "reply", category: grp(x) ? "meeting_invite" : "person_request", confidence: "high", todo: "Send the form", due: null, quote: "please send me the signed vendor form by Friday", reason: "Asked.", answeredByReply: false, proposalId: grp(x) ? "prop-g" : "prop-1", at: NOW } as ActionVerdict]));
+  const props = new Map([["prop-1", { id: "prop-1", state: "proposed", title: "Send the form", assignee: null, correction: null }], ["prop-g", { id: "prop-g", state: "proposed", title: "Send the form", assignee: null, correction: null }]]);
+  const candsV = buildCandidates({ assembled: asmV, rows: rs, settings: ACTIONS_SETTINGS_DEFAULT, verdicts: vs, proposals: props, meetingProposals: [], replies: [], isDraftable: () => false }).candidates;
+  const selV = selectActionItems(candsV, ACTIONS_SETTINGS_DEFAULT);
+  t("R6-15 GUARD (verify-2, end to end): the newer twin hidden by category does not drop the listed 1:1 ask", [us.length, selV.rows.filter((r) => r.itemKey.startsWith(`teams:${ONE}|`)).length, selV.hidden.categories.meeting_invite ?? 0], [2, 1, 0]);
 }
 t(
   "R6-4 label: 1:1; a group chat named only after the owner -> 'Teams group chat'; another name kept; no name -> 'Teams'",

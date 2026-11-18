@@ -32,9 +32,10 @@ import { foldPersonName, normTeamsId, type AssembledLedgerPlan, type LedgerRepor
 import type { EmailContent } from "../correspondence/source-item";
 import { FEED_ID_PREFIX } from "../external-feeds/onedrive-feed";
 import { meetingItemIsOwnersOrUnassigned } from "../proposals/meeting-triage";
-import { titleKey } from "../proposals/proposals";
+import { REJECT_REASONS, titleKey, type RejectReason } from "../proposals/proposals";
+import type { ProposeResult } from "../proposals/engine";
 import { safeLink } from "../attention/attention";
-import { correctionFor, plainPreview, type ActionCandidate, type ActionsSettings } from "./actions";
+import { correctionFor, correctionHides, HELD_REASONS, plainPreview, proposalStateListed, whatShowsHideReason, type ActionCandidate, type ActionsSettings } from "./actions";
 
 const stripFeed = (id: string) => (id.startsWith(FEED_ID_PREFIX) ? id.slice(FEED_ID_PREFIX.length) : id);
 
@@ -133,8 +134,9 @@ export interface ClassifyDeps {
   recordCall(at: ThreadUnit["storeAt"]): Promise<void>;
   /** The model call (strict JSON). Throws on failure. */
   model(system: string, input: string, schemaName: string): Promise<unknown>;
-  /** Back an admitted item with a proposal (EXISTING proposeFromSource). onBoard = already an open board task. */
-  propose(unit: ThreadUnit, v: ActionVerdict, threadText: string): Promise<{ id: string | null; onBoard: boolean }>;
+  /** Back an admitted item with a proposal (EXISTING proposeFromSource). onBoard = already an open board task.
+   *  AC-actions-no-orphans: `suppressedBy` / `rejectedKinds` say why there is no id (see proposeOpenVerdict). */
+  propose(unit: ThreadUnit, v: ActionVerdict, threadText: string): Promise<ProposeOutcome>;
   storeVerdict(at: ThreadUnit["storeAt"], v: ActionVerdict): Promise<void>;
   /** The EXISTING meeting-triage rows (addTriageRows(triageRowsFor(...))). */
   addMeetingRows(m: MeetingItems, items: string[]): Promise<number>;
@@ -151,6 +153,59 @@ export interface ClassifyDeps {
    * `tx.store(v)` writes it there. Absent = no lock (offline tests; the report with saving off).
    */
   lockThread?<T>(u: ThreadUnit, fn: (tx: ThreadTx) => Promise<T>): Promise<T>;
+}
+
+/** What the classify pass's propose step answers (AC-actions-no-orphans). Exactly one of: an id (created / attached /
+ *  seen, or the REWORDED prior proposal, F14); onBoard (an open board task, or suppressed: `suppressedBy:"dismissed"`
+ *  for F15); or neither, with the validator's rejection KINDS (the item is then stored held, `no_task_record`). */
+export interface ProposeOutcome {
+  id: string | null;
+  onBoard: boolean;
+  suppressedBy?: "dismissed";
+  rejectedKinds?: readonly string[];
+}
+
+/** One proposeFromSource try, as the adapter reads it (a ProposeResult, or a fake with the same fields). */
+export type ProposeTry = Pick<ProposeResult, "ids" | "onBoard" | "suppressed" | "rejected"> & Pick<Partial<ProposeResult>, "suppressedBy">;
+
+/**
+ * Pure orchestration of the classify pass's propose step (AC-actions-no-orphans P-1..P-14, AC-5, AC-9, AC-10).
+ * Tries the admitted to-do, then the quote (always grounded), as titles; the FIRST try with an outcome wins over any
+ * earlier rejection (P-12 / P-13). A reworded suppression links the prior same-item proposal (P-7); a dismissed one
+ * stays hidden with its marker (P-8); a suppression that names no proposal keeps today's onBoard hiding. When every
+ * try is rejected (or none is possible, P-14), the union of the rejection KINDS is returned. A throw (store failure)
+ * propagates: the caller stores nothing (P-15).
+ */
+export async function proposeOpenVerdict(v: Pick<ActionVerdict, "todo" | "quote">, tryTitle: (title: string) => Promise<ProposeTry>): Promise<ProposeOutcome> {
+  const titles = [v.todo, v.quote].filter((t): t is string => !!t);
+  const kinds = new Set<string>();
+  for (const title of titles) {
+    const r = await tryTitle(title);
+    if (r.ids.length && r.ids[0]) return { id: r.ids[0], onBoard: false };
+    if (r.onBoard) return { id: null, onBoard: true };
+    if (r.suppressed) {
+      const by = r.suppressedBy?.[0];
+      if (by?.reason === "reworded" && by.id) return { id: by.id, onBoard: false };
+      return { id: null, onBoard: true, ...(by?.reason === "dismissed" ? { suppressedBy: "dismissed" as const } : {}) };
+    }
+    for (const k of Object.keys(r.rejected ?? {})) kinds.add(k);
+  }
+  return { id: null, onBoard: false, rejectedKinds: [...kinds] };
+}
+
+/** Pure (AC-6): rejection kinds as stored -- only RejectReason members, unique, sorted; never any text. */
+export function storedRejectKinds(kinds: Iterable<unknown> | null | undefined): RejectReason[] {
+  const known = new Set<string>(REJECT_REASONS);
+  return [...new Set([...(kinds ?? [])].filter((k): k is RejectReason => typeof k === "string" && known.has(k)))].sort();
+}
+
+/** Pure (AC-1 / AC-2 / AC-3): the verdict stored for a propose step's outcome. An id -> open with it; onBoard -> open,
+ *  hidden; otherwise HELD (`not_checked` / `no_task_record`, the model's fields kept). Never open with no home. */
+export function verdictAfterPropose(v: ActionVerdict, p: ProposeOutcome): ActionVerdict {
+  if (typeof p.id === "string" && p.id) return { ...v, proposalId: p.id };
+  if (p.onBoard) return { ...v, proposalId: null, onBoard: true, ...(p.suppressedBy === "dismissed" ? { suppressedBy: "dismissed" as const } : {}) };
+  const { onBoard: _o, suppressedBy: _s, ...rest } = v;
+  return { ...rest, status: "not_checked", notCheckedReason: "no_task_record", noTaskRecordKinds: storedRejectKinds(p.rejectedKinds), proposalId: null };
 }
 
 /** The thread-locked transaction handed to ClassifyDeps.lockThread's callback. */
@@ -247,7 +302,8 @@ export async function runClassify(
         const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");
         try {
           const p = await deps.propose(u, v, text);
-          v = { ...v, proposalId: p.id, ...(p.onBoard ? { onBoard: true } : {}) };
+          // AC-actions-no-orphans: no id and not on the board -> stored HELD (no_task_record), never open-with-no-home.
+          v = verdictAfterPropose(v, p);
         } catch {
           return "failed"; // nothing stored: retried next pass
         }
@@ -379,9 +435,27 @@ export const HELD_ACTION_ERROR = "Couldn't add that. Try again.";
 /** At most this many (task, evidence) tries per click (each is one proposeFromSource validation, no model call). */
 export const HELD_CANDIDATES_MAX = 8;
 
-/** Pure: is this stored verdict the CURRENT held judgement of this unit? */
-export function isHeldVerdict(v: ActionVerdict | null | undefined, u: Pick<ThreadUnit, "itemKey" | "source">): v is ActionVerdict {
-  return !!v && verdictIsCurrent(v, u.itemKey, u.source) && v.status === "not_checked" && v.notCheckedReason === "quote_not_found";
+type HeldUnit = Pick<ThreadUnit, "itemKey" | "source"> & { email?: Pick<ConversationFacts, "ownerPosition"> | null };
+
+/** Pure: the section the page gives this stored verdict (the SAME actionSectionFor call buildCandidates makes). */
+function verdictSection(v: ActionVerdict, u: HeldUnit) {
+  return u.source === "email" ? actionSectionFor("email", v.kind ?? null, u.email?.ownerPosition) : actionSectionFor("teams", v.kind ?? null);
+}
+
+/** Pure: is this stored verdict the CURRENT held judgement of this unit? Held = `not_checked` for a HELD_REASONS
+ *  reason (exact string), OR (AC-actions-no-orphans) an `open` verdict with no home: no proposal id and not on the
+ *  board (the legacy rows, AC-12), or an id but no section (G4-b). The same rules as selectActionItems. */
+export function isHeldVerdict(v: ActionVerdict | null | undefined, u: HeldUnit): boolean {
+  if (!v || !verdictIsCurrent(v, u.itemKey, u.source)) return false;
+  if (v.status === "not_checked") return (HELD_REASONS as readonly string[]).includes(v.notCheckedReason ?? "");
+  if (v.status !== "open" || v.onBoard === true) return false;
+  if (!v.proposalId) return true;
+  return verdictSection(v, u) === null;
+}
+
+/** Pure (G4-a): a current `open` verdict with an id and a section -- a normal row, unless its proposal was deleted. */
+export function isOpenWithIdVerdict(v: ActionVerdict | null | undefined, u: HeldUnit): v is ActionVerdict & { proposalId: string } {
+  return !!v && verdictIsCurrent(v, u.itemKey, u.source) && v.status === "open" && v.onBoard !== true && !!v.proposalId && verdictSection(v, u) !== null;
 }
 
 /** Pure: the text proposeFromSource validates against (the thread's messages, as the classify pass passes them). */
@@ -428,6 +502,15 @@ export interface HeldActDeps {
    *  proposal was DELETED gets a fresh one instead of retrying the missing id forever. Throws on a read failure (the
    *  click then fails and nothing is stored). Absent = assume it exists (today's behaviour). */
   proposalExists?(proposalId: string): Promise<boolean>;
+  /** NORT-7: the owner-scoped state of a kept (written-back) proposal, null when there is no such row. A kept id whose
+   *  proposal the page does not list (decided: dismissed / completed / approved / delegated) is refused like every
+   *  other not-listed item. Throws on a read failure (the click fails, nothing stored). Absent = not checked. */
+  proposalState?(proposalId: string): Promise<string | null>;
+  /** FIX verify-1 (2026-11-18): the owner-scoped stored owner_correction column of a kept proposal (null when none).
+   *  A kept id the owner corrected with Wrong? on THIS item version is listed only under Corrected (ownerDecided:
+   *  correctionHides(correctionFor(...))), so the held click refuses it the same way. Throws on a read failure (the
+   *  click fails, nothing stored). Absent = not checked. */
+  proposalCorrection?(proposalId: string): Promise<unknown>;
 }
 
 export type HeldActResult = { ok: true; proposalId: string | null; note?: string } | { ok: false; error: string; proposalId?: string };
@@ -439,10 +522,22 @@ export async function actOnHeldItem(u: ThreadUnit, action: HeldAction, deps: Hel
   try {
     step = await deps.lockThread<Step>(u, async (tx) => {
       const cur = await tx.current();
-      if (!isHeldVerdict(cur, u)) return { kind: "not_held" };
+      // G4-a (AC-actions-no-orphans): an open item whose proposal row was DELETED is held too, but only once the store
+      // confirms the row is gone (a live id is a normal row: refused here). A read error throws: nothing stored.
+      if (!cur) return { kind: "not_held" };
+      const held = isHeldVerdict(cur, u);
+      const gone = !held && isOpenWithIdVerdict(cur, u) && !!deps.proposalExists && !(await deps.proposalExists(cur.proposalId as string));
+      if (!held && !gone) return { kind: "not_held" };
       // F5-7 / F5-8: a proposal already created for this item (another click, or a click whose action failed) is re-used.
       // A written-back id whose proposal no longer exists is NOT re-used: a fresh proposal is made and written back.
-      if (cur.proposalId && (!deps.proposalExists || (await deps.proposalExists(cur.proposalId)))) return { kind: "id", id: cur.proposalId };
+      if (!gone && cur.proposalId && (!deps.proposalExists || (await deps.proposalExists(cur.proposalId)))) {
+        // NORT-7: the page lists this item only while its kept proposal is in a listed state (selectActionItems'
+        // ownerDecided). A decided one is not in the list, so the click is refused the same way, before act().
+        if (deps.proposalState && !proposalStateListed(await deps.proposalState(cur.proposalId))) return { kind: "not_held" };
+        // FIX verify-1: a Wrong? on this item version puts it under Corrected, not held (the same rule ownerDecided uses).
+        if (deps.proposalCorrection && correctionHides(correctionFor(await deps.proposalCorrection(cur.proposalId), u.itemKey), u.itemKey)) return { kind: "not_held" };
+        return { kind: "id", id: cur.proposalId };
+      }
       const p = await deps.propose(u, heldProposalCandidates(cur.todo, cur.quote, (u.email ?? u.teams)?.latestOther?.text ?? null), heldThreadText(u));
       if (p.id) {
         await tx.store({ ...cur, proposalId: p.id });
@@ -505,6 +600,8 @@ export function buildCandidates(a: {
   /** Stored verdicts by "<source>\u0000<ledger id>" of the latest message row. */
   verdicts: ReadonlyMap<string, ActionVerdict>;
   proposals: ReadonlyMap<string, ProposalLite>;
+  /** false when the proposals read FAILED (an empty `proposals` then means "not read"). Absent = the read succeeded. */
+  proposalsRead?: boolean;
   meetingProposals: readonly MeetingProposalLite[];
   replies: readonly ReplyRowLite[];
   isDraftable(graphMessageId: string): boolean;
@@ -524,6 +621,9 @@ export function buildCandidates(a: {
     const base = {
       proposalId: p?.id ?? null,
       proposalState: p?.state ?? null,
+      // G4-a: the verdict names a proposal the read did not return (deleted). Selection lists it as held. Only when the
+      // read SUCCEEDED: a failed read proves nothing about the row (NORT-10b), so the item is marked unread instead.
+      ...(current?.proposalId && !p ? (a.proposalsRead === false ? { proposalUnread: true } : { proposalMissing: true }) : {}),
       status: current?.status ?? ("not_checked" as const),
       // F5: the held reason travels to the selection (it used to be dropped here).
       notCheckedReason: current?.status === "not_checked" ? current.notCheckedReason ?? null : null,
@@ -636,7 +736,10 @@ export function buildCandidates(a: {
       });
     }
   }
-  return { candidates: collapseDuplicateTeamsItems(out, (c) => senderByItem.get(c.itemKey) ?? null), uninvolvedHidden, meetingOthersHidden };
+  // Verify-2 orphan fix: the collapse ranks items the page will LIST (the same What-shows rule selection applies)
+  // above items it will hide, so a hidden twin never drops a listed one.
+  const whatShows = whatShowsHideReason(a.settings);
+  return { candidates: collapseDuplicateTeamsItems(out, (c) => senderByItem.get(c.itemKey) ?? null, (c) => whatShows(c) === null), uninvolvedHidden, meetingOthersHidden };
 }
 
 // ── 2026-11-17 accuracy fixes (owner report: one Teams ask showed twice, "Teams 1:1" and "Teams, <his own name>") ──
@@ -669,11 +772,18 @@ export function teamsChatOfItemKey(itemKey: string): string | null {
  *  - they come from the SAME chat, or
  *  - the SAME sender id (senderIdOf; null = unknown, never matched) quoted the SAME sentence (folded) of at least
  *    DEDUP_MIN_QUOTE_CHARS characters (posted in a 1:1 and again in a small group chat, or re-posted later).
- * Only the NEWEST (by `at`) is kept. A shared backing proposal is NEVER a reason to collapse: the proposal store
+ * Only ONE is kept per key: an ELIGIBLE item (one the What-shows switches will not hide; `eligible`, from
+ * buildCandidates) before an ineligible one, then the NEWEST by `at`, then the smaller itemKey -- never input order
+ * (verify-2). So an item the page hides never drops one it lists; it only collapses with other hidden twins, which keeps
+ * the hidden counts one per ask as before. A shared backing proposal is NEVER a reason to collapse: the proposal store
  * attaches different senders' to-dos to one proposal by title (proposals-store.server.ts, OQ-9). A display NAME is
  * never a sender id. Nothing else is touched: emails, meetings, and Teams items that are not open keep their place.
  */
-export function collapseDuplicateTeamsItems(cands: readonly ActionCandidate[], senderIdOf: (c: ActionCandidate) => string | null = () => null): ActionCandidate[] {
+export function collapseDuplicateTeamsItems(
+  cands: readonly ActionCandidate[],
+  senderIdOf: (c: ActionCandidate) => string | null = () => null,
+  eligible: (c: ActionCandidate) => boolean = () => true,
+): ActionCandidate[] {
   const keysOf = (c: ActionCandidate): string[] => {
     const k: string[] = [];
     const chat = teamsChatOfItemKey(c.itemKey);
@@ -683,13 +793,21 @@ export function collapseDuplicateTeamsItems(cands: readonly ActionCandidate[], s
     if (sid && q.length >= DEDUP_MIN_QUOTE_CHARS) k.push(`q:${sid}\u0000${q}`);
     return k;
   };
-  const t = (c: ActionCandidate) => (c.at ? Date.parse(c.at) : NaN);
+  const t = (c: ActionCandidate) => (c.at ? Date.parse(c.at) : NaN) || -Infinity;
+  /** true when `c` beats `w`: eligible first, then newest, then the smaller itemKey (a stable id order). */
+  const beats = (c: ActionCandidate, w: ActionCandidate): boolean => {
+    const ec = eligible(c);
+    const ew = eligible(w);
+    if (ec !== ew) return ec;
+    if (t(c) !== t(w)) return t(c) > t(w);
+    return c.itemKey < w.itemKey;
+  };
   const winner = new Map<string, ActionCandidate>();
   for (const c of cands) {
     if (c.source !== "teams" || c.status !== "open") continue;
     for (const k of keysOf(c)) {
       const w = winner.get(k);
-      if (!w || (t(c) || -Infinity) > (t(w) || -Infinity)) winner.set(k, c);
+      if (!w || beats(c, w)) winner.set(k, c);
     }
   }
   return cands.filter((c) => c.source !== "teams" || c.status !== "open" || keysOf(c).every((k) => winner.get(k) === c));

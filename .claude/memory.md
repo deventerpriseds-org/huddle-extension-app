@@ -1,5 +1,18 @@
 # Project Memory — huddle-extension-app
 
+## Actions: no orphaned items (2026-11-18, PR #282, branch claude_actions-no-orphans) -- ACT:actions-no-orphans
+- Owner screenshot: Amy's "flight to BOS" ask sat in read-only "Not checked yet". Live store: 8 verdicts `open` with
+  proposalId null -- the action admission accepted them, the proposal validator refused them (`evidence_not_in_source`
+  for "..." fragment quotes, `task_not_grounded` when the AI's to-do words are not in the quote), nothing handled the
+  refusal, and the verdict counted as current so it was never re-judged.
+- INVARIANT now: open + no id + not on board -> stored `not_checked`/`no_task_record` (rejection kinds only) -> held
+  group with Add as task / Dismiss. Legacy open-without-proposal rows show as held at page load (no re-judge).
+- Also: reworded to-do links to its earlier proposal; dismissed-elsewhere stays hidden (`suppressedBy:"dismissed"`);
+  deleted proposal / id-without-section -> held; a proposals LOAD FAILURE is not "deleted" (stays read-only); held
+  click refuses a decided or Wrong?-corrected kept proposal; Teams same-ask collapse never lets a hidden twin drop a
+  listed one (shared `whatShowsHideReason`).
+- Evidence: AC/BUILD/REDTEAM/FIX/VERIFY-actions-no-orphans-*.md; 3 verifier loops, final SHIP.
+
 ## Actions: held items, invites with a real ask, names that are you (2026-11-18, #278 MERGED 6226392c, deploy-swa 44227067950 SUCCESS, re-check run 44227289487, UAT 44228068622 56/56; NOT owner-confirmed live) -- ACT:actions-missing-yesterday
 - The quote safety check now admits a quote made of verbatim fragments in order; a gap may only skip WHOLE sentences
   (red-team RT-1: "Please do ... send" from "Please do not send" must fail). NFC + combining marks handled.

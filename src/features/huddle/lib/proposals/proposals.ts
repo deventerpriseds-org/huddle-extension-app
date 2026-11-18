@@ -169,6 +169,27 @@ export type RejectReason =
   | "duplicate_in_batch"
   | "over_cap";
 
+/** Every RejectReason KIND, at runtime (AC-actions-no-orphans AC-6: a stored kind list is filtered to these). The
+ *  two checks below fail to compile if this list and the union ever drift apart. */
+export const REJECT_REASONS = [
+  "not_object",
+  "tasks_not_array",
+  "item_not_object",
+  "task_missing",
+  "task_too_long",
+  "evidence_missing",
+  "evidence_too_short",
+  "evidence_too_long",
+  "evidence_not_in_source",
+  "evidence_negated",
+  "task_not_grounded",
+  "task_number_not_grounded",
+  "duplicate_in_batch",
+  "over_cap",
+] as const satisfies readonly RejectReason[];
+type _RejectReasonsCoverUnion = Exclude<RejectReason, (typeof REJECT_REASONS)[number]> extends never ? true : never;
+export const REJECT_REASONS_COVER_UNION: _RejectReasonsCoverUnion = true;
+
 export interface ValidCandidate {
   title: string;
   normTitle: string;
