@@ -5481,3 +5481,11 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
       44227067950 SUCCESS; re-check run 44227289487 (134 calls, 441/500 today; app_invite 16 now hidden); UAT run
       44228068622 56/56 (existing Actions checks; the new held group has no UAT check yet).
 - [ ] Owner confirms live: his manager's two Nov 16 asks show; held items visible; his second Teams account is "you".
+
+## ACT:schedule-unstar-star — can't unselect a priority star in the Schedule tab (2026-11-18)
+Owner: *"I cannot unselect priorities in the priority view"* → corrected: *"it's the schedule view"* → *"I attempted to click to uncheck a star in the schedules priority rows"* (screenshot: Schedule → Up next → This Week).
+- **Found:** the Schedule This Week star was a decorative icon (`UpNextRowItem`, `<Star aria-hidden>`); Schedule rows have no ⋮ menu → no way to unstar from Schedule. journey function logs: 0 `set_priority_rank` calls in the 48h before the report. (Priorities tab ⋮ → "Remove from This Week" exists and is unchanged.)
+- **Shipped:** PR #280 squash `eaf3019`. `UnstarButton` on starred rows of the LIVE Schedule tab → `runPush(ctx,"unstar")` (same write as the Priorities ⋮); non-starred due-this-week rows + chat snapshot cards unchanged; `useScheduleData.reload`.
+- **Evidence:** `scripts/schedule-unstar.test.ts` 9/9; mutate.sh FIRED (control EQUIVALENT) S1/S3/S6/S8 (S1 first INERT → regex tightened); tsc 0; build 0.
+- **Test artifact:** journey task `7783b64a…` "Test-unstar check 1118" (seeded starred for the live UAT). Supabase MCP DELETE hung on a confirmation prompt — still on the board until cleaned.
+- **Status:** live after deploy; NOT owner-confirmed.
