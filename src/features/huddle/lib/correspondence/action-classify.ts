@@ -215,9 +215,11 @@ export function teamsQuoteHaystack(c: TeamsChatFacts): QuoteHaystack {
 
 // ── THE ADMISSION GUARD (Tier 1) ──────────────────────────────────────────────────────────────────────
 
-/** Whitespace, typographic quotes and dashes folded; case-insensitive. */
+/** Whitespace, typographic quotes and dashes folded; case-insensitive. F1 rule 7 (2026-11-18): zero-width space /
+ *  non-joiner / joiner (U+200B..U+200D) and the soft hyphen (U+00AD) are removed, for both the quote and the text. */
 export const canonQuote = (s: string) =>
   String(s ?? "")
+    .replace(/[​-‍­]/g, "")
     .replace(/[‘’‚‛]/g, "'")
     .replace(/[“”„‟]/g, '"')
     .replace(/[–—]/g, "-")
@@ -226,14 +228,56 @@ export const canonQuote = (s: string) =>
     .toLowerCase();
 
 export const MIN_QUOTE_CHARS = 8;
+/** F1 rule 6: a quote of more fragments than this is a bag of words, not a quote. */
+export const MAX_QUOTE_FRAGMENTS = 6;
+
+/** F1 (S1-22): ONE leading and ONE trailing quote mark (after folding) are not part of the quoted text. */
+const unwrapQuote = (q: string) => q.replace(/^["']/, "").replace(/["']$/, "").trim();
+
+/** F1 rule 2 (pure): a FOLDED quote split at sentence ends (`.`, `!`, `?` then whitespace; the mark stays with its
+ *  sentence) and at ellipses (`...`, U+2026, `[...]`, `[…]`). Never at commas. Fragments with no letter or digit
+ *  (empty, or punctuation only) are dropped. */
+export function quoteFragments(folded: string): string[] {
+  return folded
+    .split(/\s*(?:\[\s*(?:\.{3}|…)\s*\]|\.{3,}|…)\s*|(?<=[.!?])\s+/u)
+    .map((f) => f.trim())
+    .filter((f) => /[\p{L}\p{N}]/u.test(f));
+}
+
+const isWordChar = (c: string | undefined) => !!c && /[\p{L}\p{N}]/u.test(c);
+
+/** F1 rules 3 + 4 (pure): every fragment found in `piece` left to right, each starting at or after the end of the
+ *  previous match, on Unicode word boundaries (never ASCII \b: measured, /\bcaf\b/ matches inside "café"). Plain
+ *  indexOf scanning: quote text is never compiled into a RegExp (it is data; no backtracking). */
+function fragmentsInOrder(frags: readonly string[], piece: string): boolean {
+  let from = 0;
+  for (const f of frags) {
+    let at = piece.indexOf(f, from);
+    while (at >= 0 && ((isWordChar(f[0]) && isWordChar(piece[at - 1])) || (isWordChar(f[f.length - 1]) && isWordChar(piece[at + f.length])))) {
+      at = piece.indexOf(f, at + 1);
+    }
+    if (at < 0) return false;
+    from = at + f.length;
+  }
+  return true;
+}
 
 /** Pure, THE verbatim rule: is `quote` (at least MIN_QUOTE_CHARS after folding) a span of `haystack`? A list is
- *  checked piece by piece (each piece folded on its own, never joined): the quote must lie inside ONE piece. */
+ *  checked piece by piece (each piece folded on its own, never joined): the quote must lie inside ONE piece.
+ *  F1 (2026-11-18, AC-actions-safety-and-invites.md): when the WHOLE quote is not a span (rule 1, unchanged), it is
+ *  still verbatim when it is made of 1..MAX_QUOTE_FRAGMENTS fragments (quoteFragments), at least one of them
+ *  MIN_QUOTE_CHARS long, all found IN ORDER inside ONE piece on Unicode word boundaries -- never stitched across two
+ *  pieces (loop-2 D1). Used by admitActionVerdict AND the legacy judgeConversation path (one rule). */
 export function quoteIsVerbatim(quote: string | null | undefined, haystack: string | QuoteHaystack): boolean {
-  const q = canonQuote(quote ?? "");
+  const q = unwrapQuote(canonQuote(quote ?? ""));
   if (q.length < MIN_QUOTE_CHARS) return false;
-  const pieces = typeof haystack === "string" ? [haystack] : haystack;
-  return pieces.some((piece) => canonQuote(piece ?? "").includes(q));
+  const pieces = (typeof haystack === "string" ? [haystack] : haystack).map((p) => canonQuote(p ?? ""));
+  if (pieces.some((piece) => piece.includes(q))) return true;
+  const frags = quoteFragments(q);
+  // One fragment is allowed: a trailing / leading ellipsis ("Please send your first notes...") marks a cut.
+  if (frags.length < 1 || frags.length > MAX_QUOTE_FRAGMENTS) return false;
+  if (!frags.some((f) => f.length >= MIN_QUOTE_CHARS)) return false;
+  return pieces.some((piece) => fragmentsInOrder(frags, piece));
 }
 
 /**

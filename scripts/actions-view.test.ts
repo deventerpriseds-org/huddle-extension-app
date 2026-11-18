@@ -16,6 +16,7 @@ import {
   TEAMS_INSTRUCTIONS,
   actionSectionFor,
   admitActionVerdict,
+  canonQuote,
   emailQuoteHaystack,
   quoteIsVerbatim,
   teamsQuoteHaystack,
@@ -92,6 +93,76 @@ const FW_FACTS = { latestOther: { id: "feed:m2", text: "Pat here, see below" } }
 const FW_MAP = new Map([["feed:m2", "From: someone\n\nplease send the signed form by Friday"]]);
 t("A-10 GUARD: email quote stitched across the body and its forwarded part -> not_checked", [quoteIsVerbatim("see below from: someone", emailQuoteHaystack(FW_FACTS, FW_MAP)), adm({ ...good, quote: "see below From: someone" }, emailQuoteHaystack(FW_FACTS, FW_MAP) as never).status], [false, "not_checked"]);
 t("A-11 quote inside ONE piece still admits (teams 2nd message; email body; email forwarded part)", [adm({ ...good, quote: "please send the deck" }, teamsQuoteHaystack(STITCH_CHAT) as never).status, adm({ ...good, quote: "Pat here, see below" }, emailQuoteHaystack(FW_FACTS, FW_MAP) as never).status, adm({ ...good, quote: "send the signed form by Friday" }, emailQuoteHaystack(FW_FACTS, FW_MAP) as never).status], ["open", "open", "open"]);
+
+// ── F1. QUOTE MADE OF VERBATIM FRAGMENTS, IN ORDER (AC-actions-safety-and-invites.md F1) ────────────────
+{
+  const MSG = "Hi Sam. Here's the outline of topics I want from you each week. The room is booked. Please send your first notes by Monday.";
+  const st = (quote: unknown, hay: string | readonly string[] = MSG) => {
+    const v = admitActionVerdict({ ...good, quote }, hay as never, { key: "k|1", settled: false, nowIso: NOW });
+    return v.notCheckedReason ? `${v.status}/${v.notCheckedReason}` : v.status;
+  };
+  t("F1-1 GUARD: two verbatim sentences with one left out between them -> open (whole-quote alone would refuse)", [MSG.toLowerCase().includes("here's the outline of topics i want from you each week. please send your first notes by monday."), st("Here's the outline of topics I want from you each week. Please send your first notes by Monday.")], [false, "open"]);
+  t("F1-2 GUARD: the same two sentences out of order -> not_checked / quote_not_found", st("Please send your first notes by Monday. Here's the outline of topics I want from you each week."), "not_checked/quote_not_found");
+  const CHAT = teamsQuoteHaystack({ messages: [{ speaker: "OTHER", text: "Here's the outline of topics I want from you each week." }, { speaker: "OWNER", text: "ok" }, { speaker: "OTHER", text: "Please send your first notes by Monday." }] } as never);
+  const FWH = emailQuoteHaystack({ latestOther: { id: "feed:f1", text: "Here's the outline of topics I want from you each week." } } as never, new Map([["feed:f1", "Please send your first notes by Monday. Thanks."]]));
+  t("F1-3 GUARD: fragments from two Teams OTHER messages, or from the email body + its forward -> quote_not_found", [st("Here's the outline of topics I want from you each week. Please send your first notes by Monday.", CHAT), st("Here's the outline of topics I want from you each week. Please send your first notes by Monday.", FWH)], ["not_checked/quote_not_found", "not_checked/quote_not_found"]);
+  t("F1-4 one paraphrased fragment -> quote_not_found", st("Here's the outline of topics I want from you each week. Please send your notes by Monday."), "not_checked/quote_not_found");
+  const TWICE = "Please confirm the venue. The caterer called. Please confirm the venue.";
+  t("F1-5 GUARD: a repeat needs a repeat occurrence ('Thanks. ... Thanks.' vs one Thanks -> refused); two real occurrences -> open", [st("Thanks. ... Thanks.", "Hi. Thanks. See below."), st("Please confirm the venue. ... Please confirm the venue.", TWICE), st("Please confirm the venue. ... Please confirm the venue.", "Please confirm the venue. The caterer called.")], ["not_checked/quote_not_found", "open", "not_checked/quote_not_found"]);
+  t("F1-7 null / empty / under 8 folded chars -> quote_not_found as today", [st(null), st(""), st("by Mon.")], ["not_checked/quote_not_found", "not_checked/quote_not_found", "not_checked/quote_not_found"]);
+  const SEVEN = "Alpha one here. Bravo two here. Charlie three. Delta four here. Echo five here. Foxtrot six. Golf seven here.";
+  t("F1-8 seven one-sentence fragments, all present in order -> quote_not_found (rule 6); six -> open", [st("Alpha one here. Bravo two here. ... Delta four here. Echo five here. Foxtrot six. Golf seven here. Charlie three.", SEVEN), st("Alpha one here. Bravo two here. Charlie three. ... Echo five here. Foxtrot six. Golf seven here.", SEVEN), st("Alpha one here. Bravo two here. Charlie three. ... Echo five here. Foxtrot six. ... Golf seven here. Alpha one here.", SEVEN)], ["not_checked/quote_not_found", "open", "not_checked/quote_not_found"]);
+  t("F1-9 a zero-width space inside the message text is folded away -> open", st("review the deck by Friday", "Could you re​view the deck by Friday?"), "open");
+  t("F1-12 performance: 1,000 checks of a 6-fragment quote on a 16k-char text, each well under 5 ms", (() => {
+    const big = `${"Lorem ipsum dolor sit amet. ".repeat(580)}Here's the outline. The room is booked. Bring the slides. Send the notes. Book the venue. Call the caterer.`;
+    const q = "Here's the outline. ... Bring the slides. ... Book the venue. Call the caterer. Send the notes. The room is booked.";
+    const t0 = performance.now();
+    for (let i = 0; i < 1000; i++) quoteIsVerbatim(i % 2 ? q : "Here's the outline. ... Bring the slides. Send the notes. ... Call the caterer.", [big]);
+    return [big.length > 16_000, (performance.now() - t0) / 1000 < 5];
+  })(), [true, true]);
+  // The F1 spelling table (S1-*), haystack H with a curly apostrophe and a U+2026 ellipsis.
+  const H = "Hi Sam. Here’s the outline of topics I want from you each week. The room is booked… Please send your first notes by Monday. Thanks.";
+  const H2 = "Hi Sam. Here’s the outline of topics I want from you each week. Café notes are due too. Cafés notes are due Friday.";
+  const SPELL: [string, unknown, string | readonly string[], string][] = [
+    ["S1-1", "Please send your first notes by Monday.", H, "open"],
+    ["S1-2", "Here's the outline of topics I want from you each week. Please send your first notes by Monday.", H, "open"],
+    ["S1-3", "Here's the outline of topics I want from you each week ... Please send your first notes by Monday", H, "open"],
+    ["S1-4a", "The room is booked… Please send your first notes by Monday.", H, "open"],
+    ["S1-4b", "The room is booked... Please send your first notes by Monday.", H, "open"],
+    ["S1-5", "Here’s the outline   of topics\nI want from you each week.", H, "open"],
+    ["S1-6", "PLEASE SEND YOUR FIRST NOTES BY MONDAY.", H, "open"],
+    ["S1-7", "Please send your first notes by Monday. Here's the outline of topics I want from you each week.", H, "not_checked/quote_not_found"],
+    ["S1-8", "Please send your notes by Monday.", H, "not_checked/quote_not_found"],
+    ["S1-9", "Here's the outline. Please send the final contract by Monday.", H, "not_checked/quote_not_found"],
+    ["S1-10", "Hi Sam. Thanks.", H, "not_checked/quote_not_found"],
+    ["S1-11", "Thanks. Thanks.", H, "not_checked/quote_not_found"],
+    ["S1-12", "ere's the outline of topics I want from you each week. lease send your first notes", H, "not_checked/quote_not_found"],
+    ["S1-13", "end your first notes by Monday", H, "open"],
+    ["S1-14", "Here's the outline [...] by Monday.", H, "open"],
+    ["S1-14b", "Here's the outline […] by Monday.", H, "open"],
+    ["S1-15", "Here's the outline. Please. Send. Your. First. Notes. By Monday.", H, "not_checked/quote_not_found"],
+    ["S1-16", "Here's the outline of topics I want from you each week. Please send your first notes by Monday.", CHAT, "not_checked/quote_not_found"],
+    ["S1-17", "Here's the outline of topics I want from you each week. Please send your first notes by Monday.", FWH, "not_checked/quote_not_found"],
+    ["S1-18", "Please send your first notes by Monday. ... Thanks.", FWH, "open"],
+    ["S1-19", "Please send your first notes by Monday.", teamsQuoteHaystack({ messages: [{ speaker: "OWNER", text: H }, { speaker: "OTHER", text: "ok" }] } as never), "not_checked/quote_not_found"],
+    // S1-20 (AC wording): "Café notes are due Friday" vs "Cafés notes are due Friday". As written in the AC the
+    // whole quote is NOT a span either (the "s" sits between é and the space), so both paths refuse it; the
+    // Unicode-boundary behaviour itself is pinned by S1-20b, where only the boundary separates admit from refuse.
+    ["S1-20", "Café notes are due Friday", "Cafés notes are due Friday", "not_checked/quote_not_found"],
+    ["S1-20b", "Here's the outline of topics I want from you each week. ... Notes are due Friday. ... Bring the café", H2.replace("Cafés notes are due Friday.", "Notes are due Friday. Bring the cafés list."), "not_checked/quote_not_found"],
+    ["S1-21a", "review the​ deck by Friday", "Could you review the deck by Friday?", "open"],
+    ["S1-21b", "review the deck by Friday", "Could you review the​ deck by Fri­day?", "open"],
+    ["S1-22a", "“Please send your first notes by Monday.”", H, "open"],
+    ["S1-22b", '"Please send your first notes by Monday."', H, "open"],
+    ["S1-23a", "…", H, "not_checked/quote_not_found"],
+    ["S1-23b", "... ... ... ...", H, "not_checked/quote_not_found"],
+    ["S1-x1", "Please send your first notes...", H, "open"],
+  ];
+  t("F1 spelling table S1-1..S1-23 (each row: id -> verdict)", SPELL.map(([id, q, hay]) => `${id}:${st(q, hay)}`), SPELL.map(([id, , , want]) => `${id}:${want}`));
+  t("F1-10 de-dup still keys on canonQuote of the WHOLE stored quote: two different fragment quotes fold to different keys", [canonQuote("Here's the outline. ... Please send your first notes by Monday.") === canonQuote("Here's the outline. ... The room is booked."), canonQuote("Re​view THE  deck") === "review the deck"], [false, true]);
+  t("F1-11 the legacy judgeConversation check is the SAME function (needs-you imports quoteIsVerbatim; no second verbatim rule)", (await import("node:fs")).readFileSync("src/features/huddle/lib/correspondence/needs-you.ts", "utf8").includes("quoteIsVerbatim(ask.quote"), true);
+  t("F1-12b quote text is never compiled into a RegExp in the guard", /new RegExp\(/.test((await import("node:fs")).readFileSync("src/features/huddle/lib/correspondence/action-classify.ts", "utf8")), false);
+}
 
 // ── B. SECTIONS (AC-E-6) ─────────────────────────────────────────────────────────────────────────────
 t(
