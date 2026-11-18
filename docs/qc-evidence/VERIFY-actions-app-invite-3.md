@@ -29,3 +29,21 @@ AI-15 now asserts four booleans including the step-2-only phrase; observed PASS.
   Report with save OFF: `inMemoryWrites` sets `lockThread: undefined` -> prior null -> unchanged pre-fix behaviour (its
   propose stub returns id null; in-memory only).
 - `withThreadLock.current()` reads `result_ids->'action'` for the thread's storeAt row inside the advisory-locked txn.
+
+## Chunk 2 - loop-2 real-SQL probe re-run at 04242df2 (unchanged probe; deps = real classifyDepsFor, so real withThreadLock)
+
+8 passed, 0 failed. Rows (after the simulated version bump, the re-judge runs with the new wording):
+
+| scenario | act | wording | before re-judge | re-judge calls/open | proposal after | proposals on item | after re-judge |
+|---|---|---|---|---|---|---|---|
+| dsame/dsim/ddiff | dismissed | same/sim/diff | ABSENT | 0/0 | same id | dismissed (1) | ABSENT |
+| csame/cdiff | completed | same/diff | ABSENT | 0/0 | same id | completed (1) | ABSENT |
+| wsame | Wrong? | same | NOT_CHECKED_YET | 1/1 | same id, not null | proposed (1) | CORRECTED |
+| **wsim (B3)** | Wrong? | similar | NOT_CHECKED_YET | 1/1 | same id, not null, onBoard false | proposed (1) | **CORRECTED** (loop 2: lost link) |
+| **wdiff (B4)** | Wrong? | very different | NOT_CHECKED_YET | 1/1 | same id | proposed (1) | **CORRECTED** (loop 2: MAIN_LIST, 2nd proposal) |
+| nsame | untouched | same | NOT_CHECKED_YET | 1/1 | same id | proposed (1) | MAIN_LIST |
+| **nsim (B-open-sim)** | untouched | similar | NOT_CHECKED_YET | 1/1 | same id, onBoard false | proposed (1) | **MAIN_LIST** (loop 2: vanished) |
+| ndiff | untouched | very different | NOT_CHECKED_YET | 1/1 | same id | proposed (1) | MAIN_LIST |
+
+The propose hook was never entered on any re-judge (its debug log is empty for all 11 scenarios): exactly one proposal
+per item. B3 and B4 now HOLD.
