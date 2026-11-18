@@ -164,7 +164,6 @@ Claim 9: **PASS**. Tree clean after every run.
 
 ## Verdict
 
-FIX FIRST: F3-FAILS-CLOSED (claim 3) -- in a Teams chat, a real ask followed by a pleasantry that is the sender's (or
-another sender's) whole latest message is hidden outright (`none`) when the model quotes the pleasantry (W2, W3;
-pre-change it was held or listed). Add a regression test for W2 / W3 with the fix. UI claims (F5-3, F5-4, F4-10)
-remain NOT YET UAT-VERIFIED.
+UI claims (F5-3, F5-4, F4-10) remain NOT YET UAT-VERIFIED (owed a browser run after landing).
+
+FIX FIRST: F3-FAILS-CLOSED (claim 3) -- in a Teams chat, a real ask followed by a pleasantry that is the sender's (or another sender's) whole latest message is hidden outright (`none`) when the model quotes the pleasantry (W2, W3; before this change it was held or listed); add W2 / W3 as regression tests with the fix.
