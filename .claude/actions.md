@@ -5451,6 +5451,16 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
 ## ACT:report-saves-verdicts — report saves verdicts, one judge one store (owner 2026-11-17) — LIVE, NOT owner-confirmed
 - [x] #273 a6c48114; verify loops 1+2 docs/qc-evidence/VERIFY-report-saves-verdicts-{1,2}.md; deploy 44102932824.
 ## ACT:actions-false-positives — automated invites/notices listed as actions (owner screenshots 2026-11-17) — OPEN
-- [ ] Find why; propose fix (changes existing behaviour -> owner thumbs-up first).
+- [x] Find why: 29 open email verdicts in `automated_notice` (largest visible group); step-2 instructions contradicted
+      themselves (an invited account = open item AND system mail = no open item).
+- [x] Owner approved option A (2026-11-17): an `app_invite` category, hidden by default in What shows.
+- [x] Built on branch `claude_actions-app-invite` (NOT merged, NOT live): category in all instruction blocks, contradiction
+      removed (only EMPLOYER-required accounts stay open), hideable "App and workspace invitations" (hidden by default,
+      also for settings saved before it existed), classifier versions email 2 / teams 3 (stored verdicts re-judged).
+      Evidence: docs/qc-evidence/BUILD-actions-app-invite.md (spelling table, 10 mutation proofs FIRED/control EQUIVALENT,
+      suites green, tsc + build rc 0).
+- [ ] Merge + deploy; owner confirms live that the invites are gone from the list and counted under "hidden".
+- [ ] Open question for the owner: travel-security polls rely on the existing "system mail has no open item" rule; if
+      the model still marks one open it stays listed (automated_notice is not hideable).
 ## ACT:actions-missing-yesterday — owner expects action items from yesterday's emails that are not listed (2026-11-17) — OPEN
 - [ ] Ground-truth: ingest vs verdict vs hidden vs answered.

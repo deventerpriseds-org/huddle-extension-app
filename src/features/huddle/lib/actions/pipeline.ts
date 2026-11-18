@@ -222,11 +222,20 @@ export async function runClassify(
     /** Propose (when open) then store. Inside the thread lock (AC8) it first re-reads the thread's stored verdict:
      *  another pass that judged this version while we waited wins, and this one writes nothing (no 2nd proposal). */
     const finish = async (tx?: ThreadTx): Promise<"stored" | "adopted" | "failed"> => {
+      let prior: ActionVerdict | null = null;
       if (tx) {
         const cur = await tx.current();
         if (cur && verdictIsCurrent(cur, u.itemKey, u.source)) return "adopted";
+        prior = cur;
       }
-      if (v.status === "open") {
+      // Verifier VERIFY-actions-app-invite-2 (B3/B4): a RE-judge of the SAME item version (an older classifier
+      // version) that is still open keeps the proposal it already had, so the owner's decision on it (Wrong?, and
+      // any later state) stays attached whatever the model's wording this time -- never a 2nd proposal, never a
+      // suppressed reword that loses the link.
+      const keepId = prior && prior.key === u.itemKey && typeof prior.proposalId === "string" && prior.proposalId ? prior.proposalId : null;
+      if (v.status === "open" && keepId) {
+        v = { ...v, proposalId: keepId };
+      } else if (v.status === "open") {
         const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");
         try {
           const p = await deps.propose(u, v, text);

@@ -46,6 +46,7 @@ import {
   teamsQuoteHaystack,
 } from "../src/features/huddle/lib/correspondence/action-classify";
 
+import { HIDEABLE_CATEGORIES } from "../src/features/huddle/lib/actions/actions";
 import { renderActionReportHtml, rowsFromStoredVerdicts, type LedgerScanPart, type Row, type TRow } from "./action-report-html";
 
 // The instructions, schema, inputs and verbatim rule are the in-app classifier's (lib/correspondence/action-classify.ts,
@@ -57,10 +58,11 @@ export type { LedgerScanPart } from "./action-report-html";
 const SCHEMA = ACTION_SCHEMA;
 
 /** Categories the owner switched off (owner 2026-11-15: "Meeting invites, time keeping, verification codes can be
- *  toggled off in settings"). Seeded default; PREVIEW_HIDE_CATEGORIES overrides it until the settings screen exists.
- *  Hidden rows are listed collapsed at the end, never dropped. */
+ *  toggled off in settings"). Seeded default = the Actions view's own default-hidden list (HIDEABLE_CATEGORIES, which
+ *  gained `app_invite` 2026-11-17); PREVIEW_HIDE_CATEGORIES overrides it. Hidden rows are listed collapsed at the end,
+ *  never dropped. */
 const HIDE = new Set(
-  (process.env.PREVIEW_HIDE_CATEGORIES ?? "meeting_invite,timekeeping,verification_code").split(",").map((x) => x.trim()).filter(Boolean),
+  (process.env.PREVIEW_HIDE_CATEGORIES ?? HIDEABLE_CATEGORIES.join(",")).split(",").map((x) => x.trim()).filter(Boolean),
 );
 
 export async function runActionScan(a: {
