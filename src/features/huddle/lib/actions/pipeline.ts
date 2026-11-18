@@ -232,8 +232,11 @@ export async function runClassify(
       // version) that is still open keeps the proposal it already had, so the owner's decision on it (Wrong?, and
       // any later state) stays attached whatever the model's wording this time -- never a 2nd proposal, never a
       // suppressed reword that loses the link.
+      // X-5 (2026-11-18, AC-actions-safety-and-invites.md): the same holds when the re-judge comes back `none` or
+      // `not_checked` (e.g. F3 now drops a momentary line, F1/F5 hold or rescue an item): the prior proposal stays
+      // attached to the item key, so the owner's decision on it is never lost and no 2nd proposal is ever made.
       const keepId = prior && prior.key === u.itemKey && typeof prior.proposalId === "string" && prior.proposalId ? prior.proposalId : null;
-      if (v.status === "open" && keepId) {
+      if (keepId) {
         v = { ...v, proposalId: keepId };
       } else if (v.status === "open") {
         const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");

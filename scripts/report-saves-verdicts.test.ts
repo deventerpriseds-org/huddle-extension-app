@@ -254,6 +254,18 @@ for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INF
   moved.store.set(k0, stale(`${directKey}|an-older-message-version`));
   await runClassify(asm, S1, judged, 5, withLock(moved));
   t("RK-2 a NEW message (different item key) is proposed afresh, not glued to the old proposal", [moved.log.propose, moved.store.get(k0)?.proposalId === "prop-decided-earlier"], [1, false]);
+  // X-5 (AC-actions-safety-and-invites.md): the re-judge keeps P also when it comes back not_checked or none.
+  const held = fakeStore(paraphrase); // the email on To comes back with a non-verbatim quote -> not_checked
+  held.store.set(k0, { ...stale(directKey), status: "not_checked", notCheckedReason: "quote_not_found", proposalId: "prop-rescued-earlier" } as ActionVerdict);
+  await runClassify(asm, S1, judged, 5, withLock(held));
+  const vh = held.store.get(k0);
+  t("X-5 GUARD: prior {not_checked, proposalId P}, re-judge -> quote_not_found: P stays attached, 0 proposals made", [held.log.model, held.log.propose, vh?.status, vh?.notCheckedReason, vh?.proposalId], [1, 0, "not_checked", "quote_not_found", "prop-rescued-earlier"]);
+  const momentary: Answer = (system, input) => (!input.includes("CHAT (oldest first)") && !system.includes("NOT on the To line") ? open("Thanks!", "Reply with thanks") : honest(system, input));
+  const gone = fakeStore(momentary);
+  gone.store.set(k0, stale(directKey));
+  await runClassify(asm, S1, judged, 5, withLock(gone));
+  const vg = gone.store.get(k0);
+  t("X-5b prior {open, proposalId P}, re-judge -> none (F3 momentary): P stays attached, 0 proposals made", [gone.log.propose, vg?.status, vg?.dropReason, vg?.proposalId], [0, "none", "momentary", "prop-decided-earlier"]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
