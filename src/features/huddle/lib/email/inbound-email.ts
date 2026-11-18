@@ -51,8 +51,68 @@ export type ScreenVerdict =
   | { keep: true; reason: string }
   | {
       keep: false;
-      reason: "self" | "automated-sender" | "bulk-header" | "other-folder" | "no-ask";
+      reason: "self" | "automated-sender" | "bulk-header" | "other-folder" | "no-ask" | "excluded-subject";
     };
+
+// ── ALERT EXCLUSION LIST (owner 2026-11-18) ──────────────────────────────────────────────────────────
+// "Meeting minutes should not trigger Iris to send me a draft in the chat. It should be a part of an exclusion
+// list." azure-pg-query run 44369628206: all 9 recent "Meeting Minutes: <topic> <date>, <time>" emails -- Huddle's
+// OWN Fireflies minutes (fireflies.server.ts, subject from minutesSubject()) -- got an Iris alert + a drafted reply.
+// The list is the owner's (ActionsSettings.alertSkipSubjects, What shows); this is only its seed and its matcher.
+// ACs: docs/qc-evidence/AC-inbound-alert-exclusions.md (spelling table S-1..S-40).
+
+/** The seed, used until the owner saves his own list (a saved [] is kept: it is NOT reseeded). */
+export const ALERT_SKIP_SUBJECTS_DEFAULT: readonly string[] = ["meeting minutes"];
+export const ALERT_SKIP_MAX = 50;
+/** Shorter phrases are dropped: "re" or "a" would silently swallow most alerts, and a wrong exclusion is invisible. */
+export const ALERT_SKIP_MIN_CHARS = 3;
+/** Longer phrases are DROPPED, never cut: a cut phrase is shorter, so it would match MORE subjects. */
+export const ALERT_SKIP_MAX_CHARS = 120;
+
+const foldPhrase = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+
+/** Pure: stored entries -> the clean list. Non-strings, blanks, too-short and too-long entries dropped; duplicates
+ *  (case and spacing folded) keep the first spelling; at most ALERT_SKIP_MAX, in the order given. */
+export function cleanAlertSkipSubjects(xs: readonly unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const x of xs) {
+    if (out.length >= ALERT_SKIP_MAX) break;
+    if (typeof x !== "string") continue;
+    const t = x.replace(/\s+/g, " ").trim();
+    if (t.length < ALERT_SKIP_MIN_CHARS || t.length > ALERT_SKIP_MAX_CHARS) continue;
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out;
+}
+
+/** A reply or forward -- the same start-of-subject rule asksSomething uses. A person replying to minutes may ask
+ *  something, so those go through the normal screen. */
+const REPLY_OR_FORWARD_SUBJECT = /^\s*(re|fw|fwd)\s*:/i;
+
+/** Pure: does this ORIGINAL subject contain one of the phrases? Case and spacing are folded; the phrase is literal
+ *  text (no regex), and its edges must not touch a letter or digit (Unicode-aware -- JS `\b` treats "é" as a
+ *  boundary and misses a phrase ending in ":"). Only the subject is read. Never throws. */
+export function subjectExcluded(subject: string | null | undefined, phrases: readonly string[]): boolean {
+  const raw = String(subject ?? "");
+  if (!raw.trim() || !phrases.length || REPLY_OR_FORWARD_SUBJECT.test(raw)) return false;
+  const s = foldPhrase(raw);
+  for (const p of phrases) {
+    const f = foldPhrase(String(p ?? ""));
+    if (!f) continue;
+    let i = s.indexOf(f);
+    while (i >= 0) {
+      const before = i > 0 ? s[i - 1] : "";
+      const after = s.slice(i + f.length, i + f.length + 2);
+      if (!/[\p{L}\p{N}]$/u.test(before) && !/^[\p{L}\p{N}]/u.test(after)) return true;
+      i = s.indexOf(f, i + 1);
+    }
+  }
+  return false;
+}
 
 /** Local parts that are machines, not people. Matched against the WHOLE part before "@" (a +tag is
  *  stripped first), so `team.lead@`, `info.sarah@` or a domain containing "mail" are never caught.
@@ -175,17 +235,23 @@ export function asksSomething(
   return text.includes("?") || ASK.test(text);
 }
 
-/** The one decision: does this message reach the owner? `mailbox` is the owner's own address. */
+/** The one decision: does this message reach the owner? `mailbox` is the owner's own address.
+ *  `excludeSubjects`: the owner's alert exclusion list (the alert runner passes it; other callers pass none, so
+ *  their verdicts are unchanged). A listed subject is never announced, in EVERY mode, "all" included. */
 export function screenMessage(
   m: InboundMessage,
   mode: InboundEmailMode,
   mailbox: string,
+  excludeSubjects?: readonly string[],
 ): ScreenVerdict {
   const from = String(m.fromAddress ?? "")
     .trim()
     .toLowerCase();
   // Never announce the owner's own mail back to him, in any mode.
   if (from && from === mailbox.trim().toLowerCase()) return { keep: false, reason: "self" };
+  if (excludeSubjects?.length && subjectExcluded(m.subject, excludeSubjects)) {
+    return { keep: false, reason: "excluded-subject" };
+  }
   if (mode === "all") return { keep: true, reason: "all mode" };
 
   const headers = new Set((m.headerNames ?? []).map((h) => h.toLowerCase()));

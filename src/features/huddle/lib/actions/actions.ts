@@ -13,6 +13,7 @@
 import type { ActionCategory, ActionKind, ActionSection } from "../correspondence/action-classify";
 import { ACTION_SECTION_ORDER } from "../correspondence/action-classify";
 import { foldPersonName } from "../correspondence/report-from-ledger";
+import { ALERT_SKIP_SUBJECTS_DEFAULT, cleanAlertSkipSubjects } from "../email/inbound-email";
 
 // ── SETTINGS ("What shows") ─────────────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,11 @@ export interface ActionsSettings {
    *  known (his second account). Seeded from the configured full names (ownerFullNames) until he saves the field;
    *  a saved empty list is kept. Takes effect from the next re-check (F4-13). */
   ownNames: string[];
+  /** Iris's new-email ALERT exclusion list (owner 2026-11-18: "Meeting minutes should not trigger Iris to send me a
+   *  draft in the chat. It should be a part of an exclusion list."). A new email whose ORIGINAL subject contains one
+   *  of these phrases gets no Iris alert, no owed row and no draft (inbound-email.ts subjectExcluded). Seeded
+   *  ["meeting minutes"] until he saves the field; a saved [] is kept. Does NOT change what the Actions page lists. */
+  alertSkipSubjects: string[];
 }
 
 /** F4 bounds: at most this many names, each at most OWN_NAME_CHARS characters after trim. */
@@ -120,6 +126,7 @@ export const ACTIONS_SETTINGS_DEFAULT: ActionsSettings = {
   timeZone: "America/New_York",
   range: "week",
   ownNames: [],
+  alertSkipSubjects: [...ALERT_SKIP_SUBJECTS_DEFAULT],
 };
 
 const isZone = (z: unknown): z is string => {
@@ -161,7 +168,18 @@ export function resolveActionsSettings(raw: unknown, seed: readonly string[] = [
     range: (ACTIONS_RANGES as readonly unknown[]).includes(o.range) ? (o.range as ActionsRange) : d.range,
     // F4 rule 2: a stored list (even []) is used exactly; no stored field -> the seed.
     ownNames: cleanOwnNames(Array.isArray(o.ownNames) ? o.ownNames : seed),
+    // Same rule as ownNames: a stored ARRAY (even []) is used exactly; anything else -> the seed.
+    alertSkipSubjects: Array.isArray(o.alertSkipSubjects) ? cleanAlertSkipSubjects(o.alertSkipSubjects) : [...ALERT_SKIP_SUBJECTS_DEFAULT],
   };
+}
+
+/** Pure (AC-40): a settings SAVE replaces the whole stored object, so a payload from an older client or a stale open
+ *  tab that lacks `alertSkipSubjects` would reset the owner's list to the seed. When the payload has no such key, the
+ *  stored list is carried over. Any other payload is returned unchanged. */
+export function keepStoredAlertSkipSubjects(raw: unknown, stored: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || "alertSkipSubjects" in raw) return raw;
+  const st = stored && typeof stored === "object" && !Array.isArray(stored) ? (stored as Record<string, unknown>) : null;
+  return st && Array.isArray(st.alertSkipSubjects) ? { ...(raw as Record<string, unknown>), alertSkipSubjects: st.alertSkipSubjects } : raw;
 }
 
 /** Pure: does the classifier run for this owner? An explicit setting wins; otherwise ON only for the configured

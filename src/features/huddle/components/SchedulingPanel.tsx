@@ -49,7 +49,8 @@ const JOB_LABELS: Record<JobTypeKey, { label: string; hint: string }> = {
     hint:
       "Iris checks your Outlook inbox every few minutes during these hours and tells you about new email from a real person " +
       "that asks you something, with a suggested reply she can save to your Drafts when you say so. " +
-      "Each email is only ever mentioned once; newsletters and no-reply senders are skipped.",
+      "Each email is only ever mentioned once; newsletters and no-reply senders are skipped, and so is any email whose " +
+      "subject is on your exclusion list (meeting minutes, to start) -- edit it in Actions → What shows.",
   },
   reviewDigest: {
     label: "Review digest",

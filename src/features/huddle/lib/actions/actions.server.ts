@@ -22,6 +22,7 @@ import {
   capNotice,
   classifyEnabled,
   resolveActionsSettings,
+  keepStoredAlertSkipSubjects,
   withItemCorrection,
   withItemUndo,
   selectActionItems,
@@ -442,8 +443,10 @@ export async function saveActionsSettings(caller: { entra_object_id?: string; en
   if (!cfg) return { ok: false, error: "Actions is not switched on." };
   const owners = await ownedScope(caller, cfg);
   if (!owners?.length) return { ok: false, error: "Sign-in required." };
-  const s = resolveActionsSettings(raw, ownNamesSeed(cfg));
-  const { setActionsSettingsRaw } = await import("../email/email-replies.server");
+  const { setActionsSettingsRaw, getActionsSettingsRaw } = await import("../email/email-replies.server");
+  // AC-40: a payload without the alert exclusion list keeps the stored one (never reseeds it).
+  const stored = raw && typeof raw === "object" && !("alertSkipSubjects" in raw) ? await getActionsSettingsRaw(cfg.owner).catch(() => null) : null;
+  const s = resolveActionsSettings(keepStoredAlertSkipSubjects(raw, stored), ownNamesSeed(cfg));
   await setActionsSettingsRaw(cfg.owner, s);
   return { ok: true, settings: s };
 }
