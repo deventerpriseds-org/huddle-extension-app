@@ -528,16 +528,38 @@ try {
     // checked yet" (unchecked), never held. Exact value, so held (the defect) or rows still fail. Once the read works
     // again the dismissed item is in no group.
     t("NORT-10b GUARD (real SQL): during a proposals read failure a DISMISSED item is read-only unchecked, never held; after it, in no group", [fbGroups, groupsOf(await page(), uL.itemKey)], [["unchecked"], []]);
-    // NORT-7 (real SQL, the server's owner-scoped state read): a G4-b verdict (open + id + no section) whose kept proposal
-    // was DISMISSED is in no group, and the held click is refused: no act, no new proposal, state still dismissed.
-    if (vL) await putV(CL, { ...vL, kind: "none" });
+    // NORT-7 (real SQL, the server's owner-scoped state read). FIX verify-1: the old fixture dismissed the kept proposal
+    // through a ref on the SAME thread, which resolves the thread (RESOLVED_PROPOSAL_STATES), so the unit left the plan
+    // and the click was refused at the plan lookup, never at the state check. Now the kept proposal's only ref is on
+    // ANOTHER thread (one proposal backing two threads), so the thread stays in the plan; the item is a legitimate G4-b
+    // held item (open + live id + kind "none" = no section), shown held while the proposal is `proposed`. Then the
+    // proposal is decided elsewhere: the ONLY thing left to refuse the click is the kept-proposal state check.
     const nProps = async () => Number((await pool.query<{ n: string }>(`SELECT count(*) AS n FROM chat.task_proposals`)).rows[0]?.n);
+    const propRow = async (id: string) => (await pool.query<{ state: string; u: string; c: unknown }>(`SELECT state, updated_at::text AS u, owner_correction AS c FROM chat.task_proposals WHERE id = $1`, [id])).rows[0] ?? null;
+    const ASK7 = "Synthetic: could you please send the venue shortlist for the offsite by Wednesday?";
+    const keptHeld = async (name: string) => {
+      const chat = chatN(name);
+      await L.storeContent(O, [msgRow(chat, ASK7)] as never);
+      const u = await uOf(chat);
+      const p = cand(`Test-No ${name} item`, `test-no ${name} item`, "teams", teamsSourceItemId(chatN(`${name}_other`), "1"));
+      await P.upsert(p);
+      await putV(chat, { v: 1, key: u.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "open", kind: "none", category: "person_request", confidence: "high", todo: "Test-Send the venue shortlist", due: "Wednesday", quote: ASK7, reason: "Asked.", answeredByReply: false, proposalId: p.id, at });
+      return { chat, u, id: p.id };
+    };
+    const k7 = await keptHeld("nort7");
+    const g7held = groupsOf(await page(), k7.u.itemKey);
+    await pool.query(`UPDATE chat.task_proposals SET state = 'dismissed' WHERE id = $1`, [k7.id]);
+    const inPlan7 = (await unitsNow()).units.some((x) => x.itemKey === k7.u.itemKey);
     const n7 = await nProps();
-    const g7 = groupsOf(await page(), uL.itemKey);
-    const c7 = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: uL.itemKey, action: "approve" });
-    const s7 = (await pool.query<{ state: string }>(`SELECT state FROM chat.task_proposals WHERE id = $1`, [vL?.proposalId])).rows[0]?.state;
-    t("NORT-7 GUARD (real SQL): G4-b on a DISMISSED kept proposal -> in no group; held click refused, no new proposal, still dismissed", [g7, c7, (await nProps()) - n7, s7], [[], { ok: false, error: "That item isn't in your list." }, 0, "dismissed"]);
-    if (vL) await putV(CL, vL);
+    const v7 = JSON.stringify(await stored(k7.chat));
+    const r7 = JSON.stringify(await propRow(k7.id));
+    const g7 = groupsOf(await page(), k7.u.itemKey);
+    const c7 = await A.actOnHeldItemFor({ entra_email: O }, { itemKey: k7.u.itemKey, action: "dismiss" });
+    t(
+      "NORT-7 GUARD (real SQL): a legitimate G4-b held item (listed held while proposed, still in the plan) whose kept proposal is then DISMISSED -> in no group; the held click is refused, 0 proposals made, nothing written",
+      [g7held, inPlan7, g7, c7, (await nProps()) - n7, JSON.stringify(await stored(k7.chat)) === v7, JSON.stringify(await propRow(k7.id)) === r7],
+      [["held"], true, [], { ok: false, error: "That item isn't in your list." }, 0, true, true],
+    );
     t("NO-S17 observed (real PostgreSQL): ->> on a JSON null is SQL NULL, and NULL IN (...) is NULL (not true)", [nullCheck?.isnull, nullCheck?.inlist], [true, null]);
     // AC-7: the classify heartbeat line carries counts only.
     const logs: string[] = [];
