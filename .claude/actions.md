@@ -5511,4 +5511,6 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - Evidence: azure-pg-query run 44369628206 (9 minutes rows, 7 owed). ACs: docs/qc-evidence/AC-inbound-alert-exclusions.md.
 - Built on branch claude/modest-brown-2hdt5n (commit e83dcf59): owner-editable `alertSkipSubjects`, seeded "meeting minutes". Tests 61/61; 6 guards FIRED.
 - Red-team pre-pass done (RT-1..RT-8 fixed, commit e5d8dcc5; seed narrowed to "meeting minutes:").
-- Remaining: PR -> verifier -> merge/deploy -> dismiss the 7 owed minutes rows (by id, with undo SQL) -> live dry run -> owner confirms no draft on the next minutes email.
+- PR deventerpriseds-org/huddle-extension-app#286. Verify loop 1: 6 CONFIRMED, C4 REFUTED (a failed settings read could write defaults over the saved list) -> fixed 2d23aef3; loop 2: 7/7 (VERIFY-alert-exclusions-1/2.md).
+- Data fix DONE: 7 owed minutes rows dismissed by id, settled_at = received_at (run 44374957433: owed 20 -> 13, minutes owed 0); undo SQL in DATAFIX-alert-exclusions-owed-minutes.md.
+- Remaining (was: PR -> verifier -> merge/deploy -> dismiss the 7 owed minutes rows (by id, with undo SQL) -> live dry run -> owner confirms no draft on the next minutes email.
