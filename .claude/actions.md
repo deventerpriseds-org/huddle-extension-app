@@ -5488,4 +5488,7 @@ Owner: *"I cannot unselect priorities in the priority view"* → corrected: *"it
 - **Shipped:** PR #280 squash `eaf3019`. `UnstarButton` on starred rows of the LIVE Schedule tab → `runPush(ctx,"unstar")` (same write as the Priorities ⋮); non-starred due-this-week rows + chat snapshot cards unchanged; `useScheduleData.reload`.
 - **Evidence:** `scripts/schedule-unstar.test.ts` 9/9; mutate.sh FIRED (control EQUIVALENT) S1/S3/S6/S8 (S1 first INERT → regex tightened); tsc 0; build 0.
 - **Test artifact:** journey task `7783b64a…` "Test-unstar check 1118" (seeded starred for the live UAT). Supabase MCP DELETE hung on a confirmation prompt — still on the board until cleaned.
-- **Status:** live after deploy; NOT owner-confirmed.
+- **Deploy:** deploy-swa run 44232876244 success.
+- **Live UAT:** verify-uat run 44235076619 (schedule-unstar-checks.mjs, opens Schedule via Modules) 6/6 PASS: star tappable on the Test- row, toast "Removed from This Week.", row updated after the re-read, no console/request errors. journey `set_priority_rank {unset:true}` logged; journey + mirror both `is_priority=false` in the same second. (Run 44234313695 failed only because the check waited 5s while the re-read's calendar fetch was still running; now polls 25s.)
+- **Cleanup:** test task set DONE + unstarred (hard DELETE needs an interactive confirm).
+- **Status:** live; mechanism verified on the deployed app; NOT owner-confirmed on his phone.
