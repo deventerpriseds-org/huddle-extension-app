@@ -5507,6 +5507,7 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - **Open:** journey Settings checkbox reaches the web app when Lovable publishes `main` (not in Actions). NOT owner-confirmed.
 
 ## ACT:alert-exclusions — meeting minutes must not trigger an Iris draft in chat; make it an exclusion list (owner 2026-11-18) — DEPLOYED, awaiting owner confirmation
+- UAT: actions-view-checks.mjs gained a READ-ONLY ALERT-SKIP check (field + label + seed value) for verify-uat.yml.
 - LIVE: #286 merged 3f5fac37, deploy-swa 44376446505 success. Dry run 44376789048: 10 minutes excluded, 43 asks kept; the 19:03 minutes email made no owed row / no turn.
 - Ask: "Meeting minutes should not trigger Iris to send me a draft in the chat. It should be a part of an exclusion list."
 - Evidence: azure-pg-query run 44369628206 (9 minutes rows, 7 owed). ACs: docs/qc-evidence/AC-inbound-alert-exclusions.md.
