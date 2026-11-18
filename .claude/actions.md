@@ -5477,4 +5477,7 @@ Analysis of the owner's Iris/Ezra conversation (2026-10-29/30, read from `chat.p
       teams 4. AC: docs/qc-evidence/AC-actions-safety-and-invites.md; builds BUILD-actions-safety-invites-A.md,
       BUILD-actions-held-names-B.md; red-team REDTEAM-actions-safety-invites.md (7 of 31 broke, all fixed:
       FIX-redteam-actions-safety-invites.md).
-- [ ] Independent verifier -> merge -> deploy -> re-check -> UAT; owner confirms live that the two asks now show.
+- [x] Five verifier loops (VERIFY-actions-safety-invites-1..5, final SHIP); merged #278 (6226392c); deploy-swa run
+      44227067950 SUCCESS; re-check run 44227289487 (134 calls, 441/500 today; app_invite 16 now hidden); UAT run
+      44228068622 56/56 (existing Actions checks; the new held group has no UAT check yet).
+- [ ] Owner confirms live: his manager's two Nov 16 asks show; held items visible; his second Teams account is "you".

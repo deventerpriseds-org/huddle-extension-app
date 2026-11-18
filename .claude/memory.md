@@ -1,6 +1,6 @@
 # Project Memory — huddle-extension-app
 
-## Actions: held items, invites with a real ask, names that are you (2026-11-18, branch claude_actions-held-names, NOT merged, NOT live) -- ACT:actions-missing-yesterday
+## Actions: held items, invites with a real ask, names that are you (2026-11-18, #278 MERGED 6226392c, deploy-swa 44227067950 SUCCESS, re-check run 44227289487, UAT 44228068622 56/56; NOT owner-confirmed live) -- ACT:actions-missing-yesterday
 - The quote safety check now admits a quote made of verbatim fragments in order; a gap may only skip WHOLE sentences
   (red-team RT-1: "Please do ... send" from "Please do not send" must fail). NFC + combining marks handled.
 - Items it still holds are shown in their own visible group with the AI's to-do, a fixed reason sentence and Add as
@@ -13,6 +13,8 @@
   match marks a Teams sender as the owner even when owner ids exist. His legal first name differs from his nickname.
 - Re-judge keeps the item's earlier proposal whatever the new status (X-5); decided proposals are never re-listed.
 - CLASSIFIER_INPUT_VERSION email 3 / teams 4 -> one more re-judge after deploy.
+- F3 code backstop ended TEAMS-ONLY (5 verifier loops): email is never dropped by code -- the subject line and every
+  message's forward reach the model but not the backstop. AC F3-9 amended (dated) to match.
 
 ## Actions: app and workspace invitations (2026-11-17, branch claude_actions-app-invite, NOT merged, NOT live) -- ACT:actions-false-positives
 - New classifier category `app_invite` (an app/platform says he was invited to or can access a team, workspace,
