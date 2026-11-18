@@ -5510,4 +5510,5 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - Ask: "Meeting minutes should not trigger Iris to send me a draft in the chat. It should be a part of an exclusion list."
 - Evidence: azure-pg-query run 44369628206 (9 minutes rows, 7 owed). ACs: docs/qc-evidence/AC-inbound-alert-exclusions.md.
 - Built on branch claude/modest-brown-2hdt5n (commit e83dcf59): owner-editable `alertSkipSubjects`, seeded "meeting minutes". Tests 61/61; 6 guards FIRED.
-- Remaining: red-team pre-pass -> PR -> verifier -> merge/deploy -> dismiss the 7 owed minutes rows (by id, with undo SQL) -> live dry run -> owner confirms no draft on the next minutes email.
+- Red-team pre-pass done (RT-1..RT-8 fixed, commit e5d8dcc5; seed narrowed to "meeting minutes:").
+- Remaining: PR -> verifier -> merge/deploy -> dismiss the 7 owed minutes rows (by id, with undo SQL) -> live dry run -> owner confirms no draft on the next minutes email.
