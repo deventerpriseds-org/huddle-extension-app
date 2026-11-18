@@ -231,7 +231,7 @@ describe("red-team findings", () => {
   test("RT-4: accent marks and astral letters count as part of the word", () => {
     expect(subjectExcluded("Pr\u00E9meeting minutes: x", SEED)).toBe(false);
     expect(subjectExcluded("Pre\u0301meeting minutes: x", SEED)).toBe(false);
-    expect(subjectExcluded("\u{1D400}meeting minutes: x", SEED)).toBe(false);
+    expect(subjectExcluded("\u{10400}meeting minutes: x", SEED)).toBe(false); // Deseret: NFKD keeps it astral (𝐀 folds to "A")
     expect(subjectExcluded("Meeting minutes\u0301x", ["meeting minutes"])).toBe(false);
   });
   test("RT-5: invisible and compatibility characters do not hide the phrase", () => {
