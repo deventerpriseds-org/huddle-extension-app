@@ -539,11 +539,12 @@ try {
     const ASK7 = "Synthetic: could you please send the venue shortlist for the offsite by Wednesday?";
     const keptHeld = async (name: string) => {
       const chat = chatN(name);
-      await L.storeContent(O, [msgRow(chat, ASK7)] as never);
+      const ask = `${ASK7} Ref ${name}.`; // each fixture its own text and to-do (no tie with another thread's)
+      await L.storeContent(O, [msgRow(chat, ask)] as never);
       const u = await uOf(chat);
       const p = cand(`Test-No ${name} item`, `test-no ${name} item`, "teams", teamsSourceItemId(chatN(`${name}_other`), "1"));
       await P.upsert(p);
-      await putV(chat, { v: 1, key: u.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "open", kind: "none", category: "person_request", confidence: "high", todo: "Test-Send the venue shortlist", due: "Wednesday", quote: ASK7, reason: "Asked.", answeredByReply: false, proposalId: p.id, at });
+      await putV(chat, { v: 1, key: u.itemKey, inputVersion: CLASSIFIER_INPUT_VERSION.teams, status: "open", kind: "none", category: "person_request", confidence: "high", todo: `Test-Send the venue shortlist ${name}`, due: "Wednesday", quote: ask, reason: "Asked.", answeredByReply: false, proposalId: p.id, at });
       return { chat, u, id: p.id };
     };
     const k7 = await keptHeld("nort7");
