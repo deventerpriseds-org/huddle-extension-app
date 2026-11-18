@@ -630,7 +630,10 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
     [["Sam Okafor", "Samuel Okafor"], [], ["Sam Okafor"]],
   );
   const rivera = tm({ messageId: "r1", at: "2026-11-16T12:45:00Z", sender: { id: "f4-rivera", name: "Sam Rivera", isApp: false }, text: "Synthetic: can you review this?" });
-  t("F4-4 GUARD: a namesake sharing only the FIRST name ('Sam Rivera') is OTHER even with ['Sam Okafor','Sam'] listed (one-word names never match)", [speakers([...known, ask, rivera], ["Sam Okafor", "Sam"]), ownerTeamsIdsAcross([...known, ask, rivera], [], ["Sam Okafor", "Sam"])], [["OTHER", "OTHER"], [ID_A]]);
+  // Mutation-proof note: "Sam Rivera" alone cannot prove the 2-word rule (it never folds equal to "sam"); a sender whose
+  // Teams display name is only "Sam" is the case the rule protects.
+  const bareSam = tm({ messageId: "r2", at: "2026-11-16T12:50:00Z", sender: { id: "f4-bare", name: "Sam", isApp: false }, text: "Synthetic: can you look at this?" });
+  t("F4-4 GUARD: namesakes are OTHER even with ['Sam Okafor','Sam'] listed: 'Sam Rivera' (first name only shared) and a sender shown only as 'Sam' (one-word names never match)", [speakers([...known, ask, rivera, bareSam], ["Sam Okafor", "Sam"]), ownerTeamsIdsAcross([...known, ask, rivera, bareSam], [], ["Sam Okafor", "Sam"])], [["OTHER", "OTHER", "OTHER"], [ID_A]]);
   const commaB = tm({ messageId: "b2", at: "2026-11-16T12:30:00Z", sender: { id: ID_B, name: "Okafor, Samuel", isApp: false } });
   t("F4-5 'Okafor, Samuel' against ['Samuel Okafor'] is the OWNER (Last, First fold)", speakers([...known, ask, commaB], ["Samuel Okafor"]), ["OTHER", "OWNER"]);
   const appB = tm({ messageId: "b3", at: "2026-11-16T12:30:00Z", sender: { id: "f4-app", name: "Samuel Okafor", isApp: true } });
