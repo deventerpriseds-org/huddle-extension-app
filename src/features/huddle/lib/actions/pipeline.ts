@@ -222,7 +222,10 @@ export async function runClassify(
     // of the conversation, both speakers, email and Teams. Code drops an item only when the WHOLE conversation is
     // momentary chat; anything subtler (an ask the owner answered with "be right there") is left to MOMENTARY_RULE
     // in the instructions, so a code mistake can only ever show an item, never hide a real ask.
-    const latestMessages: string[] = [...(u.email ? u.email.messages : u.teams!.messages).map((m) => m.text ?? ""), ...(u.email ? (typeof haystack === "string" ? [haystack] : [...haystack]) : [])];
+    // Verifier VERIFY-actions-safety-invites-3: email is shown the model a subject and every message's forward that
+    // the backstop cannot see in full, so the code backstop is TEAMS-ONLY; for email an empty list never drops
+    // (MOMENTARY_RULE in the instructions still applies there).
+    const latestMessages: string[] = u.email ? [] : u.teams!.messages.map((m) => m.text ?? "");
     let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source], latestMessages });
     /** Propose (when open) then store. Inside the thread lock (AC8) it first re-reads the thread's stored verdict:
      *  another pass that judged this version while we waited wins, and this one writes nothing (no 2nd proposal). */

@@ -317,6 +317,11 @@ for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INF
     return u ? f.store.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`)?.status : "no-unit";
   };
   t("F3E-1 GUARD email: an ask then 'Thanks!' as the latest message (model quotes 'Thanks!') is NOT dropped", ["open", "not_checked"].includes(String(await runE("Thanks!"))), true);
+  const asmS = assembleLedgerPlan({ rows: [erow("s1", "conv-s", "2026-11-10T14:00:00Z", { subject: "Please send the signed contract by Friday", bodyText: "Thanks!" })], proposals: [], bell: [] }, cfg, SINCE);
+  const fS = fakeStore(() => open("Thanks!", "Send the signed contract"));
+  await runClassify(asmS, S({ sources: { email: true, teams: false, meeting: false } }), new Set(), 5, fS.deps);
+  const uS = threadUnits(asmS, S()).units.find((x) => x.source === "email" && x.email?.messages.length === 1 && x.itemKey.includes("conv-s"));
+  t("F3E-3 GUARD email (loop 3 E-SUBJECT): an ask only in the subject with body 'Thanks!' is NOT dropped (no code backstop on email)", ["open", "not_checked"].includes(String(uS ? fS.store.get(`${uS.storeAt.source}\u0000${uS.storeAt.sourceItemId}`)?.status : "no-unit")), true);
   t("F3E-2 GUARD email: an ask then 'Thanks, see you soon!' is NOT dropped", ["open", "not_checked"].includes(String(await runE("Thanks, see you soon!"))), true);
 }
 

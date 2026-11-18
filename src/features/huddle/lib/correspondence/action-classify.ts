@@ -468,7 +468,7 @@ const str = (v: unknown, max = 300) => (typeof v === "string" && v.trim() ? v.tr
 /**
  * Pure (F3, 2026-11-18 red-team RT-7): may the momentary backstop drop this item? It FAILS OPEN. A momentary QUOTE is
  * not enough: EVERY message of the conversation must be momentary in full. `latestMessages` is every message of the
- * conversation, both speakers (email and Teams, from runClassify); absent, the haystack pieces JOINED are used as one message (email: the latest
+ * conversation, both speakers (TEAMS only, from runClassify; email passes [] and never drops); absent, the haystack pieces JOINED are used as one message (email: the latest
  * OTHER message plus its forward; any other text in it keeps the item). Drop only when one of those messages is
  * itself momentary in full AND holds the quote. Anything else ("Thanks! Can you send the contract?") is not dropped.
  */
