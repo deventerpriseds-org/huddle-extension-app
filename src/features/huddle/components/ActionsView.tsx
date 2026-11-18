@@ -63,6 +63,7 @@ import {
   type ActionsSettings,
   type CorrectionReason,
 } from "../lib/actions/actions";
+import { cleanAlertSkipSubjects } from "../lib/email/inbound-email";
 
 type Caller = { entra_object_id?: string; entra_email?: string } | undefined;
 type Page = Awaited<ReturnType<typeof getActionsFn>>;
@@ -163,6 +164,11 @@ export function ActionsView() {
 
   async function saveSettings(next: ActionsSettings) {
     if (!ok || !caller) return;
+    // verify loop 1 C4: these are the defaults (the stored settings could not be read); saving them would overwrite yours.
+    if (ok.settingsUnreadable) {
+      toast.error("Couldn't load your saved settings, so nothing was changed. Reload and try again.");
+      return;
+    }
     const prev = ok.settings;
     setPage({ ...ok, settings: next });
     const r = await setActionsSettingsFn({ data: { caller, settings: next as unknown as Record<string, unknown> } }).catch(() => null);
@@ -1031,6 +1037,31 @@ function WhatShows({
             if (next.join("\n") !== settings.ownNames.join("\n")) onChange({ ...settings, ownNames: next });
           }}
           data-testid="actions-own-names"
+          className="mt-1 w-full max-w-sm resize-y rounded border border-hairline bg-background px-1.5 py-0.5 text-xs"
+        />
+      </label>
+      {/* Owner 2026-11-18: "Meeting minutes should not trigger Iris to send me a draft in the chat. It should be a part of
+          an exclusion list." The list lives on this same settings row; the inbound alert runner reads it once per check.
+          Seeded "meeting minutes:" (with the colon) until saved; a cleared field stays empty. ACs: docs/qc-evidence/AC-inbound-alert-exclusions.md */}
+      <label className="block text-xs" data-testid="actions-alert-skip-field">
+        <span className="block">Emails Iris won&rsquo;t alert you about</span>
+        <span className="block text-[11px] text-muted-foreground">
+          One phrase per line. When a new email&rsquo;s subject contains one, Iris doesn&rsquo;t tell you about it or draft a
+          reply. Case doesn&rsquo;t matter. Replies and forwards (Re:/Fw:) still alert. This doesn&rsquo;t change what this list
+          shows. Applies from the next email check.
+        </span>
+        <textarea
+          key={settings.alertSkipSubjects.join("\n")}
+          defaultValue={settings.alertSkipSubjects.join("\n")}
+          rows={Math.max(2, Math.min(8, settings.alertSkipSubjects.length + 1))}
+          onBlur={(e) => {
+            const next = cleanAlertSkipSubjects(e.target.value.split("\n"));
+            // RT-7: always show what will actually be used (a dropped or merged line disappears at once). No length cap on
+            // the box: a cut-off last line would become a SHORTER phrase; the cleaner caps count and length instead.
+            if (e.target.value !== next.join("\n")) e.target.value = next.join("\n");
+            if (next.join("\n") !== settings.alertSkipSubjects.join("\n")) onChange({ ...settings, alertSkipSubjects: next });
+          }}
+          data-testid="actions-alert-skip"
           className="mt-1 w-full max-w-sm resize-y rounded border border-hairline bg-background px-1.5 py-0.5 text-xs"
         />
       </label>

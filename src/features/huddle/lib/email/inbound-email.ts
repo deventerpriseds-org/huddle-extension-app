@@ -51,8 +51,94 @@ export type ScreenVerdict =
   | { keep: true; reason: string }
   | {
       keep: false;
-      reason: "self" | "automated-sender" | "bulk-header" | "other-folder" | "no-ask";
+      reason: "self" | "automated-sender" | "bulk-header" | "other-folder" | "no-ask" | "excluded-subject";
     };
+
+// ── ALERT EXCLUSION LIST (owner 2026-11-18) ──────────────────────────────────────────────────────────
+// "Meeting minutes should not trigger Iris to send me a draft in the chat. It should be a part of an exclusion
+// list." azure-pg-query run 44369628206: all 9 recent "Meeting Minutes: <topic> <date>, <time>" emails -- Huddle's
+// OWN Fireflies minutes (fireflies.server.ts, subject from minutesSubject()) -- got an Iris alert + a drafted reply.
+// The list is the owner's (ActionsSettings.alertSkipSubjects, What shows); this is only its seed and its matcher.
+// ACs: docs/qc-evidence/AC-inbound-alert-exclusions.md (spelling table S-1..S-40).
+
+/** The seed, used until the owner saves his own list (a saved [] is kept: it is NOT reseeded). WITH the colon: it
+ *  matches the shape Huddle sends ("Meeting Minutes: ...", "Updated Meeting Minutes: ...") and a colleague's own
+ *  "Meeting minutes: Tuesday", but NOT a person ASKING about minutes ("Can you send me the meeting minutes?") --
+ *  red-team RT-2: a wrong exclusion is silent, so the seed stays narrow. The owner can widen it. */
+export const ALERT_SKIP_SUBJECTS_DEFAULT: readonly string[] = ["meeting minutes:"];
+export const ALERT_SKIP_MAX = 50;
+/** Shorter phrases are dropped: "re" or "a" would silently swallow most alerts, and a wrong exclusion is invisible. */
+export const ALERT_SKIP_MIN_CHARS = 3;
+/** Longer phrases are DROPPED, never cut: a cut phrase is shorter, so it would match MORE subjects. */
+export const ALERT_SKIP_MAX_CHARS = 120;
+
+/** Invisible characters that sit between words (zero-width space/joiners, word joiner, BOM, soft hyphen). */
+const INVISIBLE = /[\u200B-\u200D\u2060\uFEFF\u00AD]/g;
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+
+/** Pure: the comparable form of a subject or phrase. Compatibility forms folded (full-width letters and colon ->
+ *  ASCII), accent marks dropped (so NFC "é" and NFD "e\u0301" read the same, and Turkish "İ" -> "i"), invisible
+ *  characters and every whitespace run -> one space, lower-cased. Red-team RT-4 / RT-5. */
+export function foldSubjectText(s: string): string {
+  return s.normalize("NFKD").replace(/\p{M}/gu, "").replace(INVISIBLE, " ").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Pure: stored entries -> the clean list. Non-strings, blanks, too-short, too-long and letter-less ("...", "?!?")
+ *  entries dropped; duplicates (folded) keep the first spelling; at most ALERT_SKIP_MAX, in the order given. */
+export function cleanAlertSkipSubjects(xs: readonly unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const x of xs) {
+    if (out.length >= ALERT_SKIP_MAX) break;
+    if (typeof x !== "string") continue;
+    const t = x.replace(INVISIBLE, " ").replace(/\s+/g, " ").trim();
+    if (t.length < ALERT_SKIP_MIN_CHARS || t.length > ALERT_SKIP_MAX_CHARS) continue;
+    const k = foldSubjectText(t);
+    if (!LETTER_OR_DIGIT.test(k) || seen.has(k)) continue; // RT-8: a phrase must hold a letter or digit
+    seen.add(k);
+    out.push(t);
+  }
+  return out;
+}
+
+/** ONE reply/forward prefix rule (red-team RT-1): RE/FW/FWD and the other languages' markers (AW, TR, WG, SV, RV,
+ *  ANTW), with an optional [n]. external-feeds/onedrive-feed.ts stripReplyPrefixes uses this same pattern. */
+export const REPLY_PREFIX = /^\s*(re|fw|fwd|aw|tr|wg|sv|rv|antw)(\[\d+\])?\s*:/i;
+/** Leading mail-gateway tags such as "[EXT]" or "[External]" (red-team RT-3). */
+const LEADING_TAGS = /^\s*(\[[^\]\n]{1,30}\]\s*)+/;
+
+/** Pure: is this subject a reply or forward? Read on the folded form, after any leading gateway tags, so a full-width
+ *  colon or a zero-width space cannot hide the prefix. */
+export function isReplyOrForwardSubject(subject: string | null | undefined): boolean {
+  return REPLY_PREFIX.test(foldSubjectText(String(subject ?? "")).replace(LEADING_TAGS, ""));
+}
+
+/** Pure: does this ORIGINAL subject contain one of the phrases? Both are folded (foldSubjectText); the phrase is
+ *  literal text (no regex). Where the phrase starts or ends with a letter or digit, the character next to it must not
+ *  be one (Unicode-aware, surrogate-safe; JS `\b` treats "é" as a boundary). A reply or forward is never excluded:
+ *  a person replying to minutes may ask something, so it goes through the normal screen. Only the subject is read.
+ *  Never throws. */
+export function subjectExcluded(subject: string | null | undefined, phrases: readonly string[]): boolean {
+  const raw = String(subject ?? "");
+  if (!raw.trim() || !phrases.length || isReplyOrForwardSubject(raw)) return false;
+  const s = foldSubjectText(raw);
+  for (const p of phrases) {
+    const f = foldSubjectText(String(p ?? ""));
+    if (!f || !LETTER_OR_DIGIT.test(f)) continue;
+    const checkStart = /^[\p{L}\p{N}]/u.test(f);
+    const checkEnd = /[\p{L}\p{N}]$/u.test(f);
+    let i = s.indexOf(f);
+    while (i >= 0) {
+      const before = s.slice(Math.max(0, i - 2), i);
+      const after = s.slice(i + f.length, i + f.length + 2);
+      const okStart = !checkStart || !/[\p{L}\p{N}]$/u.test(before);
+      const okEnd = !checkEnd || !/^[\p{L}\p{N}]/u.test(after);
+      if (okStart && okEnd) return true;
+      i = s.indexOf(f, i + 1);
+    }
+  }
+  return false;
+}
 
 /** Local parts that are machines, not people. Matched against the WHOLE part before "@" (a +tag is
  *  stripped first), so `team.lead@`, `info.sarah@` or a domain containing "mail" are never caught.
@@ -175,17 +261,23 @@ export function asksSomething(
   return text.includes("?") || ASK.test(text);
 }
 
-/** The one decision: does this message reach the owner? `mailbox` is the owner's own address. */
+/** The one decision: does this message reach the owner? `mailbox` is the owner's own address.
+ *  `excludeSubjects`: the owner's alert exclusion list (the alert runner passes it; other callers pass none, so
+ *  their verdicts are unchanged). A listed subject is never announced, in EVERY mode, "all" included. */
 export function screenMessage(
   m: InboundMessage,
   mode: InboundEmailMode,
   mailbox: string,
+  excludeSubjects?: readonly string[],
 ): ScreenVerdict {
   const from = String(m.fromAddress ?? "")
     .trim()
     .toLowerCase();
   // Never announce the owner's own mail back to him, in any mode.
   if (from && from === mailbox.trim().toLowerCase()) return { keep: false, reason: "self" };
+  if (excludeSubjects?.length && subjectExcluded(m.subject, excludeSubjects)) {
+    return { keep: false, reason: "excluded-subject" };
+  }
   if (mode === "all") return { keep: true, reason: "all mode" };
 
   const headers = new Set((m.headerNames ?? []).map((h) => h.toLowerCase()));

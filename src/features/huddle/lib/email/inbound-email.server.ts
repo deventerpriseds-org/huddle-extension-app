@@ -12,6 +12,7 @@
 // the existing every-minute scheduler as job type "inbound-email" — no new cron, no new secret.
 
 import {
+  ALERT_SKIP_SUBJECTS_DEFAULT,
   INBOUND_EMAIL_LOOKBACK_HOURS_DEFAULT,
   INBOUND_EMAIL_MODE_DEFAULT,
   inboundEmailDirective,
@@ -49,6 +50,31 @@ export interface InboundEmailRunResult {
   /** The instant-alert subscription upkeep this run did. Action + status code only (public logs). */
   subscription?: { action: "create" | "renew" | "keep" | "skipped"; ok: boolean; status?: number };
   error?: string;
+}
+
+/** The owner's alert exclusion list (ActionsSettings.alertSkipSubjects), read ONCE per run. It is read by the SAME
+ *  key the Actions page saves it under (actionsConfig().owner) -- not this runner's resolveTaskEmail key, which can
+ *  differ and would silently read nothing. Actions off -> the seed. ANY read failure -> the seed, never "no
+ *  exclusions", and never a throw (a lost list must not turn the minutes alerts back on). `deps` is for tests. */
+export async function loadAlertSkipSubjects(
+  deps: {
+    config?: () => { owner: string } | null;
+    readRaw?: (owner: string) => Promise<unknown>;
+  } = {},
+): Promise<string[]> {
+  const seed = [...ALERT_SKIP_SUBJECTS_DEFAULT];
+  try {
+    const config = deps.config ?? (await import("../actions/actions.server")).actionsConfig;
+    const cfg = config();
+    if (!cfg?.owner) return seed;
+    const readRaw = deps.readRaw ?? (await import("./email-replies.server")).getActionsSettingsRaw;
+    const { resolveActionsSettings } = await import("../actions/actions");
+    return resolveActionsSettings(await readRaw(cfg.owner)).alertSkipSubjects;
+  } catch (err) {
+    // The error NAME only: never a subject, phrase or address (this run's logs are public).
+    console.error("[inbound-email] alert exclusion list unreadable; using the default list", err instanceof Error ? err.name : "error");
+    return seed;
+  }
 }
 
 /** Run once for one user. NEVER THROWS — like every scheduled job, a throw would lose the tick. */
@@ -131,6 +157,9 @@ export async function runInboundEmailWatch(
     }
     const { isFeedId } = await import("../external-feeds/onedrive-feed");
 
+    // The owner's exclusion list, ONCE per run (owner 2026-11-18: meeting minutes never get an alert or a draft).
+    const skipSubjects = await loadAlertSkipSubjects();
+
     // Oldest first, so the owner hears about them in the order they arrived.
     const msgs = [...read.messages, ...(feed?.messages ?? [])].sort((a, b) =>
       String(a.receivedDateTime ?? "").localeCompare(String(b.receivedDateTime ?? "")),
@@ -152,7 +181,8 @@ export async function runInboundEmailWatch(
       // feed mail ("unnecessary and complicates testing") -- mail from his EDS address INTO the work
       // mailbox is screened like any sender. screenMessage's own rule (from === the mailbox it arrived
       // in) still applies to both sources, unchanged.
-      const verdict: ScreenVerdict = screenMessage(m, mode, msgMailbox);
+      // An excluded subject stops HERE: no owed row, no turn, and it never uses up MAX_PER_RUN.
+      const verdict: ScreenVerdict = screenMessage(m, mode, msgMailbox, skipSubjects);
       const row: (typeof decisions)[number] = {
         received: m.receivedDateTime ?? null,
         fromDomain:

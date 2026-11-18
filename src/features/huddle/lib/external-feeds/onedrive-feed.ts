@@ -14,7 +14,7 @@
 // THIS REPO IS PUBLIC: no tenant, drive, flow or calendar identifiers live in code. Everything that
 // binds the feed to a person comes from the server-only HUDDLE_ONEDRIVE_FEEDS setting.
 
-import type { InboundMessage } from "../email/inbound-email";
+import { REPLY_PREFIX, type InboundMessage } from "../email/inbound-email";
 import { visibleHtml } from "./html-visible";
 
 /** One feed file (email or appointments) inside the owner's EDS OneDrive. */
@@ -141,10 +141,13 @@ export function parseUtcMs(v: unknown): number {
 
 /** Pure (red-team F18): drop leading reply/forward markers in the common languages (RE:, Re:, FW:, Fwd:,
  *  AW: German, TR: French, WG: German forward, SV: Nordic, RV: Spanish), repeated, with optional [n]. */
+// The ONE prefix rule lives in inbound-email.ts (REPLY_PREFIX, shared with the alert exclusion list); same pattern
+// as before, plus the trailing space it strips.
+const REPLY_PREFIX_STRIP = new RegExp(REPLY_PREFIX.source + "\\s*", "i");
 export function stripReplyPrefixes(subject: string): string {
   let s = subject;
   for (let i = 0; i < 10; i++) {
-    const next = s.replace(/^\s*(re|fw|fwd|aw|tr|wg|sv|rv|antw)(\[\d+\])?\s*:\s*/i, "");
+    const next = s.replace(REPLY_PREFIX_STRIP, "");
     if (next === s) break;
     s = next;
   }
