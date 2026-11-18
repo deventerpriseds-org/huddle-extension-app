@@ -64,8 +64,15 @@ export const checks = [
     }
     await screenshot("schedule-after-tap");
     check("tapping it shows 'Removed from This Week.'", toast, "no success toast within 15s");
-    await page.waitForTimeout(5000); // runPush re-reads now and again at 2.5s (mirror lag)
-    const still = await page.getByRole("button", { name: `Remove "${TITLE}" from This Week` }).count();
+    // runPush re-reads now and again at 2.5s; each re-read also fetches the Outlook calendar, which took
+    // longer than 5s on the first live run (journey + mirror were already correct at the tap's second).
+    let still = 1;
+    const t3 = Date.now() + 25000;
+    while (Date.now() < t3) {
+      still = await page.getByRole("button", { name: `Remove "${TITLE}" from This Week` }).count();
+      if (still === 0) break;
+      await page.waitForTimeout(1000);
+    }
     await screenshot("schedule-after-reread");
     check("after the re-read the row no longer has a remove star", still === 0, `${still} still present`);
   },
