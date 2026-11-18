@@ -403,7 +403,8 @@ const cand = (o: Partial<ActionCandidate>): ActionCandidate => ({ proposalId: `p
   ];
   const sel = selectActionItems(cs, S());
   t("F-1 GUARD: decided proposals / on-board items are not listed (AC-E-13)", sel.rows.every((r) => r.state === "proposed" || r.state === "untriaged"), true);
-  t("F-2 rows / answered / not checked / hidden", [sel.rows.length, sel.answered.length, sel.notChecked, sel.hidden.total], [4, 1, 2, 3]);
+  // AC-actions-no-orphans AC-12 (2026-11-18): the admitted-but-unbacked item is now HELD, not "not checked".
+  t("F-2 rows / answered / not checked / held / hidden", [sel.rows.length, sel.answered.length, sel.notChecked, sel.held.length, sel.hidden.total], [4, 1, 1, 1, 3]);
   t("F-3 RECONCILE: email + teams + meetings = all = sum of sections (AC-D-2)", [sel.counts.email + sel.counts.teams + sel.counts.meeting === sel.counts.all, Object.values(sel.sectionCounts).reduce((a, b) => a + b, 0) === sel.counts.all], [true, true]);
   t("F-4 section order", sel.rows.map((r) => r.section), ["needs_reply", "todo", "fyi", "meetings"]);
   const shown = selectActionItems(cs, S({ hideCategories: [] }));
@@ -564,16 +565,17 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   ];
   const listedKeys = (sel: ReturnType<typeof selectActionItems>) => sel.unchecked.map((r) => r.itemKey);
   const allOn = selectActionItems(cs, S({ hideUninvolvedChats: false }));
-  t("U-1 GUARD: not-checked items are LISTED, not only counted (notChecked === unchecked.length), newest first", [allOn.notChecked, allOn.unchecked.length, listedKeys(allOn)], [5, 5, ["u-teams-new", "u-list", "u-uninv", "u-nobacking", "u-email-old"]]);
-  t("U-2 per-source unchecked counts reconcile with the list", [allOn.uncheckedCounts, allOn.uncheckedCounts.email + allOn.uncheckedCounts.teams + allOn.uncheckedCounts.meeting === allOn.uncheckedCounts.all], [{ all: 5, email: 3, teams: 2, meeting: 0 }, true]);
+  // AC-actions-no-orphans AC-12: u-nobacking (open, nothing backs it) moved from unchecked to held.
+  t("U-1 GUARD: not-checked items are LISTED, not only counted (notChecked === unchecked.length), newest first", [allOn.notChecked, allOn.unchecked.length, listedKeys(allOn), allOn.held.map((r) => r.itemKey)], [4, 4, ["u-teams-new", "u-list", "u-uninv", "u-email-old"], ["u-nobacking"]]);
+  t("U-2 per-source unchecked counts reconcile with the list", [allOn.uncheckedCounts, allOn.uncheckedCounts.email + allOn.uncheckedCounts.teams + allOn.uncheckedCounts.meeting === allOn.uncheckedCounts.all], [{ all: 4, email: 2, teams: 2, meeting: 0 }, true]);
   const uninvHidden = selectActionItems(cs, S({ hideUninvolvedChats: true }));
-  t("U-3 GUARD: hide uninvolved chats hides a not-checked uninvolved chat too (counted in hidden, not listed)", [listedKeys(uninvHidden).includes("u-uninv"), uninvHidden.hidden.uninvolved, uninvHidden.notChecked], [false, 1, 4]);
+  t("U-3 GUARD: hide uninvolved chats hides a not-checked uninvolved chat too (counted in hidden, not listed)", [listedKeys(uninvHidden).includes("u-uninv"), uninvHidden.hidden.uninvolved, uninvHidden.notChecked], [false, 1, 3]);
   const teamsOff = selectActionItems(cs, S({ hideUninvolvedChats: false, sources: { email: true, teams: false, meeting: true } }));
   t("U-4 GUARD: a source switched off hides its not-checked items (counted in hidden.sources)", [teamsOff.unchecked.some((r) => r.source === "teams"), teamsOff.hidden.sources, teamsOff.uncheckedCounts.teams], [false, 2, 0]);
   const senderOff = selectActionItems(cs, S({ hideUninvolvedChats: false, hiddenSenders: ["ops-list@work.example"] }));
   t("U-5 GUARD: a stopped list sender hides its not-checked email (counted in hidden.senders)", [listedKeys(senderOff).includes("u-list"), senderOff.hidden.senders], [false, 1]);
   t("U-6 judged rows are unaffected by the unchecked list (still counted only from rows)", [allOn.rows.map((r) => r.itemKey), allOn.counts.all], [["judged|1"], 1]);
-  const tc = tabCounts(allOn.rows, allOn.unchecked);
+  const tc = tabCounts(allOn.rows, allOn.unchecked, allOn.held);
   t("U-7 GUARD: the type tabs count the not-checked items too (a tab never reads 0 over a listed item)", tc, { all: 6, email: 4, teams: 2, meeting: 0 });
   t("U-8 a tab filter lists only that type's not-checked items", filterRows(allOn.unchecked, "teams").map((r) => r.itemKey), ["u-teams-new", "u-uninv"]);
   t("U-9 GUARD: changing the range resets the tab to All; the same range keeps it", [tabAfterRangeChange("teams", "week", "all"), tabAfterRangeChange("email", "all", "week"), tabAfterRangeChange("teams", "all", "all"), tabAfterRangeChange("all", "week", "all")], ["all", "all", "teams", "all"]);
@@ -995,8 +997,9 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   const f2 = await actOnHeldItem(hU, "approve", wf.deps);
   t("F5-8 the action fails after the proposal was created -> row stays held WITH that id; the next click re-uses it (no 2nd propose)", [f1.ok, stillHeld.map((r) => r.id), f2.ok, wf.calls.propose, wf.calls.act, wf.page().held.length], [false, ["prop-f5000001"], true, 1, ["approve:prop-f5000001", "approve:prop-f5000001"], 0]);
   const wn = mkWorld();
-  wn.store.set(storeKey, { ...heldV, status: "open", notCheckedReason: undefined, proposalId: null });
-  t("F5 a verdict that is not held (open) is refused: no propose, no act", [await actOnHeldItem(hU, "approve", wn.deps), wn.calls.propose, wn.calls.act.length], [{ ok: false, error: "That item isn't in your list." }, 0, 0]);
+  // AC-actions-no-orphans (2026-11-18): open with NO id is now held (AC-12); an open verdict WITH a live id is a row.
+  wn.store.set(storeKey, { ...heldV, status: "open", notCheckedReason: undefined, proposalId: "prop-live0001" });
+  t("F5 a verdict that is not held (open, with a proposal) is refused: no propose, no act", [await actOnHeldItem(hU, "approve", wn.deps), wn.calls.propose, wn.calls.act.length], [{ ok: false, error: "That item isn't in your list." }, 0, 0]);
 
   // F5-14: re-judged at a new version and now admitted -> open, KEEPS the rescue proposal (runClassify keepId), moves
   // from held to rows, never both.
@@ -1044,7 +1047,7 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
       /heldGroup = held\.length \? \(\s*<section/.test(viewF5),
       viewF5.includes("{HELD_GROUP_LABEL}"),
       viewF5.includes("{row.heldReason}"),
-      viewF5.includes("{HELD_QUOTE_LABEL}"),
+      viewF5.includes("{row.heldQuoteLabel ?? HELD_QUOTE_LABEL}"),
       viewF5.includes('data-testid="actions-held-add"') && viewF5.includes("Add as task"),
       viewF5.includes('data-testid="actions-held-dismiss"'),
       viewF5.indexOf("{heldGroup}") > 0 && viewF5.indexOf("{heldGroup}") < viewF5.lastIndexOf("{notChecked}"),
@@ -1085,8 +1088,9 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   t("RT-23 F5 D5 gate: a held verdict from an OLDER classifier version is not actionable", [stale.r.ok, stale.log.propose, stale.log.act.length], [false, 0, 0]);
   const other = await run(heldV({ key: "email:someone-else|m9" }));
   t("RT-24 F5 a verdict for a DIFFERENT item key (another thread) is not actionable through this item", [other.r.ok, other.log.propose, other.log.act.length], [false, 0, 0]);
-  const openV = await run(heldV({ status: "open", notCheckedReason: undefined }));
-  t("RT-25 F5 D5 gate: an OPEN verdict is not acted on as held", [openV.r.ok, openV.log.propose], [false, 0]);
+  // AC-actions-no-orphans (2026-11-18): an open verdict with NO id is held now (AC-12/AC-22); with a live id it is not.
+  const openV = await run(heldV({ status: "open", notCheckedReason: undefined, proposalId: "prop-live0002" }));
+  t("RT-25 F5 D5 gate: an OPEN verdict with a proposal is not acted on as held", [openV.r.ok, openV.log.propose], [false, 0]);
   const fresh = await run(heldV());
   t("RT-26 F5-5 a fresh held item: exactly 1 proposal, id written back with status still not_checked", [fresh.log.propose, fresh.log.act, (fresh.log.stored[0] as { proposalId?: string; status?: string })?.proposalId, (fresh.log.stored[0] as { status?: string })?.status], [1, ["prop-0000aaaa"], "prop-0000aaaa", "not_checked"]);
   // Selection
