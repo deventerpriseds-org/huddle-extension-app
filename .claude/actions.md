@@ -5497,3 +5497,11 @@ Owner: *"I cannot unselect priorities in the priority view"* → corrected: *"it
 - [x] Ground-truth: 8 live verdicts open with no proposal (validator refused: evidence_not_in_source / task_not_grounded).
 - [x] Built + red-teamed (2/11 broke, fixed) + 3 verifier loops (final SHIP): PR #282.
 - [ ] Merge, deploy, UAT; owner confirms the held group shows Amy's flight/agenda ask with Add as task / Dismiss.
+
+## ACT:ignore-tentative — tentative calendar items excluded like "work block" (2026-11-19)
+Owner: *"Items that are tentative on my schedule should be on the same exclusion list as 'work block' items"*.
+- **Found:** 37 upcoming tentative events stored in journey (all from the OneDrive work-calendar feed: Story Point Poker, Platform Weekly/Retro/Sprint Planning...). Huddle's work-calendar FEED read had NO exclusion at all (Work Block 1/2 showed as MEETING in the owner's 11-18 Schedule screenshot).
+- **Shipped:** journey-voice #130 `f858760` (calendar-ignore.ts rule = title phrase OR show_as tentative; delta-sync + feed filter; delta-sync purges stored tentative; Settings checkbox "Also ignore events marked Tentative", default on; AC-MTG-7 marked superseded). Huddle #284 `f89bb4d` (isIgnoredCalendarEvent on Graph read incl. showAs, AND on the work feed).
+- **Evidence:** journey 718/718 + calendar-ignore 9/9; Huddle calendar-ignore 4/4, feed/day-schedule/schedule-brief suites green; mutate.sh FIRED (control EQUIVALENT) CI-6 x2, CI-9, CAL-IGN-2, CAL-IGN-4. Deploys: journey functions success, Huddle SWA success.
+- **Live:** sync triggered via pg_net (request 1012651, HTTP 200): stored tentative 37 → 0, busy 63 kept. Huddle schedule-brief dry run 44300646477: 10 meetings today+week, 0 work blocks / known tentative titles.
+- **Open:** journey Settings checkbox reaches the web app when Lovable publishes `main` (not in Actions). NOT owner-confirmed.
