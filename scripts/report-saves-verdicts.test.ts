@@ -266,7 +266,10 @@ for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INF
   gone.store.set(k0, stale(directKey));
   await runClassify(asm, S1, judged, 5, withLock(gone));
   const vg = gone.store.get(k0);
-  t("X-5b prior {open, proposalId P}, re-judge -> none (F3 momentary): P stays attached, 0 proposals made", [gone.log.propose, vg?.status, vg?.dropReason, vg?.proposalId], [0, "none", "momentary", "prop-decided-earlier"]);
+  // 2026-11-18 red-team RT-7: the F3 backstop FAILS OPEN. This email holds a real ask besides "Thanks!", so the quote
+  // is no longer dropped to none; it is held (not_checked, the quote is under 8 chars). The X-5 invariants are unchanged:
+  // P stays attached and 0 proposals are made.
+  t("X-5b prior {open, proposalId P}, re-judge -> not open (a 'Thanks!' quote on a message with a real ask is held, RT-7): P stays attached, 0 proposals made", [gone.log.propose, vg?.status, vg?.notCheckedReason, vg?.proposalId], [0, "not_checked", "quote_not_found", "prop-decided-earlier"]);
   // RED-TEAM RT-31 (REDTEAM-actions-safety-invites.md, F5-14): a HELD item rescued by the owner (P written back) that
   // the re-judge now ADMITS as open keeps P -- never a second proposal, never listed twice.
   const rescued = fakeStore(honest);
