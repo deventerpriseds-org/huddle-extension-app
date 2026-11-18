@@ -1,0 +1,35 @@
+{
+  "results": [
+    {
+      "name": "Schedule tab opens",
+      "pass": true,
+      "detail": "no Schedule button"
+    },
+    {
+      "name": "the starred Test- row shows a tappable star",
+      "pass": true,
+      "detail": "no button 'Remove \"Test-unstar check 1118\" from This Week'"
+    },
+    {
+      "name": "tapping it shows 'Removed from This Week.'",
+      "pass": true,
+      "detail": "no success toast within 15s"
+    },
+    {
+      "name": "after the re-read the row no longer has a remove star",
+      "pass": false,
+      "detail": "1 still present"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
