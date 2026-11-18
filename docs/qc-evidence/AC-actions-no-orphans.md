@@ -130,3 +130,68 @@ Column M: **M** means the AC needs a NEW guard, mutation-proved with `mutate.sh`
 |---|---|---|---|---|
 | AC-30 | Given the fix, then a classify pass makes no more `proposeFromSource` calls per open verdict than today (two titles) and NO extra model call. The page read adds no query per held row: selection stays pure. | performance | offline call counters; code read of the page loader | |
 
+## Spelling table (Tier 1 matcher on stored verdict shapes)
+
+The fix MATCHES stored JSON verdicts (`chat.correspondence_ledger.result_ids->'action'`) in three places: the TS
+selection (`isHeldCandidate` / the open branch), the TS click check (`isHeldVerdict`) and the SQL D5 check. All three
+must give the same verdict for every row. Source cited for each row: the `ActionVerdict` type
+(`action-classify.ts` ~375-395), the candidate builder (`pipeline.ts` ~527-531: `onBoard: current?.onBoard === true`,
+`notCheckedReason` only when `status === "not_checked"`) and the existing D5 SQL (`actions.server.ts` ~590-596).
+
+| # | Stored spelling (current verdict) | Documented by | Expected: selection / click / D5 (when an id is written back) | Wrong answer would be |
+|---|---|---|---|---|
+| S-1 | `status:"open"`, `proposalId:null`, no `onBoard` key | `ActionVerdict`; selection `!c.proposalId` | held / accepted / true (as `open`) | FALSE REFUSAL (today's orphan) |
+| S-2 | `status:"open"`, `proposalId` key ABSENT | same; JS `!undefined` | held / accepted / n.a. | FALSE REFUSAL |
+| S-3 | `status:"open"`, `proposalId:""` | JS `!""` is true; SQL `= $3` never matches "" | held / accepted / n.a. | FALSE REFUSAL |
+| S-4 | `status:"open"`, no id, `onBoard:false` | builder `=== true` | held / accepted | FALSE REFUSAL |
+| S-5 | `status:"open"`, no id, `onBoard:true` | builder `=== true` | not listed / refused | FALSE PASS (duplicate of a board task) |
+| S-6 | `status:"open"`, no id, `onBoard:"true"` (a string) | builder `=== true`, so the string is NOT on board | held / accepted | FALSE REFUSAL if a truthy check were used and hid it; all three paths must use `=== true` |
+| S-7 | `status:"open"`, `proposalId:"<id>"` | selection open branch | row (if listed state) / refused by the held check | FALSE PASS if held (2 groups) |
+| S-8 | `status:"not_checked"`, `notCheckedReason:"no_task_record"`, no id | new reason | held / accepted / n.a. | FALSE REFUSAL |
+| S-9 | `status:"not_checked"`, `notCheckedReason:"no_task_record"`, `proposalId:"<id>"` (after a click) | F5 write-back | held while the id is listed, else resolved / re-used id / true | FALSE PASS if not D5-backed |
+| S-10 | `status:"not_checked"`, `notCheckedReason:"quote_not_found"` | F5 | held / accepted / true (unchanged) | regression |
+| S-11 | `status:"not_checked"`, `notCheckedReason:"bad_shape"` | `ActionVerdict` | unchecked / refused / false | over-match negative: FALSE PASS |
+| S-12 | `status:"not_checked"`, reason absent or null | `ActionVerdict` optional field | unchecked / refused / false | over-match negative |
+| S-13 | `notCheckedReason:"No_Task_Record"`, `"no_task_record "` or `"no-task-record"` | exact string compare (TS `includes`, SQL `=`) | unchecked / refused / false (unknown reason) | over-match negative: no case-folding, no trim |
+| S-14 | `status:"open"` with a leftover `notCheckedReason:"no_task_record"` | builder drops the reason unless `not_checked` | decided by the `open` rules (S-1..S-7) | FALSE PASS if the reason alone made an `open` + id item held |
+| S-15 | `status:"none"` (any reason, any id) | selection `none` branch | answered or dropped / refused / false | over-match negative |
+| S-16 | any of S-1, S-8 on a verdict that is NOT current (stale `key` / `inputVersion`) | `verdictIsCurrent` | unchecked (never judged) / refused / n.a. | FALSE PASS if a stale verdict were held |
+| S-17 | `notCheckedReason:"no_task_record"` read via SQL when the JSON value is `null` | Postgres `->>` returns SQL NULL for a JSON null (see Gaps G-5: doc not opened) | D5 false | FALSE PASS if NULL were treated as a match |
+
+## Goal to AC coverage
+
+- Goal "nothing is ever orphaned at write time" -> AC-1, AC-2, AC-3, AC-5, AC-6, AC-8, AC-9.
+- Goal "the 8 live rows show up now, with no re-judge" -> AC-12, AC-11, AC-14, AC-15, S-1..S-6.
+- Goal "the owner can act on them" -> AC-21, AC-22, AC-23, AC-25, AC-26.
+- Goal "counts and tabs include them, one group each" -> AC-16.
+- Goal "no regressions (decided, onBoard, RK, suppressed)" -> AC-10, AC-17, AC-18, AC-19, AC-20, AC-24, AC-27, AC-29.
+- Goal "no private text stored or logged" -> AC-6, AC-7.
+- Every AC above traces to a goal. AC-30 is the stated performance default (no extra calls).
+
+## Gaps / open questions, each with a safe default
+
+- **G-1 (decision, with a safe default): what "suppressed" means.** Today `suppressed` is mapped to `onBoard:true`
+  (O-3), so both kinds disappear under a wrong flag. Safe default: (a) **suppressed-dismissed (F15)** keeps today's
+  hidden outcome. It is never held, unchecked or a row (AC-10). Store it with an explicit marker, e.g.
+  `suppressedBy:"dismissed"`, alongside `onBoard:true` so existing readers keep hiding it; the marker is reversible
+  and adds no new behaviour. (b) **suppressed-reworded (F14)** links the prior same-item proposal's id (AC-9). That
+  needs an ADDITIVE `ProposeResult` field naming the suppressing proposal and its reason. If the builder decides not
+  to change the engine, the fallback is today's `onBoard:true` hiding for reworded too, and AC-9 is then recorded as
+  "known orphan of a live proposal, not fixed". That is the only acceptable fallback; storing it as held is NOT,
+  because the owner would see a 2nd copy of a proposal that still exists.
+- **G-2: the kinds field name and shape.** Safe default: `noTaskRecordKinds: RejectReason[]` on `ActionVerdict`,
+  present only with `notCheckedReason:"no_task_record"`, holding the union of KIND keys from `ProposeResult.rejected`
+  across tries (AC-6).
+- **G-3: the reason sentence.** Safe default (fixed, in code): "Held back: the AI's to-do couldn't be matched to the
+  message closely enough to add it automatically." Quote label for this reason: "AI's quote". The same sentence and
+  label apply to legacy open-without-proposal rows, which carry no stored reason (AC-12, AC-14).
+- **G-4: two more no-home paths seen in the code, outside the owner's scope (O-9).** (i) `open` + an id whose proposal
+  row no longer exists is dropped silently. (ii) `open` + an id + a null section goes to read-only `unchecked`. Safe
+  default: NOT widened in this fix (the D5 widening is exactly `quote_not_found`, `no_task_record` and
+  open-without-proposal). One backlog row each, with the observed behaviour only.
+- **G-5: documents not opened.** The PostgreSQL JSON operator documentation (for S-17, `->>` on a JSON null) was not
+  opened in this pass. S-17 is written from the existing D5 SQL's behaviour, and the builder's real-PostgreSQL test
+  (AC-25) must observe it directly rather than rely on this row.
+- **G-6: classify-pass counter.** Safe default: a `no_task_record` store counts in `ClassifyResult.notChecked`, not
+  `open` (AC-1). No new counter.
+
