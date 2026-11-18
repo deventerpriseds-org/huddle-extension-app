@@ -434,11 +434,19 @@ void GRP;
   const askPat = row({ chatId: TV, messageId: "t1", at: "2026-11-16T12:00:00Z", text: "Can you send me the signed contract by Friday?" });
   const thanksPat = row({ chatId: TV, messageId: "t2", at: "2026-11-16T12:01:00Z", text: "Thanks!" });
   const thanksLee = row({ chatId: TV, messageId: "t3", at: "2026-11-16T12:02:00Z", sender: LEE, text: "Thanks!" });
-  t("F3V-1 GUARD same sender: an ask then 'Thanks!' (model quotes 'Thanks!') is NOT dropped", (await runTail([askPat, thanksPat])) !== "none", true);
-  t("F3V-2 GUARD another sender: Pat asks, Lee says 'Thanks!' -> NOT dropped", (await runTail([askPat, thanksLee])) !== "none", true);
+  t("F3V-1 GUARD same sender: an ask then 'Thanks!' (model quotes 'Thanks!') is NOT dropped", ["open", "not_checked"].includes(String(await runTail([askPat, thanksPat]))), true);
+  t("F3V-2 GUARD another sender: Pat asks, Lee says 'Thanks!' -> NOT dropped", ["open", "not_checked"].includes(String(await runTail([askPat, thanksLee]))), true);
   const brt = row({ chatId: TV, messageId: "t4", at: "2026-11-16T12:03:00Z", sender: OWN, text: "Be right there" });
   const nw = row({ chatId: TV, messageId: "t5", at: "2026-11-16T12:04:00Z", text: "No worries, thank you!" });
-  t("F3V-3 the owner's 'Be right there' then only 'No worries, thank you!' since -> dropped (momentary)", await runTail([askPat, brt, nw], "No worries, thank you!"), "none");
+  t("F3V-3 GUARD (loop 2 A7) an ask, the owner's 'Be right there', then 'No worries, thank you!' -> NOT dropped by code (the ask is in the chat)", ["open", "not_checked"].includes(String(await runTail([askPat, brt, nw], "No worries, thank you!"))), true);
+  const deckAsk = row({ chatId: TV, messageId: "t6", at: "2026-11-16T12:00:00Z", text: "Can you send me the deck tomorrow?" });
+  const ownDeck = row({ chatId: TV, messageId: "t7", at: "2026-11-16T12:01:00Z", sender: OWN, text: "Be right there. I'll send you the deck tomorrow." });
+  const seeYou = row({ chatId: TV, messageId: "t8", at: "2026-11-16T12:02:00Z", text: "Thanks, see you soon!" });
+  t("F3V-5 GUARD (loop 2 A8) a promised deliverable then 'Thanks, see you soon!' -> NOT dropped", ["open", "not_checked"].includes(String(await runTail([deckAsk, ownDeck, seeYou], "Thanks, see you soon!"))), true);
+  const okPat = row({ chatId: TV, messageId: "t9", at: "2026-11-16T12:00:00Z", text: "See you this afternoon!" });
+  const brt2 = row({ chatId: TV, messageId: "t10", at: "2026-11-16T12:01:00Z", sender: OWN, text: "Be right there" });
+  const nw2 = row({ chatId: TV, messageId: "t11", at: "2026-11-16T12:02:00Z", text: "No worries, thank you!" });
+  t("F3V-4 a chat that is ONLY logistics and pleasantries (both speakers) -> dropped (momentary)", await runTail([okPat, brt2, nw2], "No worries, thank you!"), "none");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

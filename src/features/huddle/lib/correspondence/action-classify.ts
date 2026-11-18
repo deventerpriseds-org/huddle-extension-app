@@ -467,8 +467,8 @@ const str = (v: unknown, max = 300) => (typeof v === "string" && v.trim() ? v.tr
  */
 /**
  * Pure (F3, 2026-11-18 red-team RT-7): may the momentary backstop drop this item? It FAILS OPEN. A momentary QUOTE is
- * not enough: EVERY unanswered message must be momentary in full. `latestMessages` is every OTHER message since the
- * owner last wrote (Teams); absent, the haystack pieces JOINED are used as one message (email: the latest
+ * not enough: EVERY message of the conversation must be momentary in full. `latestMessages` is every message of the
+ * conversation, both speakers (email and Teams, from runClassify); absent, the haystack pieces JOINED are used as one message (email: the latest
  * OTHER message plus its forward; any other text in it keeps the item). Drop only when one of those messages is
  * itself momentary in full AND holds the quote. Anything else ("Thanks! Can you send the contract?") is not dropped.
  */
@@ -477,8 +477,9 @@ export function momentaryDropApplies(quote: string | null | undefined, haystack:
   const q = unwrapQuote(canonQuote(quote ?? ""));
   if (!q) return false;
   const msgs = latestMessages ?? [(typeof haystack === "string" ? [haystack] : haystack).join(" ")];
-  // Verifier VERIFY-actions-safety-invites-1: EVERY unanswered message must be momentary in full (one real ask
-  // anywhere in the tail keeps the item), and one of them must hold the quote. An empty tail never drops.
+  // Verifiers VERIFY-actions-safety-invites-1/-2: EVERY message of the conversation must be momentary in full (one
+  // real ask anywhere keeps the item; an empty or attachment-only message is not momentary, so it keeps it too), and
+  // one of them must hold the quote. No messages never drops.
   if (!msgs.length) return false;
   return msgs.every((m) => isMomentaryQuote(m)) && msgs.some((m) => canonQuote(m ?? "").includes(q));
 }

@@ -305,5 +305,20 @@ for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INF
   );
 }
 
+// ── Verifier VERIFY-actions-safety-invites-2 E1/E1b: an email thread with an earlier ask whose latest message is a pleasantry ──
+{
+  const asmE = (latest: string) =>
+    assembleLedgerPlan({ rows: [erow("e1", "conv-e", "2026-11-10T14:00:00Z", { bodyText: "Could you send me the signed contract by Friday?" }), erow("e2", "conv-e", "2026-11-10T15:00:00Z", { bodyText: latest })], proposals: [], bell: [] }, cfg, SINCE);
+  const runE = async (latest: string) => {
+    const a = asmE(latest);
+    const f = fakeStore(() => open(latest, "Send the signed contract"));
+    await runClassify(a, S({ sources: { email: true, teams: false, meeting: false } }), new Set(), 5, f.deps);
+    const u = threadUnits(a, S()).units.find((x) => x.source === "email" && x.email?.messages.length === 2);
+    return u ? f.store.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`)?.status : "no-unit";
+  };
+  t("F3E-1 GUARD email: an ask then 'Thanks!' as the latest message (model quotes 'Thanks!') is NOT dropped", ["open", "not_checked"].includes(String(await runE("Thanks!"))), true);
+  t("F3E-2 GUARD email: an ask then 'Thanks, see you soon!' is NOT dropped", ["open", "not_checked"].includes(String(await runE("Thanks, see you soon!"))), true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

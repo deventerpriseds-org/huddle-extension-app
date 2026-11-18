@@ -218,16 +218,11 @@ export async function runClassify(
     }
     const haystack = u.email ? emailQuoteHaystack(u.email, a.forwards) : teamsQuoteHaystack(u.teams!);
     const settled = u.email ? u.email.settled : u.teams!.settled;
-    // RT-7 + verifier VERIFY-actions-safety-invites-1 (F3 fails open): for Teams, the momentary backstop is given
-    // EVERY OTHER message since the owner last wrote (the unanswered tail), not just each sender's latest -- so an ask
-    // followed by "Thanks!" (same or another sender) keeps the item.
-    let latestMessages: string[] | undefined;
-    if (!u.email && u.teams) {
-      const msgs = u.teams.messages;
-      let lastOwner = -1;
-      msgs.forEach((m, i) => { if (m.speaker === "OWNER") lastOwner = i; });
-      latestMessages = msgs.slice(lastOwner + 1).filter((m) => m.speaker === "OTHER").map((m) => m.text ?? "");
-    }
+    // F3 fails open (verifier VERIFY-actions-safety-invites-1 and -2): the momentary backstop is given EVERY message
+    // of the conversation, both speakers, email and Teams. Code drops an item only when the WHOLE conversation is
+    // momentary chat; anything subtler (an ask the owner answered with "be right there") is left to MOMENTARY_RULE
+    // in the instructions, so a code mistake can only ever show an item, never hide a real ask.
+    const latestMessages: string[] = [...(u.email ? u.email.messages : u.teams!.messages).map((m) => m.text ?? ""), ...(u.email ? (typeof haystack === "string" ? [haystack] : [...haystack]) : [])];
     let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source], latestMessages });
     /** Propose (when open) then store. Inside the thread lock (AC8) it first re-reads the thread's stored verdict:
      *  another pass that judged this version while we waited wins, and this one writes nothing (no 2nd proposal). */
