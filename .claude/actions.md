@@ -5505,3 +5505,9 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - **Evidence:** journey 718/718 + calendar-ignore 9/9; Huddle calendar-ignore 4/4, feed/day-schedule/schedule-brief suites green; mutate.sh FIRED (control EQUIVALENT) CI-6 x2, CI-9, CAL-IGN-2, CAL-IGN-4. Deploys: journey functions success, Huddle SWA success.
 - **Live:** sync triggered via pg_net (request 1012651, HTTP 200): stored tentative 37 → 0, busy 63 kept. Huddle schedule-brief dry run 44300646477: 10 meetings today+week, 0 work blocks / known tentative titles.
 - **Open:** journey Settings checkbox reaches the web app when Lovable publishes `main` (not in Actions). NOT owner-confirmed.
+
+## ACT:alert-exclusions — meeting minutes must not trigger an Iris draft in chat; make it an exclusion list (owner 2026-11-18) — OPEN
+- Ask: "Meeting minutes should not trigger Iris to send me a draft in the chat. It should be a part of an exclusion list."
+- Evidence: azure-pg-query run 44369628206 (9 minutes rows, 7 owed). ACs: docs/qc-evidence/AC-inbound-alert-exclusions.md.
+- Built on branch claude/modest-brown-2hdt5n (commit e83dcf59): owner-editable `alertSkipSubjects`, seeded "meeting minutes". Tests 61/61; 6 guards FIRED.
+- Remaining: red-team pre-pass -> PR -> verifier -> merge/deploy -> dismiss the 7 owed minutes rows (by id, with undo SQL) -> live dry run -> owner confirms no draft on the next minutes email.

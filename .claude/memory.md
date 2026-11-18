@@ -1,5 +1,12 @@
 # Project Memory — huddle-extension-app
 
+## Iris email alerts: subject exclusion list (2026-11-18, branch claude/modest-brown-2hdt5n, NOT merged, NOT live) -- ACT:alert-exclusions
+- **What was wrong (measured, azure-pg-query run 44369628206):** Huddle's OWN Fireflies minutes emails ("Meeting Minutes: <topic> <date>, <time>", from_name "EDS Dev", subject from `minutesSubject()`) passed `screenMessage` (ASK words / "?"), so each got an Iris 1:1 alert + drafted reply. 9 rows, 7 still owed.
+- **Now (on the branch):** `screenMessage(m, mode, mailbox, excludeSubjects?)` returns `excluded-subject` (every mode, after `self`) when an ORIGINAL subject (Re:/Fw:/Fwd: still screened normally) contains a listed phrase. Literal match, case + whitespace folded, edges must not touch a Unicode letter/digit (JS `\b` misses "minutes:" and wrongly matches inside "réunion").
+- **The list:** `ActionsSettings.alertSkipSubjects` on the EXISTING `chat.attention_settings.actions_settings` row, seeded `["meeting minutes"]`; a saved `[]` is kept; 3-120 chars, max 50; a save WITHOUT the key keeps the stored list (`keepStoredAlertSkipSubjects`). Edited in Actions -> What shows ("Emails Iris won't alert you about"); Settings -> New email alerts hint points there.
+- **Runner key gotcha:** settings are keyed by `actionsConfig().owner`, NOT the runner's `resolveTaskEmail` key. `loadAlertSkipSubjects` reads by the Actions key once per run; Actions off or ANY read failure -> the seed (never "no exclusions").
+- Proposals (`proposals.ts`) pass no list -> unchanged. Tests: `bun test scripts/inbound-alert-exclusions.test.ts` (61 pass); 6 guards mutation-proven FIRED with clean controls. `fireflies-minutes.test.ts` G3/G5/G8 fail on main too (pre-existing, unrelated).
+
 ## Actions: no orphaned items (2026-11-18, PR #282, branch claude_actions-no-orphans) -- ACT:actions-no-orphans
 - Owner screenshot: Amy's "flight to BOS" ask sat in read-only "Not checked yet". Live store: 8 verdicts `open` with
   proposalId null -- the action admission accepted them, the proposal validator refused them (`evidence_not_in_source`
