@@ -174,10 +174,14 @@ export function resolveActionsSettings(raw: unknown, seed: readonly string[] = [
 }
 
 /** Pure (AC-40): a settings SAVE replaces the whole stored object, so a payload from an older client or a stale open
- *  tab that lacks `alertSkipSubjects` would reset the owner's list to the seed. When the payload has no such key, the
- *  stored list is carried over. Any other payload is returned unchanged. */
+ *  tab that lacks `alertSkipSubjects` would reset the owner's list to the seed. When the payload has no usable list
+ *  (missing, or not an array), the stored list is carried over. Any other payload is returned unchanged. */
+export function payloadLacksAlertSkipList(raw: unknown): boolean {
+  return !!raw && typeof raw === "object" && !Array.isArray(raw) && !Array.isArray((raw as Record<string, unknown>).alertSkipSubjects);
+}
 export function keepStoredAlertSkipSubjects(raw: unknown, stored: unknown): unknown {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw) || "alertSkipSubjects" in raw) return raw;
+  // RT-6(b): a present-but-not-an-array value counts as missing, so it cannot reseed the list either.
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || Array.isArray((raw as Record<string, unknown>).alertSkipSubjects)) return raw;
   const st = stored && typeof stored === "object" && !Array.isArray(stored) ? (stored as Record<string, unknown>) : null;
   return st && Array.isArray(st.alertSkipSubjects) ? { ...(raw as Record<string, unknown>), alertSkipSubjects: st.alertSkipSubjects } : raw;
 }

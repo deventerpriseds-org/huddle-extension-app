@@ -63,7 +63,7 @@ import {
   type ActionsSettings,
   type CorrectionReason,
 } from "../lib/actions/actions";
-import { ALERT_SKIP_MAX, ALERT_SKIP_MAX_CHARS, cleanAlertSkipSubjects } from "../lib/email/inbound-email";
+import { cleanAlertSkipSubjects } from "../lib/email/inbound-email";
 
 type Caller = { entra_object_id?: string; entra_email?: string } | undefined;
 type Page = Awaited<ReturnType<typeof getActionsFn>>;
@@ -1049,9 +1049,11 @@ function WhatShows({
           key={settings.alertSkipSubjects.join("\n")}
           defaultValue={settings.alertSkipSubjects.join("\n")}
           rows={Math.max(2, Math.min(8, settings.alertSkipSubjects.length + 1))}
-          maxLength={ALERT_SKIP_MAX * (ALERT_SKIP_MAX_CHARS + 1)}
           onBlur={(e) => {
             const next = cleanAlertSkipSubjects(e.target.value.split("\n"));
+            // RT-7: always show what will actually be used (a dropped or merged line disappears at once). No length cap on
+            // the box: a cut-off last line would become a SHORTER phrase; the cleaner caps count and length instead.
+            if (e.target.value !== next.join("\n")) e.target.value = next.join("\n");
             if (next.join("\n") !== settings.alertSkipSubjects.join("\n")) onChange({ ...settings, alertSkipSubjects: next });
           }}
           data-testid="actions-alert-skip"

@@ -23,6 +23,7 @@ import {
   classifyEnabled,
   resolveActionsSettings,
   keepStoredAlertSkipSubjects,
+  payloadLacksAlertSkipList,
   withItemCorrection,
   withItemUndo,
   selectActionItems,
@@ -444,8 +445,16 @@ export async function saveActionsSettings(caller: { entra_object_id?: string; en
   const owners = await ownedScope(caller, cfg);
   if (!owners?.length) return { ok: false, error: "Sign-in required." };
   const { setActionsSettingsRaw, getActionsSettingsRaw } = await import("../email/email-replies.server");
-  // AC-40: a payload without the alert exclusion list keeps the stored one (never reseeds it).
-  const stored = raw && typeof raw === "object" && !("alertSkipSubjects" in raw) ? await getActionsSettingsRaw(cfg.owner).catch(() => null) : null;
+  // AC-40: a payload without the alert exclusion list keeps the stored one (never reseeds it). RT-6(a): if the stored
+  // row cannot be read, REFUSE the save -- carrying on would write the seed over the owner's list.
+  let stored: unknown = null;
+  if (payloadLacksAlertSkipList(raw)) {
+    try {
+      stored = await getActionsSettingsRaw(cfg.owner);
+    } catch {
+      return { ok: false, error: "Couldn't read your saved settings, so nothing was changed. Try again." };
+    }
+  }
   const s = resolveActionsSettings(keepStoredAlertSkipSubjects(raw, stored), ownNamesSeed(cfg));
   await setActionsSettingsRaw(cfg.owner, s);
   return { ok: true, settings: s };
