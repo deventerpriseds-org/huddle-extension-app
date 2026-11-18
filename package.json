@@ -88,7 +88,8 @@
     "test:one-request-one-task": "bun test scripts/one-request-one-task.test.ts",
     "test:shared-pool": "bun scripts/shared-pool.test.ts",
     "test:fireflies-minutes": "bun scripts/fireflies-minutes.test.ts",
-    "test:fireflies-queue-sql": "bun scripts/fireflies-queue-sql.test.ts"
+    "test:fireflies-queue-sql": "bun scripts/fireflies-queue-sql.test.ts",
+    "test:schedule-unstar": "bun scripts/schedule-unstar.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
