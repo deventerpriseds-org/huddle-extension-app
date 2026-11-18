@@ -49,8 +49,19 @@ export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | nul
 const ownNamesSeed = (cfg: Pick<OneDriveFeedsConfig, "mailbox" | "ownerLogins" | "correspondence">) => ownerFullNames(cfg);
 
 async function settingsFor(cfg: OneDriveFeedsConfig & { owner: string }): Promise<ActionsSettings> {
+  return (await settingsRead(cfg)).settings;
+}
+
+/** settingsFor, plus whether the stored row could be READ (verify loop 1 C4). Readers may fall back to the defaults;
+ *  a WRITER must not, or a single failed read writes the defaults over the owner's saved settings (his alert
+ *  exclusion list included). */
+async function settingsRead(cfg: OneDriveFeedsConfig & { owner: string }): Promise<{ settings: ActionsSettings; readFailed: boolean }> {
   const { getActionsSettingsRaw } = await import("../email/email-replies.server");
-  return resolveActionsSettings(await getActionsSettingsRaw(cfg.owner).catch(() => null), ownNamesSeed(cfg));
+  try {
+    return { settings: resolveActionsSettings(await getActionsSettingsRaw(cfg.owner), ownNamesSeed(cfg)), readFailed: false };
+  } catch {
+    return { settings: resolveActionsSettings(null, ownNamesSeed(cfg)), readFailed: true };
+  }
 }
 
 const lower = (xs: readonly string[]) => [...new Set(xs.map((x) => String(x ?? "").trim().toLowerCase()).filter(Boolean))];
@@ -338,6 +349,9 @@ export type ActionsPage =
       status: "ok";
       sinceIso: string;
       settings: ActionsSettings;
+      /** verify loop 1 C4: the stored settings could not be read, so `settings` are the DEFAULTS. The page must not save
+       *  them back (that would overwrite the owner's real settings). */
+      settingsUnreadable?: boolean;
       classifyOn: boolean;
       neverClassified: boolean;
       meetingOthersHidden: number;
@@ -401,7 +415,7 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
   if (!owners) return { status: "signed_out" };
   if (!owners.length) return { status: "off" };
   const now = Date.now();
-  const s = await settingsFor(cfg);
+  const { settings: s, readFailed: settingsUnreadable } = await settingsRead(cfg);
   const sinceMs = actionsWindowStartMs(now, s);
   const { loadLedgerReportData } = await import("../correspondence/report-from-ledger.server");
   const data = await loadLedgerReportData(cfg.ownerLogins);
@@ -428,6 +442,7 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
     status: "ok",
     sinceIso: new Date(sinceMs).toISOString(),
     settings: s,
+    ...(settingsUnreadable ? { settingsUnreadable: true } : {}),
     classifyOn,
     neverClassified: verdicts.size === 0,
     meetingOthersHidden,
@@ -475,7 +490,9 @@ export async function correctActionItem(
   if (!r.ok) return r;
   const next = r.correction;
   if (next && next.reason === "stop_list" && input.listSender) {
-    const s = await settingsFor(cfg);
+    // verify loop 1 C4: never write the defaults over the owner's settings after a failed read.
+    const { settings: s, readFailed } = await settingsRead(cfg);
+    if (readFailed) return { ok: false, error: "Couldn't read your settings, so that list wasn't hidden. Try again." };
     const sender = input.listSender.trim().toLowerCase();
     const hiddenSenders = input.undo ? s.hiddenSenders.filter((x) => x !== sender) : [...new Set([...s.hiddenSenders, sender])];
     const { setActionsSettingsRaw } = await import("../email/email-replies.server");

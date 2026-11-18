@@ -164,6 +164,11 @@ export function ActionsView() {
 
   async function saveSettings(next: ActionsSettings) {
     if (!ok || !caller) return;
+    // verify loop 1 C4: these are the defaults (the stored settings could not be read); saving them would overwrite yours.
+    if (ok.settingsUnreadable) {
+      toast.error("Couldn't load your saved settings, so nothing was changed. Reload and try again.");
+      return;
+    }
     const prev = ok.settings;
     setPage({ ...ok, settings: next });
     const r = await setActionsSettingsFn({ data: { caller, settings: next as unknown as Record<string, unknown> } }).catch(() => null);
@@ -1037,7 +1042,7 @@ function WhatShows({
       </label>
       {/* Owner 2026-11-18: "Meeting minutes should not trigger Iris to send me a draft in the chat. It should be a part of
           an exclusion list." The list lives on this same settings row; the inbound alert runner reads it once per check.
-          Seeded "meeting minutes" until saved; a cleared field stays empty. ACs: docs/qc-evidence/AC-inbound-alert-exclusions.md */}
+          Seeded "meeting minutes:" (with the colon) until saved; a cleared field stays empty. ACs: docs/qc-evidence/AC-inbound-alert-exclusions.md */}
       <label className="block text-xs" data-testid="actions-alert-skip-field">
         <span className="block">Emails Iris won&rsquo;t alert you about</span>
         <span className="block text-[11px] text-muted-foreground">

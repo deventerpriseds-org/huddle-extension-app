@@ -257,3 +257,24 @@ describe("red-team findings", () => {
     expect(subjectExcluded("Hmm ... can you check the budget?", ["..."])).toBe(false);
   });
 });
+
+// Verify loop 1 C4 (docs/qc-evidence/VERIFY-alert-exclusions-1.md): a failed settings READ must never lead to a WRITE
+// of the defaults over the owner's settings (his alert exclusion list included).
+describe("verify loop 1 C4: no write after a failed read", () => {
+  test("'Stop flagging this list' refuses when the settings read failed", () => {
+    const srv = strip("actions/actions.server.ts");
+    const i = srv.indexOf('if (next && next.reason === "stop_list" && input.listSender) {');
+    const block = srv.slice(i, srv.indexOf("setActionsSettingsRaw(cfg.owner, { ...s, hiddenSenders })", i));
+    expect(block).toContain("await settingsRead(cfg)");
+    expect(block).toMatch(/if \(readFailed\) return \{ ok: false/);
+  });
+  test("the page marks defaults served after a failed read, and the view refuses to save them", () => {
+    const srv = strip("actions/actions.server.ts");
+    expect(srv).toContain("const { settings: s, readFailed: settingsUnreadable } = await settingsRead(cfg);");
+    expect(srv).toContain("...(settingsUnreadable ? { settingsUnreadable: true } : {}),");
+    expect(srv).toMatch(/catch \{\n\s*return \{ settings: resolveActionsSettings\(null, ownNamesSeed\(cfg\)\), readFailed: true \};/);
+    const view = readFileSync(`${import.meta.dir}/../src/features/huddle/components/ActionsView.tsx`, "utf8");
+    const save = view.slice(view.indexOf("async function saveSettings("), view.indexOf("setActionsSettingsFn(", view.indexOf("async function saveSettings(")));
+    expect(save).toMatch(/if \(ok\.settingsUnreadable\) \{[\s\S]*?return;/);
+  });
+});

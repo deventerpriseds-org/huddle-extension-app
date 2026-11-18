@@ -64,7 +64,7 @@ export interface ActionsSettings {
   /** Iris's new-email ALERT exclusion list (owner 2026-11-18: "Meeting minutes should not trigger Iris to send me a
    *  draft in the chat. It should be a part of an exclusion list."). A new email whose ORIGINAL subject contains one
    *  of these phrases gets no Iris alert, no owed row and no draft (inbound-email.ts subjectExcluded). Seeded
-   *  ["meeting minutes"] until he saves the field; a saved [] is kept. Does NOT change what the Actions page lists. */
+   *  ["meeting minutes:"] until he saves the field; a saved [] is kept. Does NOT change what the Actions page lists. */
   alertSkipSubjects: string[];
 }
 
