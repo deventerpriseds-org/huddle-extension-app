@@ -265,3 +265,75 @@ Documented by = `MOMENTARY_RULE` / `MOMENTARY_PHRASES` as specified above, and `
 Gaps: the phrase list is a judgement, not a documented grammar. It is deliberately SHORT and exact-match, so its
 errors are FALSE PASSES left to the prompt (an item still shows) rather than FALSE REFUSALS (a real item hidden).
 Recall matters most, per the instructions. The full list must be in the PR, reviewed by the red-team pre-pass.
+
+---
+
+## F4. "Names that are you": the owner's other name or account is the OWNER
+
+**Read in source:** `ownerTeamsIdsAcross` (report-from-ledger.ts) builds the owner's Teams ids from configured ids and
+capture-line `ownerUserId`s. The full-name match (`personNameWordCount(n) >= 2`, `foldPersonName`) runs ONLY inside
+`if (!ids.size)`. So once the main account's id is known, a message from his SECOND account (its display name is his
+full legal name, e.g. synthetic "Samuel Okafor", while he is configured as "Sam Okafor") is OTHER. `foldPersonName`
+lower-cases, collapses spaces and turns "Last, First" into "first last". It does not strip accents, middle names or a
+suffix such as "(External)". `ActionsSettings` has no owner-name field today; names come only from config
+(`correspondence.ownerNames`, via `effectiveOwnerNames` for the model and `ownerFullNames` for person matching).
+
+**The rule (SD marked):**
+1. New field `ActionsSettings.ownNames: string[]`, labelled "Names that are you" in the "What shows" panel (one name
+   per line, add / remove). Same settings store, same `setActionsSettingsFn`. No second store.
+2. Seeding (config-centric rule): when the stored settings have NO `ownNames` field, the resolved value is
+   `ownerFullNames(cfg)` (configured full names, plus "First Last" from `first.last` logins). When the field IS stored,
+   it is used exactly, even when it is `[]` (the owner cleared it on purpose). SD: `resolveActionsSettings` gains a
+   second argument `seed: string[]`, so it stays pure.
+3. Matching: a Teams sender whose `foldPersonName(sender.name)` equals `foldPersonName(n)` for some `n` in `ownNames`
+   with `personNameWordCount(n) >= 2` is the OWNER, AND its sender id is added to the owner ids. This runs ALWAYS,
+   not only when `ids.size === 0`. App senders (`sender.isApp === true`) never match. A one-word name in the list is
+   kept for display but never matches (the loop-2 D-3 rule).
+4. Bounds: at most 10 names, each at most 80 chars after trim; blanks and duplicates (by folded form) dropped.
+5. One resolver: the heartbeat, the page read and `runReportClassify` all pass the RESOLVED `ownNames` into
+   `ownerTeamsIdsAcross` / `teamsChatsFromLedger` (X-6). The names are also added to the model's owner-name context
+   (`effectiveOwnerNames`), so "Reply to <his own name>" cannot be written about a message code already calls OWNER.
+
+| # | Given / When / Then | Category | Observed via | Guard |
+|---|---|---|---|---|
+| F4-1 | Given rows where the main account's id `id-A` is known (2+ chats), and a chat with messages from sender `id-B`, name "Samuel Okafor", and `ownNames: ["Samuel Okafor"]`, when `ownerTeamsIdsAcross` runs, then the result contains `id-A` AND `id-B`, and `chatFacts` labels `id-B`'s messages OWNER. | happy | unit | **mutation-proved** (restore the `if (!ids.size)` wrapper must fail) |
+| F4-2 | Given the same rows and `ownNames: []` stored, when run, then the result does NOT contain `id-B` (an empty stored list is respected, not re-seeded). | edge | unit | **mutation-proved** (treat `[]` as absent must fail) |
+| F4-3 | Given stored settings with no `ownNames` field and config `ownerNames: ["Sam Okafor", "Samuel Okafor"]`, when `resolveActionsSettings(raw, seed)` runs, then `ownNames` deep-equals `["Sam Okafor", "Samuel Okafor"]`. Given config with only `ownerNames: ["Sam"]` and login `sokafor@example.com`, then `ownNames` is `[]` (no full name can be derived). | happy / migration | unit | -- |
+| F4-4 | Given a sender "Sam Rivera" (a namesake who shares only the first name) and `ownNames: ["Sam Okafor", "Sam"]`, when run, then "Sam Rivera" is OTHER. | edge | unit | **mutation-proved** (drop the 2-word rule must fail) |
+| F4-5 | Given a sender "Okafor, Samuel" and `ownNames: ["Samuel Okafor"]`, when run, then OWNER (foldPersonName order rule). | edge | unit | -- |
+| F4-6 | Given an app sender (`isApp: true`) named "Samuel Okafor", when run, then it is NOT added. | security | unit | existing rule, re-run |
+| F4-7 | Given a settled chat where the only message after the latest true OTHER message is from `id-B`, when facts are built, then `ownerWroteAfter` is true and the settled guard applies (no "Reply to <his own name>" item). | happy | offline `chatFacts` + `admitActionVerdict` | -- |
+| F4-8 | Given the setting is saved via `setActionsSettingsFn` with 12 names, names of 120 chars, blanks and case-duplicates, when read back, then at most 10, each trimmed to 80, no blanks, no duplicates by folded form. | edge | unit on `resolveActionsSettings` | -- |
+| F4-9 | Given the heartbeat, the page read and `runReportClassify` on one fixture with `ownNames` set, when each builds its Teams facts, then all three label `id-B` OWNER (X-6). | reconciliation | offline test calling all three | -- |
+| F4-10 | Given F4 ships, when the "What shows" panel renders, then a "Names that are you" field shows the resolved list (seeded values visible), and saving a change takes effect on the next page read without a deploy. | happy | component test or Playwright on the panel | -- |
+| F4-11 | Given `CLASSIFIER_INPUT_VERSION.teams` was bumped (X-1), when stored Teams verdicts built with the old labels are read, then they are re-judged once with the new labels (X-2). An existing proposal P "Reply to <his own name>..." is NOT shown again as undecided after the re-judge returns `none` (X-5). | regression | X-2 / X-5 tests on a Teams fixture | covered by X-5 |
+| F4-12 | Given any of this code runs, when it logs, then it logs counts only (e.g. "ownNames matched 1 sender"), never a name or an id (X-7). | security | grep | -- |
+| F4-13 | Given a settings save that changes `ownNames`, when the next pass runs, then items whose OWNER/OTHER labels changed are re-judged. SD: the item key does not change (it is keyed on the last message id), so a hash of the folded `ownNames` is folded into the Teams `inputVersion` check, OR (simpler, SD chosen) the change is applied at the next version bump only and the panel says "Applies to new messages and the next re-check". | edge | unit on `verdictIsCurrent` or the panel copy | -- |
+
+### F4 spelling table (sender display-name spellings against `ownNames: ["Samuel Okafor", "Sam Okafor"]`)
+
+Documented by = `foldPersonName` source (trim, `\s+` collapse, lower case, one "Last, First" swap) and
+`personNameWordCount` (split on whitespace and commas), as read on branch head 359bee03.
+
+| # | Sender display name | Documented by | Expected | Wrong answer would be |
+|---|---|---|---|---|
+| S4-1 | `Samuel Okafor` | exact | OWNER | FALSE REFUSAL (his own account as OTHER) |
+| S4-2 | `samuel  OKAFOR` | lower case + `\s+` collapse | OWNER | FALSE REFUSAL |
+| S4-3 | `Okafor, Samuel` | "Last, First" swap | OWNER | FALSE REFUSAL |
+| S4-4 | ` Sam Okafor ` | trim | OWNER | FALSE REFUSAL |
+| S4-5 | `Sam` | one word never matches (over-match negative: bare first name) | OTHER | FALSE PASS (namesake as owner) |
+| S4-6 | `Samuel` | one word (over-match negative) | OTHER | FALSE PASS |
+| S4-7 | `Sam Rivera` | namesake, first name only shared (over-match negative) | OTHER | FALSE PASS |
+| S4-8 | `Samuel Okafor-Diaz` | different folded string (over-match negative: prefix) | OTHER | FALSE PASS |
+| S4-9 | `Samuel J. Okafor` | middle initial: NOT folded today (SD: no fuzzy match; he adds this spelling to the list himself) | OTHER unless listed | FALSE REFUSAL, accepted and fixable in the setting |
+| S4-10 | `Samuel Okafor (External)` | suffix NOT stripped (SD, same reason) | OTHER unless listed | FALSE REFUSAL, accepted |
+| S4-11 | `Okafor Samuel` (no comma) | no swap without a comma | OTHER unless listed | FALSE REFUSAL, accepted |
+| S4-12 | `Sámuel Okafor` | accents NOT stripped (SD: avoids merging two different people) | OTHER unless listed | FALSE REFUSAL, accepted |
+| S4-13 | `Okafor, Samuel, Jr` | two commas: the swap regex does not apply | OTHER unless listed | n/a, recorded |
+| S4-14 | `Samuel Okafor` with `isApp: true` | apps never count | OTHER | FALSE PASS |
+| S4-15 | `Samuel Okafor` exactly, but a different real person (a full-name namesake) | undecidable by name alone | OWNER (accepted risk; the owner controls the list) | FALSE PASS, accepted and documented |
+| S4-16 | `""` / missing name | empty fold never matches | OTHER | FALSE PASS |
+
+Gaps: this covers Teams senders only. An EMAIL from his second account's address is decided by `ownerAddresses`
+(needs-you.ts), not by name, and was not opened in this pass. If the second account also sends email, the matching
+setting is an address list, not this one. Unicode NFC vs NFD for the same visible name was not measured.
