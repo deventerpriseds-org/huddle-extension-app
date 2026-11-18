@@ -47,3 +47,31 @@ AI-15 now asserts four booleans including the step-2-only phrase; observed PASS.
 
 The propose hook was never entered on any re-judge (its debug log is empty for all 11 scenarios): exactly one proposal
 per item. B3 and B4 now HOLD.
+
+## Chunk 3 - adversarial probes (new real-SQL probe, same scaffold, synthetic data; not committed) and mutations
+
+| # | question | observed | verdict |
+|---|---|---|---|
+| C1 | stale verdict `none` (no proposalId) re-judged open | propose called 1x, new proposal, verdict open iv=3, MAIN_LIST, title = new to-do | PASS |
+| C2 | stale open verdict whose proposal ROW was deleted | propose NOT called (dangling id kept), item shows under NOT_CHECKED_YET ("open with no backing row") and stays there until a new message arrives; pre-fix it would have proposed afresh | OBSERVATION (no code path deletes `chat.task_proposals` rows: grep of src/features/huddle/lib for a delete/purge of that table finds none; reachable only by a manual DB delete) |
+| C3 | untouched item re-judged with very different wording | propose 0x, 1 proposal, MAIN_LIST; title shown = the OLD proposal's title (`p?.title` wins in buildCandidates), quote/reason from the new verdict | PASS; acceptable: same item version (same message), the old title is grounded in that same message and carries any owner edit |
+| C4 | stale open (with proposal) re-judged `none` | propose 0x, verdict none (no proposalId), item ABSENT; old proposal row stays `proposed` | PASS for this fix (keep logic only fires on open). Pre-existing, outside this fix's radius: the orphaned `proposed` row is unchanged from before 04242df2 |
+| C5 | new message (different item key) on a thread with a stale open verdict | propose 1x, 2nd proposal created, MAIN_LIST with the new title | PASS (matches RK-2 intent; old proposal remains `proposed`, pre-existing) |
+| no-lock | `lockThread` absent (offline tests, report save OFF via `inMemoryWrites`) | code read: `prior` only set inside `if (tx)`, so keepId is always null -> pre-fix behaviour; report-saves-verdicts RL-2 still PASS | PASS |
+| live | heartbeat passes lockThread | `runActionsClassify` -> `classifyDepsFor` -> `lockThread: (u, fn) => withThreadLock(owners, u, fn)`; the probe uses that same `classifyDepsFor` | PASS |
+
+Mutations (`mutate.sh`, anchor `if (v.status === "open" && keepId) {` -> `... && keepId && false) {`):
+- `bun scripts/report-saves-verdicts.test.ts`, must-fail `RK-1 GUARD`: **FIRED (control EQUIVALENT)**, exit 0.
+- loop-2 real-SQL probe, must-fail `B4 Wrong?`: **FIRED** (run with `--no-control`, so uncontrolled; the probe
+  executes the code against PostgreSQL rather than hashing the file). Restored to HEAD both times, tree clean.
+
+Re-checked at reduced depth: claims 1-9, A6 (the share-note carve-out text present in action-classify.ts at the three
+instruction blocks; AI-15 PASS with the added step-2-only phrase), B1, B2 and the dismissed/completed set-aside (probe
+rows: 0 calls on re-judge, stay ABSENT) - all PASS via the suites and the probe.
+
+## Verdict
+
+SHIP. B3/B4 fixed and proven against real SQL; the fix's mutation is caught by both RK-1 and the real-SQL probe.
+Non-blocking notes for the owner/builder: C2 (a manually deleted proposal row now leaves the item in "Not checked yet"
+instead of re-proposing) and C4/C5 (an orphaned `proposed` row when the verdict flips or the message changes;
+pre-existing, not introduced here).
