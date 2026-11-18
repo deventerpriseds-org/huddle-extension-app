@@ -66,3 +66,40 @@ still accepts it (the state is `proposed`). Same as before this fix; not in the 
 
 Results: `scripts/actions-view.test.ts` 262 passed, 0 failed; `scripts/actions-view-server.test.ts` 49 passed, 0 failed.
 
+### Mutation table (mutate.sh, anchors in the session scratchpad `orph-RT/`)
+
+| id | file | mutation (defect reinstated) | must-fail test | exit | verdict |
+|---|---|---|---|---|---|
+| F1 | actions.server.ts | load-failure catch reports `ok:true` (swallow again) | NORT-10b GUARD | 0 | FIRED, control EQUIVALENT |
+| F2 | pipeline.ts | `proposalMissing` set even when the read failed | NORT-10b GUARD | 0 | FIRED, control EQUIVALENT |
+| F3 | actions.ts | `proposalUnread` branch disabled (unread -> held) | NORT-10b GUARD | 0 | FIRED, control EQUIVALENT |
+| F4 | actions.server.ts | `proposalsRead` not passed to buildCandidates | NORT-10b GUARD | 0 | FIRED, control EQUIVALENT |
+| F5 | pipeline.ts | listed-state check removed from the held click | NORT-7 GUARD (offline) | 0 | FIRED, control EQUIVALENT |
+| F6 | actions.server.ts | `proposalState` dependency not wired into the click | NORT-7 GUARD (real SQL) | 1 | **INERT** |
+| F7 | actions.ts | `proposalStateListed` = any non-empty state | NORT-7b GUARD | 0 | FIRED, control EQUIVALENT |
+| F8 | actions.server.ts | `proposalExists` always true (shared read not used) | NO-G4a-S2 GUARD | 0 | FIRED, control EQUIVALENT |
+
+F6 INERT, observed: with the dependency removed, the real click on the G4-b item backed by a dismissed proposal still
+returns `{"ok":false,"error":"That item isn't in your list."}` and the item is in no group (debug print, then
+reverted). So something further down the real path (inside `actOnProposal` with `from:"actions"`, most likely the D5
+backing check; NOT traced, inference only) already refuses it. The red-team's "click reports ok" was observed in the
+offline world only. The server wiring of `proposalState` is therefore NOT proven by a test; the pipeline check is
+(F5, F7).
+
+### Final gates (2026-11-18)
+
+| gate | result |
+|---|---|
+| scripts/actions-view.test.ts | 262 passed, 0 failed (was 252 + failing NORT-7) |
+| scripts/actions-accuracy.test.ts | 96 passed, 0 failed |
+| scripts/report-saves-verdicts.test.ts | 39 passed, 0 failed |
+| scripts/actions-view-server.test.ts (real PostgreSQL 16) | 49 passed, 0 failed (was 47 + failing NORT-10b) |
+| npx tsc --noEmit | exit 0, no output |
+| npm run build | exit 0 |
+
+### NOT DONE
+
+- F6 INERT (above): which real-path step refuses the decided G4-b click was not traced.
+- A kept proposal CORRECTED (Wrong?) is listed in `corrected`, but the held click still accepts it (state `proposed`). Unchanged.
+- Two test changes, both flagged above as deviations for the parent: NORT-10b expectation `[]` -> `["unchecked"]`;
+  NORT-7 given a `state` input it could not express before.
