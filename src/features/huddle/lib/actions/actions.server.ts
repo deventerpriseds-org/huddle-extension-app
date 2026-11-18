@@ -650,6 +650,14 @@ export async function actOnHeldItemFor(
     lockThread: (unit, fn) => withThreadLock(ledgerOwners, unit, fn),
     propose: (unit, cands, text) => proposeHeldWith(cfg.owner, pd, unit, cands, text),
     act: (id, action) => actOnProposal(caller, id, action, undefined, undefined, { from: "actions" }),
+    // A deleted rescue proposal is replaced, not retried forever. A read error throws: the click fails, nothing stored.
+    proposalExists: async (id) => {
+      const r = await getSharedPool().query<{ ok: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM chat.task_proposals WHERE id = $1 AND owner_email = ANY($2::text[])) AS ok`,
+        [id, owners.map((o) => o.toLowerCase())],
+      );
+      return r.rows[0]?.ok === true;
+    },
   });
   console.log(`[actions] held ${input.action} source=${u.source} ok=${r.ok}`);
   return r;

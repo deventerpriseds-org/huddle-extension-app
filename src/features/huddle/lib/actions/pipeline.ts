@@ -218,7 +218,14 @@ export async function runClassify(
     }
     const haystack = u.email ? emailQuoteHaystack(u.email, a.forwards) : teamsQuoteHaystack(u.teams!);
     const settled = u.email ? u.email.settled : u.teams!.settled;
-    let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source] });
+    // RT-7 (F3 fails open): for Teams, the momentary backstop compares against each OTHER sender's LATEST message.
+    let latestMessages: string[] | undefined;
+    if (!u.email && u.teams) {
+      const bySender = new Map<string, string>();
+      for (const m of u.teams.messages) if (m.speaker === "OTHER") bySender.set(String(m.name ?? ""), m.text ?? "");
+      latestMessages = [...bySender.values()];
+    }
+    let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source], latestMessages });
     /** Propose (when open) then store. Inside the thread lock (AC8) it first re-reads the thread's stored verdict:
      *  another pass that judged this version while we waited wins, and this one writes nothing (no 2nd proposal). */
     const finish = async (tx?: ThreadTx): Promise<"stored" | "adopted" | "failed"> => {
@@ -419,6 +426,10 @@ export interface HeldActDeps {
   propose(u: ThreadUnit, cands: readonly HeldCandidate[], threadText: string): Promise<{ id: string | null; onBoard: boolean }>;
   /** The EXISTING actOnProposal (from: "actions"). */
   act(proposalId: string, action: HeldAction): Promise<{ ok: boolean; error?: string; note?: string; alreadyOnBoard?: boolean }>;
+  /** 2026-11-18 (red-team, untested finding): does the written-back proposal still exist? A held item whose rescue
+   *  proposal was DELETED gets a fresh one instead of retrying the missing id forever. Throws on a read failure (the
+   *  click then fails and nothing is stored). Absent = assume it exists (today's behaviour). */
+  proposalExists?(proposalId: string): Promise<boolean>;
 }
 
 export type HeldActResult = { ok: true; proposalId: string | null; note?: string } | { ok: false; error: string; proposalId?: string };
@@ -432,7 +443,8 @@ export async function actOnHeldItem(u: ThreadUnit, action: HeldAction, deps: Hel
       const cur = await tx.current();
       if (!isHeldVerdict(cur, u)) return { kind: "not_held" };
       // F5-7 / F5-8: a proposal already created for this item (another click, or a click whose action failed) is re-used.
-      if (cur.proposalId) return { kind: "id", id: cur.proposalId };
+      // A written-back id whose proposal no longer exists is NOT re-used: a fresh proposal is made and written back.
+      if (cur.proposalId && (!deps.proposalExists || (await deps.proposalExists(cur.proposalId)))) return { kind: "id", id: cur.proposalId };
       const p = await deps.propose(u, heldProposalCandidates(cur.todo, cur.quote, (u.email ?? u.teams)?.latestOther?.text ?? null), heldThreadText(u));
       if (p.id) {
         await tx.store({ ...cur, proposalId: p.id });

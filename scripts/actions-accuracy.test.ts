@@ -397,6 +397,18 @@ void GRP;
   t("RT-18 F4 'Okafor Samuel' (no comma) is OTHER unless listed", second("Okafor Samuel"), false);
   t("RT-19 F4 an app sender named after him is never the OWNER", second("Samuel Okafor", true), false);
   t("RT-20 F4 'Samuel Okafor (External)' is OTHER unless listed (SD)", second("Samuel Okafor (External)"), false);
+  // ── FIX pass 2026-11-18 (docs/qc-evidence/FIX-redteam-actions-safety-invites.md): one guard per fix, each isolates ONE rule.
+  t("RT-1b GUARD F1 a sentence-split gap may not skip words inside a sentence ('Please do. Send the contract.' vs '... Do not send the contract.')", quoteIsVerbatim("Please do. Send the contract to the client.", ["Please do. Do not send the contract to the client."]), false);
+  t("RT-1c F1 an ellipsis that skips WHOLE sentences is still admitted", quoteIsVerbatim("Here is the plan. ... Send the draft by Friday.", ["Here is the plan. The room is booked. Send the draft by Friday."]), true);
+  t("RT-2b GUARD F1 rule 4: a non-composing combining mark (q + U+0307) after a fragment's last letter is mid-word", quoteIsVerbatim("Here is the plan. Send the draft to q", ["Here is the plan. Ignore this. Send the draft to q̇x now."]), false);
+  t("RT-3b GUARD F1 an NFC quote matches the NFD message even as one contiguous span", quoteIsVerbatim("Please review the café menu", ["Please review the café menu today."]), true);
+  const latest = (msgs: string[]) => admitActionVerdict(ask("Thanks!", { todo: "Send the signed contract" }), msgs, { ...A, latestMessages: msgs.slice(-1) });
+  t("RT-7b F3 a Teams sender whose LATEST message is wholly 'Thanks!' is dropped (momentary)", [latest(["Can you send the signed contract by Friday?", "Thanks!"]).status, latest(["Can you send the signed contract by Friday?", "Thanks!"]).dropReason], ["none", "momentary"]);
+  t("RT-7c GUARD F3 'Thanks!' quoted from an EARLIER message while the sender's latest carries a real ask is not dropped", latest(["Thanks!", "Can you send the signed contract by Friday?"]).status !== "none", true);
+  t("RT-11b GUARD F2-6 meeting_invite + kind both is admitted as kind action (To-do, not Needs your reply)", [both.status, both.kind], ["open", "action"]);
+  t("RT-11c F2-6 kind both on another category is unchanged", admitActionVerdict(ask("Dinner Friday at 7, hope you can make it!", { kind: "both", category: "person_request" }), [dinner], A).kind, "both");
+  t("RT-13b GUARD foldPersonName NFC: NFD and NFC spellings fold to one name", foldPersonName("Sámuel Okafor") === foldPersonName("Sámuel Okafor"), true);
+  t("RT-14b GUARD foldPersonName strips zero-width / format characters (U+200B, U+FEFF, U+2060)", [foldPersonName("Samuel​ Okafor﻿"), foldPersonName("Okafor,⁠ Samuel")], ["samuel okafor", "samuel okafor"]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

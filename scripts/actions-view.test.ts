@@ -143,12 +143,17 @@ t("A-11 quote inside ONE piece still admits (teams 2nd message; email body; emai
     ["S1-9", "Here's the outline. Please send the final contract by Monday.", H, "not_checked/quote_not_found"],
     ["S1-10", "Hi Sam. Thanks.", H, "not_checked/quote_not_found"],
     // S1-11: the quote rule refuses it (F1-5 pins quoteIsVerbatim = false); since F3 the momentary backstop drops a
-    // "Thanks. Thanks." verdict to none before the quote check, so admission reads none. Neither is ever shown.
-    ["S1-11", "Thanks. Thanks.", H, "none"],
+    // "Thanks. Thanks." verdict to none before the quote check. 2026-11-18 red-team RT-7: the backstop FAILS OPEN and
+    // drops only when the momentary line is the WHOLE latest message; H holds a real ask, so it is not dropped and the
+    // quote rule holds it (not_checked, the held group), never open.
+    ["S1-11", "Thanks. Thanks.", H, "not_checked/quote_not_found"],
     ["S1-12", "ere's the outline of topics I want from you each week. lease send your first notes", H, "not_checked/quote_not_found"],
     ["S1-13", "end your first notes by Monday", H, "open"],
-    ["S1-14", "Here's the outline [...] by Monday.", H, "open"],
-    ["S1-14b", "Here's the outline […] by Monday.", H, "open"],
+    // S1-14 / S1-14b / S1-x1: 2026-11-18 red-team RT-1, AC S1-14 tightened (owner-approved safe default): an ellipsis
+    // may only stand for skipped WHOLE sentences. These elide words inside a sentence, so they are held, not admitted.
+    ["S1-14", "Here's the outline [...] by Monday.", H, "not_checked/quote_not_found"],
+    ["S1-14b", "Here's the outline […] by Monday.", H, "not_checked/quote_not_found"],
+    ["S1-14c", "Here's the outline of topics I want from you each week. [...] Please send your first notes by Monday.", H, "open"],
     ["S1-15", "Here's the outline. Please. Send. Your. First. Notes. By Monday.", H, "not_checked/quote_not_found"],
     ["S1-16", "Here's the outline of topics I want from you each week. Please send your first notes by Monday.", CHAT, "not_checked/quote_not_found"],
     ["S1-17", "Here's the outline of topics I want from you each week. Please send your first notes by Monday.", FWH, "not_checked/quote_not_found"],
@@ -165,7 +170,9 @@ t("A-11 quote inside ONE piece still admits (teams 2nd message; email body; emai
     ["S1-22b", '"Please send your first notes by Monday."', H, "open"],
     ["S1-23a", "…", H, "not_checked/quote_not_found"],
     ["S1-23b", "... ... ... ...", H, "not_checked/quote_not_found"],
-    ["S1-x1", "Please send your first notes...", H, "open"],
+    ["S1-x1", "Please send your first notes...", H, "not_checked/quote_not_found"],
+    ["S1-x2", "Please send your first notes by Monday. ...", H, "open"],
+    ["S1-x3", "Hi Sam. ... The room is booked… ...", H, "open"],
   ];
   t("F1 spelling table S1-1..S1-23 (each row: id -> verdict)", SPELL.map(([id, q, hay]) => `${id}:${st(q, hay)}`), SPELL.map(([id, , , want]) => `${id}:${want}`));
   t("F1-10 de-dup still keys on canonQuote of the WHOLE stored quote: two different fragment quotes fold to different keys", [canonQuote("Here's the outline. ... Please send your first notes by Monday.") === canonQuote("Here's the outline. ... The room is booked."), canonQuote("Re​view THE  deck") === "review the deck"], [false, true]);
@@ -961,6 +968,19 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   const wt = mkWorld({ proposeThrows: true });
   const thr = await actOnHeldItem(hU, "approve", wt.deps);
   t("F5-8 propose fails -> plain error, verdict unchanged (no proposalId), item still held", [thr, wt.store.get(storeKey)?.proposalId, wt.page().held.length], [{ ok: false, error: HELD_ACTION_ERROR }, null, 1]);
+  // 2026-11-18 red-team untested finding: the written-back rescue proposal was DELETED from the store. The held action
+  // must make a fresh proposal (and write its id back), never retry the missing id forever.
+  const wg = mkWorld();
+  wg.store.set(storeKey, { ...(wg.store.get(storeKey) as ActionVerdict), proposalId: "prop-gone0001" });
+  (wg.deps as Record<string, unknown>).proposalExists = async (id: string) => wg.proposals.has(id);
+  const gone = await actOnHeldItem(hU, "approve", wg.deps);
+  t("F5-DEL GUARD: a held item whose written-back proposal no longer exists -> ONE fresh proposal, acted on, its id written back", [gone.ok, wg.calls.propose, wg.calls.act, wg.store.get(storeKey)?.proposalId], [true, 1, ["approve:prop-f5000001"], "prop-f5000001"]);
+  const wex = mkWorld();
+  wex.store.set(storeKey, { ...(wex.store.get(storeKey) as ActionVerdict), proposalId: "prop-f5000001" });
+  wex.proposals.set("prop-f5000001", { id: "prop-f5000001", state: "proposed", title: "Synthetic", assignee: null, correction: null });
+  (wex.deps as Record<string, unknown>).proposalExists = async (id: string) => wex.proposals.has(id);
+  const exKept = await actOnHeldItem(hU, "approve", wex.deps);
+  t("F5-DEL-b an existing written-back proposal is still re-used (0 propose)", [exKept.ok, wex.calls.propose, wex.calls.act], [true, 0, ["approve:prop-f5000001"]]);
   const wf = mkWorld({ actFails: true });
   const f1 = await actOnHeldItem(hU, "approve", wf.deps);
   const stillHeld = wf.page().held;

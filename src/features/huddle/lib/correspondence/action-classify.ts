@@ -250,6 +250,9 @@ export function teamsQuoteHaystack(c: TeamsChatFacts): QuoteHaystack {
  *  non-joiner / joiner (U+200B..U+200D) and the soft hyphen (U+00AD) are removed, for both the quote and the text. */
 export const canonQuote = (s: string) =>
   String(s ?? "")
+    // 2026-11-18 red-team RT-3: NFC first, so an NFD message ("cafe" + U+0301) and an NFC quote of the same visible
+    // text fold to the same string (quote AND haystack both pass through here).
+    .normalize("NFC")
     .replace(/[​-‍­]/g, "")
     .replace(/[‘’‚‛]/g, "'")
     .replace(/[“”„‟]/g, '"')
@@ -275,16 +278,46 @@ export function quoteFragments(folded: string): string[] {
     .filter((f) => /[\p{L}\p{N}]/u.test(f));
 }
 
-const isWordChar = (c: string | undefined) => !!c && /[\p{L}\p{N}]/u.test(c);
+/** 2026-11-18 red-team RT-2: a combining mark (\p{M}) is part of the word it sits on, never a boundary. */
+const isWordChar = (c: string | undefined) => !!c && /[\p{L}\p{N}\p{M}]/u.test(c);
+
+/** 2026-11-18 red-team RT-1 (AC S1-14, tightened): what elided text may be. A gap in a quote (an ellipsis, or the
+ *  space between two sentence fragments) may only stand for skipped WHOLE sentences, never words inside one. So a
+ *  fragment followed by a gap must END a sentence in the message, and a fragment after a gap must START one. Folded
+ *  text: a sentence end is `.`, `!`, `?` or U+2026; closing quotes / brackets may sit after it. */
+const SENTENCE_END_CH = /[.!?…]/u;
+function endsSentenceAt(piece: string, end: number): boolean {
+  if (SENTENCE_END_CH.test(piece[end - 1] ?? "")) return true;
+  let i = end;
+  while (i < piece.length && /["')\]]/.test(piece[i])) i++;
+  return i >= piece.length || SENTENCE_END_CH.test(piece[i]);
+}
+function startsSentenceAt(piece: string, start: number): boolean {
+  let i = start - 1;
+  while (i >= 0 && /["'(\[]/.test(piece[i])) i--;
+  while (i >= 0 && piece[i] === " ") i--;
+  while (i >= 0 && /["')\]]/.test(piece[i])) i--;
+  return i < 0 || SENTENCE_END_CH.test(piece[i]);
+}
+const ELLIPSIS_LEAD = /^\s*(?:\[\s*(?:\.{3}|…)\s*\]|\.{3,}|…)/u;
+const ELLIPSIS_TRAIL = /(?:\[\s*(?:\.{3}|…)\s*\]|\.{3,}|…)\s*$/u;
 
 /** F1 rules 3 + 4 (pure): every fragment found in `piece` left to right, each starting at or after the end of the
  *  previous match, on Unicode word boundaries (never ASCII \b: measured, /\bcaf\b/ matches inside "café"). Plain
  *  indexOf scanning: quote text is never compiled into a RegExp (it is data; no backtracking). */
-function fragmentsInOrder(frags: readonly string[], piece: string): boolean {
+function fragmentsInOrder(frags: readonly string[], piece: string, gap: { lead: boolean; trail: boolean }): boolean {
   let from = 0;
-  for (const f of frags) {
+  for (let k = 0; k < frags.length; k++) {
+    const f = frags[k];
+    const needStart = k > 0 || gap.lead;
+    const needEnd = k < frags.length - 1 || gap.trail;
+    const bad = (at: number) =>
+      (isWordChar(f[0]) && isWordChar(piece[at - 1])) ||
+      (isWordChar(f[f.length - 1]) && isWordChar(piece[at + f.length])) ||
+      (needStart && !startsSentenceAt(piece, at)) ||
+      (needEnd && !endsSentenceAt(piece, at + f.length));
     let at = piece.indexOf(f, from);
-    while (at >= 0 && ((isWordChar(f[0]) && isWordChar(piece[at - 1])) || (isWordChar(f[f.length - 1]) && isWordChar(piece[at + f.length])))) {
+    while (at >= 0 && bad(at)) {
       at = piece.indexOf(f, at + 1);
     }
     if (at < 0) return false;
@@ -308,7 +341,8 @@ export function quoteIsVerbatim(quote: string | null | undefined, haystack: stri
   // One fragment is allowed: a trailing / leading ellipsis ("Please send your first notes...") marks a cut.
   if (frags.length < 1 || frags.length > MAX_QUOTE_FRAGMENTS) return false;
   if (!frags.some((f) => f.length >= MIN_QUOTE_CHARS)) return false;
-  return pieces.some((piece) => fragmentsInOrder(frags, piece));
+  const gap = { lead: ELLIPSIS_LEAD.test(q), trail: ELLIPSIS_TRAIL.test(q) };
+  return pieces.some((piece) => fragmentsInOrder(frags, piece, gap));
 }
 
 /**
@@ -431,7 +465,22 @@ const str = (v: unknown, max = 300) => (typeof v === "string" && v.trim() ? v.tr
  *  - open_item false -> none (answeredByReply when the thread was settled);
  *  - otherwise open.
  */
-export function admitActionVerdict(raw: unknown, haystack: string | QuoteHaystack, a: { key: string; settled: boolean; nowIso: string; inputVersion?: number }): ActionVerdict {
+/**
+ * Pure (F3, 2026-11-18 red-team RT-7): may the momentary backstop drop this item? It FAILS OPEN. A momentary QUOTE is
+ * not enough: the momentary line must be the WHOLE latest message from its sender. `latestMessages` is each OTHER
+ * sender's latest message (Teams); absent, the haystack pieces JOINED are used as one message (email: the latest
+ * OTHER message plus its forward; any other text in it keeps the item). Drop only when one of those messages is
+ * itself momentary in full AND holds the quote. Anything else ("Thanks! Can you send the contract?") is not dropped.
+ */
+export function momentaryDropApplies(quote: string | null | undefined, haystack: string | QuoteHaystack, latestMessages?: readonly string[]): boolean {
+  if (!isMomentaryQuote(quote)) return false;
+  const q = unwrapQuote(canonQuote(quote ?? ""));
+  if (!q) return false;
+  const msgs = latestMessages ?? [(typeof haystack === "string" ? [haystack] : haystack).join(" ")];
+  return msgs.some((m) => isMomentaryQuote(m) && canonQuote(m ?? "").includes(q));
+}
+
+export function admitActionVerdict(raw: unknown, haystack: string | QuoteHaystack, a: { key: string; settled: boolean; nowIso: string; inputVersion?: number; latestMessages?: readonly string[] }): ActionVerdict {
   const base: ActionVerdict = { v: 1, key: a.key, ...(a.inputVersion !== undefined ? { inputVersion: a.inputVersion } : {}), status: "not_checked", notCheckedReason: "bad_shape", kind: null, category: null, confidence: null, todo: null, due: null, quote: null, reason: null, answeredByReply: false, proposalId: null, at: a.nowIso };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return base;
   const o = raw as Record<string, unknown>;
@@ -439,14 +488,17 @@ export function admitActionVerdict(raw: unknown, haystack: string | QuoteHaystac
   if (!ACTION_KINDS.includes(o.kind as ActionKind)) return base;
   if (!ACTION_CATEGORIES.includes(o.category as ActionCategory)) return base;
   const conf: ActionVerdict["confidence"] = o.confidence === "high" || o.confidence === "medium" || o.confidence === "low" ? o.confidence : null;
-  const common = { ...base, kind: o.kind as ActionKind, category: o.category as ActionCategory, confidence: conf, todo: plainRoles(str(o.todo, 200)), due: str(o.due, 120), quote: str(o.quote, 600), reason: plainRoles(str(o.reason)) };
+  // F2-6 (extended 2026-11-18, red-team RT-11): a meeting_invite of kind `both` is admitted as kind `action`, never a
+  // reply item (the owner: a bare invite "must NOT become a reply item"; `both` would list it under Needs your reply).
+  const kind: ActionKind = o.category === "meeting_invite" && o.kind === "both" ? "action" : (o.kind as ActionKind);
+  const common = { ...base, kind, category: o.category as ActionCategory, confidence: conf, todo: plainRoles(str(o.todo, 200)), due: str(o.due, 120), quote: str(o.quote, 600), reason: plainRoles(str(o.reason)) };
   if (o.open_item === false) {
     const { notCheckedReason: _n, ...rest } = common;
     return { ...rest, status: "none", answeredByReply: a.settled };
   }
   // F3 backstop + F2-6 (2026-11-18): deterministic, code-only drops of the model's open_item=true, BEFORE the quote
   // check (a momentary "Thanks!" is not held either). Both are exact rules; anything else takes the path below.
-  const drop: ActionVerdict["dropReason"] | null = isMomentaryQuote(common.quote) ? "momentary" : common.category === "meeting_invite" && common.kind === "reply" ? "meeting_invite_reply" : null;
+  const drop: ActionVerdict["dropReason"] | null = momentaryDropApplies(common.quote, haystack, a.latestMessages) ? "momentary" : common.category === "meeting_invite" && common.kind === "reply" ? "meeting_invite_reply" : null;
   if (drop) {
     const { notCheckedReason: _n, ...rest } = common;
     return { ...rest, status: "none", answeredByReply: false, reason: DROP_REASON_TEXT[drop], dropReason: drop };

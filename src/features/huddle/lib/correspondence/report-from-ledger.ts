@@ -278,7 +278,9 @@ export interface TeamsChatFacts {
 /** Pure: a display name folded for comparison: lower-case, whitespace collapsed, and "Last, First" turned into
  *  "first last" (Teams shows many tenants' names as "Last, First"). */
 export function foldPersonName(v: unknown): string {
-  const s = typeof v === "string" ? v.trim().replace(/\s+/g, " ").toLowerCase() : "";
+  // 2026-11-18 red-team RT-13 / RT-14: NFC, and zero-width / format characters (\p{Cf}, e.g. U+200B) removed, so an
+  // NFD display name or one with an invisible trailing character still folds to his name.
+  const s = typeof v === "string" ? v.normalize("NFC").replace(/\p{Cf}/gu, "").trim().replace(/\s+/g, " ").toLowerCase() : "";
   const m = /^([^,]+),\s*([^,]+)$/.exec(s);
   return m ? `${m[2].trim()} ${m[1].trim()}` : s;
 }
