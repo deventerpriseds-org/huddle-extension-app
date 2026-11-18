@@ -727,8 +727,10 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   const Q6 = "Running late, can you start the review without me and send notes after?";
   t("F3-6 GUARD: a list phrase plus more is NOT dropped (exact match only) -> still open", [isMomentaryQuote(Q6), teamsAdm(Q6, [Q6]).status], [false, "open"]);
   t("F3-7 a dropped verdict carries only the code reason (never model text) and the code drop reason", [m2.reason === DROP_REASON_TEXT.momentary, m2.todo, JSON.stringify(m2).includes("Synthetic.")], [true, "Synthetic to-do", false]);
-  const em = admitActionVerdict({ open_item: true, kind: "reply", todo: "Reply", due: null, quote: "Thanks, see you there!", confidence: "low", reason: "x", category: "person_request" }, emailQuoteHaystack({ latestOther: { id: "feed:e3", text: "Thanks, see you there!" } } as never, new Map()), { key: "e3|1", settled: false, nowIso: NOW });
-  t("F3-9 one rule for both sources: an email 'Thanks, see you there!' -> none", [em.status, em.dropReason], ["none", "momentary"]);
+  const em = admitActionVerdict({ open_item: true, kind: "reply", todo: "Reply", due: null, quote: "Thanks, see you there!", confidence: "low", reason: "x", category: "person_request" }, emailQuoteHaystack({ latestOther: { id: "feed:e3", text: "Thanks, see you there!" } } as never, new Map()), { key: "e3|1", settled: false, nowIso: NOW, latestMessages: [] });
+  // 2026-11-18 verifier loops 3/4: the code backstop is TEAMS-ONLY; runClassify passes [] for email, so email is never
+  // dropped by code (MOMENTARY_RULE in the instructions still applies there). Fails toward showing an item.
+  t("F3-9 (amended) email gets no code backstop: what runClassify passes ([]) never drops an email pleasantry", [em.status, em.dropReason ?? null], ["open", null]);
   // F3 spelling table (S3-*): the backstop verdict per quote spelling. false rows are NOT matched (left to the prompt).
   const SP: [string, string, boolean][] = [
     ["S3-1", "Be right there", true],
