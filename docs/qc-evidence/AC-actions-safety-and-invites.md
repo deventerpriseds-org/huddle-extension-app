@@ -412,3 +412,7 @@ F5-10. Everything else is an ordinary test or an eval.
 Open questions for the owner: none truly undecidable. The one judgement he may want to see is F4-13, whether a change
 to "Names that are you" re-checks past items at once (costs model calls) or only applies from the next re-check
 (SD chosen: next re-check, and the panel says so).
+
+Note on section X: X-5 says "see F5-9". F5 was written after X, and the re-judge case it means is **F5-6** (Dismiss
+on a held item survives a re-judge). F5-9 here is the category-hide case. X-5's own text is correct; only the
+cross-reference number is off.
