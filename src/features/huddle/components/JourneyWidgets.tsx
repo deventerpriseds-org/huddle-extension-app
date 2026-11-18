@@ -1390,10 +1390,45 @@ function ScheduleRowItem({
   );
 }
 
-function UpNextRowItem({ row, caller }: { row: WidgetTaskRow; caller: Caller }) {
+/** The star on a starred This Week row of the LIVE Schedule tab, as a button: tap = "Remove from This
+ *  Week", the same `unstar` write the Priorities tab's ⋮ menu uses (runPush → unstarWidgetTask →
+ *  journey set_priority_rank unset). Owner, 2026-11-18: "I attempted to click to uncheck a star in the
+ *  schedules priority rows" — the star was a picture and the Schedule rows had no other way to unstar. */
+function UnstarButton({ row, ctx }: { row: WidgetTaskRow; ctx: PushCtx }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy || !ctx.caller?.entra_email}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await runPush(ctx, "unstar", { taskId: row.id });
+        } finally {
+          setBusy(false);
+        }
+      }}
+      aria-label={`Remove "${row.title}" from This Week`}
+      title="Remove from This Week"
+      className="-my-2 -ml-2 flex size-11 shrink-0 items-center justify-center rounded-lg transition hover:bg-accent disabled:opacity-50"
+    >
+      {busy ? (
+        <Loader2 size={11} className="animate-spin" aria-hidden />
+      ) : (
+        <Star size={11} className="fill-current" style={{ color: "var(--warning)" }} aria-hidden />
+      )}
+    </button>
+  );
+}
+
+function UpNextRowItem({ row, caller, pushCtx }: { row: WidgetTaskRow; caller: Caller; pushCtx?: PushCtx }) {
   return (
     <li className="flex items-center gap-2 px-3 py-2">
-      <Star size={11} className="shrink-0 fill-current" style={{ color: "var(--warning)" }} aria-hidden />
+      {pushCtx && row.isPriority ? (
+        <UnstarButton row={row} ctx={pushCtx} />
+      ) : (
+        <Star size={11} className="shrink-0 fill-current" style={{ color: "var(--warning)" }} aria-hidden />
+      )}
       <span className="min-w-0 flex-1 truncate text-[13px] leading-snug text-foreground" title={row.title}>
         {row.title}
       </span>
@@ -1407,6 +1442,7 @@ export function ScheduleWidget({
   full,
   live,
   chrome = "card",
+  onChanged,
 }: {
   data: ScheduleWidgetData;
   full?: boolean;
@@ -1414,8 +1450,16 @@ export function ScheduleWidget({
   live?: boolean;
   /** Outer chrome. Defaults to the chat-stream card; see `widgetShell`. */
   chrome?: "card" | "page" | "bare";
+  /** Re-read the widget after a This Week change. Only the live Schedule tab passes it. */
+  onChanged?: () => void;
 }) {
   const caller = useCaller();
+  // The star becomes a button only on the LIVE tab: a chat card is a frozen snapshot, and unstarring
+  // from a days-old list is the same hazard PrioritiesWidget's `live` gate exists for.
+  const pushCtx: PushCtx | undefined = useMemo(
+    () => (live === true ? { caller, live: true, pushes: [], onChanged } : undefined),
+    [caller, live, onChanged],
+  );
   // ONE seed pass over every row in the widget, so a task that Lane B legitimately places in two
   // sections is tracked once and agrees with itself. (Lane B de-dupes `upNext` against the other
   // two, so in practice this is belt-and-braces — and it is the cheap half.)
@@ -1527,7 +1571,7 @@ export function ScheduleWidget({
           <ScrollBand full={full} flow>
             <ul className="pb-1">
               {data.upNext.map((row) => (
-                <UpNextRowItem key={row.id} row={row} caller={caller} />
+                <UpNextRowItem key={row.id} row={row} caller={caller} pushCtx={pushCtx} />
               ))}
             </ul>
           </ScrollBand>
@@ -1546,12 +1590,15 @@ export function ScheduleWidget({
  * Neither fn throws — a failure is `ok:false` with empty sections — so there is no catch-and-invent
  * path here, and `ReadError` inside each widget is what tells the user a read failed. */
 
-function useScheduleData(): { loading: boolean; data: ScheduleWidgetData | null } {
+function useScheduleData(): { loading: boolean; data: ScheduleWidgetData | null; reload: () => void } {
   const caller = useCaller();
   const [state, setState] = useState<{ loading: boolean; data: ScheduleWidgetData | null }>({
     loading: true,
     data: null,
   });
+  // Bumped by `reload` (a This Week star tapped off) — same pattern as usePrioritiesData.
+  const [nonce, setNonce] = useState(0);
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
   useEffect(() => {
     let cancelled = false;
     void getScheduleWidget({ data: { caller, timeZone: TIME_ZONE } })
@@ -1559,13 +1606,14 @@ function useScheduleData(): { loading: boolean; data: ScheduleWidgetData | null 
         if (!cancelled) setState({ loading: false, data: d });
       })
       .catch(() => {
-        if (!cancelled) setState({ loading: false, data: null });
+        // Keep what is on screen if a RE-read fails; only the first read may land on "unreachable".
+        if (!cancelled) setState((prev) => ({ loading: false, data: prev.data }));
       });
     return () => {
       cancelled = true;
     };
-  }, [caller]);
-  return state;
+  }, [caller, nonce]);
+  return { ...state, reload };
 }
 
 function usePrioritiesData(): { loading: boolean; data: PrioritiesWidgetData | null; reload: () => void } {
@@ -1641,11 +1689,11 @@ function LiveScheduleWidget({
   full?: boolean;
   chrome?: "card" | "page" | "bare";
 }) {
-  const { loading, data } = useScheduleData();
+  const { loading, data, reload } = useScheduleData();
   if (loading) return <WidgetPlaceholder label="Loading your schedule…" />;
   if (!data) return <WidgetUnreachable label="your schedule" />;
   // `live` — same reason as LivePrioritiesWidget.
-  return <ScheduleWidget data={data} full={full} live chrome={chrome} />;
+  return <ScheduleWidget data={data} full={full} live chrome={chrome} onChanged={reload} />;
 }
 
 /* ── Full-page views (side menu) ─────────────────────────────────────────────────────────────────── */
