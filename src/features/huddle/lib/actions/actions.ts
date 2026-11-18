@@ -340,6 +340,9 @@ export interface ActionCandidate {
   /** G4-a (AC-actions-no-orphans): the current verdict names a proposal id that the proposal read did not return
    *  (the row was deleted). The candidate's proposalId is then null. Optional so older candidates stay valid. */
   proposalMissing?: boolean;
+  /** NORT-10b: the current verdict names a proposal id but the proposal read FAILED, so whether that proposal exists
+   *  (or was decided) is unknown. The candidate's proposalId is then null. Such an open item is never held. */
+  proposalUnread?: boolean;
   answeredByReply: boolean;
   /** Admitted but the to-do is already open on the board. */
   onBoard: boolean;
@@ -561,6 +564,11 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     // AC-actions-no-orphans: an open item with no home is HELD (actionable), never read-only "Not checked yet":
     // no proposal (the legacy rows, AC-12; or its proposal was deleted, G4-a), or a proposal but no section (G4-b).
     if (!c.proposalId) {
+      // NORT-10b: the proposal read failed, so this item's proposal may be decided: read-only, as before G4-a.
+      if (c.proposalUnread) {
+        pushUnchecked(c);
+        continue;
+      }
       pushHeld(c, c.proposalMissing ? "proposal_gone" : "no_task_record");
       continue;
     }

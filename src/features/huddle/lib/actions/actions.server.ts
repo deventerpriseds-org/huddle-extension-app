@@ -347,9 +347,11 @@ export type ActionsPage =
 
 const proposalCols = `id, state, title, assignee, owner_correction`;
 
-async function loadProposalsById(owners: string[], ids: string[]): Promise<Map<string, ProposalLite>> {
+/** The proposals named by the stored verdicts. `ok` is false when the read FAILED (table missing, connection error):
+ *  an empty map then means "not read", never "every proposal was deleted" (red-team NORT-10b). G4-a reads `ok`. */
+async function loadProposalsById(owners: string[], ids: string[]): Promise<{ byId: Map<string, ProposalLite>; ok: boolean }> {
   const m = new Map<string, ProposalLite>();
-  if (!ids.length) return m;
+  if (!ids.length) return { byId: m, ok: true };
   try {
     const r = await getSharedPool().query<{ id: string; state: string; title: string; assignee: string | null; owner_correction: OwnerCorrection | null }>(
       `SELECT ${proposalCols} FROM chat.task_proposals WHERE owner_email = ANY($1::text[]) AND id = ANY($2::text[])`,
@@ -357,9 +359,10 @@ async function loadProposalsById(owners: string[], ids: string[]): Promise<Map<s
     );
     for (const x of r.rows) m.set(x.id, { id: x.id, state: x.state, title: x.title, assignee: x.assignee, correction: x.owner_correction ?? null });
   } catch {
-    /* chat.task_proposals not created yet: nothing is backed, so nothing is listed (counted not checked) */
+    /* chat.task_proposals not created yet / unreadable: nothing is backed, so nothing is listed (counted not checked) */
+    return { byId: new Map(), ok: false };
   }
-  return m;
+  return { byId: m, ok: true };
 }
 
 async function loadMeetingProposals(owners: string[], meetingIds: string[]): Promise<MeetingProposalLite[]> {
@@ -403,7 +406,7 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
   const assembled = assembleLedgerPlan(data, cfg, sinceMs, s.ownNames);
   const verdicts = await loadVerdicts(lower(cfg.ownerLogins));
   const proposalIds = [...new Set([...verdicts.values()].map((v) => v.proposalId).filter((x): x is string => !!x))];
-  const proposals = await loadProposalsById(owners, proposalIds);
+  const { byId: proposals, ok: proposalsRead } = await loadProposalsById(owners, proposalIds);
   const meetingProposals = s.sources.meeting ? await loadMeetingProposals(owners, assembled.plan.meetings.inWindow.map((m) => m.meetingId)) : [];
   const emailFacts = assembled.plan.email.scan;
   const { listEmailRepliesFor } = await import("../email/email-replies.server");
@@ -412,7 +415,7 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
     emailFacts.flatMap((f) => f.messages.map((m) => m.id)),
     emailFacts.map((f) => f.conversationId).filter((x): x is string => !!x),
   ).catch(() => []);
-  const { candidates, uninvolvedHidden, meetingOthersHidden } = buildCandidates({ assembled, rows: data.rows, settings: s, verdicts, proposals, meetingProposals, replies, isDraftable: (id) => !isFeedId(id) });
+  const { candidates, uninvolvedHidden, meetingOthersHidden } = buildCandidates({ assembled, rows: data.rows, settings: s, verdicts, proposals, proposalsRead, meetingProposals, replies, isDraftable: (id) => !isFeedId(id) });
   const sel = selectActionItems(candidates, s);
   sel.hidden.uninvolved += uninvolvedHidden;
   sel.hidden.total += uninvolvedHidden;

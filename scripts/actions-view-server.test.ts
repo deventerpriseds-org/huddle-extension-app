@@ -524,7 +524,10 @@ try {
       await pool.query(`ALTER TABLE chat.task_proposals_rt RENAME TO task_proposals`);
     }
     t("NORT-10a held (real SQL): during a proposals read failure the click on the resurfaced item writes nothing", [JSON.stringify(await stored(CL)) === vBefore, (fbClick as { ok?: boolean })?.ok], [true, false]);
-    t("NORT-10b BROKEN? (real SQL): during a proposals read failure a DISMISSED item must not resurface as held", fbGroups, []);
+    // FIX (FIX-redteam-actions-no-orphans.md): the brief fixes the fallback to the pre-G4-a behaviour, read-only "Not
+    // checked yet" (unchecked), never held. Exact value, so held (the defect) or rows still fail. Once the read works
+    // again the dismissed item is in no group.
+    t("NORT-10b GUARD (real SQL): during a proposals read failure a DISMISSED item is read-only unchecked, never held; after it, in no group", [fbGroups, groupsOf(await page(), uL.itemKey)], [["unchecked"], []]);
     t("NO-S17 observed (real PostgreSQL): ->> on a JSON null is SQL NULL, and NULL IN (...) is NULL (not true)", [nullCheck?.isnull, nullCheck?.inlist], [true, null]);
     // AC-7: the classify heartbeat line carries counts only.
     const logs: string[] = [];

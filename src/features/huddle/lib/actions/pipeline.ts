@@ -584,6 +584,8 @@ export function buildCandidates(a: {
   /** Stored verdicts by "<source>\u0000<ledger id>" of the latest message row. */
   verdicts: ReadonlyMap<string, ActionVerdict>;
   proposals: ReadonlyMap<string, ProposalLite>;
+  /** false when the proposals read FAILED (an empty `proposals` then means "not read"). Absent = the read succeeded. */
+  proposalsRead?: boolean;
   meetingProposals: readonly MeetingProposalLite[];
   replies: readonly ReplyRowLite[];
   isDraftable(graphMessageId: string): boolean;
@@ -603,8 +605,9 @@ export function buildCandidates(a: {
     const base = {
       proposalId: p?.id ?? null,
       proposalState: p?.state ?? null,
-      // G4-a: the verdict names a proposal the read did not return (deleted). Selection lists it as held.
-      ...(current?.proposalId && !p ? { proposalMissing: true } : {}),
+      // G4-a: the verdict names a proposal the read did not return (deleted). Selection lists it as held. Only when the
+      // read SUCCEEDED: a failed read proves nothing about the row (NORT-10b), so the item is marked unread instead.
+      ...(current?.proposalId && !p ? (a.proposalsRead === false ? { proposalUnread: true } : { proposalMissing: true }) : {}),
       status: current?.status ?? ("not_checked" as const),
       // F5: the held reason travels to the selection (it used to be dropped here).
       notCheckedReason: current?.status === "not_checked" ? current.notCheckedReason ?? null : null,
