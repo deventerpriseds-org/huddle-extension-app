@@ -112,6 +112,13 @@ const storedAt = (store: ReadonlyMap<string, ActionVerdict>, i: number) => store
   f.store.set(k, { ...f.store.get(k)!, inputVersion: 1 });
   const r3 = await pass1(f);
   t("RB-3 an out-of-date verdict (Teams at input version 1) is re-judged: exactly 1 call", [r3.res.calls, r3.res.alreadyJudged], [1, 2]);
+  // X-2 (AC-actions-safety-and-invites.md): the PREVIOUS versions (email 2, teams 3) are out of date after the bump.
+  const ke = `${UNITS[0].storeAt.source}\u0000${UNITS[0].storeAt.sourceItemId}`;
+  f.store.set(ke, { ...f.store.get(ke)!, inputVersion: 2 });
+  f.store.set(k, { ...f.store.get(k)!, inputVersion: 3 });
+  const calls0 = f.log.model;
+  const r4 = await pass1(f);
+  t("X-2 GUARD: an email verdict at input version 2 and a Teams verdict at 3 are each judged again (2 calls, counted), stored at the new version", [r4.res.calls, f.log.model - calls0, r4.res.alreadyJudged, f.store.get(ke)?.inputVersion, f.store.get(k)?.inputVersion], [2, 2, 1, 3, 4]);
   const c = fakeStore(honest);
   const rc = await pass1(c, { usedToday: ACTIONS_SETTINGS_DEFAULT.dailyCap - 1 });
   t("RB-4 GUARD: the report is bounded by what the owner's daily cap has left (1 left -> 1 call, 2 over cap)", [rc.callsLeft, rc.res.calls, rc.res.overCap], [1, 1, 2]);
@@ -248,6 +255,18 @@ for (const bad of [Number.NaN, -3, Number.POSITIVE_INFINITY, Number.NEGATIVE_INF
   moved.store.set(k0, stale(`${directKey}|an-older-message-version`));
   await runClassify(asm, S1, judged, 5, withLock(moved));
   t("RK-2 a NEW message (different item key) is proposed afresh, not glued to the old proposal", [moved.log.propose, moved.store.get(k0)?.proposalId === "prop-decided-earlier"], [1, false]);
+  // X-5 (AC-actions-safety-and-invites.md): the re-judge keeps P also when it comes back not_checked or none.
+  const held = fakeStore(paraphrase); // the email on To comes back with a non-verbatim quote -> not_checked
+  held.store.set(k0, { ...stale(directKey), status: "not_checked", notCheckedReason: "quote_not_found", proposalId: "prop-rescued-earlier" } as ActionVerdict);
+  await runClassify(asm, S1, judged, 5, withLock(held));
+  const vh = held.store.get(k0);
+  t("X-5 GUARD: prior {not_checked, proposalId P}, re-judge -> quote_not_found: P stays attached, 0 proposals made", [held.log.model, held.log.propose, vh?.status, vh?.notCheckedReason, vh?.proposalId], [1, 0, "not_checked", "quote_not_found", "prop-rescued-earlier"]);
+  const momentary: Answer = (system, input) => (!input.includes("CHAT (oldest first)") && !system.includes("NOT on the To line") ? open("Thanks!", "Reply with thanks") : honest(system, input));
+  const gone = fakeStore(momentary);
+  gone.store.set(k0, stale(directKey));
+  await runClassify(asm, S1, judged, 5, withLock(gone));
+  const vg = gone.store.get(k0);
+  t("X-5b prior {open, proposalId P}, re-judge -> none (F3 momentary): P stays attached, 0 proposals made", [gone.log.propose, vg?.status, vg?.dropReason, vg?.proposalId], [0, "none", "momentary", "prop-decided-earlier"]);
 }
 
 // ── F4 / X-6 (AC-actions-safety-and-invites): the REPORT pass uses the SAME "Names that are you" ───────────────────
