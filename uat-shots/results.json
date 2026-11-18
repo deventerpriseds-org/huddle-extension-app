@@ -1,0 +1,265 @@
+{
+  "results": [
+    {
+      "name": "A-1 rail shows a labelled Modules button",
+      "pass": true
+    },
+    {
+      "name": "A-1 rail has NO separate Priorities icon",
+      "pass": true
+    },
+    {
+      "name": "A-1 rail has NO separate Schedule icon",
+      "pass": true
+    },
+    {
+      "name": "A-10 Apps is still on the rail",
+      "pass": true
+    },
+    {
+      "name": "X-3 header pills read Huddle, Board, Files, Modules (no Priorities/Schedule)",
+      "pass": true,
+      "detail": "HuddleBoardFilesModules"
+    },
+    {
+      "name": "A-2 Modules popover opens (Priorities)",
+      "pass": true
+    },
+    {
+      "name": "A-2 Modules lists exactly Priorities, Schedule, Actions in order",
+      "pass": true,
+      "detail": "Priorities,Schedule,Actions"
+    },
+    {
+      "name": "A-3 Priorities opens its full page (h1 = Priorities)",
+      "pass": true
+    },
+    {
+      "name": "A-4 Modules is marked current on Priorities",
+      "pass": true
+    },
+    {
+      "name": "B-11 no horizontal page scroll on Priorities",
+      "pass": true
+    },
+    {
+      "name": "A-2 Modules popover opens (Schedule)",
+      "pass": true
+    },
+    {
+      "name": "A-3 Schedule opens its full page (h1 = Schedule)",
+      "pass": true
+    },
+    {
+      "name": "A-4 Modules is marked current on Schedule",
+      "pass": true
+    },
+    {
+      "name": "B-11 no horizontal page scroll on Schedule",
+      "pass": true
+    },
+    {
+      "name": "A-2 Modules popover opens (Actions)",
+      "pass": true
+    },
+    {
+      "name": "A-3 Actions opens its full page (h1 = Actions)",
+      "pass": true
+    },
+    {
+      "name": "A-4 Modules is marked current on Actions",
+      "pass": true
+    },
+    {
+      "name": "B-11 no horizontal page scroll on Actions",
+      "pass": true
+    },
+    {
+      "name": "B-7/B-8/B-9 Actions shows a definite state (rows, caught up, not sorted, off or error)",
+      "pass": true,
+      "detail": "actions-section-needs_reply"
+    },
+    {
+      "name": "RANGE-UI the range toggle shows This week / All time, exactly one selected",
+      "pass": true,
+      "detail": "This week,All time"
+    },
+    {
+      "name": "AT-0 the saved range is readable before clicking",
+      "pass": true,
+      "detail": "week"
+    },
+    {
+      "name": "AT-1 clicking All time selects All time",
+      "pass": true,
+      "detail": "all"
+    },
+    {
+      "name": "AT-2 a range change resets the type tab to All",
+      "pass": true,
+      "detail": "tab before click email, after all"
+    },
+    {
+      "name": "AT-3 All time lists at least as many items as This week (it is a superset)",
+      "pass": true,
+      "detail": "week: tab All 38, listed 34+0 | all time: tab All 153, listed 147+0"
+    },
+    {
+      "name": "AT-P1 All time: a \"not checked yet\" count is never shown with no listed items",
+      "pass": true,
+      "detail": "listed 153 (judged open 147 + not checked 0 + held 6) | page reports: tab All 153, not checked 0, held 6, section header -"
+    },
+    {
+      "name": "AT-P2 All time: listed not-checked items = the count the page reports (tab All)",
+      "pass": true,
+      "detail": "listed 153 (judged open 147 + not checked 0 + held 6) | page reports: tab All 153, not checked 0, held 6, section header -"
+    },
+    {
+      "name": "AT-P3 All time: tab All = judged open listed + not checked listed + held listed",
+      "pass": true,
+      "detail": "listed 153 (judged open 147 + not checked 0 + held 6) | page reports: tab All 153, not checked 0, held 6, section header -"
+    },
+    {
+      "name": "AT-P7 All time: held rows listed = the held count the page reports, and each held row has Add as task + Dismiss",
+      "pass": true,
+      "detail": "listed 153 (judged open 147 + not checked 0 + held 6) | page reports: tab All 153, not checked 0, held 6, section header -"
+    },
+    {
+      "name": "AT-P4 All time: Email + Teams + Meetings tabs = All",
+      "pass": true,
+      "detail": "{\"all\":153,\"email\":6,\"teams\":3,\"meeting\":144}"
+    },
+    {
+      "name": "AT-P5 All time: not-checked rows carry no Add as task / Done / Dismiss / Wrong? (never judged)",
+      "pass": true,
+      "detail": "0 rows with judged-row buttons"
+    },
+    {
+      "name": "AT-P6 All time: the old count-only \"N not checked yet\" line is gone",
+      "pass": true
+    },
+    {
+      "name": "AT-P1 This week: a \"not checked yet\" count is never shown with no listed items",
+      "pass": true,
+      "detail": "listed 38 (judged open 34 + not checked 0 + held 4) | page reports: tab All 38, not checked 0, held 4, section header -"
+    },
+    {
+      "name": "AT-P2 This week: listed not-checked items = the count the page reports (tab All)",
+      "pass": true,
+      "detail": "listed 38 (judged open 34 + not checked 0 + held 4) | page reports: tab All 38, not checked 0, held 4, section header -"
+    },
+    {
+      "name": "AT-P3 This week: tab All = judged open listed + not checked listed + held listed",
+      "pass": true,
+      "detail": "listed 38 (judged open 34 + not checked 0 + held 4) | page reports: tab All 38, not checked 0, held 4, section header -"
+    },
+    {
+      "name": "AT-P7 This week: held rows listed = the held count the page reports, and each held row has Add as task + Dismiss",
+      "pass": true,
+      "detail": "listed 38 (judged open 34 + not checked 0 + held 4) | page reports: tab All 38, not checked 0, held 4, section header -"
+    },
+    {
+      "name": "AT-P4 This week: Email + Teams + Meetings tabs = All",
+      "pass": true,
+      "detail": "{\"all\":38,\"email\":3,\"teams\":2,\"meeting\":33}"
+    },
+    {
+      "name": "AT-P5 This week: not-checked rows carry no Add as task / Done / Dismiss / Wrong? (never judged)",
+      "pass": true,
+      "detail": "0 rows with judged-row buttons"
+    },
+    {
+      "name": "AT-P6 This week: the old count-only \"N not checked yet\" line is gone",
+      "pass": true
+    },
+    {
+      "name": "AT-9 the saved range is restored after the test",
+      "pass": true,
+      "detail": "saved week, now week"
+    },
+    {
+      "name": "ACC-5 a row WITHOUT More shows its whole title (nothing cut off)",
+      "pass": true
+    },
+    {
+      "name": "ACC-5 the More control is at least 44px tall",
+      "pass": true,
+      "detail": "44px"
+    },
+    {
+      "name": "ACC-5 an expanded row shows its full title (wraps, nothing cut off)",
+      "pass": true,
+      "detail": "{\"fits\":true,\"ws\":\"pre-wrap\",\"expanded\":\"true\"}"
+    },
+    {
+      "name": "ACC-5 an expanded row shows its full summary + quote (no line clamp)",
+      "pass": true,
+      "detail": "{\"clamp\":\"none\",\"fits\":true}"
+    },
+    {
+      "name": "ACC-4 no meeting row title starts with a label (Timestamp:, Responsible person:, ...) or carries **",
+      "pass": true,
+      "detail": "33 meeting rows"
+    },
+    {
+      "name": "G bottom bar visible at 390px",
+      "pass": true
+    },
+    {
+      "name": "A-7 bottom bar is Huddle, Board, Modules, Files, Apps",
+      "pass": true,
+      "detail": "Huddle,Board,Modules,Files,Apps"
+    },
+    {
+      "name": "A-7 columns are equal width (within 1px)",
+      "pass": true,
+      "detail": "73,73,73,73,73"
+    },
+    {
+      "name": "A-11 every bottom-bar target is >= 44px tall",
+      "pass": true,
+      "detail": "44,44,44,44,44"
+    },
+    {
+      "name": "A-8 Modules opens a bottom sheet titled Modules",
+      "pass": true
+    },
+    {
+      "name": "A-11 sheet rows are >= 44px tall",
+      "pass": true,
+      "detail": "52,52,52"
+    },
+    {
+      "name": "G-3 phone top bar says Actions on the Actions view",
+      "pass": true,
+      "detail": "Actions"
+    },
+    {
+      "name": "A-9 Modules column is current on Actions",
+      "pass": true
+    },
+    {
+      "name": "G-2 no horizontal page scroll at 390px",
+      "pass": true
+    },
+    {
+      "name": "G-1 labelled row buttons are hidden on a phone (menu chip instead)",
+      "pass": true
+    },
+    {
+      "name": "G-3 phone top bar says Priorities on Priorities",
+      "pass": true
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
