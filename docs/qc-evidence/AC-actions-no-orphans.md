@@ -195,3 +195,20 @@ must give the same verdict for every row. Source cited for each row: the `Action
 - **G-6: classify-pass counter.** Safe default: a `no_task_record` store counts in `ClassifyResult.notChecked`, not
   `open` (AC-1). No new counter.
 
+
+## G-4 brought IN SCOPE (owner decision, 2026-11-18): two more no-home paths
+
+The owner's complaint is "items are being orphaned". Both O-9 paths are therefore in scope and must land in the
+EXISTING held group (actionable), never vanish and never sit read-only. Code facts these rest on (read 2026-11-18):
+`buildCandidates` sets `proposalId: p?.id ?? null`, and the page loads proposals by id with NO state filter
+(`actions.server.ts` ~359), so a stored id missing from that map means the proposal row was DELETED. Today such a
+candidate reaches the selection as `open` + no id and lands in read-only `unchecked`. `actionSectionFor` returns null
+for `kind` null / `"none"`.
+
+| # | Given / When / Then | Cat. | Observed via | M |
+|---|---|---|---|---|
+| G4-a | Given a CURRENT stored verdict `open` + `proposalId` X where proposal X no longer exists (deleted), when the page is read, then the item is in `held` (not `unchecked`, not dropped), with its own fixed reason sentence (not the `no_task_record` one), and it is counted in `heldCounts`. When Add as task / Dismiss is clicked, the held check accepts it ONLY after `proposalExists(X)` answers false, a fresh proposal is made through `proposeHeldWith`, its id replaces X on the verdict (status stays `open`), and the action is applied. Given the same verdict while X still exists, the held click is refused ("That item isn't in your list."). Given `proposalExists` throws, the click fails with `HELD_ACTION_ERROR` and nothing is stored. | orphan / regression | offline selection + `actOnHeldItem` tests; real-PostgreSQL `actOnHeldItemFor` test (delete the row, read, click) | M |
+| G4-b | Given a CURRENT stored verdict `open` + `proposalId` X (X exists, `proposed`) whose section is null (`kind` null or `"none"`), when the page is read, then the item is in `held` with its own fixed reason sentence, row id X. When clicked, the held check accepts it (section recomputed from the stored `kind` with `actionSectionFor`, the same function the builder uses), X is re-used (no new proposal), and the action is applied to X. Given X is decided, the item is in no group; given X is corrected on this version, it is only in `corrected`. Given the same verdict with a non-null section, the held click is refused. | orphan / regression | offline selection + `actOnHeldItem` tests | M |
+
+Both reasons are display-only keys of the held row: no new stored `notCheckedReason`, so the D5 SQL needs no change for
+them (their verdicts stay `open`, which D5 already accepts).
