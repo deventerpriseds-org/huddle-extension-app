@@ -335,6 +335,8 @@ export interface ActionCandidate {
   source: ActionSource;
   /** open = admitted; none = not open; not_checked = no admitted verdict (unclassified, refused, over cap). */
   status: "open" | "none" | "not_checked";
+  /** F5: why a current verdict is not_checked (the stored verdict's notCheckedReason); null / absent otherwise. */
+  notCheckedReason?: "quote_not_found" | "bad_shape" | null;
   answeredByReply: boolean;
   /** Admitted but the to-do is already open on the board. */
   onBoard: boolean;
@@ -386,6 +388,8 @@ export interface ActionRow extends ActionDisplay {
   at: string | null;
   fromList: boolean;
   listSender: string | null;
+  /** F5: on a held row only, the fixed reason sentence (HELD_REASON_TEXT); absent elsewhere. */
+  heldReason?: string;
 }
 
 export interface ActionsSelection {
@@ -401,6 +405,27 @@ export interface ActionsSelection {
   unchecked: ActionRow[];
   /** Per-source counts of `unchecked`; the type tabs show counts.x + uncheckedCounts.x. */
   uncheckedCounts: { all: number; email: number; teams: number; meeting: number };
+  /** F5 (AC-actions-safety-and-invites, owner-approved 2026-11-18): items the safety check HELD (the AI said open but
+   *  its quote was not found word for word), newest first. Never in `rows`, never in `unchecked`; shown in their own
+   *  expanded group with Add as task / Dismiss. Each row's `heldReason` is the fixed code sentence. */
+  held: ActionRow[];
+  heldCounts: { all: number; email: number; teams: number; meeting: number };
+}
+
+/** F5 rule 1: the one reason that makes a not-checked item HELD. bad_shape / over cap / never judged stay "Not checked". */
+export const HELD_REASONS = ["quote_not_found"] as const;
+export type HeldReason = (typeof HELD_REASONS)[number];
+/** F5 rule 4 / F5-12: the plain-words reason shown on a held row. Fixed, written in code; never model text. */
+export const HELD_REASON_TEXT: Record<HeldReason, string> = {
+  quote_not_found: "Held back: the AI's supporting quote didn't match the message word for word, so it wasn't added automatically.",
+};
+/** F5 rule 4: the label over the model's quote on a held row (it never claims the quote is real). */
+export const HELD_QUOTE_LABEL = "AI's quote (not found in the message)";
+/** F5 rule 6: the group's title. */
+export const HELD_GROUP_LABEL = "Held by the safety check";
+/** Pure (F5-1 / F5-2): is this candidate HELD (current verdict not_checked for quote_not_found)? */
+export function isHeldCandidate(c: Pick<ActionCandidate, "status" | "notCheckedReason">): boolean {
+  return c.status === "not_checked" && (HELD_REASONS as readonly string[]).includes(c.notCheckedReason ?? "");
 }
 
 const LISTED_STATES = new Set(["proposed", "untriaged"]);
@@ -435,6 +460,8 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     notChecked: 0,
     unchecked: [],
     uncheckedCounts: { all: 0, email: 0, teams: 0, meeting: 0 },
+    held: [],
+    heldCounts: { all: 0, email: 0, teams: 0, meeting: 0 },
   };
   const hiddenCats = new Set<string>(s.hideCategories);
   const hiddenSenders = new Set(s.hiddenSenders);
@@ -472,7 +499,22 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
   const pushUnchecked = (c: ActionCandidate) => {
     if (!hiddenBySettings(c)) out.unchecked.push(toRow(c, c.section ?? "needs_reply"));
   };
+  /** F5: a HELD item. Resolved once the owner decided it (Add as task / Dismiss wrote a proposal id back and that
+   *  proposal left the listed states) or it is already on the board; otherwise the What-shows switches apply (same
+   *  order as every item, F5 rule 3) and it is listed in `held`. A rescue proposal still `proposed` (its action failed
+   *  after it was created) keeps the row, with that id, so the next click re-uses it (F5-8). */
+  const pushHeld = (c: ActionCandidate) => {
+    if (c.onBoard) return;
+    if (c.proposalId && !LISTED_STATES.has(c.proposalState ?? "")) return;
+    if (hiddenBySettings(c)) return;
+    const reason = c.notCheckedReason as HeldReason;
+    out.held.push({ ...toRow(c, c.section ?? "needs_reply"), heldReason: HELD_REASON_TEXT[reason] });
+  };
   for (const c of cands) {
+    if (isHeldCandidate(c)) {
+      pushHeld(c);
+      continue;
+    }
     if (c.status === "not_checked") {
       pushUnchecked(c);
       continue;
@@ -499,6 +541,11 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
   out.rows.sort((a, b) => (order.get(a.section) ?? 9) - (order.get(b.section) ?? 9) || ms(b.at) - ms(a.at));
   out.answered.sort((a, b) => ms(b.at) - ms(a.at));
   out.unchecked.sort((a, b) => ms(b.at) - ms(a.at));
+  out.held.sort((a, b) => ms(b.at) - ms(a.at));
+  for (const r of out.held) {
+    out.heldCounts.all++;
+    out.heldCounts[r.source]++;
+  }
   for (const r of out.unchecked) {
     out.notChecked++;
     out.uncheckedCounts.all++;
@@ -527,10 +574,10 @@ export function plainPreview(text: string | null | undefined): string | null {
 }
 
 /** Pure (2026-11-17): the type-tab counts. A tab counts the open judged rows AND the not-checked items of that type,
- *  so a tab never reads 0 while the "Not checked yet" section under it lists items. */
-export function tabCounts(open: readonly ActionRow[], unchecked: readonly ActionRow[]): Record<"all" | ActionSource, number> {
+ *  so a tab never reads 0 while the "Not checked yet" section under it lists items. F5-10: and the HELD items. */
+export function tabCounts(open: readonly ActionRow[], unchecked: readonly ActionRow[], held: readonly ActionRow[] = []): Record<"all" | ActionSource, number> {
   const c: Record<"all" | ActionSource, number> = { all: 0, email: 0, teams: 0, meeting: 0 };
-  for (const r of [...open, ...unchecked]) {
+  for (const r of [...open, ...unchecked, ...held]) {
     c.all++;
     c[r.source]++;
   }

@@ -504,7 +504,8 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   const view = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
   t(
     "U-13 the view lists the not-checked items (read-only rows), feeds unchecked into the tab counts, and resets the tab on a range change",
-    [view.includes('data-testid="actions-not-checked-row"'), view.includes("tabCounts(openRows, unchecked)"), view.includes("setFilter((f) => tabAfterRangeChange(f, ok.settings.range, r))"), (/function UncheckedRowItem\([\s\S]*?\n}\n/.exec(view)?.[0] ?? "act(").match(/act\(|Add as task|Dismiss|Wrong\?|actOnProposalFn|correctActionFn/)?.[0] ?? null],
+    // F5 (2026-11-18): the tabs also count the held items (3rd argument).
+    [view.includes('data-testid="actions-not-checked-row"'), view.includes("tabCounts(openRows, unchecked, held)"), view.includes("setFilter((f) => tabAfterRangeChange(f, ok.settings.range, r))"), (/function UncheckedRowItem\([\s\S]*?\n}\n/.exec(view)?.[0] ?? "act(").match(/act\(|Add as task|Dismiss|Wrong\?|actOnProposalFn|correctActionFn/)?.[0] ?? null],
     [true, true, true, null],
   );
   const pipe = readFileSync(new URL("../src/features/huddle/lib/actions/pipeline.ts", import.meta.url), "utf8");
@@ -651,9 +652,9 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   const asmOwn = assembleLedgerPlan({ rows, proposals: [], bell: [] }, cfgSam, Date.parse("2026-11-09T05:00:00Z"), ["Sam Okafor", "Samuel Okafor"]);
   const spk = (a: typeof asmOwn) => a.plan.teams.scan.concat(a.plan.teams.resolved.map((r) => r.c)).find((c) => c.chatId === C3)?.messages.map((m) => m.speaker) ?? null;
   t(
-    "F4-9 GUARD (X-6): heartbeat, page read and report all pass s.ownNames into assembleLedgerPlan; with it id-B is OWNER, the seed alone keeps it OTHER; names reach the model context",
+    "F4-9 GUARD (X-6): heartbeat, page read, report (and the F5 held action) all pass s.ownNames into assembleLedgerPlan; with it id-B is OWNER, the seed alone keeps it OTHER; names reach the model context",
     [
-      (srvF4.match(/assembleLedgerPlan\([^)]*\), s\.ownNames\)|assembleLedgerPlan\(data, cfg, [a-zA-Z.]+, s\.ownNames\)/g) ?? []).length,
+      (srvF4.match(/assembleLedgerPlan\(data, cfg, .*, s\.ownNames\);/g) ?? []).length,
       (srvF4.match(/assembleLedgerPlan\(/g) ?? []).length,
       spk(asmSeed),
       spk(asmOwn),
@@ -661,7 +662,7 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
       asmOwn.ctx.ownerFullNames,
       asmSeed.ctx.ownerFullNames,
     ],
-    [3, 3, ["OTHER", "OTHER"], ["OTHER", "OWNER"], true, ["Sam Okafor", "Samuel Okafor"], ["Sam Okafor"]],
+    [4, 4, ["OTHER", "OTHER"], ["OTHER", "OWNER"], true, ["Sam Okafor", "Samuel Okafor"], ["Sam Okafor"]],
   );
   const viewF4 = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
   t("F4-10 / F4-13 the What shows panel has the 'Names that are you' field (resolved list, saved through onChange) and says when it applies", [viewF4.includes("Names that are you"), viewF4.includes('data-testid="actions-own-names"'), viewF4.includes("defaultValue={settings.ownNames.join(\"\\n\")}"), viewF4.includes("onChange({ ...settings, ownNames: next })"), viewF4.includes("{OWN_NAMES_NOTE}"), OWN_NAMES_NOTE], [true, true, true, true, true, "Applies to new messages and the next re-check."]);
@@ -694,6 +695,160 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   for (const [id, , , , want] of S4) s4want.push(`${id}:${want}`);
   const missingName = tm({ messageId: "s4-missing", at: "2026-11-16T12:30:00Z", sender: { id: "f4-missing", isApp: false } as never });
   t("F4 spelling table S4-1..S4-16 (Teams sender names vs ['Samuel Okafor','Sam Okafor'])", [s4got, speakers([...known, ask, missingName], OWN)[1], foldPersonName("Okafor, Samuel, Jr")], [s4want, "OTHER", "okafor, samuel, jr"]);
+}
+
+// ── F5 (AC-actions-safety-and-invites): items HELD by the safety check, their own group, Add as task / Dismiss ──────
+{
+  const { HELD_REASON_TEXT, HELD_GROUP_LABEL, HELD_QUOTE_LABEL, isHeldCandidate } = await import("../src/features/huddle/lib/actions/actions");
+  const { actOnHeldItem, heldProposalCandidates, isHeldVerdict, HELD_ACTION_ERROR } = await import("../src/features/huddle/lib/actions/pipeline");
+  const held = (o: Partial<ActionCandidate> = {}) => cand({ status: "not_checked", notCheckedReason: "quote_not_found", proposalId: null, proposalState: null, section: "todo", kind: "action", itemKey: "h|1", display: { ...disp, title: "Test-Send the weekly notes", quote: "Test-invented quote", reasonLine: "Model text that must not be the held reason." }, ...o });
+  const sel1 = selectActionItems([held()], S());
+  t("F5-1 GUARD: a current quote_not_found verdict is HELD: in held (1), not unchecked, not rows; heldCounts.all 1", [sel1.held.length, sel1.unchecked.length, sel1.rows.length, sel1.heldCounts.all, sel1.notChecked], [1, 0, 0, 1, 0]);
+  const sel2 = selectActionItems([held({ notCheckedReason: "bad_shape", itemKey: "b|1" }), cand({ status: "not_checked", proposalId: null, section: null, itemKey: "n|1" })], S());
+  t("F5-2 GUARD: bad_shape and never-judged stay in unchecked, never held", [sel2.held.length, sel2.unchecked.map((r) => r.itemKey).sort(), isHeldCandidate({ status: "not_checked", notCheckedReason: "bad_shape" }), isHeldCandidate({ status: "open", notCheckedReason: "quote_not_found" })], [0, ["b|1", "n|1"], false, false]);
+  const inv = held({ category: "meeting_invite", itemKey: "mi|1" });
+  const hid = selectActionItems([inv], S());
+  const shown = selectActionItems([inv], S({ hideCategories: [] }));
+  const teamsOff = selectActionItems([held({ source: "teams", itemKey: "t|1" })], S({ sources: { email: true, teams: false, meeting: true } }));
+  t("F5-9 the What-shows switches apply to held items: meeting_invite hidden by default (counted), shown when switched off; a source switch hides too", [hid.held.length, hid.hidden.categories.meeting_invite, shown.held.length, teamsOff.held.length, teamsOff.hidden.sources], [0, 1, 1, 0, 1]);
+  const mix = [
+    cand({ itemKey: "o|1" }),
+    cand({ itemKey: "o|2" }),
+    held({ source: "teams", itemKey: "h|t" }),
+    cand({ status: "not_checked", proposalId: null, section: null, itemKey: "n|1" }),
+    cand({ status: "not_checked", proposalId: null, section: null, itemKey: "n|2" }),
+    cand({ status: "not_checked", proposalId: null, section: null, itemKey: "n|3" }),
+  ];
+  const selM = selectActionItems(mix, S());
+  t("F5-10 GUARD: tabs count open + held + not-checked (All 6, Email 5, Teams 1); notChecked === unchecked.length and excludes held", [tabCounts(selM.rows, selM.unchecked, selM.held), selM.notChecked, selM.unchecked.length, selM.heldCounts], [{ all: 6, email: 5, teams: 1, meeting: 0 }, 3, 3, { all: 1, email: 0, teams: 1, meeting: 0 }]);
+  t("F5-11 the Teams tab lists only Teams held items", filterRows(selectActionItems([held({ itemKey: "he|1" }), held({ source: "teams", itemKey: "ht|1" })], S()).held, "teams").map((r) => r.itemKey), ["ht|1"]);
+  t("F5-12 the held reason is the FIXED code sentence, never the model's reason", [sel1.held[0].heldReason, sel1.held[0].heldReason === sel1.held[0].reasonLine, HELD_REASON_TEXT.quote_not_found], [HELD_REASON_TEXT.quote_not_found, false, "Held back: the AI's supporting quote didn't match the message word for word, so it wasn't added automatically."]);
+  const decided = selectActionItems([held({ proposalId: "prop-aa01", proposalState: "approved", itemKey: "d|1" }), held({ proposalId: "prop-aa02", proposalState: "dismissed", itemKey: "d|2" }), held({ onBoard: true, itemKey: "d|3" }), held({ proposalId: "prop-aa03", proposalState: "proposed", itemKey: "d|4" })], S());
+  t("F5-5/F5-8 selection: a held item whose rescue proposal was decided (approved / dismissed) or is on the board is gone; one still 'proposed' stays held with that id", [decided.held.map((r) => [r.itemKey, r.id]), decided.unchecked.length, decided.rows.length], [[["d|4", "prop-aa03"]], 0, 0]);
+
+  // The rescue path through the real plan (a synthetic 1:1 Teams chat) with an in-memory thread store.
+  const HC = `19:f5_held${"@"}unq.gbl.spaces`;
+  const ASKH = "Hi Sam. Here is the outline of topics I want from you each week. Please send your first notes by Monday.";
+  const hRow: LedgerReportRow = { source: "teams", sourceItemId: teamsSourceItemId(HC, "1"), threadId: HC, at: "2026-11-16T12:00:00Z", content: { kind: "teams", chatId: HC, chatName: null, messageId: "1", at: "2026-11-16T12:00:00Z", sender: { id: "f5-pat", name: "Pat Example", isApp: false }, fromOwner: false, text: ASKH, webUrl: null, mentionedUserIds: [], ownerUserId: "f5-owner" } as TeamsContent };
+  const hAsm = assembleLedgerPlan({ rows: [hRow], proposals: [], bell: [] }, cfg, SINCE);
+  const hU = threadUnits(hAsm, S()).units.find((x) => x.teams?.chatId === HC)!;
+  const heldV = admitActionVerdict({ open_item: true, kind: "action", todo: "Test-Send your first notes by Monday", due: "Monday", quote: "Please send your weekly notes by Monday", confidence: "high", reason: "Asked.", category: "person_request" }, teamsQuoteHaystack(hU.teams!), { key: hU.itemKey, settled: false, nowIso: NOW, inputVersion: CLASSIFIER_INPUT_VERSION.teams });
+  t("F5 setup: the paraphrased quote is HELD (not_checked / quote_not_found) and isHeldVerdict says so", [heldV.status, heldV.notCheckedReason, isHeldVerdict(heldV, hU)], ["not_checked", "quote_not_found", true]);
+  const storeKey = `${hU.storeAt.source}\u0000${hU.storeAt.sourceItemId}`;
+  const mkWorld = (opts: { proposeThrows?: boolean; actFails?: boolean } = {}) => {
+    const store = new Map<string, ActionVerdict>([[storeKey, { ...heldV }]]);
+    const proposals = new Map<string, { id: string; state: string; title: string; assignee: null; correction: null }>();
+    const calls = { propose: 0, act: [] as string[] };
+    let chain = Promise.resolve();
+    const deps = {
+      lockThread: <T,>(u: typeof hU, fn: (tx: { current(): Promise<ActionVerdict | null>; store(v: ActionVerdict): Promise<void> }) => Promise<T>): Promise<T> => {
+        const k = `${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`;
+        const run = chain.then(async () => {
+          const snapshot = store.get(k) ?? null;
+          let pending: ActionVerdict | null = null;
+          const out = await fn({ current: async () => store.get(k) ?? null, store: async (v) => void (pending = v) });
+          if (pending) store.set(k, pending); // commit only when fn returned (a throw rolls back)
+          void snapshot;
+          return out;
+        });
+        chain = run.then(() => undefined, () => undefined);
+        return run;
+      },
+      propose: async (_u: typeof hU, cands: readonly { task: string; evidence: string }[], text: string) => {
+        calls.propose++;
+        if (opts.proposeThrows) throw new Error("proposals:store_failed");
+        if (!cands.length || !cands.every((c) => text.includes(c.evidence))) return { id: null, onBoard: false };
+        const id = "prop-f5000001";
+        proposals.set(id, { id, state: "proposed", title: cands[0].task, assignee: null, correction: null });
+        return { id, onBoard: false };
+      },
+      act: async (id: string, action: "approve" | "dismiss") => {
+        calls.act.push(`${action}:${id}`);
+        if (opts.actFails) return { ok: false, error: "Couldn't add that task to your board." };
+        const p = proposals.get(id);
+        if (p) p.state = action === "approve" ? "approved" : "dismissed";
+        return { ok: true };
+      },
+    };
+    const page = () => selectActionItems(buildCandidates({ assembled: hAsm, rows: [hRow], settings: S(), verdicts: store, proposals, meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
+    return { store, proposals, calls, deps, page };
+  };
+  const w = mkWorld();
+  const before = w.page();
+  const add = await actOnHeldItem(hU, "approve", w.deps);
+  const after = w.page();
+  t(
+    "F5-5 GUARD: Add as task -> ONE proposal via propose, approved via act, its id written back on the stored verdict (still not_checked); next read: in none of held / unchecked / rows",
+    [before.held.length, add.ok, w.calls.propose, w.calls.act, w.store.get(storeKey)?.proposalId, w.store.get(storeKey)?.status, w.store.get(storeKey)?.notCheckedReason, after.held.length, after.unchecked.length, after.rows.length],
+    [1, true, 1, ["approve:prop-f5000001"], "prop-f5000001", "not_checked", "quote_not_found", 0, 0, 0],
+  );
+  const wd = mkWorld();
+  const dis = await actOnHeldItem(hU, "dismiss", wd.deps);
+  t("F5-6 Dismiss -> a proposal is created and dismissed; the item is gone on the next read", [dis.ok, wd.calls.act, wd.proposals.get("prop-f5000001")?.state, wd.page().held.length], [true, ["dismiss:prop-f5000001"], "dismissed", 0]);
+  const wc = mkWorld();
+  const [c1, c2] = await Promise.all([actOnHeldItem(hU, "approve", wc.deps), actOnHeldItem(hU, "approve", wc.deps)]);
+  t("F5-7 a double click (two at once): ONE propose, the second click re-uses the first proposal's id", [c1.ok, c2.ok, wc.calls.propose, c1.ok && c2.ok && c1.proposalId === c2.proposalId, wc.proposals.size], [true, true, 1, true, 1]);
+  const wt = mkWorld({ proposeThrows: true });
+  const thr = await actOnHeldItem(hU, "approve", wt.deps);
+  t("F5-8 propose fails -> plain error, verdict unchanged (no proposalId), item still held", [thr, wt.store.get(storeKey)?.proposalId, wt.page().held.length], [{ ok: false, error: HELD_ACTION_ERROR }, null, 1]);
+  const wf = mkWorld({ actFails: true });
+  const f1 = await actOnHeldItem(hU, "approve", wf.deps);
+  const stillHeld = wf.page().held;
+  wf.deps.act = async (id: string, action: "approve" | "dismiss") => {
+    wf.calls.act.push(`${action}:${id}`);
+    const p = wf.proposals.get(id);
+    if (p) p.state = "approved";
+    return { ok: true };
+  };
+  const f2 = await actOnHeldItem(hU, "approve", wf.deps);
+  t("F5-8 the action fails after the proposal was created -> row stays held WITH that id; the next click re-uses it (no 2nd propose)", [f1.ok, stillHeld.map((r) => r.id), f2.ok, wf.calls.propose, wf.calls.act, wf.page().held.length], [false, ["prop-f5000001"], true, 1, ["approve:prop-f5000001", "approve:prop-f5000001"], 0]);
+  const wn = mkWorld();
+  wn.store.set(storeKey, { ...heldV, status: "open", notCheckedReason: undefined, proposalId: null });
+  t("F5 a verdict that is not held (open) is refused: no propose, no act", [await actOnHeldItem(hU, "approve", wn.deps), wn.calls.propose, wn.calls.act.length], [{ ok: false, error: "That item isn't in your list." }, 0, 0]);
+
+  // F5-14: re-judged at a new version and now admitted -> open, KEEPS the rescue proposal (runClassify keepId), moves
+  // from held to rows, never both.
+  const wr = mkWorld({ actFails: true });
+  await actOnHeldItem(hU, "approve", wr.deps); // rescue proposal created, still 'proposed'
+  wr.store.set(storeKey, { ...wr.store.get(storeKey)!, inputVersion: 1 }); // judged at an OLDER version
+  let proposed = 0;
+  const rj = await runClassify(hAsm, S(), currentlyJudgedKeys(wr.store), 5, {
+    recordCall: async () => {},
+    model: async () => ({ open_item: true, kind: "action", todo: "Test-Send your first notes by Monday", due: "Monday", quote: "Please send your first notes by Monday.", confidence: "high", reason: "Asked.", category: "person_request" }),
+    propose: async () => (proposed++, { id: "prop-f5ffffff", onBoard: false }),
+    storeVerdict: async () => {},
+    addMeetingRows: async () => 0,
+    nowIso: () => NOW,
+    lockThread: wr.deps.lockThread as never,
+  });
+  const reSel = wr.page();
+  t("F5-14 re-judged into open: keeps the rescue proposal (0 new proposals), listed in rows, not in held", [rj.open, proposed, wr.store.get(storeKey)?.status, wr.store.get(storeKey)?.proposalId, reSel.rows.length, reSel.held.length], [1, 0, "open", "prop-f5000001", 1, 0]);
+
+  const hc = heldProposalCandidates("Test-Send your first notes by Monday", "Please send your weekly notes by Monday", ASKH);
+  t("F5 heldProposalCandidates: every evidence is verbatim from the message (never the AI's quote); the to-do first; a grounded fallback sentence last", [hc.every((c) => ASKH.includes(c.evidence)), hc.some((c) => c.evidence.includes("weekly notes")), hc[0].task, hc[hc.length - 1], heldProposalCandidates(null, null, ""), heldProposalCandidates("x", null, null)], [true, false, "Test-Send your first notes by Monday", { task: "Please send your first notes by Monday.", evidence: "Please send your first notes by Monday." }, [], []]);
+
+  const { readFileSync } = await import("node:fs");
+  const viewF5 = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
+  t(
+    "F5-3/F5-4 the view renders the held group expanded (no CollapsibleSection), with the fixed reason, the labelled quote, Add as task and Dismiss, only when non-empty, before Not checked yet",
+    [
+      viewF5.includes("const heldGroup = held.length ? ("),
+      /heldGroup = held\.length \? \(\s*<section/.test(viewF5),
+      viewF5.includes("{HELD_GROUP_LABEL}"),
+      viewF5.includes("{row.heldReason}"),
+      viewF5.includes("{HELD_QUOTE_LABEL}"),
+      viewF5.includes('data-testid="actions-held-add"') && viewF5.includes("Add as task"),
+      viewF5.includes('data-testid="actions-held-dismiss"'),
+      viewF5.indexOf("{heldGroup}") > 0 && viewF5.indexOf("{heldGroup}") < viewF5.lastIndexOf("{notChecked}"),
+      viewF5.includes("tabCounts(openRows, unchecked, held)"),
+      HELD_GROUP_LABEL,
+      HELD_QUOTE_LABEL,
+    ],
+    [true, true, true, true, true, true, true, true, true, "Held by the safety check", "AI's quote (not found in the message)"],
+  );
+  const srvF5 = readFileSync(new URL("../src/features/huddle/lib/actions/actions.server.ts", import.meta.url), "utf8");
+  const heldFn = srvF5.slice(srvF5.indexOf("export async function actOnHeldItemFor("), srvF5.indexOf("/** X-6: the bell rows"));
+  t("F5-13 the held action logs only the action, the source and ok (no to-do, quote, name or id)", [(heldFn.match(/console\.(log|error|warn)\(/g) ?? []).length, heldFn.includes("console.log(`[actions] held ${input.action} source=${u.source} ok=${r.ok}`)")], [1, true]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

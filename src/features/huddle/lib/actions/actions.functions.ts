@@ -36,6 +36,22 @@ export const setActionsSettingsFn = createServerFn({ method: "POST" })
     }
   });
 
+/** F5 (AC-actions-safety-and-invites): Add as task / Dismiss on an item HELD by the safety check. A thin wrapper: the
+ *  proposal is created at click time through the EXISTING proposeFromSource and acted on through the EXISTING
+ *  actOnProposal (from:"actions"); see actOnHeldItemFor. */
+export const actOnHeldItemFn = createServerFn({ method: "POST" })
+  .inputValidator((raw: unknown) => z.object({ caller: Caller, itemKey: z.string().min(1).max(600), action: z.enum(["approve", "dismiss"]) }).parse(raw))
+  .handler(async ({ data }): Promise<{ ok: boolean; error?: string; note?: string }> => {
+    try {
+      const { actOnHeldItemFor } = await import("./actions.server");
+      const r = await actOnHeldItemFor(data.caller, { itemKey: data.itemKey, action: data.action });
+      return r.ok ? { ok: true, ...(r.note ? { note: r.note } : {}) } : { ok: false, error: r.error };
+    } catch (e) {
+      console.error("[actions] held action failed", e instanceof Error ? e.name : "error");
+      return { ok: false, error: "Couldn't add that. Try again." };
+    }
+  });
+
 export const correctActionFn = createServerFn({ method: "POST" })
   .inputValidator((raw: unknown) =>
     z

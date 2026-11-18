@@ -32,6 +32,7 @@ import {
   type OwnerCorrection,
 } from "./actions";
 import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, runReportClassify, inMemoryWrites, type ClassifyDeps, type ThreadTx, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
+import { actOnHeldItem, threadUnits, type HeldAction, type HeldActResult, type HeldCandidate } from "./pipeline";
 
 /** The feed config when the correspondence ingest is on (the Actions view reads what the ingest stored). */
 export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | null {
@@ -588,7 +589,10 @@ export async function proposalBacksActionsRow(owners: string[], ledgerOwners: st
       `SELECT EXISTS (SELECT 1 FROM chat.task_proposals WHERE id = $3 AND owner_email = ANY($1::text[]))
           AND (EXISTS (SELECT 1 FROM chat.correspondence_ledger
                         WHERE owner_email = ANY($2::text[]) AND source IN ('email','teams') AND result_ids ? 'action'
-                          AND result_ids->'action'->>'proposalId' = $3 AND result_ids->'action'->>'status' = 'open')
+                          AND result_ids->'action'->>'proposalId' = $3
+                          AND (result_ids->'action'->>'status' = 'open'
+                               -- F5: a HELD item's rescue proposal (written back by actOnHeldItemFor) backs its row too.
+                               OR (result_ids->'action'->>'status' = 'not_checked' AND result_ids->'action'->>'notCheckedReason' = 'quote_not_found')))
                OR EXISTS (SELECT 1 FROM chat.task_proposal_refs
                            WHERE proposal_id = $3 AND owner_email = ANY($1::text[]) AND source = 'transcript')) AS ok`,
       [owners.map((o) => o.toLowerCase()), lower(ledgerOwners), proposalId],
@@ -597,6 +601,58 @@ export async function proposalBacksActionsRow(owners: string[], ledgerOwners: st
   } catch {
     return false;
   }
+}
+
+// ── F5: Add as task / Dismiss on a HELD item ────────────────────────────────────────────────────────
+
+/** The EXISTING proposeFromSource with each (task, evidence) candidate in turn (the extraction is the candidate
+ *  itself: no model call). The first candidate the validators accept wins. Exported for the real-PostgreSQL test. */
+export async function proposeHeldWith(
+  owner: string,
+  pd: Omit<import("../proposals/engine").ProposeDeps, "extract">,
+  u: ThreadUnit,
+  cands: readonly HeldCandidate[],
+  text: string,
+): Promise<{ id: string | null; onBoard: boolean }> {
+  const { proposeFromSource } = await import("../proposals/engine");
+  const src = { source: u.source, sourceItemId: u.refItemId, at: u.at, context: (u.email?.latestOther?.subject ?? u.teams?.chatName ?? "").slice(0, 160) || null, text };
+  let onBoard = false;
+  for (const c of cands) {
+    const r = await proposeFromSource(owner, src, { ...pd, extract: async () => ({ tasks: [{ task: c.task, evidence: c.evidence, assignee: null, due_text: null }] }) });
+    if (r.ids.length) return { id: r.ids[0], onBoard: false };
+    if (r.onBoard) onBoard = true;
+  }
+  return { id: null, onBoard };
+}
+
+/** F5: the owner-scoped Add as task / Dismiss on one held item (by its item key, as the page listed it). The item is
+ *  found in the SAME plan the page reads; the action goes through the EXISTING actOnProposal with from:"actions".
+ *  Logs the outcome code only (X-7 / F5-13). */
+export async function actOnHeldItemFor(
+  caller: { entra_object_id?: string; entra_email?: string } | undefined,
+  input: { itemKey: string; action: HeldAction },
+): Promise<HeldActResult> {
+  const cfg = actionsConfig();
+  if (!cfg) return { ok: false, error: "Actions is not switched on." };
+  const owners = await ownedScope(caller, cfg);
+  if (!owners?.length) return { ok: false, error: "Sign-in required." };
+  const s = await settingsFor(cfg);
+  const { loadLedgerReportData } = await import("../correspondence/report-from-ledger.server");
+  const data = await loadLedgerReportData(cfg.ownerLogins);
+  const assembled = assembleLedgerPlan(data, cfg, actionsWindowStartMs(Date.now(), s), s.ownNames);
+  const u = threadUnits(assembled, s).units.find((x) => x.itemKey === input.itemKey);
+  if (!u) return { ok: false, error: "That item isn't in your list." };
+  const ledgerOwners = lower(cfg.ownerLogins);
+  const { deps } = await import("../proposals/proposals.server");
+  const pd = await deps(cfg.owner);
+  const { actOnProposal } = await import("../proposals/proposals.server");
+  const r = await actOnHeldItem(u, input.action, {
+    lockThread: (unit, fn) => withThreadLock(ledgerOwners, unit, fn),
+    propose: (unit, cands, text) => proposeHeldWith(cfg.owner, pd, unit, cands, text),
+    act: (id, action) => actOnProposal(caller, id, action, undefined, undefined, { from: "actions" }),
+  });
+  console.log(`[actions] held ${input.action} source=${u.source} ok=${r.ok}`);
+  return r;
 }
 
 /** X-6: the bell rows behind a decided proposal's refs. */

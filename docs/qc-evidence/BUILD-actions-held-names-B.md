@@ -54,3 +54,41 @@ Gap: email from a second ADDRESS is decided by `ownerAddresses`, not names (AC g
 Tests added (actions-view.test.ts): F4-1..F4-10/13 and the S4-1..S4-16 spelling table. actions-view 155/0,
 actions-accuracy 60/0.
 
+### F5 "Held by the safety check" (commit 2)
+
+What changed (extends the existing selection, proposeFromSource and actOnProposal; no new store or action path):
+- `pipeline.ts` `buildCandidates`: copies the stored `notCheckedReason` onto the candidate (it was dropped).
+- `actions.ts`: `ActionCandidate.notCheckedReason`, `ActionsSelection.held` / `heldCounts`, `isHeldCandidate`,
+  `HELD_REASON_TEXT` (fixed code sentence), `HELD_QUOTE_LABEL`, `HELD_GROUP_LABEL`. `selectActionItems` gets ONE early
+  branch (`isHeldCandidate -> pushHeld`), self-contained for the merge with part A's F2-6 edit. A held item is dropped
+  when its rescue proposal was decided or it is on the board; the What-shows switches apply in the existing order.
+  `tabCounts(open, unchecked, held = [])`.
+- `pipeline.ts` (pure, all I/O injected): `isHeldVerdict`, `heldProposalCandidates`, `actOnHeldItem`. Inside the thread
+  lock: re-read the verdict; not held -> refused; already has a proposal id -> re-use it (double click, F5-7; failed
+  action, F5-8); otherwise propose, write the id back (status stays not_checked), then act.
+- Evidence for the rescue proposal: the AI's quote was NOT found in the message, and `proposeFromSource`'s validators
+  require verbatim evidence, so the quote is never sent as evidence. `heldProposalCandidates` sends the AI's to-do with
+  evidence that is always a verbatim span of the latest OTHER message (the whole message when <= 400 chars, then each
+  sentence), and last the best-overlapping sentence as its own title. The existing validators still decide.
+- `actions.server.ts`: `proposeHeldWith` (the existing proposeFromSource, extraction = the candidate, no model call),
+  `actOnHeldItemFor` (owner scope, the same plan as the page, `withThreadLock`, `actOnProposal(..., {from:"actions"})`),
+  logs `[actions] held <action> source=<source> ok=<bool>` only.
+- `proposalBacksActionsRow` (loop-2 D5 gate) EXTENDED: a verdict `not_checked` + `quote_not_found` pointing at the
+  proposal also backs an Actions row. Needed so the held rescue can use the existing `from:"actions"` path when
+  `correspondence.proposals` is off. `bad_shape` verdicts still do not back a row (pinned in the real-SQL test).
+- `actions.functions.ts`: `actOnHeldItemFn` (thin wrapper, zod: itemKey <= 600, action approve | dismiss).
+- `ActionsView.tsx`: the expanded "Held by the safety check" group (a `<section>`, not a CollapsibleSection), after the
+  judged sections and before "Not checked yet", absent when empty; `HeldRowItem` shows the to-do, who / where / when,
+  the fixed reason, the AI's quote labelled "AI's quote (not found in the message)", Add as task and Dismiss. Tabs
+  count held items. The "nothing needs you" line no longer says "all caught up" while items are held.
+
+Existing tests changed: U-13 source-string check (`tabCounts(openRows, unchecked, held)`).
+
+Dependency on part A (NOT built here, it is in section X): X-5 (`runClassify` keeping a prior `proposalId` when the
+re-judge returns `not_checked` or `none`). Until X-5 lands, a held item the owner dismissed and that is RE-JUDGED at a
+new version and held again loses its proposal id and shows again as undecided (F5-6 "stays gone across a re-judge").
+F5-14 (re-judged into OPEN) already keeps the rescue proposal through the existing `keepId`.
+
+Tests added (actions-view.test.ts): F5-1, F5-2, F5-3/4 (source), F5-5, F5-6, F5-7, F5-8 (x2), F5-9, F5-10, F5-11,
+F5-12, F5-13, F5-14, refusal of a non-held verdict, heldProposalCandidates. actions-view 173/0.
+
