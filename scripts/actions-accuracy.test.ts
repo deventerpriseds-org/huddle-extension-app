@@ -95,7 +95,12 @@ const noIdOwn = row({ chatId: ONE, messageId: "m1", at: "2026-11-16T12:56:00Z", 
 t("R1-6 GUARD: no id anywhere -> a sender named as the owner ('Last, First' folded) contributes its id", teamsChatsFromLedger([ask, noIdOwn], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER"]);
 t("R1-7 without owner names the same chat stays as stored (no guessing)", teamsChatsFromLedger([ask, noIdOwn]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OTHER"]);
 const twin = row({ chatId: ONE, messageId: "q2", at: "2026-11-16T13:00:00Z", sender: { id: "namesake-guid", name: "Owen Example", isApp: false } });
-t("R1-8 GUARD: once an id is known, a NAMESAKE with another id stays OTHER", teamsChatsFromLedger([older, older2, ask, twin, own], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER", "OTHER"]);
+// SUPERSEDED 2026-11-18 by F4 (AC-actions-safety-and-invites, owner-approved): R1-8 used to say "once an id is known, a
+// sender with the owner's EXACT full name and another id stays OTHER". F4 makes the owner's own names count ALWAYS (his
+// second account has its own id), and AC S4-15 accepts the exact-full-name namesake risk: the owner controls the list.
+// What still holds, and is pinned here: a namesake sharing only the FIRST name stays OTHER.
+const firstOnly = row({ chatId: ONE, messageId: "q3", at: "2026-11-16T13:05:00Z", sender: { id: "rivera-guid", name: "Owen Rivera", isApp: false } });
+t("R1-8 (F4) once an id is known, a sender with the owner's exact FULL name is the owner (his 2nd account); a first-name namesake stays OTHER", teamsChatsFromLedger([older, older2, ask, twin, firstOnly, own], [], ["Owen Example"]).find((c) => c.chatId === ONE)!.messages.map((m) => m.speaker), ["OTHER", "OWNER", "OWNER", "OTHER"]);
 t("R1-9 an app sender with the owner's name never counts", ownerTeamsIdsAcross([row({ sender: { id: "app-guid", name: "Owen Example", isApp: true } })], [], ["Owen Example"]), []);
 t("R1-10 foldPersonName: 'Last, First' -> 'first last'; plain kept", [foldPersonName("Example,  Owen"), foldPersonName(" Owen  Example "), foldPersonName(null)], ["owen example", "owen example", ""]);
 

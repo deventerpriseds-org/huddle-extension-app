@@ -49,6 +49,10 @@ import {
   DAILY_CAP_MAX,
   HIDEABLE_CATEGORIES,
   HIDEABLE_CATEGORY_LABEL,
+  OWN_NAME_CHARS,
+  OWN_NAMES_MAX,
+  OWN_NAMES_NOTE,
+  cleanOwnNames,
   filterRows,
   tabAfterRangeChange,
   tabCounts,
@@ -924,6 +928,27 @@ function WhatShows({
           Hide group and meeting chats I never wrote in
           <span className="block text-[11px] text-muted-foreground">Unless someone @mentioned you.{hidden.uninvolved ? ` ${hidden.uninvolved} hidden.` : ""}</span>
         </span>
+      </label>
+      {/* F4 (owner-approved 2026-11-18): "Names that are you". One name per line; seeded from the configured full
+          names until saved. A Teams sender with one of these full names is you (your other account), never someone
+          asking you. Saved like every other setting here (setActionsSettingsFn). */}
+      <label className="block text-xs" data-testid="actions-own-names-field">
+        <span className="block">Names that are you</span>
+        <span className="block text-[11px] text-muted-foreground">
+          One full name per line (first and last). A Teams message from one of these names counts as yours. {OWN_NAMES_NOTE}
+        </span>
+        <textarea
+          key={settings.ownNames.join("\n")}
+          defaultValue={settings.ownNames.join("\n")}
+          rows={Math.max(2, Math.min(OWN_NAMES_MAX, settings.ownNames.length + 1))}
+          maxLength={OWN_NAMES_MAX * (OWN_NAME_CHARS + 1)}
+          onBlur={(e) => {
+            const next = cleanOwnNames(e.target.value.split("\n"));
+            if (next.join("\n") !== settings.ownNames.join("\n")) onChange({ ...settings, ownNames: next });
+          }}
+          data-testid="actions-own-names"
+          className="mt-1 w-full max-w-sm resize-y rounded border border-hairline bg-background px-1.5 py-0.5 text-xs"
+        />
       </label>
       <p className={head}>Sources</p>
       {(["email", "teams", "meeting"] as const).map((s) => (

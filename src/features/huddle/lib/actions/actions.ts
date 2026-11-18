@@ -12,6 +12,7 @@
 
 import type { ActionCategory, ActionKind, ActionSection } from "../correspondence/action-classify";
 import { ACTION_SECTION_ORDER } from "../correspondence/action-classify";
+import { foldPersonName } from "../correspondence/report-from-ledger";
 
 // ── SETTINGS ("What shows") ─────────────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,34 @@ export interface ActionsSettings {
   /** Which correspondence the page lists AND the classifier judges (owner 2026-11-17: "an option for all time vs this
    *  week"). "week" = since Monday 00:00 (the original behaviour, default); "all" = everything still stored. */
   range: ActionsRange;
+  /** F4 (AC-actions-safety-and-invites, owner-approved 2026-11-18) "Names that are you": the owner's own display
+   *  names. A Teams sender whose folded name is one of these (2+ name words) is the OWNER, even when his ids are
+   *  known (his second account). Seeded from the configured full names (ownerFullNames) until he saves the field;
+   *  a saved empty list is kept. Takes effect from the next re-check (F4-13). */
+  ownNames: string[];
+}
+
+/** F4 bounds: at most this many names, each at most OWN_NAME_CHARS characters after trim. */
+export const OWN_NAMES_MAX = 10;
+export const OWN_NAME_CHARS = 80;
+/** F4-13 (safe default): a change applies from the next re-check, and the panel says so in these words. */
+export const OWN_NAMES_NOTE = "Applies to new messages and the next re-check.";
+
+/** Pure (F4 rule 4): trim, bound to OWN_NAME_CHARS, drop blanks and duplicates (by folded form), keep at most
+ *  OWN_NAMES_MAX. One-word names are KEPT (display) but never match (ownerTeamsIdsAcross needs 2+ words). */
+export function cleanOwnNames(xs: readonly unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const x of xs) {
+    if (typeof x !== "string") continue;
+    const t = x.trim().replace(/\s+/g, " ").slice(0, OWN_NAME_CHARS).trim();
+    const k = foldPersonName(t);
+    if (!t || !k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+    if (out.length >= OWN_NAMES_MAX) break;
+  }
+  return out;
 }
 
 export type ActionsRange = "week" | "all";
@@ -90,6 +119,7 @@ export const ACTIONS_SETTINGS_DEFAULT: ActionsSettings = {
   dailyCap: DAILY_CAP_DEFAULT,
   timeZone: "America/New_York",
   range: "week",
+  ownNames: [],
 };
 
 const isZone = (z: unknown): z is string => {
@@ -102,8 +132,9 @@ const isZone = (z: unknown): z is string => {
   }
 };
 
-/** Pure: stored JSON (anything) -> complete settings. Unknown / bad fields fall back to the default, field by field. */
-export function resolveActionsSettings(raw: unknown): ActionsSettings {
+/** Pure: stored JSON (anything) -> complete settings. Unknown / bad fields fall back to the default, field by field.
+ *  `seed` (F4): the configured full names, used for `ownNames` ONLY when the stored settings have no such field. */
+export function resolveActionsSettings(raw: unknown, seed: readonly string[] = []): ActionsSettings {
   const d = ACTIONS_SETTINGS_DEFAULT;
   const o = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const isHideable = (c: unknown): c is HideableCategory => (HIDEABLE_CATEGORIES as readonly string[]).includes(c as string);
@@ -128,6 +159,8 @@ export function resolveActionsSettings(raw: unknown): ActionsSettings {
     dailyCap: cap,
     timeZone: isZone(o.timeZone) ? o.timeZone : d.timeZone,
     range: (ACTIONS_RANGES as readonly unknown[]).includes(o.range) ? (o.range as ActionsRange) : d.range,
+    // F4 rule 2: a stored list (even []) is used exactly; no stored field -> the seed.
+    ownNames: cleanOwnNames(Array.isArray(o.ownNames) ? o.ownNames : seed),
   };
 }
 

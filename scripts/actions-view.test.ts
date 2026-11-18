@@ -401,7 +401,8 @@ t("RANGE-2 week window = since Monday 00:00 (unchanged behaviour)", actionsWindo
   const pageRead = body("export async function getActionsPage(");
   t(
     "RANGE-5 GUARD: page read and classify pass both window with actionsWindowStartMs(now, s), neither with a bare sinceMondayMs",
-    [classify.includes("assembleLedgerPlan(data, cfg, actionsWindowStartMs(now, s))"), pageRead.includes("const sinceMs = actionsWindowStartMs(now, s);") && pageRead.includes("assembleLedgerPlan(data, cfg, sinceMs)"), /sinceMondayMs\(/.test(srv)],
+    // F4 (2026-11-18): both calls also pass the resolved "Names that are you" (s.ownNames) as the 4th argument.
+    [classify.includes("assembleLedgerPlan(data, cfg, actionsWindowStartMs(now, s), s.ownNames)"), pageRead.includes("const sinceMs = actionsWindowStartMs(now, s);") && pageRead.includes("assembleLedgerPlan(data, cfg, sinceMs, s.ownNames)"), /sinceMondayMs\(/.test(srv)],
     [true, true, false],
   );
   const view = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
@@ -590,6 +591,109 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
     ["teams\u0000cur", { ...verdictFor(TABLE[0]), key: "t-cur|1", inputVersion: CLASSIFIER_INPUT_VERSION.teams }],
   ]);
   t("AI-14 GUARD: the version bump forces a re-judge (email < 2, teams < 3 are not current; the new versions are)", [CLASSIFIER_INPUT_VERSION, [...currentlyJudgedKeys(store)].sort()], [{ email: 2, teams: 3 }, ["e-cur|1", "t-cur|1"]]);
+}
+
+// ── F4 (AC-actions-safety-and-invites): "Names that are you" -- the owner's other name / account is the OWNER ─────
+// Synthetic owner "Sam Okafor" (configured) whose second Teams account shows "Samuel Okafor". "Sam Rivera" is a
+// made-up namesake sharing only the first name.
+{
+  const { ownerTeamsIdsAcross, teamsChatsFromLedger, foldPersonName } = await import("../src/features/huddle/lib/correspondence/report-from-ledger");
+  const { ownerFullNames } = await import("../src/features/huddle/lib/correspondence/needs-you");
+  const { cleanOwnNames, OWN_NAMES_MAX, OWN_NAME_CHARS, OWN_NAMES_NOTE } = await import("../src/features/huddle/lib/actions/actions");
+  const A = "@";
+  const C1 = `19:f4a_one${A}unq.gbl.spaces`;
+  const C2 = `19:f4b_two${A}unq.gbl.spaces`;
+  const C3 = `19:f4c_three${A}unq.gbl.spaces`;
+  const ID_A = "f4-main-account";
+  const ID_B = "f4-second-account";
+  const tm = (o: Partial<TeamsContent>): LedgerReportRow => {
+    const c: TeamsContent = { kind: "teams", chatId: C3, chatName: null, messageId: "1", at: "2026-11-16T15:00:00Z", sender: { id: "f4-pat", name: "Pat Example", isApp: false }, fromOwner: null, text: "Synthetic text", webUrl: null, mentionedUserIds: [], ...o };
+    return { source: "teams", sourceItemId: teamsSourceItemId(c.chatId, c.messageId), threadId: c.chatId, at: c.at, content: c };
+  };
+  // The main account's id is known from 2+ chats (loop-2 D-4), so ids WERE found before any name is consulted.
+  const known = [
+    tm({ chatId: C1, messageId: "a1", at: "2026-11-12T10:00:00Z", sender: { id: ID_A, name: "Sam Okafor", isApp: false }, ownerUserId: ID_A }),
+    tm({ chatId: C2, messageId: "a2", at: "2026-11-12T11:00:00Z", sender: { id: ID_A, name: "Sam Okafor", isApp: false }, ownerUserId: ID_A }),
+  ];
+  const ask = tm({ messageId: "p1", at: "2026-11-16T12:00:00Z", text: "Synthetic: can you send the deck?" });
+  const second = tm({ messageId: "b1", at: "2026-11-16T12:30:00Z", sender: { id: ID_B, name: "Samuel Okafor", isApp: false }, text: "Synthetic: on it, sending today." });
+  const rows = [...known, ask, second];
+  const speakers = (rs: LedgerReportRow[], names: string[]) => teamsChatsFromLedger(rs, [], names).find((c) => c.chatId === C3)!.messages.map((m) => m.speaker);
+  t("F4-1 GUARD: main id known (2+ chats) AND ownNames ['Samuel Okafor'] -> the result holds BOTH ids, and id-B's message is OWNER", [ownerTeamsIdsAcross(rows, [], ["Samuel Okafor"]).sort(), speakers(rows, ["Samuel Okafor"])], [[ID_A, ID_B].sort(), ["OTHER", "OWNER"]]);
+  t("F4-2 GUARD: a saved EMPTY list is respected (not re-seeded): resolve keeps [], and id-B stays OTHER", [resolveActionsSettings({ ownNames: [] }, ["Samuel Okafor"]).ownNames, ownerTeamsIdsAcross(rows, [], resolveActionsSettings({ ownNames: [] }, ["Samuel Okafor"]).ownNames), speakers(rows, resolveActionsSettings({ ownNames: [] }, ["Samuel Okafor"]).ownNames)], [[], [ID_A], ["OTHER", "OTHER"]]);
+  const cfgF4 = (names: string[], login = "sokafor@huddle.example") =>
+    ({ mailbox: "sokafor@work.example", ownerLogins: [login], correspondence: { ownerNames: names } }) as Parameters<typeof ownerFullNames>[0];
+  t(
+    "F4-3 seed: no stored field -> ownNames = configured full names; config 'Sam' only + login sokafor@ -> []",
+    [resolveActionsSettings({ dailyCap: 9 }, ownerFullNames(cfgF4(["Sam Okafor", "Samuel Okafor"]))).ownNames, resolveActionsSettings(null, ownerFullNames(cfgF4(["Sam"]))).ownNames, resolveActionsSettings({}, ["Sam Okafor"]).ownNames],
+    [["Sam Okafor", "Samuel Okafor"], [], ["Sam Okafor"]],
+  );
+  const rivera = tm({ messageId: "r1", at: "2026-11-16T12:45:00Z", sender: { id: "f4-rivera", name: "Sam Rivera", isApp: false }, text: "Synthetic: can you review this?" });
+  t("F4-4 GUARD: a namesake sharing only the FIRST name ('Sam Rivera') is OTHER even with ['Sam Okafor','Sam'] listed (one-word names never match)", [speakers([...known, ask, rivera], ["Sam Okafor", "Sam"]), ownerTeamsIdsAcross([...known, ask, rivera], [], ["Sam Okafor", "Sam"])], [["OTHER", "OTHER"], [ID_A]]);
+  const commaB = tm({ messageId: "b2", at: "2026-11-16T12:30:00Z", sender: { id: ID_B, name: "Okafor, Samuel", isApp: false } });
+  t("F4-5 'Okafor, Samuel' against ['Samuel Okafor'] is the OWNER (Last, First fold)", speakers([...known, ask, commaB], ["Samuel Okafor"]), ["OTHER", "OWNER"]);
+  const appB = tm({ messageId: "b3", at: "2026-11-16T12:30:00Z", sender: { id: "f4-app", name: "Samuel Okafor", isApp: true } });
+  t("F4-6 an app sender named 'Samuel Okafor' is never added", [ownerTeamsIdsAcross([...known, ask, appB], [], ["Samuel Okafor"]), speakers([...known, ask, appB], ["Samuel Okafor"])], [[ID_A], ["OTHER", "OTHER"]]);
+  // F4-7: the only message after the latest true OTHER message is from id-B -> settled (the owner wrote after it).
+  const chatSettled = teamsChatsFromLedger(rows, [], ["Samuel Okafor"]).find((c) => c.chatId === C3)!;
+  const chatUnsettled = teamsChatsFromLedger(rows, [], []).find((c) => c.chatId === C3)!;
+  const vSettled = admitActionVerdict({ open_item: false, kind: "none", todo: null, due: null, quote: null, confidence: "high", reason: "Answered by your reply", category: "person_request" }, teamsQuoteHaystack(chatSettled), { key: "f4|b1", settled: chatSettled.settled, nowIso: NOW });
+  t("F4-7 settled: id-B wrote after the latest OTHER -> settled true, latest OTHER is the real other person, answered by reply (no 'Reply to <his name>' item)", [chatSettled.settled, chatSettled.latestOther?.id, chatUnsettled.settled, chatUnsettled.latestOther?.id, vSettled.status, vSettled.answeredByReply], [true, ask.sourceItemId, false, second.sourceItemId, "none", true]);
+  const many = Array.from({ length: 12 }, (_, i) => `Synthetic Name${String.fromCharCode(65 + i)} Example`);
+  const resolved = resolveActionsSettings({ ownNames: [...many, "x".repeat(120) + " Long", "   ", "", "sam okafor", "Sam  Okafor", 7, null] }).ownNames;
+  t("F4-8 bounds: at most 10, each trimmed to 80, no blanks, no duplicates by folded form", [resolved.length, resolved.every((n) => n.length <= OWN_NAME_CHARS && !!n.trim()), OWN_NAMES_MAX, cleanOwnNames(["sam okafor", "Sam  Okafor", "Okafor, Sam", " ", "Pat Example"]), cleanOwnNames(["y".repeat(120)])[0].length], [10, true, 10, ["sam okafor", "Pat Example"], 80]);
+  // F4-9 / X-6: ONE resolver. All three passes (heartbeat, page read, report) hand the resolved s.ownNames to the ONE
+  // assembly, which uses it for Teams identity AND the model's owner-name context.
+  const { readFileSync } = await import("node:fs");
+  const srvF4 = readFileSync(new URL("../src/features/huddle/lib/actions/actions.server.ts", import.meta.url), "utf8");
+  const cfgSam = parseFeedsConfig(JSON.stringify({ enabled: true, synthetic: false, driveUser: "sokafor@work.example", mailbox: "sokafor@work.example", ownerLogins: ["sokafor@huddle.example"], teams: {}, correspondence: { ownerNames: ["Sam Okafor"] } }))!;
+  const asmSeed = assembleLedgerPlan({ rows, proposals: [], bell: [] }, cfgSam, Date.parse("2026-11-09T05:00:00Z"));
+  const asmOwn = assembleLedgerPlan({ rows, proposals: [], bell: [] }, cfgSam, Date.parse("2026-11-09T05:00:00Z"), ["Sam Okafor", "Samuel Okafor"]);
+  const spk = (a: typeof asmOwn) => a.plan.teams.scan.concat(a.plan.teams.resolved.map((r) => r.c)).find((c) => c.chatId === C3)?.messages.map((m) => m.speaker) ?? null;
+  t(
+    "F4-9 GUARD (X-6): heartbeat, page read and report all pass s.ownNames into assembleLedgerPlan; with it id-B is OWNER, the seed alone keeps it OTHER; names reach the model context",
+    [
+      (srvF4.match(/assembleLedgerPlan\([^)]*\), s\.ownNames\)|assembleLedgerPlan\(data, cfg, [a-zA-Z.]+, s\.ownNames\)/g) ?? []).length,
+      (srvF4.match(/assembleLedgerPlan\(/g) ?? []).length,
+      spk(asmSeed),
+      spk(asmOwn),
+      asmOwn.ctx.ownerNames.includes("Samuel Okafor"),
+      asmOwn.ctx.ownerFullNames,
+      asmSeed.ctx.ownerFullNames,
+    ],
+    [3, 3, ["OTHER", "OTHER"], ["OTHER", "OWNER"], true, ["Sam Okafor", "Samuel Okafor"], ["Sam Okafor"]],
+  );
+  const viewF4 = readFileSync(new URL("../src/features/huddle/components/ActionsView.tsx", import.meta.url), "utf8");
+  t("F4-10 / F4-13 the What shows panel has the 'Names that are you' field (resolved list, saved through onChange) and says when it applies", [viewF4.includes("Names that are you"), viewF4.includes('data-testid="actions-own-names"'), viewF4.includes("defaultValue={settings.ownNames.join(\"\\n\")}"), viewF4.includes("onChange({ ...settings, ownNames: next })"), viewF4.includes("{OWN_NAMES_NOTE}"), OWN_NAMES_NOTE], [true, true, true, true, true, "Applies to new messages and the next re-check."]);
+  // F4 spelling table S4-1..S4-16 (sender display-name spellings against ownNames ["Samuel Okafor", "Sam Okafor"]).
+  const OWN = ["Samuel Okafor", "Sam Okafor"];
+  const S4: [string, string, unknown, boolean, "OWNER" | "OTHER"][] = [
+    ["S4-1", "exact", "Samuel Okafor", false, "OWNER"],
+    ["S4-2", "case + spaces", "samuel  OKAFOR", false, "OWNER"],
+    ["S4-3", "Last, First", "Okafor, Samuel", false, "OWNER"],
+    ["S4-4", "trim", " Sam Okafor ", false, "OWNER"],
+    ["S4-5", "bare first name", "Sam", false, "OTHER"],
+    ["S4-6", "bare first name", "Samuel", false, "OTHER"],
+    ["S4-7", "first-name namesake", "Sam Rivera", false, "OTHER"],
+    ["S4-8", "prefix", "Samuel Okafor-Diaz", false, "OTHER"],
+    ["S4-9", "middle initial not folded", "Samuel J. Okafor", false, "OTHER"],
+    ["S4-10", "suffix not stripped", "Samuel Okafor (External)", false, "OTHER"],
+    ["S4-11", "no comma, no swap", "Okafor Samuel", false, "OTHER"],
+    ["S4-12", "accents not stripped", "Sámuel Okafor", false, "OTHER"],
+    ["S4-13", "two commas", "Okafor, Samuel, Jr", false, "OTHER"],
+    ["S4-14", "app sender", "Samuel Okafor", true, "OTHER"],
+    ["S4-15", "exact full-name namesake (accepted risk)", "Samuel Okafor", false, "OWNER"],
+    ["S4-16", "empty / missing name", "", false, "OTHER"],
+  ];
+  const s4got: string[] = [];
+  const s4want: string[] = [];
+  for (const [id, , name, isApp] of S4) {
+    const r = tm({ messageId: `s4-${id}`, at: "2026-11-16T12:30:00Z", sender: { id: `f4-${id.toLowerCase()}`, name: name as string, isApp } });
+    s4got.push(`${id}:${speakers([...known, ask, r], OWN)[1]}`);
+  }
+  for (const [id, , , , want] of S4) s4want.push(`${id}:${want}`);
+  const missingName = tm({ messageId: "s4-missing", at: "2026-11-16T12:30:00Z", sender: { id: "f4-missing", isApp: false } as never });
+  t("F4 spelling table S4-1..S4-16 (Teams sender names vs ['Samuel Okafor','Sam Okafor'])", [s4got, speakers([...known, ask, missingName], OWN)[1], foldPersonName("Okafor, Samuel, Jr")], [s4want, "OTHER", "okafor, samuel, jr"]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

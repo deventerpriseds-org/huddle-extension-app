@@ -289,8 +289,9 @@ export function foldPersonName(v: unknown): string {
  * CHAT, so a chat whose own rows carried no `ownerUserId` had NO owner id, and the owner's own message was labelled
  * OTHER and judged as someone asking him (live probe 2026-11-17: 37 of 69 recent messages were the owner's, none
  * carried the id). The owner is one person, so an id seen on any of his capture lines is his everywhere.
- * LAST RESORT, only when no id is known at all: a sender whose display name (foldPersonName) is one of the owner's
- * configured names contributes its sender ID; ids decide everything after that. App senders never count.
+ * NAMES (F4, 2026-11-18; this used to be a last resort, only when no id was known): a sender whose display name
+ * (foldPersonName) is one of the owner's names (`ownerNames` = the resolved "Names that are you", 2+ words) ALWAYS
+ * contributes its sender ID, so his second account counts as him too. App senders never count.
  * LOOP-2 D-4 (one bad row must not promote a sender to OWNER in every chat): a row's `ownerUserId` is taken
  * ACROSS chats only when that id is on rows of AT LEAST 2 DIFFERENT chats. When no id reaches that, the single
  * MOST FREQUENT id is taken, only when it is on 2+ rows and strictly ahead of every other id. Configured ids always
@@ -316,13 +317,14 @@ export function ownerTeamsIdsAcross(rows: readonly LedgerReportRow[], configured
     const ranked = [...seen].sort((a, b) => b[1].rows - a[1].rows);
     if (ranked.length && ranked[0][1].rows >= 2 && (ranked.length === 1 || ranked[0][1].rows > ranked[1][1].rows)) ids.add(ranked[0][0]);
   }
-  if (!ids.size) {
-    // Loop-2 D-3: FULL names only (two or more name words). A bare first name never marks a sender as the owner.
-    const names = new Set((ownerNames ?? []).filter((n) => personNameWordCount(n) >= 2).map(foldPersonName).filter(Boolean));
-    for (const c of contents) {
-      const sid = normTeamsId(c?.sender?.id);
-      if (sid && c?.sender?.isApp !== true && names.has(foldPersonName(c?.sender?.name))) ids.add(sid);
-    }
+  // F4 (AC-actions-safety-and-invites, owner-approved 2026-11-18): the owner's own names ("Names that are you", the
+  // resolved ActionsSettings.ownNames) mark a sender as the OWNER ALWAYS, not only when no id is known: his second
+  // account has its own id and his full name. Loop-2 D-3 still holds: FULL names only (two or more name words), so a
+  // bare first name never marks a sender as the owner. App senders never count.
+  const names = new Set((ownerNames ?? []).filter((n) => personNameWordCount(n) >= 2).map(foldPersonName).filter(Boolean));
+  for (const c of contents) {
+    const sid = normTeamsId(c?.sender?.id);
+    if (sid && c?.sender?.isApp !== true && names.has(foldPersonName(c?.sender?.name))) ids.add(sid);
   }
   return [...ids];
 }
@@ -641,9 +643,13 @@ export function assembleLedgerPlan(
   data: { rows: readonly LedgerReportRow[]; proposals: readonly ProposalSignalRow[]; bell: readonly BellSignalRow[] },
   cfg: Pick<OneDriveFeedsConfig, "mailbox" | "ownerLogins" | "correspondence" | "teams">,
   sinceMs: number,
+  /** F4: the resolved "Names that are you" (ActionsSettings.ownNames). Absent = the configured full names (its seed).
+   *  The ONE owner-name input for Teams identity, the source label and the model's owner-name context (X-6). */
+  ownNames?: readonly string[],
 ): AssembledLedgerPlan {
   const sent = sentFromLedger(data.rows);
-  const ctx: NeedsYouContext = { ownerAddresses: ownerAddressSet(cfg), ownerNames: effectiveOwnerNames(cfg), ownerFullNames: ownerFullNames(cfg), latestSent: latestSentByConversation(sent), sentKnown: sent.length > 0 };
+  const own = [...(ownNames ?? ownerFullNames(cfg))];
+  const ctx: NeedsYouContext = { ownerAddresses: ownerAddressSet(cfg), ownerNames: [...new Set([...effectiveOwnerNames(cfg), ...own])], ownerFullNames: own, latestSent: latestSentByConversation(sent), sentKnown: sent.length > 0 };
   const emailFacts = [...groupEmailConversations(cfg.mailbox, emailMessagesFromLedger(data.rows))].map(([k, msgs]) => conversationFacts(k, msgs, ctx));
   const teams = teamsChatsFromLedger(data.rows, cfg.teams.ownerSenderIds, ctx.ownerFullNames ?? []);
   const meetings = meetingItemsFromLedger(data.rows, data.proposals);

@@ -13,6 +13,7 @@
 import { getSharedPool, SHARED_POOL_MAX } from "../db/shared-pool.server";
 import { ACTION_SCHEMA, type ActionVerdict } from "../correspondence/action-classify";
 import { assembleLedgerPlan, type MeetingItems } from "../correspondence/report-from-ledger";
+import { ownerFullNames } from "../correspondence/needs-you";
 import { isFeedId, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
 import { getFeedsConfig } from "../external-feeds/onedrive-feed.server";
 import type { ProposalSourceRef } from "../proposals/proposals";
@@ -40,9 +41,13 @@ export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | nul
   return owner ? { ...cfg, owner: owner.toLowerCase() } : null;
 }
 
-async function settingsFor(owner: string): Promise<ActionsSettings> {
+/** F4: the seed of "Names that are you" -- the configured full names (ownerFullNames), used only while the owner has
+ *  never saved the field. */
+const ownNamesSeed = (cfg: Pick<OneDriveFeedsConfig, "mailbox" | "ownerLogins" | "correspondence">) => ownerFullNames(cfg);
+
+async function settingsFor(cfg: OneDriveFeedsConfig & { owner: string }): Promise<ActionsSettings> {
   const { getActionsSettingsRaw } = await import("../email/email-replies.server");
-  return resolveActionsSettings(await getActionsSettingsRaw(owner).catch(() => null));
+  return resolveActionsSettings(await getActionsSettingsRaw(cfg.owner).catch(() => null), ownNamesSeed(cfg));
 }
 
 const lower = (xs: readonly string[]) => [...new Set(xs.map((x) => String(x ?? "").trim().toLowerCase()).filter(Boolean))];
@@ -158,12 +163,13 @@ export function runActionsClassify(): Promise<ClassifyResult | null> {
     try {
       const cfg = actionsConfig();
       if (!cfg) return null;
-      const s = await settingsFor(cfg.owner);
+      const s = await settingsFor(cfg);
       if (!classifyEnabled(s, true)) return null;
       const owners = lower(cfg.ownerLogins);
       const { loadLedgerReportData } = await import("../correspondence/report-from-ledger.server");
       const data = await loadLedgerReportData(cfg.ownerLogins);
-      const assembled = assembleLedgerPlan(data, cfg, actionsWindowStartMs(now, s));
+      // F4 / X-6: the resolved "Names that are you" decide Teams owner identity in every pass.
+      const assembled = assembleLedgerPlan(data, cfg, actionsWindowStartMs(now, s), s.ownNames);
       const verdicts = await loadVerdicts(owners);
       // Loop-2 D-1: only verdicts judged at the current classifier-input version are skipped; older ones re-judge.
       const judged = currentlyJudgedKeys(verdicts);
@@ -292,10 +298,10 @@ export async function runReportPassFor(cfg: OneDriveFeedsConfig, a: { sinceMs: n
   const owner = String(cfg.ownerLogins[0] ?? "").toLowerCase();
   if (!owner) throw new Error("no_owner_login");
   const owners = lower(cfg.ownerLogins);
-  const s = await settingsFor(owner);
+  const s = await settingsFor({ ...cfg, owner });
   const { loadLedgerReportData } = await import("../correspondence/report-from-ledger.server");
   const data = await loadLedgerReportData(cfg.ownerLogins);
-  const assembled = assembleLedgerPlan(data, cfg, a.sinceMs);
+  const assembled = assembleLedgerPlan(data, cfg, a.sinceMs, s.ownNames);
   const now = Date.now();
   const usedBefore = await usedTodayFor(cfg.ownerLogins, now, s.timeZone);
   const real = await classifyDepsFor(owner, owners);
@@ -393,11 +399,11 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
   if (!owners) return { status: "signed_out" };
   if (!owners.length) return { status: "off" };
   const now = Date.now();
-  const s = await settingsFor(cfg.owner);
+  const s = await settingsFor(cfg);
   const sinceMs = actionsWindowStartMs(now, s);
   const { loadLedgerReportData } = await import("../correspondence/report-from-ledger.server");
   const data = await loadLedgerReportData(cfg.ownerLogins);
-  const assembled = assembleLedgerPlan(data, cfg, sinceMs);
+  const assembled = assembleLedgerPlan(data, cfg, sinceMs, s.ownNames);
   const verdicts = await loadVerdicts(lower(cfg.ownerLogins));
   const proposalIds = [...new Set([...verdicts.values()].map((v) => v.proposalId).filter((x): x is string => !!x))];
   const proposals = await loadProposalsById(owners, proposalIds);
@@ -436,7 +442,7 @@ export async function saveActionsSettings(caller: { entra_object_id?: string; en
   if (!cfg) return { ok: false, error: "Actions is not switched on." };
   const owners = await ownedScope(caller, cfg);
   if (!owners?.length) return { ok: false, error: "Sign-in required." };
-  const s = resolveActionsSettings(raw);
+  const s = resolveActionsSettings(raw, ownNamesSeed(cfg));
   const { setActionsSettingsRaw } = await import("../email/email-replies.server");
   await setActionsSettingsRaw(cfg.owner, s);
   return { ok: true, settings: s };
@@ -457,7 +463,7 @@ export async function correctActionItem(
   if (!r.ok) return r;
   const next = r.correction;
   if (next && next.reason === "stop_list" && input.listSender) {
-    const s = await settingsFor(cfg.owner);
+    const s = await settingsFor(cfg);
     const sender = input.listSender.trim().toLowerCase();
     const hiddenSenders = input.undo ? s.hiddenSenders.filter((x) => x !== sender) : [...new Set([...s.hiddenSenders, sender])];
     const { setActionsSettingsRaw } = await import("../email/email-replies.server");
