@@ -36,7 +36,7 @@ const sched = src.slice(src.indexOf("export function ScheduleWidget("), src.inde
 const live = fn("LiveScheduleWidget");
 const hook = fn("useScheduleData");
 
-check("S1 a starred row on the live tab gets the button", /pushCtx && row\.isPriority \?\s*\(\s*<UnstarButton row=\{row\} ctx=\{pushCtx\} \/>/.test(upNext));
+check("S1 a starred row on the live tab gets the button", /\{pushCtx && row\.isPriority \?\s*\(\s*<UnstarButton row=\{row\} ctx=\{pushCtx\} \/>/.test(upNext));
 check("S2 every other row keeps the plain star", /:\s*\(\s*<Star size=\{11\}[^>]*aria-hidden \/>/.test(upNext));
 check("S3 the button runs the SAME unstar write as the Priorities ⋮ menu", /runPush\(ctx, "unstar", \{ taskId: row\.id \}\)/.test(unstar));
 check("S4 the button is labelled for what it does", /aria-label=\{`Remove "\$\{row\.title\}" from This Week`\}/.test(unstar));
