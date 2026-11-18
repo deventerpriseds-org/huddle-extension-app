@@ -1103,5 +1103,194 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   t("RT-30 F5-9 a held meeting_invite is hidden by the default switch, counted, not held", [hiddenMeet.held.length, hiddenMeet.hidden.categories.meeting_invite ?? 0], [0, 1]);
 }
 
+// ── AC-actions-no-orphans (Tier 1, owner-approved 2026-11-18): no Actions item is ever left with no home. ─────────
+// docs/qc-evidence/AC-actions-no-orphans.md. Synthetic data only. Test ids are "NO-<AC>".
+{
+  const P = await import("../src/features/huddle/lib/actions/pipeline");
+  const A = await import("../src/features/huddle/lib/actions/actions");
+  const { CLASSIFIER_INPUT_VERSION } = await import("../src/features/huddle/lib/correspondence/action-classify");
+  const homeless = (v: ActionVerdict) => v.status === "open" && !v.proposalId && v.onBoard !== true;
+  const noProp = (o: Partial<{ rejectedKinds: string[] }> = {}) => async () => ({ id: null, onBoard: false, ...o });
+
+  // ── A. write time ──
+  const sA = stub(answerFor);
+  const rA = await runClassify(asm, S(), new Set(), 10, { ...sA.deps, propose: noProp({ rejectedKinds: ["task_not_grounded"] }) });
+  const stA = [...sA.stored.values()];
+  t("NO-AC1 GUARD: an open verdict whose propose gives no id and no board -> stored not_checked / no_task_record, notChecked counted (not open)", [stA.length, stA.every((v) => v.status === "not_checked" && v.notCheckedReason === "no_task_record" && v.proposalId === null && v.onBoard === undefined), rA.notChecked, rA.open], [3, true, 3, 0]);
+  const sB = stub(answerFor);
+  await runClassify(asm, S(), new Set(), 10, sB.deps);
+  const strip = (v: ActionVerdict | undefined, ks: string[]) => Object.fromEntries(Object.entries(v ?? {}).filter(([k]) => !ks.includes(k)));
+  const k0 = [...sB.stored.keys()].sort();
+  t("NO-AC2 GUARD: the held verdict keeps todo / quote / kind / category / due / key / inputVersion; only status, reason and kinds differ", k0.map((k) => JSON.stringify(strip(sA.stored.get(k), ["status", "notCheckedReason", "noTaskRecordKinds", "proposalId"])) === JSON.stringify(strip(sB.stored.get(k), ["status", "proposalId"]))), [true, true, true]);
+
+  // AC-3 / P-1..P-16: every propose outcome, through the adapter AND the stored-verdict rule.
+  const vOpen = { ...(stA[0] ?? {}), status: "open", notCheckedReason: undefined, noTaskRecordKinds: undefined, proposalId: null } as unknown as ActionVerdict;
+  delete (vOpen as Record<string, unknown>).notCheckedReason;
+  delete (vOpen as Record<string, unknown>).noTaskRecordKinds;
+  const tr = (o: Partial<import("../src/features/huddle/lib/actions/pipeline").ProposeTry>) => ({ ids: [], onBoard: 0, suppressed: 0, rejected: {}, ...o });
+  const table: [string, ReturnType<typeof tr>[], string][] = [
+    ["P-1 created", [tr({ ids: ["prop-p1"] })], "open:prop-p1"],
+    ["P-2 attached", [tr({ ids: ["prop-p2"] })], "open:prop-p2"],
+    ["P-3 seen", [tr({ ids: ["prop-p3"] })], "open:prop-p3"],
+    ["P-6 on board", [tr({ onBoard: 1 })], "board"],
+    ["P-7 reworded", [tr({ suppressed: 1, suppressedBy: [{ id: "prop-prior7", reason: "reworded" }] })], "open:prop-prior7"],
+    ["P-8 dismissed elsewhere", [tr({ suppressed: 1, suppressedBy: [{ id: "prop-dis8", reason: "dismissed" }] })], "board:dismissed"],
+    ["P-8b suppressed, no reason given", [tr({ suppressed: 1 })], "board"],
+    ["P-9 evidence gaps", [tr({ rejected: { evidence_not_in_source: 1 } }), tr({ rejected: { evidence_not_in_source: 1 } })], "held:evidence_not_in_source"],
+    ["P-10 not grounded", [tr({ rejected: { task_not_grounded: 1 } }), tr({ rejected: { evidence_too_short: 1 } })], "held:evidence_too_short,task_not_grounded"],
+    ["P-11 other kind", [tr({ rejected: { over_cap: 2 } }), tr({ rejected: {} })], "held:over_cap"],
+    ["P-12 rejected then created", [tr({ rejected: { task_not_grounded: 1 } }), tr({ ids: ["prop-p12"] })], "open:prop-p12"],
+    ["P-13a rejected then on board", [tr({ rejected: { task_not_grounded: 1 } }), tr({ onBoard: 1 })], "board"],
+    ["P-13b rejected then reworded", [tr({ rejected: { task_not_grounded: 1 } }), tr({ suppressed: 1, suppressedBy: [{ id: "prop-p13", reason: "reworded" }] })], "open:prop-p13"],
+    ["P-13c rejected then dismissed", [tr({ rejected: { task_not_grounded: 1 } }), tr({ suppressed: 1, suppressedBy: [{ id: "prop-x", reason: "dismissed" }] })], "board:dismissed"],
+    ["P-1b empty-string id", [tr({ ids: [""] }), tr({ rejected: { task_missing: 1 } })], "held:task_missing"],
+  ];
+  const shapeOf = (v: ActionVerdict) => (v.status === "open" ? (v.onBoard ? `board${v.suppressedBy ? `:${v.suppressedBy}` : ""}` : `open:${v.proposalId}`) : `held:${(v.noTaskRecordKinds ?? []).join(",")}`);
+  const got: string[] = [];
+  let homelessN = 0;
+  for (const [, tries] of table) {
+    let i = 0;
+    const out = await P.proposeOpenVerdict({ todo: "Test-a to-do", quote: "Test-a quote" }, async () => tries[Math.min(i++, tries.length - 1)]);
+    const sv = P.verdictAfterPropose(vOpen, out);
+    if (homeless(sv)) homelessN++;
+    got.push(shapeOf(sv));
+  }
+  t("NO-AC3 GUARD: P-1..P-13 table -- each outcome stores its expected shape, and NONE is open with no home", [got, homelessN], [table.map((r) => r[2]), 0]);
+  const p14 = P.verdictAfterPropose(vOpen, await P.proposeOpenVerdict({ todo: null, quote: null }, async () => { throw new Error("must not be called"); }));
+  t("NO-AC3b P-14 no try possible -> held no_task_record with kinds []", [p14.status, p14.notCheckedReason, p14.noTaskRecordKinds], ["not_checked", "no_task_record", []]);
+  const p12 = P.verdictAfterPropose(vOpen, { id: "prop-p12", onBoard: false });
+  t("NO-AC5 GUARD: rejected-then-created stores open with the id and NO kinds / reason", [p12.status, p12.proposalId, "noTaskRecordKinds" in p12, "notCheckedReason" in p12], ["open", "prop-p12", false, false]);
+  const secret = "Zebrafinchsynth";
+  const v6 = { ...vOpen, todo: `Test-${secret} to-do`, quote: `Test-${secret} quote` } as ActionVerdict;
+  const s6 = P.verdictAfterPropose(v6, { id: null, onBoard: false, rejectedKinds: ["task_not_grounded", `${secret} text`, "evidence_not_in_source", "task_not_grounded", "__proto__"] });
+  const json6 = JSON.stringify(s6);
+  t("NO-AC6 GUARD: stored kinds are RejectReason members only, unique, sorted; the to-do's words appear only inside todo / quote", [s6.noTaskRecordKinds, json6.split(secret).length - 1, json6.replace(s6.todo!, "").replace(s6.quote!, "").includes(secret)], [["evidence_not_in_source", "task_not_grounded"], 2, false]);
+  const sE = stub(answerFor);
+  const rE = await runClassify(asm, S(), new Set(), 10, { ...sE.deps, propose: async () => { throw new Error("proposals:store_failed"); } });
+  t("NO-AC8 GUARD: a propose throw (store failure) stores NOTHING and counts a failure (retried next pass)", [sE.stored.size, rE.failures, rE.notChecked, P.pendingUnitCount(asm, S(), new Set())], [0, 3, 0, 3]);
+  const sF = stub(answerFor);
+  await runClassify(asm, S(), new Set(), 10, { ...sF.deps, propose: async () => P.proposeOpenVerdict({ todo: "x", quote: "y" }, async () => tr({ suppressed: 1, suppressedBy: [{ id: "prop-prior9", reason: "reworded" }] })) });
+  t("NO-AC9 GUARD (offline): a reworded suppression links the prior same-item proposal id (open, not onBoard, not held)", [...sF.stored.values()].map((v) => [v.status, v.proposalId, v.onBoard ?? false]), [["open", "prop-prior9", false], ["open", "prop-prior9", false], ["open", "prop-prior9", false]]);
+  const sG = stub(answerFor);
+  await runClassify(asm, S(), new Set(), 10, { ...sG.deps, propose: async () => P.proposeOpenVerdict({ todo: "x", quote: "y" }, async () => tr({ suppressed: 1, suppressedBy: [{ id: "prop-d", reason: "dismissed" }] })) });
+  const selG = selectActionItems(buildCandidates({ assembled: asm, rows, settings: S(), verdicts: sG.stored, proposals: new Map(), meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
+  const sGkeys = new Set([...sG.stored.values()].map((v) => v.key));
+  const inAny = (sel: ReturnType<typeof selectActionItems>, k: string) => [sel.rows, sel.unchecked, sel.held, sel.corrected, sel.answered].some((g) => g.some((r) => r.itemKey === k));
+  t("NO-AC10 GUARD (offline): a dismissed-elsewhere suppression is stored onBoard + suppressedBy and is in NO group", [[...sG.stored.values()].every((v) => v.onBoard === true && v.suppressedBy === "dismissed"), [...sGkeys].some((k) => inAny(selG, k))], [true, false]);
+  const jA = P.currentlyJudgedKeys(sA.stored);
+  const sH = stub(answerFor);
+  const rH = await runClassify(asm, S(), jA, 10, sH.deps);
+  t("NO-AC11 a stored no_task_record verdict counts as judged: the next pass makes 0 calls for it", [jA.size, rH.calls, sH.calls.length], [3, 0, 0]);
+  const shared = await import("node:fs");
+  const srv = shared.readFileSync(new URL("../src/features/huddle/lib/actions/actions.server.ts", import.meta.url), "utf8");
+  t("NO-AC7 the heartbeat log line is counts only (no to-do / quote / sender / subject interpolated)", (srv.match(/console\.log\(\s*`\[actions\] classify[^`]*`/)?.[0] ?? "").match(/\$\{([^}]*)\}/g)?.every((x) => /res\.|used|s\.dailyCap/.test(x)) ?? false, true);
+
+  // ── B. selection ──
+  const op = (o: Partial<ActionCandidate>) => cand({ status: "open", proposalId: null, proposalState: null, section: "todo", kind: "action", ...o });
+  const selB = selectActionItems([op({ itemKey: "nb|1" }), cand({ status: "not_checked", notCheckedReason: "no_task_record", proposalId: null, proposalState: null, itemKey: "nb|2" }), cand({ status: "not_checked", notCheckedReason: "quote_not_found", proposalId: null, proposalState: null, itemKey: "nb|3" })], S());
+  const byKey = (sel: ReturnType<typeof selectActionItems>) => Object.fromEntries(sel.held.map((r) => [r.itemKey, [r.heldReason, r.heldQuoteLabel]]));
+  t("NO-AC12 GUARD: a current open verdict with no proposal (the legacy rows) is HELD with the no_task_record sentence, not unchecked", [byKey(selB)["nb|1"], selB.unchecked.length, selB.notChecked], [[A.HELD_REASON_TEXT.no_task_record, "AI's quote"], 0, 0]);
+  t("NO-AC13 GUARD: a not_checked / no_task_record verdict is HELD with the same sentence", byKey(selB)["nb|2"], [A.HELD_REASON_TEXT.no_task_record, "AI's quote"]);
+  t("NO-AC14 labels per reason: only quote_not_found says the quote was not found; texts are the fixed constants", [byKey(selB)["nb|3"], A.HELD_REASON_TEXT.no_task_record, Object.entries(A.HELD_QUOTE_LABELS).filter(([, l]) => l.includes("not found")).map(([k]) => k)], [[A.HELD_REASON_TEXT.quote_not_found, A.HELD_QUOTE_LABEL], "Held back: the AI's to-do couldn't be matched to the message closely enough to add it automatically.", ["quote_not_found"]]);
+  const sw = (sel: ReturnType<typeof selectActionItems>) => [sel.held.length, sel.hidden.total];
+  t("NO-AC15 the What-shows switches hide a new-kind held item (uninvolved, source off, category, list sender), counted in hidden", [sw(selectActionItems([op({ uninvolved: true, source: "teams" })], S({ hideUninvolvedChats: true }))), sw(selectActionItems([op({ source: "teams" })], S({ sources: { email: true, teams: false, meeting: true } }))), sw(selectActionItems([op({ category: "meeting_invite" })], S())), sw(selectActionItems([op({ listSender: "ops-list@work.example" })], S({ hiddenSenders: ["ops-list@work.example"] })))], [[0, 1], [0, 1], [0, 1], [0, 1]]);
+  // Spelling table S-1..S-16 at the selection AND the click check (the same rules).
+  const KEY = "email:no-thread|no-msg";
+  const unit = { source: "email", itemKey: KEY, storeAt: { source: "email", sourceItemId: "no-msg" }, refItemId: "no-msg", at: null, uninvolved: false, email: { ownerPosition: "direct", messages: [{ text: "Synthetic: please send the weekly notes by Monday to the team." }], latestOther: { id: "no-msg", text: "Synthetic: please send the weekly notes by Monday to the team." } } } as never;
+  const sv = (o: Record<string, unknown>) => ({ v: 1, key: KEY, inputVersion: CLASSIFIER_INPUT_VERSION.email, status: "open", kind: "action", category: "person_request", confidence: "high", todo: "Test-Send the weekly notes", due: null, quote: "please send the weekly notes by Monday", reason: null, answeredByReply: false, proposalId: null, at: "2026-11-18T10:00:00Z", ...o }) as unknown as ActionVerdict;
+  const spell: [string, ActionVerdict, string, boolean][] = [
+    ["S-1", sv({ proposalId: null }), "held", true],
+    ["S-2", (() => { const x = sv({}) as unknown as Record<string, unknown>; delete x.proposalId; return x as unknown as ActionVerdict; })(), "held", true],
+    ["S-3", sv({ proposalId: "" }), "held", true],
+    ["S-4", sv({ onBoard: false }), "held", true],
+    ["S-5", sv({ onBoard: true }), "none", false],
+    ["S-6", sv({ onBoard: "true" }), "held", true],
+    ["S-7", sv({ proposalId: "prop-s7" }), "rows", false],
+    ["S-8", sv({ status: "not_checked", notCheckedReason: "no_task_record" }), "held", true],
+    ["S-9", sv({ status: "not_checked", notCheckedReason: "no_task_record", proposalId: "prop-s9" }), "held", true],
+    ["S-10", sv({ status: "not_checked", notCheckedReason: "quote_not_found" }), "held", true],
+    ["S-11", sv({ status: "not_checked", notCheckedReason: "bad_shape" }), "unchecked", false],
+    ["S-12", sv({ status: "not_checked" }), "unchecked", false],
+    ["S-13a", sv({ status: "not_checked", notCheckedReason: "No_Task_Record" }), "unchecked", false],
+    ["S-13b", sv({ status: "not_checked", notCheckedReason: "no_task_record " }), "unchecked", false],
+    ["S-13c", sv({ status: "not_checked", notCheckedReason: "no-task-record" }), "unchecked", false],
+    ["S-14", sv({ notCheckedReason: "no_task_record", proposalId: "prop-s14" }), "rows", false],
+    ["S-15", sv({ status: "none", notCheckedReason: "no_task_record" }), "none", false],
+    ["S-16a", sv({ inputVersion: 1 }), "unchecked", false],
+    ["S-16b", sv({ status: "not_checked", notCheckedReason: "no_task_record", key: "email:no-thread|older" }), "unchecked", false],
+    ["G4-b", sv({ proposalId: "prop-g4b", kind: "none" }), "held", true],
+  ];
+  // The candidate the builder would make from this stored verdict (the SAME mapping as buildCandidates).
+  const toCand = (v: ActionVerdict): ActionCandidate => {
+    const cur = P.verdictIsCurrent(v, KEY, "email") ? v : null;
+    return cand({ itemKey: KEY, status: cur?.status ?? "not_checked", notCheckedReason: cur?.status === "not_checked" ? (cur.notCheckedReason as never) ?? null : null, onBoard: cur?.onBoard === true, proposalId: cur?.proposalId || null, proposalState: cur?.proposalId ? "proposed" : null, kind: cur?.kind ?? null, section: cur ? (cur.kind === "none" ? null : "todo") : null });
+  };
+  const groupOf = (sel: ReturnType<typeof selectActionItems>) => (sel.held.length ? "held" : sel.rows.length ? "rows" : sel.unchecked.length ? "unchecked" : "none");
+  const spellGot = spell.map(([id, v]) => [id, groupOf(selectActionItems([toCand(v)], S())), P.isHeldVerdict(v, unit)]);
+  t("NO-S GUARD: spelling table S-1..S-16 + G4-b -- selection group and the click check agree on every stored shape", spellGot, spell.map(([id, , g, h]) => [id, g, h]));
+
+  // AC-16 reconciliation over a mix of every shape: one group per item, counts reconcile.
+  const mixN = [
+    ...spell.map(([id, v]) => ({ ...toCand(v), itemKey: `mix|${id}` })),
+    op({ itemKey: "mix|dec", proposalId: "prop-dec", proposalState: "approved" }),
+    op({ itemKey: "mix|g4a", proposalMissing: true }),
+    op({ itemKey: "mix|cor", proposalId: "prop-cor", proposalState: "proposed", correction: { reason: "not_mine", text: null, itemKey: "mix|cor", at: NOW, withdrawnAt: null } as never }),
+    cand({ itemKey: "mix|ans", status: "none", answeredByReply: true }),
+  ];
+  const selX = selectActionItems(mixN, S());
+  const groups = [selX.rows, selX.unchecked, selX.held, selX.answered, selX.corrected].flatMap((g) => g.map((r) => r.itemKey));
+  const tc = tabCounts(selX.rows, selX.unchecked, selX.held);
+  t("NO-AC16 GUARD: every item in at most ONE group; tabs = rows + unchecked + held; heldCounts.all = held; notChecked = unchecked", [groups.length === new Set(groups).size, tc.all === selX.rows.length + selX.unchecked.length + selX.held.length, selX.heldCounts.all === selX.held.length, selX.notChecked === selX.unchecked.length, selX.held.length > 0 && selX.unchecked.length > 0 && selX.rows.length > 0], [true, true, true, true, true]);
+  const hk = (sel: ReturnType<typeof selectActionItems>) => [sel.held.length, sel.corrected.map((r) => r.itemKey), sel.rows.length, sel.unchecked.length];
+  t("NO-AC17 GUARD: a held item (any reason) whose id is decided is in no group; corrected on this version -> only Corrected", [...["approved", "dismissed", "completed", "delegated"].map((st) => hk(selectActionItems([op({ proposalId: "prop-d", proposalState: st, section: null, kind: "none" }), cand({ status: "not_checked", notCheckedReason: "no_task_record", proposalId: "prop-e", proposalState: st })], S()))), hk(selectActionItems([op({ itemKey: "c|1", proposalId: "prop-c", proposalState: "proposed", section: null, kind: "none", correction: { reason: "not_mine", text: null, itemKey: "c|1", at: NOW, withdrawnAt: null } as never })], S()))], [[0, [], 0, 0], [0, [], 0, 0], [0, [], 0, 0], [0, [], 0, 0], [0, ["c|1"], 0, 0]]);
+  t("NO-AC18 GUARD: open + onBoard:true + no id is in no group and no count", hk(selectActionItems([op({ onBoard: true })], S())), [0, [], 0, 0]);
+  t("NO-AC19 GUARD: bad_shape / no reason / never judged stay unchecked, not held", hk(selectActionItems([cand({ status: "not_checked", notCheckedReason: "bad_shape", proposalId: null }), cand({ status: "not_checked", notCheckedReason: null, proposalId: null }), cand({ status: "not_checked", proposalId: null, section: null })], S())), [0, [], 0, 3]);
+  const g4aSel = selectActionItems([op({ itemKey: "g4a|1", proposalMissing: true })], S());
+  t("NO-G4a-1 GUARD: an open item whose proposal row is gone is HELD with its own sentence (not unchecked, not dropped)", [g4aSel.held.map((r) => [r.itemKey, r.heldReason]), g4aSel.unchecked.length, g4aSel.heldCounts.all], [[["g4a|1", A.HELD_REASON_TEXT.proposal_gone]], 0, 1]);
+  const g4bSel = selectActionItems([op({ itemKey: "g4b|1", proposalId: "prop-g4b", proposalState: "proposed", section: null, kind: "none" })], S());
+  t("NO-G4b-1 GUARD: an open item with a live proposal but no section is HELD (row id = that proposal), not unchecked", [g4bSel.held.map((r) => [r.itemKey, r.id, r.heldReason]), g4bSel.unchecked.length], [[["g4b|1", "prop-g4b", A.HELD_REASON_TEXT.no_section]], 0]);
+
+  // ── C. the held click ──
+  const world = (cur: ActionVerdict | null, o: { exists?: (id: string) => Promise<boolean>; propose?: () => Promise<{ id: string | null; onBoard: boolean }> } = {}) => {
+    const log = { propose: 0, act: [] as string[], stored: [] as ActionVerdict[] };
+    const deps = {
+      lockThread: async <T,>(_u: unknown, fn: (tx: import("../src/features/huddle/lib/actions/pipeline").ThreadTx) => Promise<T>) => fn({ current: async () => cur, store: async (v: ActionVerdict) => void log.stored.push(v) }),
+      propose: async () => (log.propose++, o.propose ? o.propose() : { id: "prop-fresh001", onBoard: false }),
+      act: async (id: string, a: string) => (log.act.push(`${a}:${id}`), { ok: true }),
+      ...(o.exists ? { proposalExists: o.exists } : {}),
+    };
+    return { log, deps };
+  };
+  const leg = world(sv({ proposalId: null }));
+  const rLeg = await P.actOnHeldItem(unit, "dismiss", leg.deps as never);
+  t("NO-AC22 GUARD (offline): a legacy held item (open, no id): ONE proposal, id written back with status still open, action applied", [rLeg, leg.log.propose, leg.log.stored.map((v) => [v.status, v.proposalId]), leg.log.act], [{ ok: true, proposalId: "prop-fresh001" }, 1, [["open", "prop-fresh001"]], ["dismiss:prop-fresh001"]]);
+  const ntr = world(sv({ status: "not_checked", notCheckedReason: "no_task_record" }));
+  await P.actOnHeldItem(unit, "approve", ntr.deps as never);
+  t("NO-AC21 (offline) a no_task_record item: ONE proposal, id written back, status / reason unchanged", [ntr.log.propose, ntr.log.stored.map((v) => [v.status, v.notCheckedReason, v.proposalId]), ntr.log.act], [1, [["not_checked", "no_task_record", "prop-fresh001"]], ["approve:prop-fresh001"]]);
+  const refused: [string, ActionVerdict | null][] = [["bad_shape", sv({ status: "not_checked", notCheckedReason: "bad_shape" })], ["open+id", sv({ proposalId: "prop-live" })], ["open+onBoard", sv({ onBoard: true })], ["none", sv({ status: "none" })], ["stale", sv({ inputVersion: 1 })], ["other key", sv({ key: "email:other|m" })], ["no verdict", null]];
+  const refGot = [];
+  for (const [id, v] of refused) {
+    const w = world(v, { exists: async () => true });
+    refGot.push([id, await P.actOnHeldItem(unit, "approve", w.deps as never), w.log.propose, w.log.stored.length, w.log.act.length]);
+  }
+  t("NO-AC24 GUARD: every NOT-held shape is refused: no proposal, nothing written, no action", refGot, refused.map(([id]) => [id, { ok: false, error: "That item isn't in your list." }, 0, 0, 0]));
+  const again = world(sv({ status: "not_checked", notCheckedReason: "no_task_record", proposalId: "prop-made01" }), { exists: async () => true });
+  await P.actOnHeldItem(unit, "approve", again.deps as never);
+  t("NO-AC23 a second click re-uses the written-back id (0 new proposals)", [again.log.propose, again.log.act], [0, ["approve:prop-made01"]]);
+  const rej = world(sv({ status: "not_checked", notCheckedReason: "no_task_record" }), { propose: async () => ({ id: null, onBoard: false }) });
+  const brd = world(sv({ proposalId: null }), { propose: async () => ({ id: null, onBoard: true }) });
+  t("NO-AC26 every candidate rejected again -> fixed error, nothing stored; all onBoard -> 'already on your board'", [await P.actOnHeldItem(unit, "approve", rej.deps as never), rej.log.stored.length, await P.actOnHeldItem(unit, "approve", brd.deps as never), brd.log.stored.map((v) => v.onBoard)], [{ ok: false, error: P.HELD_ACTION_ERROR }, 0, { ok: true, proposalId: null, note: "It was already on your board." }, [true]]);
+  const g4a = world(sv({ proposalId: "prop-deleted" }), { exists: async (id) => id !== "prop-deleted" });
+  const rG4a = await P.actOnHeldItem(unit, "dismiss", g4a.deps as never);
+  t("NO-G4a-2 GUARD: open + an id whose proposal is DELETED -> accepted, a fresh proposal replaces the id (status open), action applied", [rG4a, g4a.log.propose, g4a.log.stored.map((v) => [v.status, v.proposalId]), g4a.log.act], [{ ok: true, proposalId: "prop-fresh001" }, 1, [["open", "prop-fresh001"]], ["dismiss:prop-fresh001"]]);
+  const g4aLive = world(sv({ proposalId: "prop-live" }), { exists: async () => true });
+  const g4aNoDep = world(sv({ proposalId: "prop-live" }));
+  const g4aThrow = world(sv({ proposalId: "prop-live" }), { exists: async () => { throw new Error("read failed"); } });
+  t("NO-G4a-3 GUARD: a LIVE id is refused; no existence check -> refused; a failing check -> the fixed error, nothing stored", [await P.actOnHeldItem(unit, "dismiss", g4aLive.deps as never), g4aLive.log.propose, await P.actOnHeldItem(unit, "dismiss", g4aNoDep.deps as never), await P.actOnHeldItem(unit, "dismiss", g4aThrow.deps as never), g4aThrow.log.stored.length], [{ ok: false, error: "That item isn't in your list." }, 0, { ok: false, error: "That item isn't in your list." }, { ok: false, error: P.HELD_ACTION_ERROR }, 0]);
+  const g4b = world(sv({ proposalId: "prop-g4b", kind: "none" }), { exists: async () => true });
+  const rG4b = await P.actOnHeldItem(unit, "approve", g4b.deps as never);
+  t("NO-G4b-2 GUARD: open + live id + no section -> accepted, the existing proposal is re-used (0 new), action applied to it", [rG4b, g4b.log.propose, g4b.log.stored.length, g4b.log.act], [{ ok: true, proposalId: "prop-g4b" }, 0, 0, ["approve:prop-g4b"]]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
