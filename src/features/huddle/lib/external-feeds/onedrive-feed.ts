@@ -626,6 +626,8 @@ export interface FeedCalendarEvent {
   location: string | null;
   isAllDay: boolean;
   organizer: string | null;
+  /** The record's availability (Graph showAs), lower-cased; null when absent. */
+  showAs: string | null;
   source: string;
 }
 
@@ -684,6 +686,7 @@ export function mapFeedAppointments(
         const a = parseAddress(org);
         return a.name || a.address || null;
       })(),
+      showAs: str(r.showAs).toLowerCase() || null,
       source: mailbox,
     });
   }
