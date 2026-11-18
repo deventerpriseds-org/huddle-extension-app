@@ -61,6 +61,10 @@ export async function readActions(page) {
       notCheckedListed: document.querySelectorAll('[data-testid="actions-not-checked-row"]').length,
       notCheckedWithAiButtons: [...document.querySelectorAll('[data-testid="actions-not-checked-row"]')].filter((li) => /Add as task|Dismiss|Wrong\?|Done/.test(li.textContent ?? "")).length,
       oldCountOnlyLine: [...document.querySelectorAll("p")].some((p) => /^\s*\d+ not checked yet/.test(p.textContent ?? "")),
+      // 2026-11-18 (#278 held group, #282 no orphans): items the safety check held are listed in their own group.
+      heldListed: document.querySelectorAll('[data-testid="actions-held-row"]').length,
+      heldReported: q('[data-testid="actions-held"]')?.hasAttribute("data-count") ? Number(q('[data-testid="actions-held"]').getAttribute("data-count")) : 0,
+      heldWithoutButtons: [...document.querySelectorAll('[data-testid="actions-held-row"]')].filter((li) => !/Add as task/.test(li.textContent ?? "") || !/Dismiss/.test(li.textContent ?? "")).length,
     };
   });
 }
@@ -82,12 +86,14 @@ async function settleOn(page, range, timeoutMs = 45000) {
 
 /** PARITY, printed and checked: the items the view lists (judged open + not checked) against what the page reports. */
 export function parity(check, label, v) {
-  const listed = v.judgedListed + v.notCheckedListed;
-  const detail = `listed ${listed} (judged open ${v.judgedListed} + not checked ${v.notCheckedListed}) | page reports: tab All ${v.tabs.all}, not checked ${v.notCheckedReported}, section header ${v.notCheckedHeader ?? "-"}`;
+  const held = v.heldListed ?? 0;
+  const listed = v.judgedListed + v.notCheckedListed + held;
+  const detail = `listed ${listed} (judged open ${v.judgedListed} + not checked ${v.notCheckedListed} + held ${held}) | page reports: tab All ${v.tabs.all}, not checked ${v.notCheckedReported}, held ${v.heldReported ?? 0}, section header ${v.notCheckedHeader ?? "-"}`;
   console.log(`  PARITY ${label}: ${detail}`);
   check(`AT-P1 ${label}: a "not checked yet" count is never shown with no listed items`, !(v.notCheckedReported > 0 && v.notCheckedListed === 0), detail);
   check(`AT-P2 ${label}: listed not-checked items = the count the page reports (tab All)`, v.notCheckedListed === v.notCheckedReported && (v.notCheckedHeader ?? v.notCheckedListed) === v.notCheckedListed, detail);
-  check(`AT-P3 ${label}: tab All = judged open listed + not checked listed`, v.tabs.all === listed, detail);
+  check(`AT-P3 ${label}: tab All = judged open listed + not checked listed + held listed`, v.tabs.all === listed, detail);
+  check(`AT-P7 ${label}: held rows listed = the held count the page reports, and each held row has Add as task + Dismiss`, held === (v.heldReported ?? 0) && (v.heldWithoutButtons ?? 0) === 0, detail);
   const typed = ["email", "teams", "meeting"].filter((k) => typeof v.tabs[k] === "number").reduce((a, k) => a + v.tabs[k], 0);
   check(`AT-P4 ${label}: Email + Teams + Meetings tabs = All`, typed === v.tabs.all, JSON.stringify(v.tabs));
   check(`AT-P5 ${label}: not-checked rows carry no Add as task / Done / Dismiss / Wrong? (never judged)`, v.notCheckedWithAiButtons === 0, `${v.notCheckedWithAiButtons} rows with judged-row buttons`);
