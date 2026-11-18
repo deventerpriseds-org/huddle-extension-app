@@ -5492,3 +5492,8 @@ Owner: *"I cannot unselect priorities in the priority view"* → corrected: *"it
 - **Live UAT:** verify-uat run 44235076619 (schedule-unstar-checks.mjs, opens Schedule via Modules) 6/6 PASS: star tappable on the Test- row, toast "Removed from This Week.", row updated after the re-read, no console/request errors. journey `set_priority_rank {unset:true}` logged; journey + mirror both `is_priority=false` in the same second. (Run 44234313695 failed only because the check waited 5s while the re-read's calendar fetch was still running; now polls 25s.)
 - **Cleanup:** test task set DONE + unstarred (hard DELETE needs an interactive confirm).
 - **Status:** live; mechanism verified on the deployed app; NOT owner-confirmed on his phone.
+
+## ACT:actions-no-orphans — items judged as asks were orphaned in "Not checked yet" (owner screenshot 2026-11-18) — OPEN
+- [x] Ground-truth: 8 live verdicts open with no proposal (validator refused: evidence_not_in_source / task_not_grounded).
+- [x] Built + red-teamed (2/11 broke, fixed) + 3 verifier loops (final SHIP): PR #282.
+- [ ] Merge, deploy, UAT; owner confirms the held group shows Amy's flight/agenda ask with Add as task / Dismiss.
