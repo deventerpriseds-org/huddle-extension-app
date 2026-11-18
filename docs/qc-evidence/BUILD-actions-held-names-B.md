@@ -125,6 +125,30 @@ thread lock; 0 new proposals). Tests XF-1..XF-4.
 | F5-S1 GUARD (real SQL) | actions.server.ts | D5 extension removed (held rescue cannot use from:"actions") | 0 | FIRED (control EQUIVALENT) |
 | F5-S2 GUARD (real SQL) | actions.server.ts | D5 extension widened to every `not_checked` | 0 | FIRED (control EQUIVALENT) |
 
+### Merge of part A (`origin/claude_actions-safety-invites` abd87a34)
+
+Merged cleanly (no conflicts; part A put F2-6 in `admitActionVerdict`, not the selection). On the merged tree:
+
+| check | result |
+|---|---|
+| `bun scripts/actions-view.test.ts` | 209 passed, 0 failed |
+| `bun scripts/actions-view-server.test.ts` (real local Postgres) | 36 passed, 0 failed |
+| `bun scripts/report-saves-verdicts.test.ts` | 35 passed, 0 failed |
+| `bun scripts/actions-accuracy.test.ts` | 60 passed, 0 failed |
+| `npx tsc --noEmit` | exit 0 |
+| `npm run build` | exit 0 |
+| mutations re-run on the merged tree (part A touched pipeline.ts): XF-1, XF-4, F5-5 | all exit 0, FIRED (control EQUIVALENT) |
+
+### NOT DONE / open
+
+- F5-3 / F5-4 / F5-11 / F4-10 are proven by source checks and selection tests, not a rendered component or Playwright
+  run (the AC allows component test or Playwright; no UAT dispatch was allowed in this pass).
+- F5-15 (200 held items, no extra DB round trip per item): by construction the held selection reads the verdicts and
+  proposals the page already loads (no per-item query), but it was not timed.
+- Add as task end to end against real journey create was not run (the real-SQL test covers Dismiss; Add reaches
+  journey's `quick_create_task`). The approve path is covered offline (F5-5, F5-7, F5-8).
+- Safe default to revisit: the first settings save stores the seeded `ownNames` (see F4 above).
+
 Hook note: `eds-push-gate` refused pushes of commits touching `scripts/` without a `.claude/` ledger move (G14). The
 brief forbids editing `.claude/` (the session owner keeps the ledgers), so pushes used the gate's documented
 `LEDGER_OPT_OUT` with that reason. The ledger entry is for the session owner to write.
