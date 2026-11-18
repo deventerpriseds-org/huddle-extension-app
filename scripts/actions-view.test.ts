@@ -711,7 +711,8 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   const sel2 = selectActionItems([cand({ source: "teams", status: m2.status, kind: m2.kind, section: null, proposalId: null, itemKey: m2.key })], ACTIONS_SETTINGS_DEFAULT);
   t("F3-2 GUARD: 'See you this afternoon!' quoted as an open reply -> none (momentary), in neither rows nor unchecked", [m2.status, m2.dropReason, m2.reason, sel2.rows.length, sel2.unchecked.length], ["none", "momentary", DROP_REASON_TEXT.momentary, 0, 0]);
   const m3 = teamsAdm("Can you send me the deck tomorrow?", ["Can you send me the deck tomorrow?", "Be right there. I'll send you the deck tomorrow."]);
-  t("F3-3 GUARD: a real deliverable ask (owner answered 'Be right there. I'll send ...') stays open", [m3.status, m3.dropReason ?? null], ["open", null]);
+  const m3b = teamsAdm("Thanks! Can you send me the deck tomorrow?", ["Thanks! Can you send me the deck tomorrow?", "Be right there."]);
+  t("F3-3 GUARD: a real deliverable ask (owner answered 'Be right there. I'll send ...'), also one opening with 'Thanks!', stays open", [m3.status, m3.dropReason ?? null, m3b.status, m3b.dropReason ?? null], ["open", null, "open", null]);
   t("F3-4 'No worries, thank you!' -> none / momentary", teamsAdm("No worries, thank you!", ["No worries, thank you!"]).dropReason, "momentary");
   t("F3-5 'on my way, see you soon' (two entries, comma) -> none", teamsAdm("on my way, see you soon", ["on my way, see you soon"]).status, "none");
   const Q6 = "Running late, can you start the review without me and send notes after?";
