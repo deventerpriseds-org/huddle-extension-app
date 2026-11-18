@@ -358,5 +358,46 @@ void GRP;
   t("R13-5 the instructions tell the model not to write the labels", GROUNDED.includes("Never write the words OWNER or OTHER"), true);
 }
 
+// ── RED-TEAM pre-pass 2026-11-18 (docs/qc-evidence/REDTEAM-actions-safety-invites.md). A row that FAILS here is an
+// attack that SUCCEEDED: the test asserts the CORRECT behaviour and the source was deliberately NOT fixed. ──
+{
+  const { quoteIsVerbatim, isMomentaryQuote, actionSectionFor } = await import("../src/features/huddle/lib/correspondence/action-classify");
+  const A = { key: "k|rt", settled: false, nowIso: NOW };
+  const ask = (quote: string, o: Record<string, unknown> = {}) => ({ open_item: true, kind: "action", category: "person_request", confidence: "high", todo: "Synthetic to-do", quote, reason: "Synthetic reason", ...o });
+  // F1 (quote admission)
+  t("RT-1 F1 an ellipsis must not elide a negation inside one sentence (quote inverts 'do not send')", quoteIsVerbatim("Please do ... send the contract to the client.", ["Please do not send the contract to the client. Thanks."]), false);
+  t("RT-2 F1 rule 4: a fragment must not end mid-word on a combining mark (NFD 'cafe\\u0301')", quoteIsVerbatim("We reviewed the cafe ... notes are due Friday", ["We reviewed the café menu. The notes are due Friday."]), false);
+  t("RT-3 F1 the same visible text in NFC (quote) and NFD (message) is admitted", quoteIsVerbatim("The café notes are due Friday", ["The café notes are due Friday."]), true);
+  t("RT-4 F1 fragments are never stitched across two OTHER messages", quoteIsVerbatim("Here is the outline of topics. Please send your first notes by Monday.", ["Here is the outline of topics.", "Please send your first notes by Monday."]), false);
+  t("RT-5 F1 one occurrence cannot back a repeated fragment", quoteIsVerbatim("Please confirm the venue. ... Please confirm the venue.", ["Please confirm the venue. Thanks."]), false);
+  t("RT-6 F1 a 7-sentence quote that is ONE contiguous span is still admitted by the whole-quote path (rule 1)", quoteIsVerbatim("One two. Three. Four. Five. Six. Seven. Eight nine ten.", ["One two. Three. Four. Five. Six. Seven. Eight nine ten."].map((s) => s + " x")), true);
+  t("RT-6b F1 ... but 7 fragments with a gap are rejected", quoteIsVerbatim("One two. Three. Four. Five. Six. Seven. ... Eight nine ten eleven.", ["One two. Three. Four. Five. Six. Seven. Gap. Eight nine ten eleven."]), false);
+  // F3 (momentary backstop must fail OPEN)
+  const hidden = admitActionVerdict(ask("Thanks!", { todo: "Send the signed contract" }), ["Thanks! Can you send me the signed contract by Friday?"], A);
+  t("RT-7 F3 a pleasantry QUOTE on a message that carries a real ask must not hide the item (fail open: held or open, never none)", hidden.status !== "none", true);
+  t("RT-8 F3 'Thanks — can you send the deck' (em dash) is not momentary", isMomentaryQuote("Thanks — can you send the deck"), false);
+  t("RT-9 F3 'Running late… can you start the review' is not momentary", isMomentaryQuote("Running late… can you start the review"), false);
+  t("RT-10 F3 'See you there; bring the contract' is not momentary", isMomentaryQuote("See you there; bring the contract"), false);
+  // F2-6 (a bare invite must never become a reply item)
+  const dinner = "Dinner Friday at 7, hope you can make it! The venue is the synthetic bistro on Example Street.";
+  const both = admitActionVerdict(ask("Dinner Friday at 7, hope you can make it!", { kind: "both", category: "meeting_invite" }), [dinner], A);
+  t("RT-11 F2-6 a bare dinner invite judged meeting_invite + kind BOTH is not listed under Needs your reply", both.status === "open" && actionSectionFor("email", both.kind) === "needs_reply", false);
+  const realAsk = admitActionVerdict(ask("Please bring your first draft to Thursday's call.", { kind: "action", category: "meeting_invite" }), ["Join link. Please bring your first draft to Thursday's call."], A);
+  t("RT-12 F2-6 a meeting_invite of kind ACTION with a real ask keeps today's path (open)", realAsk.status, "open");
+  // F4 ("Names that are you")
+  const OA = "owner-guid-rt-a";
+  const base = [row({ chatId: ONE2, messageId: "rt1", sender: { id: OA, name: "Sam Okafor", isApp: false }, ownerUserId: OA }), row({ chatId: ONE3, messageId: "rt2", sender: { id: OA, name: "Sam Okafor", isApp: false }, ownerUserId: OA })];
+  const second = (name: string, isApp = false, names = ["Samuel Okafor", "Sam Okafor"]) =>
+    ownerTeamsIdsAcross([...base, row({ chatId: ONE, messageId: "rt3", sender: { id: "second-acct-rt-b", name, isApp } })], [], names).includes("second-acct-rt-b");
+  t("RT-13 F4 his second account in NFD ('Sa\\u0301muel Okafor') vs the list in NFC ('S\\u00E1muel Okafor') is the OWNER", second("Sámuel Okafor", false, ["Sámuel Okafor"]), true);
+  t("RT-14 F4 a display name with a trailing zero-width space is still his name", second("Samuel Okafor​"), true);
+  t("RT-15 F4 'Okafor , Samuel' (space before the comma) is the OWNER", second("Okafor , Samuel"), true);
+  t("RT-16 F4 namesake 'Sam Rivera' with a bare 'Sam' in the list is OTHER", second("Sam Rivera", false, ["Sam", "Sam Okafor"]), false);
+  t("RT-17 F4 'Samuel Okafor-Diaz' (prefix namesake) is OTHER", second("Samuel Okafor-Diaz"), false);
+  t("RT-18 F4 'Okafor Samuel' (no comma) is OTHER unless listed", second("Okafor Samuel"), false);
+  t("RT-19 F4 an app sender named after him is never the OWNER", second("Samuel Okafor", true), false);
+  t("RT-20 F4 'Samuel Okafor (External)' is OTHER unless listed (SD)", second("Samuel Okafor (External)"), false);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
