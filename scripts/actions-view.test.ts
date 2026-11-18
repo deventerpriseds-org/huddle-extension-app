@@ -17,6 +17,13 @@ import {
   actionSectionFor,
   admitActionVerdict,
   canonQuote,
+  COMMON,
+  DROP_REASON_TEXT,
+  isMomentaryQuote,
+  MEETING_ASK_RULE,
+  MOMENTARY_PHRASES,
+  MOMENTARY_RULE,
+  STEP2_ATTENDING_RULE,
   emailQuoteHaystack,
   quoteIsVerbatim,
   teamsQuoteHaystack,
@@ -108,7 +115,7 @@ t("A-11 quote inside ONE piece still admits (teams 2nd message; email body; emai
   t("F1-3 GUARD: fragments from two Teams OTHER messages, or from the email body + its forward -> quote_not_found", [st("Here's the outline of topics I want from you each week. Please send your first notes by Monday.", CHAT), st("Here's the outline of topics I want from you each week. Please send your first notes by Monday.", FWH)], ["not_checked/quote_not_found", "not_checked/quote_not_found"]);
   t("F1-4 one paraphrased fragment -> quote_not_found", st("Here's the outline of topics I want from you each week. Please send your notes by Monday."), "not_checked/quote_not_found");
   const TWICE = "Please confirm the venue. The caterer called. Please confirm the venue.";
-  t("F1-5 GUARD: a repeat needs a repeat occurrence ('Thanks. ... Thanks.' vs one Thanks -> refused); two real occurrences -> open", [st("Thanks. ... Thanks.", "Hi. Thanks. See below."), st("Please confirm the venue. ... Please confirm the venue.", TWICE), st("Please confirm the venue. ... Please confirm the venue.", "Please confirm the venue. The caterer called.")], ["not_checked/quote_not_found", "open", "not_checked/quote_not_found"]);
+  t("F1-5 GUARD: a repeat needs a repeat occurrence ('Thanks. ... Thanks.' vs one Thanks -> refused); two real occurrences -> open", [quoteIsVerbatim("Thanks. ... Thanks.", "Hi. Thanks. See below.") ? "verbatim" : "not_checked/quote_not_found", st("Please confirm the venue. ... Please confirm the venue.", TWICE), st("Please confirm the venue. ... Please confirm the venue.", "Please confirm the venue. The caterer called.")], ["not_checked/quote_not_found", "open", "not_checked/quote_not_found"]);
   t("F1-7 null / empty / under 8 folded chars -> quote_not_found as today", [st(null), st(""), st("by Mon.")], ["not_checked/quote_not_found", "not_checked/quote_not_found", "not_checked/quote_not_found"]);
   const SEVEN = "Alpha one here. Bravo two here. Charlie three. Delta four here. Echo five here. Foxtrot six. Golf seven here.";
   t("F1-8 seven one-sentence fragments, all present in order -> quote_not_found (rule 6); six -> open", [st("Alpha one here. Bravo two here. ... Delta four here. Echo five here. Foxtrot six. Golf seven here. Charlie three.", SEVEN), st("Alpha one here. Bravo two here. Charlie three. ... Echo five here. Foxtrot six. Golf seven here.", SEVEN), st("Alpha one here. Bravo two here. Charlie three. ... Echo five here. Foxtrot six. ... Golf seven here. Alpha one here.", SEVEN)], ["not_checked/quote_not_found", "open", "not_checked/quote_not_found"]);
@@ -135,7 +142,9 @@ t("A-11 quote inside ONE piece still admits (teams 2nd message; email body; emai
     ["S1-8", "Please send your notes by Monday.", H, "not_checked/quote_not_found"],
     ["S1-9", "Here's the outline. Please send the final contract by Monday.", H, "not_checked/quote_not_found"],
     ["S1-10", "Hi Sam. Thanks.", H, "not_checked/quote_not_found"],
-    ["S1-11", "Thanks. Thanks.", H, "not_checked/quote_not_found"],
+    // S1-11: the quote rule refuses it (F1-5 pins quoteIsVerbatim = false); since F3 the momentary backstop drops a
+    // "Thanks. Thanks." verdict to none before the quote check, so admission reads none. Neither is ever shown.
+    ["S1-11", "Thanks. Thanks.", H, "none"],
     ["S1-12", "ere's the outline of topics I want from you each week. lease send your first notes", H, "not_checked/quote_not_found"],
     ["S1-13", "end your first notes by Monday", H, "open"],
     ["S1-14", "Here's the outline [...] by Monday.", H, "open"],
@@ -664,6 +673,89 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
     ["teams\u0000cur", { ...verdictFor(TABLE[0]), key: "t-cur|1", inputVersion: CLASSIFIER_INPUT_VERSION.teams }],
   ]);
   t("AI-14 / X-1 GUARD: CLASSIFIER_INPUT_VERSION is exactly { email: 3, teams: 4 }; older versions (email < 3, teams < 4) are not current", [CLASSIFIER_INPUT_VERSION, [...currentlyJudgedKeys(store)].sort()], [{ email: 3, teams: 4 }, ["e-cur|1", "t-cur|1"]]);
+}
+
+// ── F2. MEETING INVITES THAT CARRY A REAL ASK (AC-actions-safety-and-invites.md F2) ──────────────────
+{
+  t("F2-1 GUARD: the meeting_invite carve-out is ONE constant inside the email (COMMON, so steps 2 + 3) and the Teams definitions", [COMMON.includes(MEETING_ASK_RULE), STEP2_INSTRUCTIONS.includes(MEETING_ASK_RULE), STEP3_INSTRUCTIONS.includes(MEETING_ASK_RULE), TEAMS_INSTRUCTIONS.includes(MEETING_ASK_RULE), MEETING_ASK_RULE.includes("SPECIFIC named thing beyond attending") && MEETING_ASK_RULE.includes("never meeting_invite")], [true, true, true, true, true]);
+  t("F2-2 GUARD: step 2 no longer makes attending alone an open item; preparing a SPECIFIC thing still is", [STEP2_INSTRUCTIONS.includes("attending or preparing for something"), STEP2_INSTRUCTIONS.includes(STEP2_ATTENDING_RULE), STEP2_ATTENDING_RULE.includes("attending a meeting is not an open item by itself")], [false, true, true]);
+  const INVITE = "Weekly sync. Join on the meeting link. Here's the outline of topics I want from you each week. Please bring your first draft to Thursday's call.";
+  const raw = (category: string, kind: string, quote = "Please bring your first draft to Thursday's call.") => ({ open_item: true, kind, todo: "Bring the first draft", due: "Thursday", quote, confidence: "high", reason: "Asked.", category });
+  const admitI = (r: unknown, settled = false) => admitActionVerdict(r, [INVITE], { key: "inv|1", settled, nowIso: NOW, inputVersion: CLASSIFIER_INPUT_VERSION.email });
+  const candOf = (v: ActionVerdict) => cand({ status: v.status, kind: v.kind, category: v.category, answeredByReply: v.answeredByReply, section: v.status === "open" ? actionSectionFor("email", v.kind, "direct") : null, itemKey: v.key, proposalId: v.status === "open" ? "prop-0f2a" : null });
+  const ask = admitI(raw("person_request", "both"));
+  const sel3 = selectActionItems([candOf(ask)], ACTIONS_SETTINGS_DEFAULT);
+  t("F2-3 an invite carrying a specific deliverable, judged person_request -> listed (needs_reply / todo), not counted as a hidden meeting invite", [ask.status, sel3.rows.length, sel3.rows[0]?.section, sel3.hidden.categories.meeting_invite ?? 0], ["open", 1, "needs_reply", 0]);
+  const bare = admitActionVerdict({ ...raw("meeting_invite", "action", "Weekly sync. Join on the meeting link."), todo: "Attend the weekly sync" }, ["Weekly sync. Join on the meeting link."], { key: "bare|1", settled: false, nowIso: NOW });
+  const sel4 = selectActionItems([candOf(bare)], ACTIONS_SETTINGS_DEFAULT);
+  t("F2-4 a bare invite (meeting_invite) with default settings -> not a row, not unchecked, hidden.categories.meeting_invite = 1", [sel4.rows.length, sel4.unchecked.length, sel4.hidden.categories.meeting_invite], [0, 0, 1]);
+  const SHOW_INVITES: ActionsSettings = { ...ACTIONS_SETTINGS_DEFAULT, hideCategories: ACTIONS_SETTINGS_DEFAULT.hideCategories.filter((c) => c !== "meeting_invite") };
+  const dinner = admitActionVerdict({ open_item: false, kind: "none", todo: null, due: null, quote: null, confidence: "high", reason: "Just an invitation.", category: "meeting_invite" }, ["Dinner Friday at 7, hope you can make it!"], { key: "din|1", settled: false, nowIso: NOW });
+  const sel5 = selectActionItems([candOf(dinner)], SHOW_INVITES);
+  t("F2-5 invites un-hidden + a bare dinner invite judged meeting_invite / open_item false -> no row, not in Answered", [dinner.status, sel5.rows.length, sel5.answered.length, sel5.unchecked.length], ["none", 0, 0, 0]);
+  const DIN = "Dinner Friday at 7, hope you can make it!";
+  const dReply = admitActionVerdict(raw("meeting_invite", "reply", DIN), [DIN], { key: "din|2", settled: false, nowIso: NOW });
+  const dAction = admitActionVerdict(raw("meeting_invite", "action", DIN), [DIN], { key: "din|3", settled: false, nowIso: NOW });
+  const dBoth = admitActionVerdict(raw("meeting_invite", "both", DIN), [DIN], { key: "din|4", settled: false, nowIso: NOW });
+  const sel6 = selectActionItems([candOf(dReply)], SHOW_INVITES);
+  t("F2-6 GUARD: meeting_invite + kind reply is never listed (code: status none, fixed reason); action / both keep today's path", [dReply.status, dReply.dropReason, dReply.reason, dReply.answeredByReply, sel6.rows.length, sel6.answered.length, dAction.status, dBoth.status], ["none", "meeting_invite_reply", DROP_REASON_TEXT.meeting_invite_reply, false, 0, 0, "open", "open"]);
+  t("F2-6b a person_request of kind reply inside an invite is NOT touched by that rule", admitI(raw("person_request", "reply")).status, "open");
+  t("F2-10 the hide switch constants are unchanged (no new hideable category, no migration)", [HIDEABLE_CATEGORIES, HIDEABLE_CATEGORY_LABEL.meeting_invite], [["meeting_invite", "timekeeping", "verification_code", "app_invite"], "Meeting invites and calendar replies"]);
+}
+
+// ── F3. MOMENTARY CHAT COORDINATION IS NOT AN OPEN ITEM (AC-actions-safety-and-invites.md F3) ────────
+{
+  t("F3-1 GUARD: MOMENTARY_RULE is one constant in the email (COMMON, steps 2 + 3) and Teams instructions", [COMMON.includes(MOMENTARY_RULE), STEP2_INSTRUCTIONS.includes(MOMENTARY_RULE), STEP3_INSTRUCTIONS.includes(MOMENTARY_RULE), TEAMS_INSTRUCTIONS.includes(MOMENTARY_RULE), MOMENTARY_RULE.includes("names something to DELIVER or DO later")], [true, true, true, true, true]);
+  const teamsAdm = (quote: string, texts: string[], o: Record<string, unknown> = {}) => admitActionVerdict({ open_item: true, kind: "reply", todo: "Synthetic to-do", due: null, quote, confidence: "high", reason: "Synthetic.", category: "person_request", ...o }, teamsQuoteHaystack({ messages: texts.map((text, i) => ({ speaker: i % 2 ? "OWNER" : "OTHER", text })) } as never), { key: "tm|1", settled: false, nowIso: NOW, inputVersion: CLASSIFIER_INPUT_VERSION.teams });
+  const m2 = teamsAdm("See you this afternoon!", ["See you this afternoon!"]);
+  const sel2 = selectActionItems([cand({ source: "teams", status: m2.status, kind: m2.kind, section: null, proposalId: null, itemKey: m2.key })], ACTIONS_SETTINGS_DEFAULT);
+  t("F3-2 GUARD: 'See you this afternoon!' quoted as an open reply -> none (momentary), in neither rows nor unchecked", [m2.status, m2.dropReason, m2.reason, sel2.rows.length, sel2.unchecked.length], ["none", "momentary", DROP_REASON_TEXT.momentary, 0, 0]);
+  const m3 = teamsAdm("Can you send me the deck tomorrow?", ["Can you send me the deck tomorrow?", "Be right there. I'll send you the deck tomorrow."]);
+  t("F3-3 GUARD: a real deliverable ask (owner answered 'Be right there. I'll send ...') stays open", [m3.status, m3.dropReason ?? null], ["open", null]);
+  t("F3-4 'No worries, thank you!' -> none / momentary", teamsAdm("No worries, thank you!", ["No worries, thank you!"]).dropReason, "momentary");
+  t("F3-5 'on my way, see you soon' (two entries, comma) -> none", teamsAdm("on my way, see you soon", ["on my way, see you soon"]).status, "none");
+  const Q6 = "Running late, can you start the review without me and send notes after?";
+  t("F3-6 GUARD: a list phrase plus more is NOT dropped (exact match only) -> still open", [isMomentaryQuote(Q6), teamsAdm(Q6, [Q6]).status], [false, "open"]);
+  t("F3-7 a dropped verdict carries only the code reason (never model text) and the code drop reason", [m2.reason === DROP_REASON_TEXT.momentary, m2.todo, JSON.stringify(m2).includes("Synthetic.")], [true, "Synthetic to-do", false]);
+  const em = admitActionVerdict({ open_item: true, kind: "reply", todo: "Reply", due: null, quote: "Thanks, see you there!", confidence: "low", reason: "x", category: "person_request" }, emailQuoteHaystack({ latestOther: { id: "feed:e3", text: "Thanks, see you there!" } } as never, new Map()), { key: "e3|1", settled: false, nowIso: NOW });
+  t("F3-9 one rule for both sources: an email 'Thanks, see you there!' -> none", [em.status, em.dropReason], ["none", "momentary"]);
+  // F3 spelling table (S3-*): the backstop verdict per quote spelling. false rows are NOT matched (left to the prompt).
+  const SP: [string, string, boolean][] = [
+    ["S3-1", "Be right there", true],
+    ["S3-2", "be right there!!", true],
+    ["S3-3", "BRT", false],
+    ["S3-4", "On my way \u{1F642}", true],
+    ["S3-5", "See you this afternoon!", true],
+    ["S3-6a", "See you soon", true],
+    ["S3-6b", "See you there", true],
+    ["S3-6c", "See you tomorrow", true],
+    ["S3-7", "No worries, thank you!", true],
+    ["S3-8a", "Thanks!", true],
+    ["S3-8b", "Thank you so much", true],
+    ["S3-8c", "Sounds good", true],
+    ["S3-8d", "\u{1F44D}", true],
+    ["S3-9", "Running 5 minutes late", true],
+    ["S3-9b", "Running 123 minutes late", false],
+    ["S3-10", "I'll send you the deck tomorrow", false],
+    ["S3-11", "Be right there, and I'll bring the signed contract", false],
+    ["S3-12", "See you this afternoon. Please have the budget ready.", false],
+    ["S3-13", "Thanks, can you review this by Friday?", false],
+    ["S3-14", "See you at the review. Bring the Q3 slides.", false],
+    ["S3-15", "on my way to drop off the keys you asked for", false],
+    ["S3-16", "Thank you for the intro, let's set up a call next week", false],
+    ["S3-17a", "be  right  there", true],
+    ["S3-17b", "Be right there.", true],
+    ["S3-18", "Can you join now?", true],
+    ["S3-x1", "I'll be right there with the deck tomorrow", false],
+    ["S3-x2", "", false],
+    ["S3-x3", "...", false],
+  ];
+  t("F3 spelling table S3-1..S3-18 (isMomentaryQuote; true = dropped by the backstop)", SP.map(([id, q]) => `${id}:${isMomentaryQuote(q)}`), SP.map(([id, , w]) => `${id}:${w}`));
+  t("F3 the phrase list is short, folded, and no entry names a deliverable", [MOMENTARY_PHRASES.length <= 30, MOMENTARY_PHRASES.every((p) => p === canonQuote(p)), MOMENTARY_PHRASES.some((p) => /send|share|review|bring|deck|call back/.test(p))], [true, true, false]);
+  t("F3-11 settled path unchanged: open_item false 'Answered by your reply' on a settled chat -> none, answeredByReply", (() => {
+    const v = admitActionVerdict({ open_item: false, kind: "none", todo: null, due: null, quote: null, confidence: "high", reason: "Answered by your reply.", category: "person_request" }, ["Are you joining?"], { key: "s|1", settled: true, nowIso: NOW });
+    return [v.status, v.answeredByReply, v.dropReason ?? null];
+  })(), ["none", true, null]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
