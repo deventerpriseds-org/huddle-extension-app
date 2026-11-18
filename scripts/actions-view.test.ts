@@ -1158,6 +1158,8 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   t("NO-AC3 GUARD: P-1..P-13 table -- each outcome stores its expected shape, and NONE is open with no home", [got, homelessN], [table.map((r) => r[2]), 0]);
   const p14 = P.verdictAfterPropose(vOpen, await P.proposeOpenVerdict({ todo: null, quote: null }, async () => { throw new Error("must not be called"); }));
   t("NO-AC3b P-14 no try possible -> held no_task_record with kinds []", [p14.status, p14.notCheckedReason, p14.noTaskRecordKinds], ["not_checked", "no_task_record", []]);
+  const pEmpty = P.verdictAfterPropose(vOpen, { id: "", onBoard: false });
+  t("NO-AC3c GUARD: an empty-string id from the propose step is NOT a home (S-3): stored held, never open", [pEmpty.status, pEmpty.notCheckedReason, homeless(pEmpty)], ["not_checked", "no_task_record", false]);
   const p12 = P.verdictAfterPropose(vOpen, { id: "prop-p12", onBoard: false });
   t("NO-AC5 GUARD: rejected-then-created stores open with the id and NO kinds / reason", [p12.status, p12.proposalId, "noTaskRecordKinds" in p12, "notCheckedReason" in p12], ["open", "prop-p12", false, false]);
   const secret = "Zebrafinchsynth";
