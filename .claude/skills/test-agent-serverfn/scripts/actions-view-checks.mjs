@@ -203,6 +203,22 @@ export const checks = [
       check("RANGE-UI the range toggle exists on the Actions page", false);
     }
     if (await range.count()) await rangeRoundTrip(page, check, screenshot);
+    // 2026-11-18 alert exclusion list (ACT:alert-exclusions, AC-36). READ-ONLY: What shows is opened and closed, the
+    // field is never focused (its save runs on blur), so nothing stored changes.
+    const whatShows = page.locator('[data-testid="actions-what-shows"]').first();
+    if (await whatShows.count()) {
+      await whatShows.click();
+      const field = page.locator('[data-testid="actions-alert-skip-field"]').first();
+      const shown = await field.waitFor({ state: "visible", timeout: 6000 }).then(() => true).catch(() => false);
+      const text = shown ? ((await field.textContent()) ?? "").replace(/\s+/g, " ") : "";
+      const value = shown ? await page.locator('[data-testid="actions-alert-skip"]').first().inputValue() : "";
+      check("ALERT-SKIP What shows has the 'Emails Iris won't alert you about' field", shown && /Emails Iris won.t alert you about/.test(text) && /Re:\/Fw:\) still alert/.test(text), text.slice(0, 120));
+      check("ALERT-SKIP the field shows the saved/seed list (holds 'meeting minutes')", /meeting minutes/i.test(value), JSON.stringify(value));
+      if (shown) await screenshot("actions-alert-skip-field");
+      await whatShows.click();
+    } else {
+      check("ALERT-SKIP What shows toggle not expected (page off / error)", state.some((s) => s === "actions-off" || s === "actions-error"));
+    }
     // 2026-11-17 accuracy fixes (BUILD-actions-accuracy.md). READ-ONLY: More / Less and opening + closing Wrong?
     // change nothing stored; Send is never pressed.
     const rowsN = await page.locator('[data-testid="actions-row"]').count();
