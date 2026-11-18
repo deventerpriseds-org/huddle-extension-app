@@ -218,13 +218,10 @@ export async function runClassify(
     }
     const haystack = u.email ? emailQuoteHaystack(u.email, a.forwards) : teamsQuoteHaystack(u.teams!);
     const settled = u.email ? u.email.settled : u.teams!.settled;
-    // F3 fails open (verifier VERIFY-actions-safety-invites-1 and -2): the momentary backstop is given EVERY message
-    // of the conversation, both speakers, email and Teams. Code drops an item only when the WHOLE conversation is
-    // momentary chat; anything subtler (an ask the owner answered with "be right there") is left to MOMENTARY_RULE
-    // in the instructions, so a code mistake can only ever show an item, never hide a real ask.
-    // Verifier VERIFY-actions-safety-invites-3: email is shown the model a subject and every message's forward that
-    // the backstop cannot see in full, so the code backstop is TEAMS-ONLY; for email an empty list never drops
-    // (MOMENTARY_RULE in the instructions still applies there).
+    // F3 fails open (verifiers VERIFY-actions-safety-invites-1..5): the momentary code backstop is TEAMS-ONLY and is
+    // given EVERY message of the chat, both speakers; it drops an item only when the WHOLE chat is momentary. Email
+    // passes [] (never dropped by code): the model sees a subject and every message's forward the backstop cannot.
+    // Anything subtler is left to MOMENTARY_RULE in the instructions, so a code mistake only ever shows an item.
     const latestMessages: string[] = u.email ? [] : u.teams!.messages.map((m) => m.text ?? "");
     let v = admitActionVerdict(raw, haystack, { key: u.itemKey, settled, nowIso: deps.nowIso(), inputVersion: CLASSIFIER_INPUT_VERSION[u.source], latestMessages });
     /** Propose (when open) then store. Inside the thread lock (AC8) it first re-reads the thread's stored verdict:
