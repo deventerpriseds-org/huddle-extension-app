@@ -16,6 +16,7 @@ import { PeopleMenuItems, usePeople } from "./PeoplePicker";
 import { getTrinnexMeetingFn, listTrinnexMeetingsFn, saveTrinnexMeetingFn } from "../lib/trinnex/meetings.functions";
 import { MEETING_TITLE_MAX, SERIES_MAX, fullTitle, splitWarnings } from "../lib/trinnex/meeting-triage-core";
 import type { MeetingDetail, MeetingListItem } from "../lib/trinnex/meetings.server";
+import type { SpeakerClue } from "../lib/trinnex/meeting-triage-core";
 
 type Pick = { kind: "person"; name: string } | { kind: "skip" };
 
@@ -296,11 +297,7 @@ function MeetingTriage({
               <div className="text-sm text-foreground">
                 {s.label} <span className="text-xs text-muted-foreground">· {s.lines} lines · {s.talkPct}%</span>
               </div>
-              {s.sample && (
-                <div className="truncate text-xs text-muted-foreground">
-                  {s.sample.at ? `${s.sample.at} ` : ""}“{s.sample.text}”
-                </div>
-              )}
+              <SpeakerClues sample={s.sample} clues={s.clues ?? []} />
               {s.label === "Unknown speaker" && <div className="text-xs text-warning-foreground">These lines had no speaker; they may be several people.</div>}
             </div>
             <PersonDropdown
@@ -372,6 +369,68 @@ function MeetingTriage({
           Save without adding to memory
         </button>
       </div>
+    </div>
+  );
+}
+
+const tail = (t: string, n: number) => (t.length > n ? `…${t.slice(-n).replace(/^\S*\s/, "")}` : t);
+
+const WHY_LABEL: Record<SpeakerClue["why"], string> = { intro: "introduces themself", "called-on": "called on", long: "" };
+
+/**
+ * The lines that help tell who a speaker is (owner, 2026-11-20: "I'm unable to see enough text to determine who is
+ * speaking"). Shows the most identifying line wrapped to three lines; "More of what they said" opens the rest, each
+ * with the line said just before it, because that is often where someone is called by name.
+ */
+function SpeakerClues({ sample, clues }: { sample: { text: string; at: string | null } | null; clues: SpeakerClue[] }) {
+  const [open, setOpen] = useState(false);
+  const lead = clues.find((c) => c.why !== "long") ?? clues[0] ?? null;
+  if (!lead && !sample) return null;
+  if (!lead && sample)
+    return (
+      <div className="line-clamp-3 text-xs text-muted-foreground">
+        {sample.at ? `${sample.at} ` : ""}“{sample.text}”
+      </div>
+    );
+  const rest = clues.filter((c) => c !== lead);
+  return (
+    <div className="flex flex-col gap-1" data-testid="speaker-clues">
+      {lead!.why === "called-on" && lead!.before && (
+        <div className="line-clamp-2 text-xs text-muted-foreground">
+          {/* The name is at the END of the line before ("...over to Pat Rivera."), so show its tail, not a clamped head. */}
+          {lead!.before.label} just before: “{tail(lead!.before.text, 90)}”
+        </div>
+      )}
+      <div className="line-clamp-3 text-xs text-muted-foreground">
+        {lead!.at ? `${lead!.at} ` : ""}“{lead!.text}”{WHY_LABEL[lead!.why] ? <span className="text-foreground"> · {WHY_LABEL[lead!.why]}</span> : null}
+      </div>
+      {clues.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="inline-flex min-h-[44px] items-center gap-1 self-start text-xs font-medium text-ai"
+        >
+          {open ? "Hide" : `More of what they said (${clues.length})`}
+        </button>
+      )}
+      {open && (
+        <ol className="flex flex-col gap-2 border-l border-hairline pl-2.5" data-testid="speaker-clue-list">
+          {[lead!, ...rest].map((c, i) => (
+            <li key={`${c.at ?? ""}-${i}`} className="flex flex-col gap-0.5 text-xs">
+              {c.before && (
+                <span className="text-muted-foreground">
+                  {c.before.label} just before: “{c.before.text}”
+                </span>
+              )}
+              <span className="text-foreground">
+                {c.at ? <span className="text-muted-foreground">{c.at} </span> : null}“{c.text}”
+                {WHY_LABEL[c.why] ? <span className="text-muted-foreground"> · {WHY_LABEL[c.why]}</span> : null}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

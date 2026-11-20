@@ -1,5 +1,13 @@
 # Project Memory — huddle-extension-app
 
+## Meetings titles come from the named transcript files (2026-11-20) -- ACT:trinnex-named-titles
+- Fireflies' own title is date-only ("Nov 10, 09:37 AM"); the owner's OneDrive folder /automation/Fireflies Transcripts
+  (same drive Huddle writes /Automation/transcripts to) holds "<Mon D>- <hh-mm AM>-<name>.md". named-files.server.ts
+  lists it with the app-only Graph token; Graph SEARCH is 403 for that token (walk folders instead).
+- Title order in Meetings: owner's display_title > file name > Fireflies title. Fail-soft to the Fireflies title.
+- Speaker cards: speakerClues picks intro > called-on-by-name (with the line before) > longest turns, up to 5.
+- THIS REPO IS PUBLIC: tests, comments and evidence use INVENTED names; never paste real transcript names or quotes.
+
 ## Trinnex workspace UAT fixes (2026-11-20, claude_trinnex-uat-fixes) -- ACT:trinnex-uat-fixes
 - Status (2026-11-20): main b930d488 has the workspace LIVE and Trinnex memory CONNECTED (deploy 44705109244). NOT owner-confirmed.
 - First UAT (verify-uat 44705323308 at 1000x680, 44705328676 at 390x844) found: Library "0 waiting" vs Meetings "29 to triage"
