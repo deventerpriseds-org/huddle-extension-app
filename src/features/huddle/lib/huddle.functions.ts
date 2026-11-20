@@ -2524,9 +2524,11 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     const runTrinnexSearch = async (args: Record<string, unknown>): Promise<string> => {
       trinnexSearchedThisTurn = true;
       const { dispatchTrinnexTool } = await import("./trinnex/memory.server");
-      const trinnexOwner =
-        (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
-      const out = await dispatchTrinnexTool(winner.id, args, trinnexOwner);
+      const ident = await import("./journey/identity");
+      const trinnexOwner = (await ident.resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+      // RT-S4: "last week / last quarter" are calendar periods in the OWNER's zone (profile -> browser -> UTC).
+      const ownerTz = await ident.resolveTimeZone(data.caller, data.timeZone).catch(() => data.timeZone || "UTC");
+      const out = await dispatchTrinnexTool(winner.id, args, trinnexOwner, ownerTz);
       let status = "error";
       try {
         status = String((JSON.parse(out) as { status?: unknown }).status ?? "error");

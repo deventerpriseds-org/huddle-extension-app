@@ -263,7 +263,7 @@ t("LOV2 huddle.functions wires search_trinnex on both paths only through the gat
   expect(src).toContain("trinnexLovableToolsFor(winner,");
   expect(src).not.toMatch(/lovableTools\.search_trinnex|lovableTools\["search_trinnex"\]/);
   // RT-I5 funnel: both paths call the ONE wrapper, and the wrapper is the only executor call, with the owner (AC-C7)
-  expect(src.match(/dispatchTrinnexTool\(winner\.id, [^)]*, trinnexOwner\)/g)?.length).toBe(1);
+  expect(src.match(/dispatchTrinnexTool\(winner\.id, [^)]*, trinnexOwner, ownerTz\)/g)?.length).toBe(1);
   expect(src.match(/await runTrinnexSearch\(/g)?.length).toBe(2);
 });
 

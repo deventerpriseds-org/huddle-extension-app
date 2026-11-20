@@ -269,3 +269,84 @@ t("NAME5 a speaker label that is an Object.prototype key stays a literal label o
   const turns = lc.turnsFromCues(labels.map((l, i) => ({ speaker: l, text: `cue ${i}`, start: i })) as never, (x: string) => x, {});
   expect(turns.map((x: { speaker: unknown }) => x.speaker)).toEqual(labels);
 });
+
+// ── S1-S5: the ONE recency table, section-5 rows plus the red-team rows ────────────────────────────
+const S = await import(`${LIB}/trinnex/search.ts`);
+const NOW = new Date("2026-11-20T12:00:00Z"); // Friday
+const REC: Array<[string, string, unknown, string?]> = [
+  ["S-C1", "the last Engineering Leaders meeting", { mostRecent: 1 }],
+  ["S-C2", "most recent Eng Leaders sync", { mostRecent: 1 }],
+  ["S-C3", "last week's Engineering Leaders meeting", { dateFrom: "2026-11-09", dateTo: "2026-11-15" }],
+  ["S-C3b", "the previous week", { dateFrom: "2026-11-09", dateTo: "2026-11-15" }],
+  ["S-C4", "the last two Engineering Leaders meetings", { mostRecent: 2 }],
+  ["S-C5", "the Engineering Leaders meeting before last", { mostRecent: 1, skip: 1 }],
+  ["S-C5b", "the second to last sync", { mostRecent: 1, skip: 1 }],
+  ["S-C6", "last time we discussed the vendor", null],
+  ["S-C7", "the last meeting", { mostRecent: 1 }],
+  ["S-C10", "what did Michael say last", { mostRecent: 1 }],
+  ["S-C11", 'the "Last Mile" review', null],
+  ["RT-S1", "to-dos from the previous Engineering Leaders meeting", { mostRecent: 1 }],
+  ["RT-S1b", "the previous sync", { mostRecent: 1 }],
+  ["RT-S1 neg", "prior to the launch what did we decide", null],
+  ["RT-S1 neg2", "previous decisions about the vendor", null],
+  ["RT-S2", "the second most recent Engineering Leaders meeting", { mostRecent: 1, skip: 1 }],
+  ["RT-S2b", "the third latest standup", { mostRecent: 1, skip: 2 }],
+  ["RT-S3", "summarise the last 10 Engineering Leaders meetings", { mostRecent: 10 }],
+  ["RT-S3b", "the last twelve meetings", { mostRecent: 12 }],
+  ["RT-S3c", "the last 9999 meetings", { mostRecent: 50 }],
+  ["RT-S4 quarter", "what did we decide last quarter", { dateFrom: "2026-07-01", dateTo: "2026-09-30" }],
+  ["RT-S4 month", "what did Michael say last month", { dateFrom: "2026-10-01", dateTo: "2026-10-31" }],
+  ["RT-S4 year", "last year's planning", { dateFrom: "2025-01-01", dateTo: "2025-12-31" }],
+  ["RT-S4 span", "the last 2 weeks", { dateFrom: "2026-11-06", dateTo: "2026-11-20" }],
+  ["RT-S4 yesterday", "yesterday's sync", { dateFrom: "2026-11-19", dateTo: "2026-11-19" }],
+  // owner time zone: 03:30 UTC Monday 16th is still SUNDAY 15th in New York, so "last week" there is Nov 2-8
+  ["TZ week", "last week's sync", { dateFrom: "2026-11-02", dateTo: "2026-11-08" }, "America/New_York"],
+  ["TZ week UTC", "last week's sync", { dateFrom: "2026-11-09", dateTo: "2026-11-15" }, "UTC"],
+  // 05:00 UTC Jan 1 2027 is still Dec 31 (Q4) in Los Angeles, so "last quarter" there is Q3; in UTC it is Q4
+  ["TZ quarter Jan 1", "last quarter", { dateFrom: "2026-07-01", dateTo: "2026-09-30" }, "America/Los_Angeles"],
+  ["TZ quarter Jan 1 UTC", "last quarter", { dateFrom: "2026-10-01", dateTo: "2026-12-31" }, "UTC"],
+];
+t("REC1 every recency row in the ONE table gives the specified filter", () => {
+  for (const [row, q, want, tz] of REC) {
+    const now =
+      row.startsWith("TZ week") ? new Date("2026-11-16T03:30:00Z") : row.startsWith("TZ quarter") ? new Date("2027-01-01T05:00:00Z") : NOW;
+    const got = S.recencyFromQuestion(q, now, tz ?? "UTC");
+    if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`${row}: ${JSON.stringify(got)} != ${JSON.stringify(want)}`);
+  }
+});
+t("REC2 an unknown time zone falls back to UTC instead of throwing", () => {
+  expect(S.recencyFromQuestion("last week", NOW, "Not/AZone")).toEqual({ dateFrom: "2026-11-09", dateTo: "2026-11-15" });
+});
+const CAT = [
+  { source: "trinnex:meeting:m1", title: "Test-A", date: "2026-11-10T15:00:00Z", series: "EL", participants: [], speakers: [] },
+  { source: "trinnex:meeting:m2", title: "Test-B", date: "2026-11-03T15:00:00Z", series: "EL", participants: [], speakers: [] },
+  { source: "trinnex:upload:u1", title: "Test-doc", date: "2026-11-15", series: null, participants: [], speakers: [] },
+  { source: "trinnex:meeting:m3", title: "Test-C", date: "2026-11-16T03:30:00Z", series: "EL", participants: [], speakers: [] },
+];
+t("REC3 recency counts meetings only; an upload is picked only when asked for", () => {
+  expect(S.selectSources(CAT, { mostRecent: 1 })).toEqual({ kind: "sources", sources: ["trinnex:meeting:m3"], speaker: undefined });
+  expect(S.selectSources(CAT, { mostRecent: 2, skip: 1 })).toEqual({
+    kind: "sources",
+    sources: ["trinnex:meeting:m1", "trinnex:meeting:m2"],
+    speaker: undefined,
+  });
+  expect(S.selectSources(CAT, { mostRecent: 1, recencyKind: "upload" })).toEqual({
+    kind: "sources",
+    sources: ["trinnex:upload:u1"],
+    speaker: undefined,
+  });
+});
+t("REC4 a date range compares the meeting's day in the OWNER's zone", () => {
+  const wk = { dateFrom: "2026-11-09", dateTo: "2026-11-15" };
+  const ny = S.selectSources(CAT, { ...wk, timeZone: "America/New_York" });
+  expect(ny.kind === "sources" && ny.sources.includes("trinnex:meeting:m3")).toBe(true); // Sunday 22:30 NY
+  const utc = S.selectSources(CAT, { ...wk, timeZone: "UTC" });
+  expect(utc.kind === "sources" && utc.sources.includes("trinnex:meeting:m3")).toBe(false); // Monday in UTC
+});
+t("REC5 searchTrinnex threads the owner's zone; huddle.functions resolves it the shared way", () => {
+  const src = readFileSync(`${LIB}/huddle.functions.ts`, "utf8");
+  expect(src).toContain("ident.resolveTimeZone(data.caller, data.timeZone)");
+  const ms = readFileSync(`${LIB}/trinnex/memory.server.ts`, "utf8");
+  expect(ms).toContain("recencyFromQuestion(str(args.question), now, timeZone)");
+  expect(ms).toContain("filters.timeZone = timeZone;");
+});

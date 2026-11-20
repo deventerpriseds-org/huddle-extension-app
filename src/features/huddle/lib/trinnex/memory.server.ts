@@ -447,6 +447,8 @@ export async function searchTrinnex(
   args: Record<string, unknown>,
   ownerEmail: string | null | undefined,
   now = new Date(),
+  /** The owner's zone (resolveTimeZone) for "last week / last quarter" ranges. */
+  timeZone = "UTC",
 ): Promise<TrinnexSearchResult> {
   if (!trinnexConfigured()) return { status: "unavailable", message: TRINNEX_NOT_SET_UP_TEXT };
   // AC-C7: no resolved owner means no search at all -- never an unscoped read.
@@ -457,7 +459,7 @@ export async function searchTrinnex(
   try {
     const recency = num(args.most_recent)
       ? { mostRecent: num(args.most_recent), skip: num(args.skip_recent) }
-      : recencyFromQuestion(str(args.question), now) ?? {};
+      : recencyFromQuestion(str(args.question), now, timeZone) ?? {};
     const filters: SourceFilters = {
       speaker: str(args.speaker),
       series: str(args.series),
@@ -470,8 +472,10 @@ export async function searchTrinnex(
       mostRecent: recency.mostRecent,
       skip: recency.skip,
     };
+    const needsCatalogKeys = Object.values(filters).some((v) => v !== undefined && !(Array.isArray(v) && v.length === 0));
+    filters.timeZone = timeZone;
     const pool = deps.getPool();
-    const needsCatalog = Object.values(filters).some((v) => v !== undefined && !(Array.isArray(v) && v.length === 0));
+    const needsCatalog = needsCatalogKeys;
     const sel = needsCatalog ? selectSources(await loadCatalog(pool, owner), filters) : ({ kind: "all" } as const);
     if (sel.kind === "ambiguous") {
       return {
@@ -530,9 +534,10 @@ export async function dispatchTrinnexTool(
   agentId: string,
   args: Record<string, unknown>,
   ownerEmail: string | null | undefined,
+  timeZone = "UTC",
 ): Promise<string> {
   if (!agentHasTrinnexAccess(AGENT_BY_ID[agentId as AgentId])) {
     return JSON.stringify({ error: "search_trinnex is not available to this agent" });
   }
-  return JSON.stringify(await searchTrinnex(args, ownerEmail));
+  return JSON.stringify(await searchTrinnex(args, ownerEmail, new Date(), timeZone));
 }
