@@ -232,3 +232,48 @@ test("VC3c a Remove that lands after the lease lapsed (hung worker): the worker'
   expect((out as { cancelled?: boolean }).cancelled).toBe(true);
   expect(remaining()).toEqual([]);
 });
+
+// ── G: the 1:1 gate with client-supplied huddleId / scope / members ─────────────────────────────────────
+const search = await import(`${SRC}/trinnex/search.ts`);
+const IRIS = { id: "iris-chase", trinnexAccess: true };
+const G_ROWS: Array<[string, Record<string, unknown>, boolean]> = [
+  ["G1 genuine 1:1 shape", { huddleId: "dm-iris-chase", scope: "one-to-one", members: ["iris-chase"] }, true],
+  ["G2 extra member", { huddleId: "dm-iris-chase", scope: "one-to-one", members: ["iris-chase", "finn-reid"] }, false],
+  ["G3 duplicated self", { huddleId: "dm-iris-chase", scope: "one-to-one", members: ["iris-chase", "iris-chase"] }, false],
+  ["G4 other agent as sole member", { huddleId: "dm-iris-chase", scope: "one-to-one", members: ["eli-vaughn"] }, false],
+  ["G5 group scope with dm id", { huddleId: "dm-iris-chase", scope: "group", members: ["iris-chase"] }, false],
+  ["G6 group id with 1:1 scope", { huddleId: "all-members", scope: "one-to-one", members: ["iris-chase"] }, false],
+  ["G7 case-spoofed id", { huddleId: "DM-iris-chase", scope: "one-to-one", members: ["iris-chase"] }, false],
+  ["G8 trailing space id", { huddleId: "dm-iris-chase ", scope: "one-to-one", members: ["iris-chase"] }, false],
+  ["G9 ceremony flag", { huddleId: "dm-iris-chase", scope: "one-to-one", members: ["iris-chase"], ceremony: true }, false],
+  ["G10 members missing", { huddleId: "dm-iris-chase", scope: "one-to-one" }, false],
+  ["G11 other agent's dm", { huddleId: "dm-eli-vaughn", scope: "one-to-one", members: ["iris-chase"] }, false],
+];
+for (const [name, where, want] of G_ROWS) {
+  test(`${name} -> ${want}`, () => {
+    expect(search.trinnexOfferedHere(IRIS, where as never)).toBe(want);
+  });
+}
+test("G12 a non-Trinnex agent in its own genuine 1:1 shape is never offered the tool", () => {
+  expect(search.trinnexOfferedHere({ id: "finn-reid" }, { huddleId: "dm-finn-reid", scope: "one-to-one", members: ["finn-reid"] } as never)).toBe(false);
+  expect(search.trinnexOfferedHere({ id: "finn-reid", trinnexAccess: false }, { huddleId: "dm-finn-reid", scope: "one-to-one", members: ["finn-reid"] } as never)).toBe(false);
+});
+
+// ── R: recency, four new phrasings of my own (NOW = 2026-11-20) ─────────────────────────────────────────
+const RNOW = new Date("2026-11-20T12:00:00Z");
+const R_ROWS: Array<[string, string, unknown]> = [
+  ["R1 'last laugh' idiom", "who had the last laugh in the vendor fight", null],
+  ["R2 'the last word' idiom", "who gets the last word on pricing", null],
+  ["R3 'last two weeks' range", "what did we cover in the last two weeks", { dateFrom: "2026-11-06", dateTo: "2026-11-20" }],
+  ["R4 'most recent meeting'", "what came out of the most recent meeting", { mostRecent: 1 }],
+];
+// R1/R2 are FINDINGS at 957bad98 (both return {mostRecent:1}): kept as test.failing so the suite stays green and the
+// row flips to a plain failure (prompting removal of `.failing`) once the idiom stops over-matching.
+const R_KNOWN_OVERMATCH = new Set(["R1 'last laugh' idiom", "R2 'the last word' idiom"]);
+for (const [name, phrase, want] of R_ROWS) {
+  (R_KNOWN_OVERMATCH.has(name) ? test.failing : test)(`${name}: ${JSON.stringify(phrase)}`, () => {
+    const got = search.recencyFromQuestion(phrase, RNOW);
+    console.log(`${name} -> ${JSON.stringify(got)}`);
+    expect(got).toEqual(want);
+  });
+}
