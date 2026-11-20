@@ -5533,3 +5533,6 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - Lane of the Trinnex workspace build (spec docs/qc-evidence/AC-trinnex-workspace.md section 2). Step log + evidence: docs/qc-evidence/BUILD-trinnex-library.md.
 ## ACT:verify-trinnex-workspace-1 -- independent verifier loop 1 of PR #289 (2026-11-20) -- OPEN, evidence branch claude_verify-trinnex-workspace-1 (not for merge)
 - Evidence: docs/qc-evidence/VERIFY-trinnex-workspace-1.md; attack tests scripts/verify-trinnex-attack.test.ts (VA9 left failing: library Remove during in-flight ingest leaves Trinnex rows behind).
+## ACT:trinnex-verify1-fixes -- fix round for verifier loop 1 of PR #289 (2026-11-20) -- IN PROGRESS on claude_trinnex-workspace, NOT merged, NOT live
+- Findings from docs/qc-evidence/VERIFY-trinnex-workspace-1.md; one line per fix in docs/qc-evidence/BUILD-trinnex-integration.md "Verifier loop-1 fix round (2026-11-20)".
+- VA9 Remove race (tombstone + worker-owned deletes, scripts/trinnex-removal-race.test.ts); bootstrap allow-list append-only (scripts/trinnex-bootstrap-allowlist.test.ts).
