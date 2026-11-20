@@ -30,7 +30,13 @@ const ownerOf = (c: Row) => String((c.metadata as { owner_email?: string }).owne
 const fakePool = {
   query: async (sql: string, p: unknown[] = []) => {
     if (sql.includes("ORDER BY embedding")) {
-      return { rows: chunks.filter((c) => ownerOf(c) === OWNER).map((c) => ({ id: c.id, text: c.text, source: c.source, score: 0.6, metadata: c.metadata })) };
+      // Honour the `sources` restriction (azure-pg searchChunks pushes it as a string[] param).
+      const only = (p as unknown[]).find((x) => Array.isArray(x) && x.every((y) => typeof y === "string" && y.startsWith("trinnex:"))) as string[] | undefined;
+      return {
+        rows: chunks
+          .filter((c) => ownerOf(c) === OWNER && (!only || only.includes(c.source as string)))
+          .map((c) => ({ id: c.id, text: c.text, source: c.source, score: 0.6, metadata: c.metadata })),
+      };
     }
     if (/SELECT source, metadata FROM rag_chunks/.test(sql)) {
       return { rows: chunks.filter((c) => ownerOf(c) === p[0]).map((c) => ({ source: c.source, metadata: c.metadata })) };
