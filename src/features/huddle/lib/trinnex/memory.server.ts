@@ -111,6 +111,14 @@ interface Deps {
   /** AC-C5: surface a fact-extraction failure through the EXISTING background-AI quota alert (ai-quota: bell row +
    *  Iris notice for a quota kind; kind logged for every other). Never throws. */
   reportFailure: (kind: string, ownerEmail: string) => Promise<void>;
+  /** Loop-2 backstop: which of these source keys are LIVE for the owner (main DB, library.server
+   *  liveTrinnexSources). Search and the orphan sweeper both read it; one batched lookup per call. */
+  liveSources: (ownerEmail: string, keys: string[]) => Promise<LiveSources>;
+}
+export interface LiveSources {
+  live: Set<string>;
+  removingSince: Map<string, number>;
+  meetingsChecked: boolean;
 }
 /** The error the existing quota alert classifies: "OpenAI <kind>" (status + provider code). Never content. */
 export const trinnexAlertError = (kind: string): Error => new Error(`OpenAI ${kind}`);
@@ -129,13 +137,17 @@ const REAL: Deps = {
   embed: realEmbed,
   extractTriples: realExtractTriples,
   reportFailure: realReportFailure,
+  liveSources: async (ownerEmail, keys) => (await import("./library.server")).liveTrinnexSources(ownerEmail, keys),
 };
+/** TEST-ONLY default when a test swaps deps without a liveSources: every key is live, so no test can reach the
+ *  REAL main-DB lookup. Production (REAL) fails closed: a lookup error makes search_trinnex "unavailable". */
+const allLiveForTests: Deps["liveSources"] = async (_o, keys) => ({ live: new Set(keys), removingSince: new Map(), meetingsChecked: true });
 let deps: Deps = REAL;
 let _store: RagStore | null = null;
 
 /** TEST ONLY: swap the pool / embed / extract. Pass null to restore the real ones. */
 export function __setTrinnexDepsForTest(d: Partial<Deps> | null): void {
-  deps = d ? { ...REAL, ...d } : REAL;
+  deps = d ? { ...REAL, liveSources: allLiveForTests, ...d } : REAL;
   _store = null;
 }
 
@@ -528,7 +540,17 @@ export async function searchTrinnex(
     filters.timeZone = timeZone;
     const pool = deps.getPool();
     const needsCatalog = needsCatalogKeys;
-    const sel = needsCatalog ? selectSources(await loadCatalog(pool, owner), filters) : ({ kind: "all" } as const);
+    // Loop-2 backstop: ONLY live sources answer. A source is live when its Library row exists and is not being
+    // removed, or its meeting row exists, for THIS owner (main DB). One batched lookup per search: over the catalog
+    // when one is loaded (its keys cover every hit), otherwise over the hits' own sources.
+    let live: Set<string> | null = null;
+    let catalog: CatalogEntry[] = [];
+    if (needsCatalog) {
+      catalog = await loadCatalog(pool, owner);
+      live = (await deps.liveSources(owner, catalog.map((e) => e.source))).live;
+      catalog = catalog.filter((e) => live!.has(e.source));
+    }
+    const sel = needsCatalog ? selectSources(catalog, filters) : ({ kind: "all" } as const);
     if (sel.kind === "ambiguous") {
       return {
         status: "ambiguous",
@@ -550,8 +572,10 @@ export async function searchTrinnex(
       // owner_email ALWAYS (AC-C7); speaker only when the filter resolved one.
       metadataMatch: { owner_email: owner, ...(sel.kind === "sources" && sel.speaker ? { speaker: sel.speaker } : {}) },
     });
-    const hits = rows.filter((r) => (r.score ?? 0) >= TRINNEX_MIN_SCORE && (r.source ?? "").startsWith("trinnex:"));
-    console.info(`[trinnex] search candidates=${rows.length} cited=${hits.length} filtered=${sel.kind === "sources"}`);
+    const candidates = rows.filter((r) => (r.score ?? 0) >= TRINNEX_MIN_SCORE && (r.source ?? "").startsWith("trinnex:"));
+    if (!live && candidates.length) live = (await deps.liveSources(owner, [...new Set(candidates.map((r) => r.source ?? ""))])).live;
+    const hits = candidates.filter((r) => live!.has(r.source ?? ""));
+    console.info(`[trinnex] search candidates=${rows.length} cited=${hits.length} not_live=${candidates.length - hits.length} filtered=${sel.kind === "sources"}`);
     if (hits.length === 0) return { status: "miss", message: TRINNEX_MISS_TEXT, hint: TRINNEX_LIBRARY_HINT };
     return {
       status: "ok",
@@ -576,6 +600,103 @@ export async function searchTrinnex(
     console.error(`[trinnex] search failed code=${(err as { code?: string })?.code ?? "unknown"}`);
     return { status: "unavailable", message: TRINNEX_UNAVAILABLE_TEXT };
   }
+}
+
+// ── orphan sweeper (loop-2 backstop) ──────────────────────────────────────────────────────────────────
+
+/** A source must have been NOT live for longer than this before the sweeper deletes it, so an in-flight ingest or
+ *  removal (whose own cleanup is still running) is never raced. */
+export const SWEEP_GRACE_MS = 10 * 60_000;
+/** How often one server process runs the sweep from the heartbeat. */
+export const SWEEP_EVERY_MS = 15 * 60_000;
+const SWEEP_MAX_SOURCES = 50;
+
+/**
+ * Pure: may the sweeper delete this source now? Only when it is NOT live and has been not-live for more than
+ * SWEEP_GRACE_MS: measured from the LATER of its newest Trinnex write and the moment its Library row entered a
+ * removal state (a missing row gives no time, so the newest write stands in for it).
+ */
+export function sweepEligible(live: boolean, newestWriteMs: number, removingSinceMs: number | undefined, nowMs: number): boolean {
+  if (live) return false;
+  const since = Math.max(newestWriteMs, removingSinceMs ?? 0);
+  return nowMs - since > SWEEP_GRACE_MS;
+}
+
+export interface SweepResult {
+  /** "ok" | "not_configured" | "error:<code>" -- a KIND, never content. */
+  kind: string;
+  owners: number;
+  sources: number;
+  chunks: number;
+  facts: number;
+}
+/** The last run's result in this process (kind + counts only). */
+export let lastTrinnexSweep: (SweepResult & { at: string }) | null = null;
+let lastSweepAt = 0;
+
+/**
+ * Delete Trinnex passages and facts (superseded facts included) whose source is not live for its owner and has not
+ * been for more than SWEEP_GRACE_MS. Owner-scoped: every lookup and every delete names the owner. Logs counts and
+ * the result kind only. Never throws.
+ */
+export async function sweepTrinnexOrphans(now = new Date()): Promise<SweepResult> {
+  const res: SweepResult = { kind: "ok", owners: 0, sources: 0, chunks: 0, facts: 0 };
+  const done = (r: SweepResult) => {
+    lastTrinnexSweep = { ...r, at: now.toISOString() };
+    console.info(`[trinnex] sweep kind=${r.kind} owners=${r.owners} sources=${r.sources} chunks=${r.chunks} facts=${r.facts}`);
+    return r;
+  };
+  if (!trinnexConfigured()) return done({ ...res, kind: "not_configured" });
+  try {
+    const { rows } = await deps.getPool().query(
+      `SELECT owner, source, max(newest) AS newest FROM (
+         SELECT lower(metadata->>'owner_email') AS owner, source, max(created_at) AS newest
+           FROM rag_chunks WHERE source LIKE 'trinnex:%' GROUP BY 1, 2
+         UNION ALL
+         SELECT lower(split_part(agent_id, '|trinnex-owner:', 2)) AS owner, split_part(agent_id, '|trinnex-owner:', 1) AS source,
+                max(created_at) AS newest
+           FROM rag_triples WHERE agent_id LIKE 'trinnex:%|trinnex-owner:%' GROUP BY 1, 2
+       ) x WHERE owner IS NOT NULL AND owner <> '' GROUP BY owner, source`,
+    );
+    const byOwner = new Map<string, Array<{ source: string; newest: number }>>();
+    for (const r of rows as Array<{ owner: string; source: string; newest: Date | string | null }>) {
+      const t = r.newest ? new Date(r.newest).getTime() : now.getTime();
+      const list = byOwner.get(r.owner) ?? [];
+      list.push({ source: r.source, newest: Number.isFinite(t) ? t : now.getTime() });
+      byOwner.set(r.owner, list);
+    }
+    for (const [owner, list] of byOwner) {
+      if (res.sources >= SWEEP_MAX_SOURCES) break;
+      const ls = await deps.liveSources(owner, list.map((x) => x.source));
+      const idOf = (src: string) => /^trinnex:(?:upload|meeting):(.+)$/.exec(src)?.[1] ?? null;
+      let touched = false;
+      for (const { source, newest } of list) {
+        if (res.sources >= SWEEP_MAX_SOURCES) break;
+        const id = idOf(source);
+        if (!id) continue;
+        // deleteTrinnexSource removes BOTH kinds for an id, so either kind being live keeps it.
+        const anyLive = ls.live.has(trinnexSourceKey("upload", id)) || ls.live.has(trinnexSourceKey("meeting", id));
+        if (source.startsWith("trinnex:meeting:") && !ls.meetingsChecked) continue; // absence not proven
+        if (!sweepEligible(anyLive, newest, ls.removingSince.get(source), now.getTime())) continue;
+        const d = await deleteTrinnexSource(id, owner);
+        res.sources++;
+        res.chunks += d.chunks;
+        res.facts += d.facts;
+        touched = true;
+      }
+      if (touched) res.owners++;
+    }
+    return done(res);
+  } catch (err) {
+    return done({ ...res, kind: `error:${(err as { code?: string })?.code ?? "unknown"}` });
+  }
+}
+
+/** Heartbeat entry (lib/tasks/scheduler.server.ts): at most once per SWEEP_EVERY_MS per process. Never throws. */
+export async function sweepTrinnexOrphansIfDue(now = new Date()): Promise<SweepResult | null> {
+  if (now.getTime() - lastSweepAt < SWEEP_EVERY_MS) return null;
+  lastSweepAt = now.getTime();
+  return sweepTrinnexOrphans(now);
 }
 
 /**

@@ -564,6 +564,82 @@ export async function processDueLibraryItems(limit = 1): Promise<number> {
   return done;
 }
 
+/** Loop-2 backstop: what the main DB says about a set of Trinnex sources for ONE owner. */
+export interface LiveSources {
+  /** Source keys (`trinnex:upload:<id>` / `trinnex:meeting:<id>`) that are live right now. */
+  live: Set<string>;
+  /** Upload keys whose row is in a removal state, with the row's updated_at (ms): when it stopped being live. */
+  removingSince: Map<string, number>;
+  /** False when the owner's email aliases could not be resolved, so a meeting's absence is NOT proof it is gone. */
+  meetingsChecked: boolean;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Library statuses that mean "being removed / removal left work": never live. */
+export const REMOVAL_STATUSES = ["removing", "remove_incomplete"] as const;
+
+/**
+ * Loop-2 backstop (search shows only live sources; the orphan sweeper). ONE batched query against the main DB:
+ * - a Library source is live when its trinnex.library_items row exists for this owner and is not in a removal state;
+ * - a meeting source is live when its chat.fireflies_meetings row exists for this owner (any of the owner's email
+ *   aliases, the same scope listMeetings reads).
+ * The two databases cannot share a transaction, so callers filter Trinnex rows in code by these keys.
+ */
+export async function liveTrinnexSources(ownerEmail: string, keys: string[]): Promise<LiveSources> {
+  const owner = (ownerEmail ?? "").trim().toLowerCase();
+  const uploads: string[] = [];
+  const meetings: string[] = [];
+  for (const k of new Set(keys)) {
+    const m = /^trinnex:(upload|meeting):(.+)$/.exec(k);
+    if (!m) continue;
+    if (m[1] === "upload") {
+      if (UUID_RE.test(m[2])) uploads.push(m[2].toLowerCase());
+    } else meetings.push(m[2]);
+  }
+  const out: LiveSources = { live: new Set(), removingSince: new Map(), meetingsChecked: true };
+  if (!owner || (!uploads.length && !meetings.length)) return out;
+  let owners = [owner];
+  if (meetings.length) {
+    try {
+      const { resolveScopeByEmail } = await import("../identity/identity.server");
+      const { emails } = await resolveScopeByEmail(owner);
+      owners = [...new Set([owner, ...emails.map((e) => e.trim().toLowerCase())].filter(Boolean))];
+    } catch {
+      out.meetingsChecked = false; // search still filters on the owner itself; the sweeper leaves meetings alone
+    }
+  }
+  if (uploads.length) await ensureBootstrapped();
+  // Only referenced parameters are sent (Postgres cannot type an unreferenced one).
+  const parts: string[] = [];
+  const params: unknown[] = [owner];
+  if (uploads.length) {
+    params.push(uploads);
+    parts.push(`SELECT 'trinnex:upload:' || id::text AS k, status, updated_at FROM trinnex.library_items
+                 WHERE id = ANY($${params.length}::uuid[]) AND lower(owner_email) = $1`);
+  }
+  if (meetings.length) {
+    params.push(meetings, owners);
+    parts.push(`SELECT 'trinnex:meeting:' || meeting_id AS k, 'live'::text AS status, updated_at FROM chat.fireflies_meetings
+                 WHERE meeting_id = ANY($${params.length - 1}::text[]) AND lower(owner_email) = ANY($${params.length}::text[])
+                   AND $1::text IS NOT NULL`);
+  }
+  const r = await getPool().query(parts.join(" UNION ALL "), params);
+  classifyLiveRows(r.rows as LiveRow[], out);
+  return out;
+}
+
+export type LiveRow = { k: string; status: string; updated_at: Date | string | null };
+/** Pure: a returned row is live unless its status is a removal state (then it records when it stopped being live). */
+export function classifyLiveRows(rows: LiveRow[], out: LiveSources, nowMs = Date.now()): LiveSources {
+  for (const row of rows) {
+    if ((REMOVAL_STATUSES as readonly string[]).includes(row.status)) {
+      const t = row.updated_at ? new Date(row.updated_at).getTime() : nowMs;
+      out.removingSince.set(row.k, Number.isFinite(t) ? t : nowMs);
+    } else out.live.add(row.k);
+  }
+  return out;
+}
+
 export async function removeLibraryItem(email: string, id: string): Promise<RemovalResult | null> {
   const item = await getLibraryItem(email, id);
   if (!item) return null; // wrong owner or gone: nothing to remove, and nothing leaks (AC-C7)
