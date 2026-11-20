@@ -5539,3 +5539,4 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - Quota surfacing: embed failures go through the facts alert path by kind (TrinnexEmbedError); a missing OpenAI key is kind no_api_key on the item (FailReason no_api_key / facts:no_api_key), never a silent 0 facts.
 - Scope gate (search_trinnex only in dm-iris-chase / dm-eli-vaughn), recency RT-S5 rows, RT-I5 strengthened.
 - Mutation proofs m1-m16 (15 FIRED control EQUIVALENT, m5 INERT-equivalent), regression green, build rc=0; evidence in BUILD-trinnex-integration.md.
+- [x] ACT:verify-trinnex-workspace-2 -- verifier loop 2 on PR #289 at 6c62d6e8; probes scripts/verify-trinnex-attack-2.test.ts (VB1-VB3, verifier-written, no product code). Evidence: docs/qc-evidence/VERIFY-trinnex-workspace-2.md

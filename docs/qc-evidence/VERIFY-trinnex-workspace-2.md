@@ -71,3 +71,25 @@ VB3  {"r":{"pending":true},"end":"died:process died","stranded":{"rowExists":tru
 - A permanent orphan is demonstrated (VB1c).
 - Under the brief's FIX FIRST list this is "a delete leaving rows".
 
+## Claim B -- bootstrap allow-list safety: PASS
+
+In `bootstrap-trinnex-db.yml` (l.66-77), a failed read aborts with `exit 1` before any `parameter set`. The output of `scripts/trinnex-extensions-allowlist.sh` decides the write: `UNCHANGED` means no write. The step has no `shell:` override, so GH's default `bash -e` applies. Simulated: `if ! CURRENT=$(false)` gives `abort before write rc=1`.
+
+```
+in=[]                              rc=2 refusing: azure.extensions read back empty
+in=[   ]                           rc=2 refusing
+(no arg)                           rc=2
+in=[PGCRYPTO,PG_TRGM]              -> PGCRYPTO,PG_TRGM,VECTOR
+in=[PGCRYPTO,VECTOR,PG_TRGM]       -> UNCHANGED
+in=[pgcrypto,Vector]               -> UNCHANGED   (mixed case)
+in=[vector]                        -> UNCHANGED
+in=[PGCRYPTO, vector ]             -> UNCHANGED   (spaces)
+in=[PGCRYPTO,PGVECTOR]             -> PGCRYPTO,PGVECTOR,VECTOR   (no substring over-match)
+in=[PGCRYPTO,]                     -> PGCRYPTO,VECTOR            (trailing comma)
+in=[UUID-OSSP,PG_STAT_STATEMENTS]  -> UUID-OSSP,PG_STAT_STATEMENTS,VECTOR
+```
+
+The new list is always the existing list plus `VECTOR`, or unchanged. Suite: `trinnex-bootstrap-allowlist` 4/0. LOW: interior whitespace is stripped from the existing list on write, which is harmless.
+
+**Process note:** the eds-push-gate (G14) refused one push on this branch ("substantive change with no ledger update", because `scripts/verify-trinnex-attack-2.test.ts` is under scripts/). I did not use `LEDGER_OPT_OUT`. Instead I added the ledger row it asks for to `.claude/actions.md` in the same commit.
+
