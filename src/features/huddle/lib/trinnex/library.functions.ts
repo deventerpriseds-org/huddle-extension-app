@@ -94,6 +94,9 @@ export const uploadTrinnexFileFn = createServerFn({ method: "POST" })
       const dup = await lib.findDuplicate(email, hash);
       if (dup && !data.replace) return { duplicateOf: dup }; // AC-L10: ask "replace?" instead of doubling passages
       if (dup && data.replace) {
+        // Loop-2 2b: never re-remove a row that is already being removed (a worker may hold it). The second Replace
+        // used to call removeLibraryItem again and delete the row under the running worker.
+        if (dup.status === "removing") return { error: "already_being_removed" };
         const r = await lib.removeLibraryItem(email, dup.id);
         if (r && !r.removed) return { error: "replace_incomplete" };
       }

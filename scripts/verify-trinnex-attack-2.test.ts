@@ -6,8 +6,10 @@
 // SUPERSEDES:    nothing. SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:      docs/qc-evidence/VERIFY-trinnex-workspace-2.md claim 2b. Run: bun test scripts/verify-trinnex-attack-2.test.ts
 //
-// beginRemoval is modelled on the LIVE SQL in library.server.ts beginRemoval(): in_flight is true only when an
-// unexpired lease is held AND the row's OLD status is one of uploaded/read/split/facts/waiting_memory.
+// beginRemoval is modelled on the LIVE SQL in library.server.ts beginRemoval(). Loop-2 fix round (builder, 2026-11-20):
+// the live SQL now decides in_flight from the unexpired lease ALONE, so the model follows it; LEASE1 in
+// scripts/trinnex-removal-lease.test.ts pins the live SQL to that shape so this model cannot drift from it.
+// (Before: lease unexpired AND old status in uploaded/read/split/facts/waiting_memory.)
 import { test, expect } from "bun:test";
 
 const SRC = `${import.meta.dir}/../src/features/huddle/lib`;
@@ -79,7 +81,6 @@ const removerA = await import(`${SRC}/trinnex/library.server.ts?proc=rA`);
 const removerB = await import(`${SRC}/trinnex/library.server.ts?proc=rB`);
 const heartbeat = await import(`${SRC}/trinnex/library.server.ts?proc=hb`);
 
-const PROCESSING = ["uploaded", "read", "split", "facts", "waiting_memory"];
 
 function reset(status = "uploaded") {
   chunks.length = 0;
@@ -131,10 +132,12 @@ function makeDeps(lease: { held: boolean }) {
       return !row.exists || row.status === "removing" || row.status === "remove_incomplete";
     },
     beginRemoval: async () => {
-      // live SQL: in_flight = lease unexpired AND old.status IN processing statuses
-      const inFlight = lease.held && PROCESSING.includes(row.status);
+      // live SQL (loop-2 fix round): in_flight = lease unexpired, from the LEASE ALONE (no status list).
+      // Was: lease unexpired AND old.status IN processing statuses -- the defect VB1/VB1c exposed.
+      const alreadyRemoving = row.status === "removing";
+      const inFlight = lease.held;
       if (row.exists) row.status = "removing";
-      return { inFlight };
+      return { inFlight, alreadyRemoving };
     },
   };
 }

@@ -211,7 +211,10 @@ export function TrinnexLibraryView() {
     }
     if (!("item" in res) || !res.item) {
       patch(p.pid, { busy: false });
-      toast.error(`Not added: ${FAIL_LABEL[(res as { error?: string }).error as FailReason] ?? "could not save"}`);
+      const err = (res as { error?: string }).error;
+      toast.error(err === "already_being_removed"
+        ? "Not added: the old copy is still being removed. Try again in a moment."
+        : `Not added: ${FAIL_LABEL[err as FailReason] ?? "could not save"}`);
       return;
     }
     setPending((all) => all.filter((x) => x.pid !== p.pid));
@@ -379,7 +382,7 @@ export function TrinnexLibraryView() {
                   <DrawerSpeakers item={open} people={data.people} onSave={async (map, participants) => {
                     if (!caller) return;
                     const r = await setTrinnexSpeakersFn({ data: { caller, id: open.id, speakerMap: map, participants } });
-                    toast[r.ok ? "success" : "error"](r.ok ? "Speakers saved. Passages will be updated." : "Speakers not saved");
+                    toast[r.ok ? "success" : "error"](r.ok ? "Speakers saved. Passages will be updated." : "Speakers not saved. If the file is still processing, save again when it finishes.");
                     await load();
                   }} />
                 )}
