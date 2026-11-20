@@ -3,7 +3,7 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
-import { turnUsedTrinnex } from "./trinnex/search";
+import { trinnexOfferedHere, turnUsedTrinnex } from "./trinnex/search";
 import { agentBudgetMs, turnDeadlineMs } from "./turn-deadline";
 import { joinOpenerAndBlock } from "./chat-format";
 import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
@@ -2329,6 +2329,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // turn's agent replies are kept OUT of personal memory (persistResearchedMemory), because a reply built from
   // Trinnex work passages would otherwise become a scope='global' personal chunk served to every agent.
   let trinnexSearchedThisTurn = false;
+  // Verifier loop 1 scope gate: search_trinnex only in the owner's 1:1 with that agent (huddle dm-<agent>, scope
+  // one-to-one, not a ceremony barge). Read by BOTH dispatch paths and the executor wrapper.
+  const trinnexHere = (agent: { id?: string; trinnexAccess?: boolean } | null | undefined): boolean =>
+    trinnexOfferedHere(agent, { huddleId: data.huddleId, scope: data.scope, ceremony: data.ceremonyBarge === true || !!data.ceremonyRunId });
   const claimAction = (key: string): boolean => {
     const k = key.trim().toLowerCase().slice(0, 240);
     if (turnActionLedger.has(k)) return false;
@@ -2523,6 +2527,12 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
     // data gate. AC-C7: scoped to the caller's resolved email (the library/meetings rows' owner key).
     const runTrinnexSearch = async (args: Record<string, unknown>): Promise<string> => {
       trinnexSearchedThisTurn = true;
+      // Scope gate (verifier loop 1): only in the owner's 1:1 with this agent. Re-checked here so a tool call that
+      // somehow arrives from a group or ceremony huddle never reaches the Trinnex DB.
+      if (!trinnexHere(winner)) {
+        recordToolUse(winner.id, "search_trinnex", "search_trinnex · not_here", false);
+        return JSON.stringify({ error: (await import("./trinnex/search")).TRINNEX_SCOPE_REFUSAL });
+      }
       const { dispatchTrinnexTool } = await import("./trinnex/memory.server");
       const ident = await import("./journey/identity");
       const trinnexOwner = (await ident.resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
@@ -4116,8 +4126,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           ...emailTools,
           ...snapshotTools,
           ...ragTools,
-          // Trinnex work memory: offered ONLY to agents agents.ts marks trinnexAccess (iris-chase, eli-vaughn).
-          ...(await import("./trinnex/search")).trinnexToolsFor(winner),
+          // Trinnex work memory: offered ONLY to agents agents.ts marks trinnexAccess (iris-chase, eli-vaughn), and
+          // ONLY in the owner's 1:1 with that agent (trinnexHere: never a group or ceremony huddle).
+          ...(trinnexHere(winner) ? (await import("./trinnex/search")).trinnexToolsFor(winner) : []),
           ...journeyTools,
           ...webSearchTools,
           ...nexusTools,
@@ -6915,7 +6926,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
         // (trinnexAccess), the SAME schema, the SAME executor (which re-checks the gate and scopes to the owner).
         Object.assign(
           lovableTools,
-          (await import("./trinnex/search")).trinnexLovableToolsFor(winner, (def) =>
+          (await import("./trinnex/search")).trinnexLovableToolsFor(trinnexHere(winner) ? winner : null, (def) =>
             tool({
               description: def.description,
               inputSchema: jsonSchema(def.parameters as unknown as Parameters<typeof jsonSchema>[0]),

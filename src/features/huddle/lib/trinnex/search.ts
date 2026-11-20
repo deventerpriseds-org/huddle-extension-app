@@ -60,6 +60,35 @@ export function turnUsedTrinnex(marked: boolean, toolUses: ReadonlyArray<{ tool?
   return marked || (toolUses ?? []).some((t) => t?.tool === SEARCH_TRINNEX_TOOL.name);
 }
 
+/** Where a turn runs: the huddle id, its scope ("one-to-one" | "group") and whether it is a ceremony barge. */
+export interface TrinnexTurnScope {
+  huddleId?: string | null;
+  scope?: string | null;
+  ceremony?: boolean;
+}
+
+/**
+ * Verifier loop 1 (session default, the owner may overrule): search_trinnex is offered ONLY in the owner's own 1:1
+ * with that agent (huddle `dm-iris-chase` / `dm-eli-vaughn`), never in a group or ceremony huddle, because an
+ * answer built from work material would otherwise be read by every agent in the room.
+ */
+export function trinnexScopeAllows(agentId: string | null | undefined, where: TrinnexTurnScope | null | undefined): boolean {
+  if (!agentId || !where || where.ceremony) return false;
+  if (where.scope !== "one-to-one") return false;
+  return where.huddleId === `dm-${agentId}`;
+}
+
+/** The two gates together: the agents.ts data gate AND the 1:1 scope gate. Both dispatch paths use this. */
+export function trinnexOfferedHere(
+  agent: { id?: string; trinnexAccess?: boolean } | undefined | null,
+  where: TrinnexTurnScope | null | undefined,
+): boolean {
+  return agentHasTrinnexAccess(agent) && trinnexScopeAllows(agent?.id, where);
+}
+
+/** The refusal the executor returns when the tool is called outside the 1:1 (defence in depth). */
+export const TRINNEX_SCOPE_REFUSAL = "search_trinnex is only available in your 1:1 with Iris or Eli";
+
 export function trinnexToolsFor(agent: { trinnexAccess?: boolean } | undefined | null): unknown[] {
   return agentHasTrinnexAccess(agent) ? [SEARCH_TRINNEX_TOOL] : [];
 }

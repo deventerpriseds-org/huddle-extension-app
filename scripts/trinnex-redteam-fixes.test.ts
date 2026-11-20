@@ -208,7 +208,8 @@ t("PERS2 both dispatch paths go through the ONE wrapper that marks the turn, and
   // OpenAI path
   expect(src).toMatch(/if \(c\.name === "search_trinnex"\) \{[\s\S]{0,200}return await runTrinnexSearch\(c\.arguments\)/);
   // Lovable path
-  expect(src).toMatch(/trinnexLovableToolsFor\(winner, \(def\) =>[\s\S]{0,400}execute: async \(args\) => await runTrinnexSearch\(/);
+  // (verifier loop 1: the agent passed in is scope-gated, trinnexHere(winner) ? winner : null)
+  expect(src).toMatch(/trinnexLovableToolsFor\(trinnexHere\(winner\) \? winner : null, \(def\) =>[\s\S]{0,400}execute: async \(args\) => await runTrinnexSearch\(/);
   // no other executor call
   expect(src.match(/dispatchTrinnexTool\(/g)?.length).toBe(1);
   // persistResearchedMemory returns before the reply-chunk loop when the turn used Trinnex
