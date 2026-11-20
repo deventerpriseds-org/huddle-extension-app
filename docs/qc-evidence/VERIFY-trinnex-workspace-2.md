@@ -178,3 +178,30 @@ my new phrasings
 
 `git status --short` was empty after all four runs, and each run reported `restored: ... matches HEAD`.
 
+## Claim 1 -- isolation (reduced depth): PASS
+
+- **VA1-VA8:** 9/0 in `verify-trinnex-attack`. The isolation suites pass 5/0 each (`redteam-isolation`, `redteam-search`). `trinnex-scope-gate` passes 4/0.
+- **search_trinnex reaches only iris-chase/eli-vaughn on both paths:**
+  - OpenAI list l.4131 and Lovable map l.6929 are both gated by `trinnexHere(winner)`, which needs `trinnexAccess === true` (agents.ts) and the 1:1 scope. The executor `runTrinnexSearch` re-checks it (l.2532).
+  - `grep search_trinnex|trinnexToolsFor|SEARCH_TRINNEX` outside `lib/trinnex/` and `huddle.functions.ts` returns only `agents.ts:384` (the data flag). It returns nothing under `lib/voice`.
+  - See also claim G.
+- **URL guard, my own spellings** (`trinnexUrlRefusal(url, personal)`):
+  ```
+  /rag_ai_agents%20                  -> personal_db_name
+  /RAG_AI_Agents/                    -> personal_db_name
+  /%52AG_AI_Agents                   -> personal_db_name
+  postgres://...EDS-POSTGRESQL.../RAG_AI_Agents (no port) -> personal_db_name
+  /trinnex?dbname=RAG_AI_Agents      -> null; pg-connection-string parses database=trinnex (no bypass)
+  /trinnex?database=RAG_AI_Agents    -> null; parses database=trinnex (no bypass)
+  /trinnex?options=-c dbname=...     -> null; parses database=trinnex (no bypass)
+  ```
+- **Every personal-memory writer** (grep of `writeChunk(` / `writeTriples(` / `INSERT INTO rag_*` in src/):
+
+  | writer | content | Trinnex? |
+  |---|---|---|
+  | huddle.functions.ts:1162/1175/1195 | the USER's message, per turn | the user's own text. Documented known limit. |
+  | huddle.functions.ts:7873 (persistResearchedMemory) | agent replies | guarded by `if (turnUsedTrinnex(...)) return;`, mutation-proved in claim M |
+  | rag.functions.ts:101/118 | explicit manual save | user action |
+  | voice/voice-memory.functions.ts:75 (`rememberVoiceTurn`) | voice-call AGENT replies, scope=global | no Trinnex guard. The voice path never offers search_trinnex (no reference under lib/voice), so a voice reply cannot come from a Trinnex search directly. LOW, inference only, not traced: if a 1:1 voice call is seeded from the same `dm-iris-chase` conversation object that holds an earlier Trinnex-based text reply, the model could repeat it and `rememberVoiceTurn` would store it. |
+  | trinnex/memory.server.ts:351/379 | the Trinnex store (separate pool) | by design |
+
