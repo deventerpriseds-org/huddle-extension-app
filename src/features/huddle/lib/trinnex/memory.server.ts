@@ -56,6 +56,10 @@ export interface TrinnexIngestInput {
   /** AC-C7: the owner's email, resolved the same way as the library and meetings rows (resolveTaskEmail). Every
    *  passage is stamped with it (metadata.owner_email, lower-cased) and every search filters on it. */
   ownerEmail: string;
+  /** VA9 (verifier loop 1): a cancellation check (the Library item was Removed while this ingest ran). It is
+   *  called before EVERY write (each passage and each fact batch). When it returns true the ingest writes nothing
+   *  more, deletes whatever it already wrote for this source, and returns `cancelled: true`. */
+  shouldStop?: () => boolean | Promise<boolean>;
 }
 
 export interface TrinnexIngestResult {
@@ -64,6 +68,31 @@ export interface TrinnexIngestResult {
   /** AC-C5: the KIND of the first fact-extraction failure ("429 insufficient_quota", "500", "timeout"), or null.
    *  Passages are stored either way; only the facts are missing. Never message text. */
   factsFailure: string | null;
+  /** True when `shouldStop` fired: nothing of this source is left in the Trinnex store. */
+  cancelled?: boolean;
+}
+
+/** AC-C5 (verifier loop 1): the KIND of an embedding failure -- "no_api_key", "<status> <provider code>",
+ *  "<status>", or "embed_error". Read from embed.server's own message shape ("OpenAI embeddings 429: {..."code":
+ *  "insufficient_quota"..}"); never returns message text. */
+export function embedFailureKind(e: unknown): string {
+  const msg = String((e as Error)?.message ?? e ?? "");
+  if (/OPENAI_API_KEY not configured/.test(msg)) return "no_api_key";
+  const st = /embeddings\s+(\d{3})\b/.exec(msg)?.[1];
+  const code = /"code"\s*:\s*"([a-z0-9_]{1,64})"/i.exec(msg)?.[1] ?? /"type"\s*:\s*"([a-z0-9_]{1,64})"/i.exec(msg)?.[1];
+  if (st) return code ? `${st} ${code}` : st;
+  return "embed_error";
+}
+
+/** Thrown by ingest when an embedding call fails. The message is "OpenAI embeddings <kind>" (kind only), so the
+ *  Library's ingestFailReason and the ai-quota classifier read the same kind. */
+export class TrinnexEmbedError extends Error {
+  readonly kind: string;
+  constructor(kind: string) {
+    super(`OpenAI embeddings ${kind}`);
+    this.name = "TrinnexEmbedError";
+    this.kind = kind;
+  }
 }
 
 // AC-C5 wording + quota test live in the pure library-core so the Library and Meetings UIs share them.
@@ -279,8 +308,27 @@ export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<Tr
   const { kind, passages } = chunkTrinnexSegments(input.segments);
   const chunkIds = new Set<string>();
   const written: Array<{ id: string; text: string }> = [];
+  // VA9: checked before EVERY write. On stop, delete what this run wrote and write nothing more.
+  const stopped = async (): Promise<boolean> => (input.shouldStop ? Boolean(await input.shouldStop()) : false);
+  const cancel = async (): Promise<TrinnexIngestResult> => {
+    await deleteTrinnexSource(input.sourceId, owner);
+    console.info(`[trinnex] ingest cancelled source_kind=${input.sourceKind} passages_removed=${chunkIds.size}`);
+    return { chunks: 0, facts: 0, factsFailure: null, cancelled: true };
+  };
   for (const p of passages) {
-    const vec = await deps.embed(p.text);
+    let vec: number[];
+    try {
+      vec = await deps.embed(p.text);
+    } catch (e) {
+      // AC-C5 (verifier loop 1): an EMBEDDING failure goes through the same alert path as fact extraction
+      // (runAsAiJob + noteAiFailure), kind only. The caller (Library / Meetings) fails the item and removes the
+      // passages written so far.
+      const k = embedFailureKind(e);
+      console.warn(`[trinnex] embed failed source_kind=${input.sourceKind} kind=${k}`);
+      await deps.reportFailure(k, owner);
+      throw new TrinnexEmbedError(k);
+    }
+    if (await stopped()) return cancel();
     const metadata: Record<string, unknown> = {
       sourceId: input.sourceId,
       owner_email: owner,
@@ -327,6 +375,7 @@ export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<Tr
     }
     const triples = ex.triples.filter(validFact);
     if (triples.length === 0) continue;
+    if (await stopped()) return cancel();
     const res = await store().writeTriples(
       triples.map((t) => ({
         scope: "agent" as const,
@@ -341,6 +390,9 @@ export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<Tr
     );
     facts += res.ids.length;
   }
+  // VA9: a stop that arrived during the LAST extraction still removes everything, so the caller never marks a
+  // removed item searchable.
+  if (await stopped()) return cancel();
   if (factsFailure) {
     console.warn(`[trinnex] facts failed source_kind=${input.sourceKind} kind=${factsFailure}`);
     await deps.reportFailure(factsFailure, owner);
