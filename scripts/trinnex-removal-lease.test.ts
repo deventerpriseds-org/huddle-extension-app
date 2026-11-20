@@ -105,3 +105,93 @@ test("LEASE5 Upload Replace never re-removes a row that is already being removed
   expect(guard).toBeGreaterThan(-1);
   expect(guard).toBeLessThan(b.indexOf("removeLibraryItem("));
 });
+
+// ── Loop-3 VC3a: the lease is renewed on a timer for the whole run, independent of fact output ─────────────
+// The REAL runPipeline over the REAL ingestTrinnexSource (fake store pool). A fake clock advances on every AI call;
+// the injected `every` scheduler fires renewals from that clock. A second worker's claim() succeeds at any instant
+// where clock > leaseUntil (claim takes a 3-minute lease; renewLease sets it to now + 3 minutes).
+const mem = await import(`${SRC}/memory.server.ts`);
+const LEASE_MS = 180_000;
+
+async function slowNoFactRun(passages: number, extractMs: number) {
+  let clock = 0;
+  let leaseUntil = LEASE_MS; // the first worker's claim() at t=0
+  let secondClaims = 0;
+  let renewals = 0;
+  let maxGapMs = 0;
+  let lastRenewal = 0;
+  const timers: Array<{ next: number; ms: number; fn: () => void }> = [];
+  const lapseCheck = (t: number) => {
+    if (t > leaseUntil) secondClaims++; // a heartbeat claim() at this instant would take the item
+  };
+  const advance = (dt: number) => {
+    const target = clock + dt;
+    for (;;) {
+      const due = timers.filter((x) => x.next <= target).sort((a, b) => a.next - b.next)[0];
+      if (!due) break;
+      clock = due.next;
+      lapseCheck(clock);
+      due.fn();
+      due.next += due.ms;
+    }
+    clock = target;
+    lapseCheck(clock);
+  };
+  let idSeq = 0;
+  mem.__setTrinnexDepsForTest({
+    getPool: () => ({
+      query: async (sql: string) => (/INSERT INTO rag_(chunks|triples)/.test(sql) ? { rows: [{ id: `id-${++idSeq}` }] } : { rows: [] }),
+    }),
+    configured: () => true,
+    embed: async () => {
+      advance(1_000);
+      return [0.1, 0.2, 0.3];
+    },
+    extractTriples: async () => {
+      advance(extractMs);
+      return { triples: [], failureKind: null };
+    },
+    reportFailure: async () => {},
+  });
+  const id = crypto.randomUUID();
+  const deps = {
+    getBytes: async () => new Uint8Array([1]),
+    deleteBytes: async () => true,
+    extract: async () => ({
+      segments: Array.from({ length: passages }, (_, i) => ({ text: `Test-paragraph ${i} `.repeat(200), page: String(i + 1) })),
+      cues: [],
+    }),
+    memory: { configured: () => true, ingest: mem.ingestTrinnexSource, remove: async () => ({ chunks: 0, facts: 0 }) },
+    update: async () => {},
+    deleteRow: async () => {},
+    isRemoved: async () => false,
+    renewLease: async () => {
+      renewals++;
+      maxGapMs = Math.max(maxGapMs, clock - lastRenewal);
+      lastRenewal = clock;
+      leaseUntil = clock + LEASE_MS;
+    },
+    every: (ms: number, fn: () => void) => {
+      const t = { next: clock + ms, ms, fn };
+      timers.push(t);
+      return () => void timers.splice(timers.indexOf(t), 1);
+    },
+  };
+  const status = await lib.runPipeline(
+    { id, ownerEmail: "o@x.com", name: "Test-long.pdf", kind: "document", blobPath: "p", docDate: null, category: "General",
+      participants: [], speakerMap: {}, chunks: 0, facts: 0, status: "uploaded" } as never,
+    deps as never,
+  );
+  maxGapMs = Math.max(maxGapMs, clock - lastRenewal);
+  return { status, secondClaims, renewals, maxGapMs, elapsedMs: clock, timersLeft: timers.length };
+}
+
+test("LEASE6 a run of 40 slow passages with 0 facts never lets a second claim succeed", async () => {
+  const r = await slowNoFactRun(40, 15_000);
+  console.log(`LEASE6 passages=40 extract=15s facts=0 elapsed=${r.elapsedMs / 1000}s renewals=${r.renewals} maxGapSec=${r.maxGapMs / 1000} secondClaims=${r.secondClaims}`);
+  expect(r.status).toBe("searchable");
+  expect(r.elapsedMs).toBeGreaterThan(3 * LEASE_MS); // the run really outlives the lease several times over
+  expect(r.secondClaims).toBe(0);
+  expect(r.maxGapMs).toBeLessThanOrEqual(lib.LEASE_RENEW_MS);
+  expect(r.timersLeft).toBe(0); // the renewal timer is stopped when the run ends (finally)
+});

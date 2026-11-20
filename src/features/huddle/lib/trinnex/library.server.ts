@@ -168,6 +168,9 @@ export interface PipelineDeps {
   /** Loop-2 2b: extend this worker's processing lease. runPipeline calls it (throttled) from its before-every-write
    *  check, so a run longer than the 3-minute lease never looks abandoned to beginRemoval or claim(). */
   renewLease?(id: string): Promise<void>;
+  /** Loop-3 VC3a: run `fn` every `ms` until the returned stop function is called. Default: setInterval (unref'd).
+   *  Injected only so a test can drive renewal from a fake clock. */
+  every?(ms: number, fn: () => void): () => void;
 }
 
 /** Loop-2 2b: how often a running worker renews its 3-minute lease (well inside it). */
@@ -191,7 +194,30 @@ export function ingestFailReason(e: unknown): FailReason {
  * stepper follows the server (AC-L6). A failure names its step and a reason code; a failure during ingestion
  * also deletes whatever the memory lane may have written for this source, so nothing is half-searchable.
  */
+const everyMs = (ms: number, fn: () => void): (() => void) => {
+  const t = setInterval(fn, ms);
+  (t as { unref?: () => void }).unref?.();
+  return () => clearInterval(t);
+};
+
 export async function runPipeline(item: LibraryItem, deps: PipelineDeps): Promise<LibraryStatus> {
+  // Loop-3 VC3a: renew the lease on a TIMER for the whole run, independent of what the run writes. The
+  // before-every-write renewal in runPipelineSteps is not enough on its own: a facts phase that finds no facts makes
+  // no check for many minutes (measured 600 s vs the 180 s lease), so claim() could hand the item to a second worker.
+  const renew = deps.renewLease;
+  const stopRenewing = renew
+    ? (deps.every ?? everyMs)(LEASE_RENEW_MS, () => {
+        renew(item.id).catch((e: unknown) => log("lease_renew_error", { id: item.id, kind: (e as Error)?.name ?? "Error" }));
+      })
+    : () => {};
+  try {
+    return await runPipelineSteps(item, deps);
+  } finally {
+    stopRenewing();
+  }
+}
+
+async function runPipelineSteps(item: LibraryItem, deps: PipelineDeps): Promise<LibraryStatus> {
   // VA9: Remove may run at ANY point while this runs (another request, another process). Before every write the
   // pipeline asks whether it was removed; if so it writes nothing more and finishes the removal itself, so no
   // passage or fact can outlive the row.
