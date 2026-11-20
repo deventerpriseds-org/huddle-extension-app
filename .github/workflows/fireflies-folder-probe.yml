@@ -1,0 +1,81 @@
+name: Probe the named Fireflies transcripts folder (read-only, counts only)
+
+# WHAT:       Lists the owner's OneDrive "Fireflies Transcripts" folder with Huddle's existing app-only Graph
+#             token and prints ONLY booleans and counts: does the folder exist in this drive, how many files,
+#             how many are named "<Mon D>- <hh-mm AM>-<descriptive name>" (the shape in the owner's screenshot).
+# WHY:        2026-11-20: all 29 Meetings rows carry Fireflies' date-only title ("Nov 10, 09:37 AM") while the
+#             owner's OneDrive files for the same meetings are named "Nov 10- 09-37 AM-Engineering ...". Before
+#             building a reader, prove Huddle's Graph app can see that folder at all.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/actions.md ACT:trinnex-named-titles.
+# PRIVACY:    this repo is PUBLIC, so its logs are public. File names hold people's names: NEVER print a name,
+#             a path below the folder, or the drive URL. Booleans and counts only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      drive_user:
+        description: "EDS user whose OneDrive to look in (already public in deploy-swa.yml)."
+        required: true
+        default: "von.ellis@enterpriseds.io"
+      folder:
+        description: "Folder name to look for at the drive root, then by search."
+        required: true
+        default: "Fireflies Transcripts"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      TENANT: ${{ secrets.AZURE_TENANT_ID }}
+      CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      IN_DRIVE_USER: ${{ inputs.drive_user }}
+      IN_FOLDER: ${{ inputs.folder }}
+    steps:
+      - name: Probe (counts only)
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
+            -d "client_id=$CLIENT_ID" --data-urlencode "client_secret=$CLIENT_SECRET" \
+            -d "scope=https://graph.microsoft.com/.default" -d "grant_type=client_credentials" \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
+          echo "::add-mask::$TOKEN"
+          [ -n "$TOKEN" ] || { echo "::error::no app-only Graph token"; exit 1; }
+          export TOKEN
+          python3 - <<'PY'
+          import json, os, re, urllib.parse, urllib.request, urllib.error
+          tok, user, folder = os.environ["TOKEN"], os.environ["IN_DRIVE_USER"], os.environ["IN_FOLDER"]
+          def get(url):
+              req = urllib.request.Request(url, headers={"Authorization": "Bearer " + tok})
+              try:
+                  with urllib.request.urlopen(req) as r: return r.status, json.load(r)
+              except urllib.error.HTTPError as e: return e.code, None
+          base = "https://graph.microsoft.com/v1.0/users/" + urllib.parse.quote(user)
+          st, drive = get(base + "/drive")
+          print("drive_read_http", st)
+          if drive: print("drive_host_is_risedigitalsolutions", "risedigitalsolutions" in str(drive.get("webUrl", "")).lower())
+          st, item = get(base + "/drive/root:/" + urllib.parse.quote(folder))
+          print("folder_at_root_http", st)
+          if st != 200:
+              st2, found = get(base + "/drive/root/search(q='" + urllib.parse.quote(folder) + "')")
+              hits = [i for i in (found or {}).get("value", []) if i.get("folder") and i.get("name", "").lower() == folder.lower()]
+              print("search_http", st2, "matching_folders", len(hits))
+              item = hits[0] if hits else None
+              if item: print("folder_depth", str(item.get("parentReference", {}).get("path", "")).count("/"))
+          if not item: raise SystemExit(0)
+          names, url = [], base + "/drive/items/" + item["id"] + "/children?$top=200&$select=name,file"
+          while url:
+              st, page = get(url)
+              if st != 200: print("children_http", st); break
+              names += [c["name"] for c in page.get("value", []) if c.get("file")]
+              url = page.get("@odata.nextLink")
+          shape = re.compile(r"^[A-Z][a-z]{2} \d{1,2}- \d{2}-\d{2} [AP]M-\s*\S")
+          print("files", len(names))
+          print("md_files", sum(n.lower().endswith(".md") for n in names))
+          print("named_stamp_files", sum(bool(shape.match(n)) for n in names))
+          print("date_only_files", sum(bool(re.match(r"^[A-Z][a-z]{2} \d{1,2}- \d{2}-\d{2} [AP]M(\.\w+)?$", n)) for n in names))
+          PY
