@@ -5525,3 +5525,4 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - Step 4 (server store + fns: lib/trinnex/meetings.server.ts, meetings.functions.ts; owner picks via EXISTING actOnProposal triage; AC-T2 source guard).
 - Step 5 (MeetingsView + PeoplePicker + Modules entry 'Meetings'; view wired in store/HuddleApp/ViewSwitcher).
 - Step 6 (4 mutation proofs FIRED; not-covered list in BUILD step 6).
+- Step 7 (build exit 0).
