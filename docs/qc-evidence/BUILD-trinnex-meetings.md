@@ -36,6 +36,26 @@ Branch `claude_trinnex-meetings`, cut from `origin/claude_trinnex-workspace` (dd
   base (checked by restoring the three HEAD files and re-running: 3 FAIL), so they predate this lane.
   `meeting-triage.test.ts` 69/0, `actions-view.test.ts` 264/0.
 
+- 6. Mutation proofs (`mutate.sh`, anchors + replacements in FILES, bare test names), all `FIRED (control EQUIVALENT)`, exit 0:
+  | guard | defect reinstated | test | exit |
+  |---|---|---|---|
+  | names.ts known first name is a WHOLE token | `low.indexOf(first)` -> `findIndex(startsWith)` | `S-A+ prefix of a known name is not a match` | 0 |
+  | names.ts S-B7 ambiguity | `byFirst.length === 1` -> `>= 1` | `S-B7 Michael with two Michaels` | 0 |
+  | core ownerPickToTriage owner -> Mine (Q4) | owner -> `someone` | `AC-T12 Von -> Mine` | 0 |
+  | core segmentsFor unmapped -> literal label | `map[label] \|\| label` -> a guessed person | `AC-T11 mapped person, else the literal label` | 0 |
+  First attempt on the whole-token guard named `S-A8 Marchesi review` and came back UNDETERMINED exit 4 (that row
+  does not exercise a known-name prefix); re-run on the row that does, FIRED.
+- NOT COVERED in this lane (time budget):
+  - AC-T13: the picker is NOT yet swapped into the chat triage checklist (`ProposalChecklistItem.tsx`) or
+    Actions > Meetings (`ActionsView.tsx`); both still use the typed "For someone" box. `PeoplePicker.tsx`
+    (`PeopleMenuItems`, `usePeople`) is ready to drop into their "For someone" menu item.
+  - AC-T16 durable queue: the save sets `trinnex_state='queued'` then calls `ingestTrinnexSource` INLINE (as the
+    brief's step 7 says); no heartbeat worker drains it. With the stub, every save ends `not_configured`.
+  - AC-T7/T8/T9 live: rename + writer change covered by pure tests only; no Graph call was made.
+  - No 390px / dark-theme render was looked at (no browser run in this lane).
+  - Owner scope uses `callerOwners` (resolveTaskEmail + login). If `FIREFLIES_OWNER_EMAIL`/the OneDrive mailbox is a
+    DIFFERENT address from the signed-in one, the meeting list is empty (rows are keyed by minutesOwner()).
+
 ## Speaker-label shapes: ANSWERED (was "QUERY FOR THE SESSION")
 
 azure-pg-query run 44671380860 (2026-11-20, run by the coordinator; label SHAPE only, never names) over every stored
