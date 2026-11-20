@@ -218,3 +218,54 @@ t("PERS2 both dispatch paths go through the ONE wrapper that marks the turn, and
   expect(guard).toBeGreaterThan(p);
   expect(guard).toBeLessThan(write);
 });
+
+// ── N1-N5: the name parser, wider spellings than the red team's own rows ───────────────────────────
+const N = await import(`${LIB}/trinnex/names.ts`);
+const ctxN = { people: ["Von", "Michael R.", "Priya S.", "Dana K."], owner: "Von" };
+const twoM = { people: ["Von", "Michael R.", "Michael T."], owner: "Von" };
+const nm = (s: string, c = ctxN) => N.suggestNames(s, c).map((x: { name: string }) => x.name);
+t("NAME1 apostrophe and hyphen names are whole names after a trigger; file-name hyphens still split", () => {
+  expect(nm("Sync with O'Brien")).toEqual(["O'Brien"]);
+  expect(nm("Call with D’Angelo")).toEqual(["D’Angelo"]);
+  expect(nm("Meeting with Jean-Luc")).toEqual(["Jean-Luc"]);
+  expect(nm("Meeting with Jean-Luc Picard")).toEqual(["Jean-Luc Picard"]);
+  expect(nm("Priya-budget-notes.docx")).toEqual(["Priya S."]);
+  expect(nm("O'Brien review")).toEqual([]); // no trigger, not on the list
+});
+t("NAME2 a trailing initial or surname that differs is a different person", () => {
+  expect(nm("Sync with Michael T.", twoM)).toEqual(["Michael T."]);
+  expect(nm("Michael T. review", twoM)).toEqual(["Michael T."]);
+  expect(nm("Sync with Michael R.", twoM)).toEqual(["Michael R."]);
+  expect(nm("Sync with Michael", twoM)).toEqual(["Michael R.", "Michael T."]); // S-A21 unchanged
+  expect(nm("Michael's 1:1")).toEqual(["Michael R."]); // S-A19 unchanged
+  expect(nm("Sync with Michael Smith", twoM)).toEqual(["Michael Smith"]); // neither Michael
+  expect(nm("Michael Roberts sync")).toEqual(["Michael R."]); // consistent initial
+});
+t("NAME3 a speaker label never maps on a first name whose surname/initial conflicts", () => {
+  const kind = (l: string, c = ctxN) => N.matchSpeaker(l, c);
+  expect(kind("Dana Smith")).toEqual({ kind: "unmatched", label: "Dana Smith" });
+  expect(kind("Dana K.")).toEqual({ kind: "person", label: "Dana K.", person: "Dana K." });
+  expect(kind("Dana Kowalski")).toEqual({ kind: "person", label: "Dana Kowalski", person: "Dana K." });
+  expect(kind("Von Ellis")).toEqual({ kind: "person", label: "Von Ellis", person: "Von" });
+  expect(kind("Michael T.", twoM)).toEqual({ kind: "person", label: "Michael T.", person: "Michael T." });
+  expect(kind("Michael", twoM).kind).toBe("ambiguous");
+  expect(kind("Michael Smith", twoM)).toEqual({ kind: "unmatched", label: "Michael Smith" });
+});
+t("NAME4 holidays, roles and product names are not names; a listed person with such a name still is", () => {
+  for (const w of ["Candidate", "Christmas", "Easter", "Microsoft", "Fireflies", "Recruiter", "Thanksgiving"]) {
+    expect(nm(`Sync with ${w}`)).toEqual([]);
+  }
+  expect(nm("Sync with Jordan")).toEqual(["Jordan"]); // S-A5 unchanged
+});
+t("NAME5 a speaker label that is an Object.prototype key stays a literal label on both transcript paths", async () => {
+  const core = await import(`${LIB}/trinnex/meeting-triage-core.ts`);
+  const lc = await import(`${LIB}/trinnex/library-core.ts`);
+  const labels = ["constructor", "toString", "__proto__", "hasOwnProperty"];
+  const seg = core.segmentsFor(labels.map((l, i) => ({ text: `line ${i}`, speaker: l, start: i })) as never, {});
+  expect(seg.map((s: { speaker: unknown }) => s.speaker)).toEqual(labels);
+  const map = core.cleanSpeakerMap({ constructor: "Priya S." }, ["constructor"]);
+  expect(core.segmentsFor([{ text: "hi", speaker: "constructor", start: 1 }] as never, map)[0].speaker).toBe("Priya S.");
+  expect(Object.getPrototypeOf(map)).toBeNull();
+  const turns = lc.turnsFromCues(labels.map((l, i) => ({ speaker: l, text: `cue ${i}`, start: i })) as never, (x: string) => x, {});
+  expect(turns.map((x: { speaker: unknown }) => x.speaker)).toEqual(labels);
+});
