@@ -48,3 +48,14 @@ Expected: 0  Received: 5
 (fail) VA9 RACE: Remove while the worker is mid-ingest ...
 ```
 VA9 is left FAILING on purpose on this verifier branch as the regression test for the fix.
+
+## Claim 3 -- Facts provenance + quota surfacing (Tier 1): CONFIRMED
+Read `memory.server.ts:279-345`: every fact is written with `sourceChunkId: w.id` where `w` is a chunk id returned by `writeChunk` for the SAME source in the same call; `validFact` (`:258-261`) drops empty/oversized s/p/o; `supersede: false`. On a conflicting repeat, `writeTriples`' `ON CONFLICT` (`azure-pg.server.ts:732-741`) keeps the existing row's (non-null) `source_chunk_id`. VA7: after re-ingest every fact's `source_chunk_id` is an existing chunk id; VA6: 0 facts with NULL `source_chunk_id` after delete.
+Quota: `extractTriplesDetailed` returns `failureKind = "<status> <provider code>"` (`triples.server.ts` diff); ingest records the first kind, stops on a quota kind, keeps passages (VA8: chunks stored, 0 facts, `factsFailure = "429 insufficient_quota"`, `reportFailure` called once with the kind). `realReportFailure` (`memory.server.ts:91-99`) runs `noteAiFailure(new Error("OpenAI <kind>"))` inside `runAsAiJob("Trinnex memory", owner, ...)`, the existing ai-quota bell + Iris notice path. Shape check (bun, real modules):
+```
+429 insufficient_quota isQuotaError= true  isQuotaKind= true  reason= facts:429 insufficient_quota
+429 rate_limit_exceeded isQuotaError= false isQuotaKind= false
+500 / timeout          isQuotaError= false
+```
+Library item gets `failReason = factsFailReason(kind)` while staying `searchable` (`library.server.ts:221-224`).
+LOW: an embed-step quota failure fails the item visibly (`ingestFailReason` -> `ai_quota`) but is not routed to the ai-quota bell (only fact-extraction failures are). LOW: `extractTriplesDetailed` returns `failureKind: null` when `OPENAI_API_KEY` is absent, so a missing key reads as "0 facts" with no kind.
