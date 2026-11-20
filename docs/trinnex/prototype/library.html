@@ -114,6 +114,30 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
   .suggest button { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; color: var(--muted-foreground); text-align: left; }
   .suggest button:hover { color: var(--foreground); background: var(--muted); }
   .theme-toggle { margin-left: auto; }
+
+  /* NEW: names read from the file name -- dashed suggestion chips, never added until clicked. */
+  .name-suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .chip-suggest { border: 1px dashed var(--ai); background: transparent; color: var(--ai); cursor: pointer; font: inherit; font-size: 12px; font-weight: 500; }
+  .chip-suggest:hover { background: var(--ai-soft); }
+  .chip-suggest svg { width: 12px; height: 12px; }
+  .chip-suggest:focus-visible, .skip-name:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .skip-name { border: 0; background: none; padding: 0 2px; cursor: pointer; color: var(--muted-foreground); display: inline-grid; place-items: center; }
+  .skip-name svg { width: 12px; height: 12px; }
+
+  /* NEW: speaker mapping ("Who is speaking"). */
+  .spk-list { display: flex; flex-direction: column; gap: 8px; }
+  .spk-row { border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); padding: 8px 10px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 230px); gap: 6px 12px; align-items: center; background: var(--surface-2); }
+  @media (max-width: 520px) { .spk-row { grid-template-columns: minmax(0, 1fr); } }
+  .spk-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .spk-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .talk { display: inline-flex; align-items: center; gap: 6px; }
+  .talk-bar { width: 72px; height: 6px; border-radius: 999px; background: var(--secondary); overflow: hidden; display: inline-block; }
+  .talk-bar span { display: block; height: 100%; background: var(--ai); }
+  .spk-sample { font-style: italic; overflow-wrap: anywhere; }
+  .spk-pick { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .spk-pick .input { width: 100%; }
+  .save-preview { font-size: 12.5px; padding: 6px 10px; border-radius: calc(var(--radius) - 2px); background: var(--muted); overflow-wrap: anywhere; }
+  .save-preview .unset { color: var(--muted-foreground); font-style: italic; }
 </style>
 </head>
 <body>
@@ -296,10 +320,72 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     return { chunks: chunks, facts: Math.max(2, Math.round(chunks * ratio)) };
   }
 
+  // ── NEW: names from the file name ──
+  // Known people match by first or full name (case-insensitive, whole words, _ - . read as spaces).
+  // New names are capitalised words right after with / and / & / "/" / 1on1 / 1-1 / x / vs that are
+  // not a common word, a month or a number. Results are SUGGESTIONS only; nothing is added unclicked.
+  var NAME_STOP = {};
+  ("a an and the of for to on in at by with from vs x me my our us we you i it all team teams hands meeting meetings sync call calls chat notes note review reviews update updates standup stand up " +
+   "weekly daily monthly quarterly annual yearly planning plan plans budget budgets vendor vendors client clients customer customers project projects roadmap kickoff kick off demo demos " +
+   "interview transcript transcripts recording draft final agenda minutes summary report reports leadership leaders staff engineering finance sales marketing product design hr legal ops " +
+   "operations board partner partners follow followup retro sprint deck doc docs policy policies contract contracts renewal new old copy version intro catch catchup check checkin onboarding " +
+   "offsite workshop session discussion prep debrief audio video zoom meet office hours company group internal external budgeting forecast " +
+   "january february march april may june july august september october november december jan feb mar apr jun jul aug sep sept oct nov dec " +
+   "monday tuesday wednesday thursday friday saturday sunday mon tue tues wed thu thur thurs fri sat sun today tomorrow yesterday").split(" ").forEach(function (w) { NAME_STOP[w] = 1; });
+  var NAME_TRIGGERS = { "with": 1, "and": 1, "&": 1, "/": 1, "1on1": 1, "x": 1, "vs": 1 };
+  function normPerson(n) { return String(n || "").toLowerCase().replace(/[._-]+/g, " ").replace(/\s+/g, " ").trim(); }
+  function findPerson(name) {
+    var l = normPerson(name); if (!l) return null;
+    for (var i = 0; i < (S.people || []).length; i++) if (normPerson(S.people[i]) === l) return S.people[i];
+    return null;
+  }
+  function isNewName(name) { return !findPerson(name); }
+  function nameLike(t) { return /^[A-Z][a-z'’]+(?:[A-Z][a-z'’]+)?$/.test(t) && t.length >= 2 && !NAME_STOP[t.toLowerCase()]; }
+  function nameHits(fileName) {
+    var s = String(fileName || "").replace(/\.[a-z0-9]+$/i, "").replace(/[_.]+/g, " ");
+    s = s.replace(/\b1\s*-?\s*on\s*-?\s*1\b/gi, " 1on1 ").replace(/\b1\s*[-:]\s*1\b/g, " 1on1 ");
+    s = s.replace(/-+/g, " ").replace(/&/g, " & ").replace(/\//g, " / ").replace(/[()[\],+]/g, " ");
+    var toks = s.split(/\s+/).filter(Boolean);
+    var lower = " " + toks.join(" ").toLowerCase() + " ";
+    var out = [], seen = {};
+    function add(n) { var k = normPerson(n); if (!seen[k]) { seen[k] = 1; out.push(n); } }
+    (S.people || []).forEach(function (p) {
+      var full = normPerson(p), first = full.split(" ")[0];
+      if (lower.indexOf(" " + full + " ") >= 0 || (first && lower.indexOf(" " + first + " ") >= 0)) add(p);
+    });
+    toks.forEach(function (t, i) {
+      if (!NAME_TRIGGERS[t.toLowerCase()]) return;
+      var parts = [];
+      for (var j = i + 1; j < toks.length && parts.length < 2 && nameLike(toks[j]); j++) parts.push(toks[j]);
+      if (!parts.length) return;
+      var known = findPerson(parts.join(" ")) || (S.people || []).filter(function (p) { return normPerson(p).split(" ")[0] === parts[0].toLowerCase(); })[0];
+      add(known || parts.join(" "));
+    });
+    return out;
+  }
+  function pendingNames(p, list) {
+    return (p.names || []).filter(function (n) { return list.indexOf(findPerson(n) || n) < 0 && p.skipped.indexOf(n) < 0; });
+  }
+  function nameSuggestHTML(p, target) {
+    var list = target === "men" ? p.mentioned : p.participants;
+    var left = pendingNames(p, list); if (!left.length) return "";
+    return '<div class="name-suggest new" role="group" aria-label="From the file name"><span class="small muted">From the file name <span class="new-tag">New</span></span>' +
+      left.map(function (n) {
+        var fresh = isNewName(n);
+        return '<span class="row" style="gap:2px"><button type="button" class="chip chip-suggest" data-act="take-name" data-target="' + target + '" data-name="' + esc(n) + '" data-pid="' + p.pid + '" aria-label="Add ' + esc(n) + (fresh ? ", a new name" : "") + '"><i data-lucide="plus"></i>' + esc(n) + (fresh ? ' <span class="new-tag">New name</span>' : "") + "</button>" +
+          '<button type="button" class="skip-name" data-act="skip-name" data-name="' + esc(n) + '" data-pid="' + p.pid + '" aria-label="Not ' + esc(n) + '"><i data-lucide="x"></i></button></span>';
+      }).join("") + "</div>";
+  }
+  function addNewPerson(name) {
+    var hit = findPerson(name); if (hit) return hit;
+    S.people.push(name); toast('New name "' + name + '" added to your people list');
+    return name;
+  }
+
   var toastTimer = null;
   function toast(msg) {
     var t = $("toast"); t.textContent = msg; t.hidden = false;
-    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 2800);
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, Math.max(2800, msg.length * 45));
   }
 
   // ── Theme toggle (base.css reads data-theme) ──
@@ -323,7 +409,8 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
       if (ACCEPT.indexOf(ext(f.name)) < 0) { rejected.push(f.name); return; }
       var kind = guessKind(f.name);
       state.seq += 1;
-      state.pending.push({ pid: "p" + state.seq, name: f.name, size: f.size, kind: kind, category: guessCategory(f.name), suggested: guessCategory(f.name), date: today(), tags: [], participants: [], phase: "form", step: -1, counts: null });
+      state.pending.push({ pid: "p" + state.seq, name: f.name, size: f.size, kind: kind, category: guessCategory(f.name), suggested: guessCategory(f.name), date: today(), tags: [], participants: [], phase: "form", step: -1, counts: null,
+        names: nameHits(f.name), skipped: [], mentioned: [], speakers: null }); // NEW: names + people mentioned + speakers
     });
     $("reject-note").innerHTML = rejected.length ? '<span class="chip chip-warn"><i data-lucide="alert-triangle"></i>Not added, unsupported type: ' + esc(rejected.join(", ")) + "</span>" : "";
     renderPending(); icons();
@@ -365,9 +452,18 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
       var tags = p.tags.map(function (t, i) { return chipHTML(t, 'data-act="rm-tag" data-pid="' + p.pid + '" data-i="' + i + '"', t); }).join("");
       var people = "";
       if (p.kind === "Transcript") {
+        if (!p.speakers) p.speakers = makeSpeakers(p.size);
         people = '<div class="field" style="grid-column:1/-1"><label for="ppl-' + p.pid + '">Participants</label><div class="tagbox">' +
           p.participants.map(function (n, i) { return chipHTML(n, 'data-act="rm-ppl" data-pid="' + p.pid + '" data-i="' + i + '"', n); }).join("") +
-          '<span class="combo" style="flex:1; min-width:120px"><input id="ppl-' + p.pid + '" data-pid="' + p.pid + '" class="ppl-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="ppl-list-' + p.pid + '" placeholder="Add a person" autocomplete="off"><ul class="combo-list" role="listbox" id="ppl-list-' + p.pid + '" hidden></ul></span></div></div>';
+          '<span class="combo" style="flex:1; min-width:120px">' + comboInputHTML("ppl-" + p.pid, 'data-ctx="ppl" data-pid="' + p.pid + '"', "Add a person") + "</span></div>" +
+          nameSuggestHTML(p, "ppl") + "</div>" +
+          speakerBlockHTML(p);
+      } else {
+        // NEW: optional "People mentioned" for documents, fed by the same combobox and the file name.
+        people = '<div class="field new" style="grid-column:1/-1"><label for="men-' + p.pid + '">People mentioned <span class="muted small">(optional)</span> <span class="new-tag">New</span></label><div class="tagbox">' +
+          p.mentioned.map(function (n, i) { return chipHTML(n, 'data-act="rm-men" data-pid="' + p.pid + '" data-i="' + i + '"', n); }).join("") +
+          '<span class="combo" style="flex:1; min-width:120px">' + comboInputHTML("men-" + p.pid, 'data-ctx="men" data-pid="' + p.pid + '"', "Add a person") + "</span></div>" +
+          nameSuggestHTML(p, "men") + "</div>";
       }
       return '<div class="pending new">' + head +
         '<div class="form-grid">' +
@@ -380,6 +476,55 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     }).join("");
   }
 
+  // ── NEW: speaker mapping ──
+  // The prototype cannot read the file, so it invents 2-3 voice labels from the file size.
+  var SPK_SAMPLES = ["Quick context before we start: here is where we landed last time.", "I can take that one and report back by Friday.", "What is the deadline, and who signs off on it?"];
+  function makeSpeakers(size) {
+    var n = size < 8192 ? 2 : 3;
+    var shares = n === 2 ? [58, 42] : [46, 32, 22];
+    return shares.map(function (pct, i) { return { label: "Speaker " + (i + 1), name: null, talk: pct, sample: SPK_SAMPLES[i] }; });
+  }
+  function spkName(s) { return s.name || s.label + " (unassigned)"; }
+  function unmappedCount(list) { return (list || []).filter(function (s) { return !s.name; }).length; }
+  // Prefill: exactly one file-name name not yet on a speaker AND exactly one unmapped speaker.
+  function speakerSuggestion(p) {
+    if (!p.speakers) return null;
+    var mapped = p.speakers.filter(function (s) { return s.name; }).map(function (s) { return normPerson(s.name); });
+    var left = (p.names || []).filter(function (n) { return p.skipped.indexOf(n) < 0 && mapped.indexOf(normPerson(findPerson(n) || n)) < 0; });
+    var free = []; p.speakers.forEach(function (s, i) { if (!s.name) free.push(i); });
+    return left.length === 1 && free.length === 1 ? { i: free[0], name: findPerson(left[0]) || left[0] } : null;
+  }
+  function comboInputHTML(id, attrs, placeholder) {
+    return '<input id="' + id + '" ' + attrs + ' class="ppl-input input-bare" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="' + id + '-list" placeholder="' + esc(placeholder) + '" autocomplete="off"><ul class="combo-list" role="listbox" id="' + id + '-list" hidden></ul>';
+  }
+  // One row per voice; used by the upload form (ctx "spk") and the detail drawer (ctx "dspk").
+  function speakerRowHTML(s, i, o) {
+    var pick;
+    if (s.name) {
+      pick = '<span class="chip chip-ai" style="align-self:flex-start">' + esc(s.name) + ' <button type="button" id="' + o.idBase + "-clear-" + i + '" ' + o.actAttr + '="spk-clear" ' + o.attrs + ' data-i="' + i + '" aria-label="Unset ' + esc(s.label) + '"><i data-lucide="x"></i></button></span>';
+    } else {
+      pick = (o.suggest && o.suggest.i === i
+        ? '<button type="button" class="chip chip-suggest" style="align-self:flex-start" id="' + o.idBase + "-accept-" + i + '" ' + o.actAttr + '="spk-accept" ' + o.attrs + ' data-i="' + i + '" data-name="' + esc(o.suggest.name) + '"><i data-lucide="check"></i>' + esc(o.suggest.name) + ' <span class="small" style="font-weight:400">Suggested from the file name</span></button>'
+        : "") +
+        '<span class="combo">' + comboInputHTML(o.idBase + "-" + i, 'data-ctx="' + o.ctx + '" ' + o.attrs + ' data-i="' + i + '" aria-label="Who is ' + esc(s.label) + '?"', "Who is this?").replace("input-bare", "input") + "</span>";
+    }
+    return '<div class="spk-row"><div class="spk-info"><div class="spk-top"><strong>' + esc(s.label) + '</strong><span class="talk" title="Share of talk time"><span class="talk-bar" aria-hidden="true"><span style="width:' + s.talk + '%"></span></span><span class="small muted num">' + s.talk + "% of talk</span></span></div>" +
+      '<span class="small muted spk-sample">&ldquo;' + esc(s.sample) + '&rdquo; <span style="font-style:normal">(sample line)</span></span></div>' +
+      '<div class="spk-pick">' + pick + "</div></div>";
+  }
+  function savePreviewHTML(list) {
+    return '<div class="save-preview" aria-live="polite"><span class="muted">Passages will be saved as:</span> ' + list.map(function (s) {
+      return s.name ? "<strong>" + esc(s.name) + "</strong>" : '<span class="unset">' + esc(spkName(s)) + "</span>";
+    }).join(" · ") + "</div>";
+  }
+  function speakerBlockHTML(p) {
+    var o = { ctx: "spk", idBase: "spk-" + p.pid, attrs: 'data-pid="' + p.pid + '"', actAttr: "data-act", suggest: speakerSuggestion(p) };
+    return '<div class="field new" style="grid-column:1/-1"><span class="label">Who is speaking <span class="new-tag">New</span></span>' +
+      '<span class="small muted">Iris heard ' + p.speakers.length + ' voices. Match each to a person so every passage says who said it. You can skip this and set them later.</span>' +
+      '<div class="spk-list">' + p.speakers.map(function (s, i) { return speakerRowHTML(s, i, o); }).join("") + "</div>" +
+      savePreviewHTML(p.speakers) + "</div>";
+  }
+
   function findPending(pid) { for (var i = 0; i < state.pending.length; i++) if (state.pending[i].pid === pid) return state.pending[i]; return null; }
 
   var pendingHost = $("pending-list");
@@ -390,6 +535,14 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     if (act === "discard" || act === "dismiss") state.pending = state.pending.filter(function (x) { return x !== p; });
     else if (act === "rm-tag") p.tags.splice(i, 1);
     else if (act === "rm-ppl") p.participants.splice(i, 1);
+    else if (act === "rm-men") p.mentioned.splice(i, 1);
+    else if (act === "take-name") { // NEW: one click adds a file-name suggestion
+      var nm = addNewPerson(b.getAttribute("data-name")), tl = b.getAttribute("data-target") === "men" ? p.mentioned : p.participants;
+      if (tl.indexOf(nm) < 0) tl.push(nm);
+    }
+    else if (act === "skip-name") p.skipped.push(b.getAttribute("data-name"));
+    else if (act === "spk-accept") { var an = addNewPerson(b.getAttribute("data-name")); p.speakers[i].name = an; if (p.participants.indexOf(an) < 0) p.participants.push(an); }
+    else if (act === "spk-clear") p.speakers[i].name = null;
     else if (act === "use-suggest") p.category = p.suggested;
     else if (act === "ingest") { ingest(p); return; }
     renderPending(); icons();
@@ -413,37 +566,55 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     }
     if (el.classList.contains("ppl-input")) comboKey(e, el);
   });
-  pendingHost.addEventListener("input", function (e) { if (e.target.classList.contains("ppl-input")) comboOpen(e.target); });
-  pendingHost.addEventListener("focusin", function (e) { if (e.target.classList.contains("ppl-input")) comboOpen(e.target); });
-  pendingHost.addEventListener("focusout", function (e) {
-    if (e.target.classList.contains("ppl-input")) { var el = e.target; setTimeout(function () { comboClose(el); }, 150); }
-  });
-  pendingHost.addEventListener("mousedown", function (e) {
-    var li = e.target.closest(".combo-list li"); if (!li) return;
-    e.preventDefault(); var list = li.parentNode; var inp = list.previousElementSibling; pickPerson(inp, li.getAttribute("data-name"));
-  });
+  // The people combobox is ONE component used by Participants, People mentioned, the speaker pickers
+  // in the upload form, and the speaker pickers in the detail drawer (bound to both hosts).
+  function bindCombo(host) {
+    host.addEventListener("input", function (e) { if (e.target.classList.contains("ppl-input")) comboOpen(e.target); });
+    host.addEventListener("focusin", function (e) { if (e.target.classList.contains("ppl-input")) comboOpen(e.target); });
+    host.addEventListener("focusout", function (e) {
+      if (e.target.classList.contains("ppl-input")) { var el = e.target; setTimeout(function () { if (document.body.contains(el)) comboClose(el); }, 150); }
+    });
+    host.addEventListener("mousedown", function (e) {
+      var li = e.target.closest(".combo-list li"); if (!li) return;
+      e.preventDefault(); var inp = li.parentNode.previousElementSibling; pickOption(inp, li);
+    });
+  }
+  bindCombo(pendingHost); bindCombo($("drawer"));
 
-  // Participants combobox reads TRINNEX_SAMPLE.people; a typed new name can be added too.
+  // What a combobox writes to, by its data-ctx.
+  function comboCtx(el) {
+    var ctx = el.getAttribute("data-ctx"), i = +el.getAttribute("data-i");
+    if (ctx === "dspk") {
+      var d = findDoc(state.openId);
+      return { taken: [], apply: function (n) { d.speakers[i].name = n; d.participants = d.participants || []; if (d.participants.indexOf(n) < 0) d.participants.push(n); }, after: function () { renderDrawer(); renderList(); }, focusId: "dspk-clear-" + i };
+    }
+    var p = findPending(el.getAttribute("data-pid"));
+    if (ctx === "men") return { taken: p.mentioned, apply: function (n) { p.mentioned.push(n); }, focusId: "men-" + p.pid };
+    if (ctx === "spk") return { taken: [], apply: function (n) { p.speakers[i].name = n; if (p.participants.indexOf(n) < 0) p.participants.push(n); }, focusId: "spk-" + p.pid + "-clear-" + i };
+    return { taken: p.participants, apply: function (n) { p.participants.push(n); }, focusId: "ppl-" + p.pid };
+  }
+  // Options: "Von (me)" first, then the people list, then "Add new name..." (or Add "typed").
   function comboOptions(el) {
-    var p = findPending(el.getAttribute("data-pid")); var q = el.value.trim().toLowerCase();
-    var opts = (S.people || []).filter(function (n) { return p.participants.indexOf(n) < 0 && n.toLowerCase().indexOf(q) >= 0; });
-    if (q && (S.people || []).map(function (n) { return n.toLowerCase(); }).indexOf(q) < 0) opts.push({ add: el.value.trim() });
+    var c = comboCtx(el), raw = el.value.trim(), q = raw.toLowerCase(), adding = el.getAttribute("data-adding") === "1";
+    var people = (S.people || []).slice().sort(function (a, b) { return (b === S.owner) - (a === S.owner); });
+    var opts = adding && !q ? [] : people.filter(function (n) { return c.taken.indexOf(n) < 0 && n.toLowerCase().indexOf(q) >= 0; })
+      .map(function (n) { return { name: n, label: esc(n) + (n === S.owner ? ' <span class="muted">(me)</span>' : "") }; });
+    if (q && !findPerson(raw)) opts.push({ name: raw, label: 'Add "' + esc(raw) + '"' });
+    else if (!q) opts.push({ addNew: true, label: '<span style="color:var(--ai)">Add new name&hellip;</span>' });
     return opts;
   }
   function comboOpen(el) {
-    var list = $("ppl-list-" + el.getAttribute("data-pid")); var opts = comboOptions(el);
+    var list = $(el.id + "-list"); if (!list) return; var opts = comboOptions(el);
     if (!opts.length) { comboClose(el); return; }
     list.innerHTML = opts.map(function (o, i) {
-      var name = typeof o === "string" ? o : o.add;
-      var label = typeof o === "string" ? esc(o) : 'Add "' + esc(o.add) + '"';
-      return '<li role="option" id="opt-' + el.getAttribute("data-pid") + "-" + i + '" data-name="' + esc(name) + '" aria-selected="' + (i === 0) + '">' + label + "</li>";
+      return '<li role="option" id="' + el.id + "-opt-" + i + '" data-name="' + esc(o.name || "") + '"' + (o.addNew ? ' data-addnew="1"' : "") + ' aria-selected="' + (i === 0) + '">' + o.label + "</li>";
     }).join("");
     list.hidden = false; el.setAttribute("aria-expanded", "true");
-    el.setAttribute("aria-activedescendant", "opt-" + el.getAttribute("data-pid") + "-0");
+    el.setAttribute("aria-activedescendant", el.id + "-opt-0");
   }
-  function comboClose(el) { var list = $("ppl-list-" + el.getAttribute("data-pid")); if (list) list.hidden = true; el.setAttribute("aria-expanded", "false"); el.removeAttribute("aria-activedescendant"); }
+  function comboClose(el) { var list = $(el.id + "-list"); if (list) list.hidden = true; el.setAttribute("aria-expanded", "false"); el.removeAttribute("aria-activedescendant"); }
   function comboKey(e, el) {
-    var list = $("ppl-list-" + el.getAttribute("data-pid")); var items = list ? Array.prototype.slice.call(list.querySelectorAll("li")) : [];
+    var list = $(el.id + "-list"); var items = list ? Array.prototype.slice.call(list.querySelectorAll("li")) : [];
     var cur = items.findIndex(function (li) { return li.getAttribute("aria-selected") === "true"; });
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault(); if (list.hidden) { comboOpen(el); return; }
@@ -451,14 +622,19 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
       items.forEach(function (li, i) { li.setAttribute("aria-selected", String(i === n)); });
       if (n >= 0) el.setAttribute("aria-activedescendant", items[n].id);
     } else if (e.key === "Enter") {
-      e.preventDefault(); if (!list.hidden && cur >= 0) pickPerson(el, items[cur].getAttribute("data-name"));
-    } else if (e.key === "Escape") { comboClose(el); }
+      e.preventDefault(); if (!list.hidden && cur >= 0) pickOption(el, items[cur]);
+    } else if (e.key === "Escape") { if (list && !list.hidden) e.stopPropagation(); comboClose(el); }
   }
-  function pickPerson(el, name) {
-    var p = findPending(el.getAttribute("data-pid")); if (!name || p.participants.indexOf(name) >= 0) return;
-    p.participants.push(name);
-    if ((S.people || []).indexOf(name) < 0) S.people.push(name);
-    renderPending(); icons(); var ni = $("ppl-" + p.pid); if (ni) ni.focus();
+  function pickOption(el, li) {
+    if (li.getAttribute("data-addnew") === "1") { // switch the same input into "type a new name" mode
+      el.value = ""; el.setAttribute("data-adding", "1"); el.placeholder = "Type the new name, then Enter"; comboClose(el); el.focus(); return;
+    }
+    var name = (li.getAttribute("data-name") || "").trim(); if (!name) return;
+    var c = comboCtx(el); name = addNewPerson(name); // a new name joins S.people, with a toast
+    if (c.taken.indexOf(name) >= 0) return;
+    c.apply(name);
+    if (c.after) c.after(); else { renderPending(); icons(); }
+    var f = $(c.focusId); if (f) f.focus();
   }
 
   // ── 3. Processing stepper ──
@@ -475,9 +651,13 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
         clearInterval(timer); p.step = STEPS.length - 1; p.phase = "done";
         state.seq += 1;
         if (p.newCategory) (S.categories = S.categories || []).push(p.category);
-        state.library.unshift({ id: "doc-new-" + state.seq, name: p.name, kind: p.kind, category: p.category, addedAt: p.date, pages: null, chunks: p.counts.chunks, facts: p.counts.facts, status: "Searchable", tags: p.tags.slice(), participants: p.participants.slice(), fresh: true });
+        // Only what the owner chose is saved: pending file-name suggestions are NOT added.
+        var isT = p.kind === "Transcript";
+        var spk = isT && p.speakers ? p.speakers.map(function (s) { return Object.assign({}, s); }) : null;
+        state.library.unshift({ id: "doc-new-" + state.seq, name: p.name, kind: p.kind, category: p.category, addedAt: p.date, pages: null, chunks: p.counts.chunks, facts: p.counts.facts, status: "Searchable", tags: p.tags.slice(), participants: isT ? p.participants.slice() : [], mentioned: isT ? [] : p.mentioned.slice(), speakers: spk, fresh: true });
         renderPills(); renderList(); renderCategoryList();
-        toast("Added to library: " + p.counts.chunks + " passages, " + p.counts.facts + " facts" + (p.newCategory ? '. New category "' + p.category + '" added.' : ""));
+        toast("Added to library: " + p.counts.chunks + " passages, " + p.counts.facts + " facts" + (p.newCategory ? '. New category "' + p.category + '" added.' : "") +
+          (spk && unmappedCount(spk) ? " Unset voices are saved as Speaker N; set them later from the file's detail." : ""));
       }
       renderPending(); icons();
     }, delay);
@@ -503,7 +683,7 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     var rows = state.library.filter(function (d) {
       if (state.filter !== "All" && d.category !== state.filter) return false;
       if (!state.query) return true;
-      return (d.name + " " + (d.category || "") + " " + d.tags.join(" ") + " " + (d.participants || []).join(" ")).toLowerCase().indexOf(state.query) >= 0;
+      return (d.name + " " + (d.category || "") + " " + d.tags.join(" ") + " " + (d.participants || []).join(" ") + " " + (d.mentioned || []).join(" ")).toLowerCase().indexOf(state.query) >= 0;
     });
     var total = state.library.length;
     $("lib-total").textContent = total + (total === 1 ? " item" : " items");
@@ -556,9 +736,11 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
   function genericDetail(d) {
     var base = d.name.replace(/\.[a-z0-9]+$/i, "");
     var tag = d.tags[0] || "this topic";
-    var who = (d.participants && d.participants[0]) || "Von";
+    var sp = d.speakers && d.speakers.length ? d.speakers.map(spkName) : null; // NEW: passages carry the mapped speaker
+    var who = sp ? sp[0] : (d.participants && d.participants[0]) || "Von";
+    var who2 = sp ? sp[1] || sp[0] : "Von";
     if (d.kind === "Transcript") return {
-      passages: [[who + " · 02:14", "Quick context before we start: the goal today is to agree next steps on " + tag + "."], ["Von · 09:40", "Can we write down who owns each follow-up so nothing slips?"], [who + " · 18:05", "I'll send the summary and the open questions by Friday."]],
+      passages: [[who + " · 02:14", "Quick context before we start: the goal today is to agree next steps on " + tag + "."], [who2 + " · 09:40", "Can we write down who owns each follow-up so nothing slips?"], [who + " · 18:05", "I'll send the summary and the open questions by Friday."]],
       facts: [[base, "topic", tag], ["Summary and open questions", "owner", who], ["Summary and open questions", "due", "Friday"], [base, "held on", fmtDate(d.addedAt)]]
     };
     var loc = d.kind === "Notes" ? ["paragraph 1", "paragraph 3", "paragraph 6"] : ["page 1", "page 3", "page 6"];
@@ -566,6 +748,12 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
       passages: [[loc[0], "This document covers " + tag + " for the Trinnex team and who it applies to."], [loc[1], "Requests go to the owning team first; anything over the agreed limit needs a manager's approval."], [loc[2], "This replaces the earlier version and applies from " + fmtDate(d.addedAt) + "."]],
       facts: [[base, "covers", tag], [base, "applies to", "Trinnex team"], ["Requests over limit", "need", "manager approval"], [base, "effective from", fmtDate(d.addedAt)]]
     };
+  }
+  // Sample transcripts already triaged carry their speakers from the matching Fireflies meeting.
+  function ensureSpeakers(d) {
+    if (d.speakers) return;
+    var m = (S.meetings || []).filter(function (x) { return x.triaged && d.name.indexOf(x.title) === 0; })[0];
+    d.speakers = m && m.speakers ? m.speakers.map(function (s, i) { return { label: s.label, name: s.person || null, talk: s.talkPct, sample: s.sample }; }) : makeSpeakers(d.chunks * 1024);
   }
   function findDoc(id) { for (var i = 0; i < state.library.length; i++) if (state.library[i].id === id) return state.library[i]; return null; }
 
@@ -595,7 +783,17 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
       html += d.tags.length ? '<div class="row" style="gap:4px">' + d.tags.map(function (t) { return '<span class="chip">' + esc(t) + "</span>"; }).join("") + "</div>" : '<span class="small muted">No tags yet.</span>';
     }
     if (d.participants && d.participants.length) html += '<span class="small muted">Participants: ' + esc(d.participants.join(", ")) + "</span>";
+    if (d.mentioned && d.mentioned.length) html += '<span class="small muted">People mentioned: ' + esc(d.mentioned.join(", ")) + "</span>";
     html += "</div>";
+
+    // NEW: Speakers -- set or change who each voice is, after upload.
+    if (d.kind === "Transcript" && !waitingTriage) {
+      ensureSpeakers(d);
+      var dopt = { ctx: "dspk", idBase: "dspk", attrs: "", actAttr: "data-dact", suggest: null };
+      html += '<div class="stack new"><span class="eyebrow row" style="gap:6px">Speakers <span class="new-tag">New</span></span>' +
+        (unmappedCount(d.speakers) ? '<span class="small muted">' + unmappedCount(d.speakers) + " voice" + (unmappedCount(d.speakers) === 1 ? " is" : "s are") + " not set yet. Passages from them say Speaker N.</span>" : "") +
+        '<div class="spk-list">' + d.speakers.map(function (s, i) { return speakerRowHTML(s, i, dopt); }).join("") + "</div>" + savePreviewHTML(d.speakers) + "</div>";
+    }
 
     if (waitingTriage) {
       html += '<div class="card scope"><i data-lucide="info"></i><p class="small muted" style="margin:0">This meeting is not split into passages yet. Triage it in <a href="meetings.html">Meetings</a> (title, participants, action items) and it becomes searchable here.</p></div>';
@@ -624,6 +822,7 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     var t = e.target.closest("button"); if (!t) return; var d = findDoc(state.openId); if (!d) return;
     if (t.id === "drawer-close") closeDrawer();
     else if (t.id === "edit-tags-btn") { state.editingTags = !state.editingTags; renderDrawer(); renderList(); var inp = $("drawer-tag-input"); (inp || $("edit-tags-btn")).focus(); }
+    else if (t.getAttribute("data-dact") === "spk-clear") { d.speakers[+t.getAttribute("data-i")].name = null; renderDrawer(); renderList(); var di = $("dspk-" + t.getAttribute("data-i")); if (di) di.focus(); }
     else if (t.getAttribute("data-dact") === "rm-tag") { d.tags.splice(+t.getAttribute("data-i"), 1); renderDrawer(); renderList(); $("drawer-tag-input").focus(); }
     else if (t.id === "remove-btn") { state.confirmRemove = true; renderDrawer(); $("confirm-remove-yes").focus(); }
     else if (t.id === "confirm-remove-no") { state.confirmRemove = false; renderDrawer(); $("remove-btn").focus(); }
@@ -634,6 +833,7 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
   });
   $("drawer").addEventListener("keydown", function (e) {
     var d = findDoc(state.openId);
+    if (e.target.classList.contains("ppl-input")) comboKey(e, e.target);
     if (e.target.id === "drawer-tag-input" && d) {
       if ((e.key === "Enter" || e.key === ",") && e.target.value.trim()) {
         e.preventDefault(); var v = e.target.value.trim().replace(/,$/, ""); if (d.tags.indexOf(v) < 0) d.tags.push(v);

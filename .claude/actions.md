@@ -5525,3 +5525,6 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
       2026-11-20 owner: "I don't know that policies needs its own category unless category will be dynamic". Library now has
       TYPE (automatic: Document / Meeting transcript) + CATEGORY (dynamic: Iris suggests, owner accepts or types, new ones join
       the list; filter pills built from categories in use). Headless check: Q1 budget file -> new "Finance" -> pill appears, 0 errors.
+      2026-11-20 owner: names from the file/meeting title; set who Speaker 1/2/... is during triage "for the benefit of the rag".
+      Added "Who is speaking" (Meetings + Library transcripts, same people picker) and "From the title/file name" suggestions.
+      Headless: Meetings 65/65 checks, Library 56/56, 0 page errors, no 390px scroll. Answered: NO second database (see memory).

@@ -4195,3 +4195,7 @@ here as fact three times before being checked.)
   rag_chunks today. Exec assistant agent = `eli-vaughn`; `iris-chase` = Team lead; both share search_memory/lookup_facts.
 - Prototype: docs/trinnex/prototype/ on branch claude_trinnex-prototype; artifact https://claude.ai/artifact/25dG6n5GB9m1DBdynxTSyA.
 - When built: triple extraction from transcripts admits model output into stored claims => TIER 1 (AC subagent first).
+- 2026-11-20: Trinnex RAG = NO second database. Same rag_chunks/rag_triples in eds-postgresql/RAG_AI_Agents; Trinnex rows
+  marked by `source` prefix + `metadata` (collection, meeting id, date, series, participants, speaker). Fireflies sends
+  `sentences[].speaker_name` ("Speaker N" when unidentified, fireflies.server.ts:75/180); triage maps labels -> people so
+  each stored passage names its speaker. Retrieval needs one small extension: a collection/speaker filter in searchChunks.
