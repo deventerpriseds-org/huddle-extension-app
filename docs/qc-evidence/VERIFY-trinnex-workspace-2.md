@@ -138,3 +138,27 @@ finn-reid in dm-finn-reid    false    {id:"iris-chase"} without trinnexAccess fl
 - The Trinnex owner is resolved from the caller, so a spoof can only expose the owner's own material to the owner's own agents. It is not a cross-owner leak, and the real UI always sends a 1:1 with one member.
 - LOW. Suggest: also require `data.members.length === 1 && data.members[0] === agent.id`.
 
+## Claim R -- recency over-match: loop-1 phrases FIXED; new over-matches found (LOW, not FIX FIRST)
+
+`recencyFromQuestion(q, 2026-11-20T12:00Z, "UTC")`:
+```
+loop-1 rows
+"did the vendor sign, at last?"                -> null                                   FIXED
+"what was the last-minute change to pricing"   -> null                                   FIXED
+"revenue over the past two years"              -> {dateFrom:2024-11-20,dateTo:2026-11-20} FIXED
+"the last 3 quarters of revenue"               -> {dateFrom:2026-02-20,dateTo:2026-11-20} FIXED
+"at long last did legal approve"               -> null                                   ok
+"what did they decide at last meeting"         -> {mostRecent:1}                         ok (intended)
+my new phrasings
+"what is our last resort if the vendor walks"  -> {mostRecent:1}   OVER-MATCH
+"the last-ditch plan for the launch"           -> {mostRecent:1}   OVER-MATCH
+"last but not least, what about pricing"       -> {mostRecent:1}   OVER-MATCH
+"what did we say about last mile delivery"     -> {mostRecent:1}   OVER-MATCH (unquoted title-ish phrase)
+"over the last couple of weeks what changed"   -> {mostRecent:1}   WRONG SHAPE (should be a ~2-week span)
+"in the past few months what slipped"          -> null             UNDER-MATCH (no span applied)
+```
+
+**Cause:** the catch-all row `S-C1 S-C2 S-C7 S-C10`, `/\b(?:last|latest|most\s+recent|newest)\b/`, matches any bare "last" not caught above it. RT-S5 only carved out "at last" and "last-minute".
+
+**Impact:** the search narrows to the single most recent source, so a semantic question can come back as a "couldn't find" miss. This is answer quality: no isolation, provenance or data-loss effect. LOW.
+
