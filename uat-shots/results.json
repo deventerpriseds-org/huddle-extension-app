@@ -1,0 +1,56 @@
+{
+  "results": [
+    {
+      "name": "Meetings module opens from Modules",
+      "pass": true
+    },
+    {
+      "name": "Meeting detail renders the triage panel",
+      "pass": true
+    },
+    {
+      "name": "Detail shows 'Who is speaking'",
+      "pass": true
+    },
+    {
+      "name": "Meetings: no horizontal scroll",
+      "pass": true
+    },
+    {
+      "name": "Trinnex Library opens from Apps",
+      "pass": true
+    },
+    {
+      "name": "Library shows 'Add material'",
+      "pass": true
+    },
+    {
+      "name": "Library shows 'Your library'",
+      "pass": true
+    },
+    {
+      "name": "Library: no horizontal scroll",
+      "pass": true
+    },
+    {
+      "name": "Huddle chat renders its composer",
+      "pass": true
+    },
+    {
+      "name": "Iris 1:1 reachable from this layout",
+      "pass": false,
+      "detail": "no visible Iris entry at this width"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
