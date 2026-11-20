@@ -4195,7 +4195,12 @@ here as fact three times before being checked.)
   rag_chunks today. Exec assistant agent = `eli-vaughn`; `iris-chase` = Team lead; both share search_memory/lookup_facts.
 - Prototype: docs/trinnex/prototype/ on branch claude_trinnex-prototype; artifact https://claude.ai/artifact/25dG6n5GB9m1DBdynxTSyA.
 - When built: triple extraction from transcripts admits model output into stored claims => TIER 1 (AC subagent first).
-- 2026-11-20: Trinnex RAG = NO second database. Same rag_chunks/rag_triples in eds-postgresql/RAG_AI_Agents; Trinnex rows
+- 2026-11-20 SUPERSEDED (same day, see below): "Trinnex RAG = NO second database." Same rag_chunks/rag_triples in eds-postgresql/RAG_AI_Agents; Trinnex rows
   marked by `source` prefix + `metadata` (collection, meeting id, date, series, participants, speaker). Fireflies sends
   `sentences[].speaker_name` ("Speaker N" when unidentified, fireflies.server.ts:75/180); triage maps labels -> people so
   each stored passage names its speaker. Retrieval needs one small extension: a collection/speaker filter in searchChunks.
+- 2026-11-20 CORRECTION: mixing Trinnex into rag_chunks/rag_triples is NOT safe. scopeClause (azure-pg.server.ts ~479)
+  filters by scope/agent only, never source; auto-retrieval (memory-context.server.ts ~77, mode "shared") runs every turn,
+  so labelled work rows would surface in personal chats by default; "researched" supersede is keyed on (scope, subject,
+  predicate) so a work fact can retire a personal one. Recommended instead: separate DATABASE on eds-postgresql ($0 idle),
+  same schema + store code, explicit bootstrap + pinned connection. Awaiting owner decision.
