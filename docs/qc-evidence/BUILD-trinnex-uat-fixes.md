@@ -31,3 +31,7 @@ EVIDENCE:   the two runs above; azure-pg-query shape counts (29 untriaged meetin
 |---|---|---|---|
 | 44707889765 | 1000x680 | 8/8 (Meetings opens, detail + "Who is speaking", no h-scroll; Library opens, Add material, Your library, no h-scroll) + no console errors + no 4xx/5xx | Library card reads "29 waiting for triage". The detail takes the full page with a "< Meetings" back link because the page is under 42rem with both panels open. Script error: "no visible Huddle view button" (rail label is "Huddles") |
 | 44707895133 | 390x844 | 8/8 + composer visible + no console errors + no 4xx/5xx | Modules/Apps sheets now open. Iris not reachable without "Open navigation" -> script fixed on claude_trinnex-uat-script |
+
+## Final live UAT (main e5e21ce5, app deploy 44707603382)
+- 44708491612 at 1000x680: 12/12. 44708497787 at 390x844: 12/12. Iris check: "opened" on both; screenshots show the
+  `@iris-chase` one-to-one composer. Read-only: no message, save, upload or removal was made.

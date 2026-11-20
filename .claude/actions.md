@@ -5555,3 +5555,7 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
       count used one address, Meetings uses the linked-address set -> 0 vs 29; (2) Meetings detail pane one word wide with both
       panels open at 1000px -> container query; (3) UAT script clicked hidden desktop controls on the phone and looked for the
       composer outside the chat view. Evidence: docs/qc-evidence/BUILD-trinnex-uat-fixes.md. NOT owner-confirmed.
+      2026-11-20 #292 merged a28adce4, deploy 44707603382 OK; #293 (script only) merged e5e21ce5. Live UAT re-run
+      44708491612 (1000x680) and 44708497787 (390x844): 12/12 each -- Meetings + detail, Library "29 waiting for triage",
+      no h-scroll, Iris 1:1 opens with composer, 0 console errors, 0 failed requests. Mechanism verified live by UAT;
+      NOT yet owner-confirmed.
