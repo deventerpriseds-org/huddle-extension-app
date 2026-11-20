@@ -22,3 +22,18 @@ trinnex-meetings 34/0, trinnex-names 43/0, voice-toolset-hidden 36/0, nexus-writ
 fireflies-minutes: branch `3 FAILED` = G3, G5, G8; on origin/main (separate detached worktree, same node_modules) the
 identical `FAIL G3 ... FAIL G5 ... FAIL G8 ... 3 FAILED`. Pre-existing, not introduced by this PR.
 `nice -n 10 npm run build` -> rc=0 (`[nitro] √ You can deploy this build using npx nitro deploy --prebuilt`).
+
+### 2b. Remove during processing -- new backstops -- PASS (no FIX-FIRST condition), one MEDIUM liveness finding
+Re-run (inside S): verify-trinnex-attack VA1-VA9 9/0, verify-trinnex-attack-2 VB1/VB1c/VB2/VB2b/VB3 5/0,
+trinnex-removal-race 11/0, trinnex-removal-lease 5/0, trinnex-live-sources 12/0.
+New probes `scripts/verify-trinnex-attack-3.test.ts` -> `9 pass 0 fail` (bun test, 51ms):
+- VC1a meeting passage owner A, fireflies row owner B: `search candidates=2 cited=1 not_live=1` -> only m-a. Not visible.
+- VC1b library row stuck `removing` forever: search `miss`; sweep at 5 min since updated_at keeps it (`sources=0`), at 11 min deletes it (`sources=1 chunks=1`). Not permanent.
+- VC1c meeting row under the owner's alias: searchable, NOT swept.
+- VC2a LIVE upload in uploaded/read/split/facts/waiting_memory/failed/searchable with writes 30 days old: sweep `sources=0`, all rows kept. Live rows are never swept: liveness is the row's status, the grace only applies to non-live.
+- VC2b no row, newest write 9 min: kept; 11 min: swept.
+- VC2c A's orphan and B's live upload with the same id: only A's deleted (owner-scoped deleteTrinnexSource).
+- VC3c Remove completes while the worker is between writes: worker's next check cancels, 0 passages remain.
+- **VC3a FINDING (MEDIUM, liveness, not a leak):** "lease renewed every 60 s" does not hold in the FACTS phase. runPipeline renews only from `removed()`, which ingestTrinnexSource calls via `shouldStop` after each embed and only before a `writeTriples` that HAS facts. Real ingest, 40 passages, 15 s/extraction, 0 facts: `shouldStop calls=41 maxGapSec=600 lease=180s`. With facts on every passage: `maxGapSec=15` (VC3b). When the lease lapses mid-facts: (i) heartbeat `claim()` can re-claim the item (status still `split`) and run a SECOND concurrent ingest that re-embeds/re-extracts (double AI spend) and deletes the first worker's passages; the first worker's `finally release()` then clears the second worker's lease; (ii) a Remove gets `inFlight=false` and deletes under the worker, but the worker writes nothing more without a `stopped()` check, so VC3c holds and the backstops catch any write that slips the check window. No derived row survives without a live source; no live source's rows are swept. Not a FIX-FIRST category.
+- Read, not executed: `liveTrinnexSources` SQL (library.server.ts ~588-640) scopes uploads by `lower(owner_email) = $1` and meetings by `lower(owner_email) = ANY(owner aliases)`; alias-resolution failure sets `meetingsChecked=false`, which keeps search owner-only and makes the sweeper skip meetings. The probe's main-DB model is written from that reading (stated, not proven against Postgres).
+- LOW: claim() re-takes a `removing` row every ~2 min and bumps its updated_at, so a removal that keeps throwing before its memory delete keeps resetting the sweeper's grace. Not visible meanwhile (not live, so filtered).
