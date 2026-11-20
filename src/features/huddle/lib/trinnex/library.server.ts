@@ -676,16 +676,28 @@ export async function removeLibraryItem(email: string, id: string): Promise<Remo
  * The Fireflies row (read only): meetings waiting for triage. Uses the meetings lane's `triaged_at` column when it
  * exists on chat.fireflies_meetings; until then no meeting has been triaged in Trinnex, so every recorded meeting
  * for the owner counts. Returns null when the table is absent (Fireflies never set up).
+ *
+ * `owners` is the caller's FULL linked-address set (proposals.server callerOwners), the same set the Meetings module
+ * filters on (meetings.server scope -> `owner_email = ANY($1::text[])`). UAT 2026-11-20 (verify-uat run 44705323308):
+ * this used to match the single signed-in address, so the Library said "0 waiting" while Meetings listed 29, because
+ * the Fireflies rows are stored under a different linked address.
  */
-export async function firefliesWaiting(email: string): Promise<number | null> {
-  const pool = getPool();
+export async function firefliesWaiting(
+  owners: string[],
+  pool: Pick<Pool, "query"> = getPool(),
+): Promise<number | null> {
+  const set = [...new Set(owners.map((o) => o.trim().toLowerCase()).filter(Boolean))];
+  if (!set.length) return 0;
   const cols = await pool.query(
     `SELECT column_name FROM information_schema.columns WHERE table_schema = 'chat' AND table_name = 'fireflies_meetings'`,
   );
   if (!cols.rowCount) return null;
-  const has = new Set(cols.rows.map((r) => String(r.column_name)));
+  const has = new Set(cols.rows.map((r: { column_name: unknown }) => String(r.column_name)));
   const where = has.has("triaged_at") ? "AND triaged_at IS NULL" : "";
-  const r = await pool.query(`SELECT count(*)::int AS n FROM chat.fireflies_meetings WHERE lower(owner_email) = lower($1) ${where}`, [email]);
+  const r = await pool.query(
+    `SELECT count(*)::int AS n FROM chat.fireflies_meetings WHERE lower(owner_email) = ANY($1::text[]) ${where}`,
+    [set],
+  );
   return Number(r.rows[0]?.n ?? 0);
 }
 
