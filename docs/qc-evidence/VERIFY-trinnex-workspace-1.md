@@ -147,3 +147,17 @@ Byte-identical to the old payloads. Regression suites for the shared files are g
 - Blob: `LIBRARY_CONTAINER = "trinnex-library"` (`library.server.ts:31`), same connection string; `container()` calls `createIfNotExists()` with no `access` argument (`blob.server.ts:48-49`) -> private. Live 409/404 on a bare GET was NOT REACHED (no egress to storage from here).
 - Logging: every `console.*` added by the PR (`git diff origin/main...HEAD -- src | grep '^+.*console\.'`) logs ids, counts, step names, error codes or `e.name`. `meetings.server.ts` `code()` (`:37-40`) only passes a message through when it is a lower-case slug, else a fixed code. No transcript, passage, title or file name is logged.
 - LOW: the bootstrap reads `azure.extensions` with `|| echo ""`; if that read fails transiently, `NEW="VECTOR"` and `parameter set` would REPLACE the shared server's extension allow-list with VECTOR only (affects every DB on eds-postgresql). Safer: fail when the read fails.
+
+## Claim 8 -- Mutation proofs (mutate.sh, anchors in FILES, bare test names): CONFIRMED for all 3 guards
+Anchors/replacements: `/tmp/claude-0/-home-user/5d755b8c-dcaa-530d-9f68-5c64e83e2a0f/scratchpad/vtw/mut/{a,r}{1,1b,2,3}.txt`. Each run restored the file to HEAD ("restored: ... matches HEAD", "tree clean").
+
+| # | Guard | Mutation | Test (bare name) | Outcome | exit |
+|---|---|---|---|---|---|
+| M1 | I5 no-persist (`huddle.functions.ts:7834`) | `if (turnUsedTrinnex(trinnexSearchedThisTurn, toolUses)) return;` -> `if (false) return;` | `PERS2 both dispatch paths go through the ONE wrapper that marks the turn, and persistence checks it before writing` (trinnex-redteam-fixes) | FIRED (control EQUIVALENT) | 0 |
+| M1' | same mutation | same | `RT-I5 an agent reply built from search_trinnex results is NOT persisted into PERSONAL rag_chunks` (trinnex-redteam-isolation) | **INERT** | 1 |
+| M1b | I5 resume breadcrumb (`search.ts:60`) | `return marked \|\| (toolUses ...).some(...)` -> `return marked;` | `PERS1 turnUsedTrinnex: the turn flag OR a resumed search_trinnex breadcrumb excludes the turn` | FIRED (control EQUIVALENT) | 0 |
+| M2 | owner-scoped delete (`memory.server.ts:377`) | `AND lower(metadata->>'owner_email') = $2` -> `AND $2::text IS NOT NULL` | `OWN1 owner B ingesting and deleting the same sourceId leaves owner A's passages AND facts intact` | FIRED (control EQUIVALENT) | 0 |
+| M3 | personal-DB URL guard (`shared-pool.server.ts:89`) | `if (isPersonal(t.db) \|\| ...) return "personal_db_name";` -> `if (false && isPersonal(t.db)) ...` | `GUARD1 every spelling of the personal database is refused with a code` | FIRED (control EQUIVALENT) | 0 |
+| M3' | same | same | `RT-I1 ...` and my `VA1 ...` | UNDETERMINED (suite rc=1 but bare `bun:test` prints `(fail)` lower-case, which mutate.sh does not read; neither file has the `FAIL <name>` wrapper) | 4 |
+
+LOW: `RT-I5` is INERT against the real defect: it only regex-matches /trinnex/i inside the persist block, and the block's own comment says "Trinnex", so deleting the guard leaves it green. The guard IS covered by PERS2 (source position) and PERS1 (behaviour of `turnUsedTrinnex`). There is still no behavioural test that runs `persistResearchedMemory` after a search_trinnex turn and counts personal writes; PERS2 is a text-position check.
