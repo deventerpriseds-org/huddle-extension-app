@@ -1,0 +1,71 @@
+{
+  "results": [
+    {
+      "name": "Meetings module opens from Modules",
+      "pass": true
+    },
+    {
+      "name": "Meetings list: most titles are real names, not date stamps",
+      "pass": true,
+      "detail": "28 of 29 named"
+    },
+    {
+      "name": "Meeting detail renders the triage panel",
+      "pass": true
+    },
+    {
+      "name": "Detail shows 'Who is speaking'",
+      "pass": true
+    },
+    {
+      "name": "Each speaker card shows identifying lines",
+      "pass": true,
+      "detail": "12 speaker cards with clues"
+    },
+    {
+      "name": "'More of what they said' opens several lines",
+      "pass": true,
+      "detail": "2 lines"
+    },
+    {
+      "name": "Meetings: no horizontal scroll",
+      "pass": true
+    },
+    {
+      "name": "Trinnex Library opens from Apps",
+      "pass": true
+    },
+    {
+      "name": "Library shows 'Add material'",
+      "pass": true
+    },
+    {
+      "name": "Library shows 'Your library'",
+      "pass": true
+    },
+    {
+      "name": "Library: no horizontal scroll",
+      "pass": true
+    },
+    {
+      "name": "Huddle chat renders its composer",
+      "pass": true
+    },
+    {
+      "name": "Iris 1:1 reachable from this layout",
+      "pass": true,
+      "detail": "opened"
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
