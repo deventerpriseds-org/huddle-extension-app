@@ -59,3 +59,68 @@ Quota: `extractTriplesDetailed` returns `failureKind = "<status> <provider code>
 ```
 Library item gets `failReason = factsFailReason(kind)` while staying `searchable` (`library.server.ts:221-224`).
 LOW: an embed-step quota failure fails the item visibly (`ingestFailReason` -> `ai_quota`) but is not routed to the ai-quota bell (only fact-extraction failures are). LOW: `extractTriplesDetailed` returns `failureKind: null` when `OPENAI_API_KEY` is absent, so a missing key reads as "0 facts" with no kind.
+
+## Claim 4 -- Spelling table section 5: CONFIRMED for every row re-derived (54 inputs), with 4 LOW over-match notes
+Driver: scratch script calling the real `suggestNames`, `speakerKey`, `matchSpeaker` (`names.ts:108,207,219`) and `recencyFromQuestion` (`search.ts:211`, rules `:172-207`), now=2026-11-20T12:00Z, tz America/New_York. Raw output follows the verdicts.
+- S-A1..S-A22 (S-A21 with two Michaels) and S-B1..S-B9 all match the table's expected column (S-B9 `Priya S. (Guest)` -> Priya S. via normalised name; `priya@x.example` -> unmapped).
+- S-C1, C3, C4, C5, C6, C7, C10, C11 match. S-C2/S-C8/S-C9 depend on catalog + series resolution and were NOT REACHED in this loop (covered by the builders' trinnex-memory tests, not re-derived).
+- RT-S1 consistency: "previous" is a synonym of "last" in EVERY rule that carries it: `previous week` = `last week` (calendar week, :180), `previous month/quarter/year` (:181-183), `previous 3` = `last 3` (:192), `the previous X meeting` = most recent (:200-203). "before last" / "second most recent" are the only skip-1 phrasings. So previous = most recent is internally consistent with the rest of the table; the comment at :197 names the one-line flip if the owner wants the other reading.
+- LOW over-matches (recency applied where none was meant): `at last we agreed on pricing` -> mostRecent 1; `last-minute changes` -> mostRecent 1; `the past two years of revenue` -> mostRecent 2 meetings; `the last 3 quarters of revenue` -> mostRecent 3 meetings. Effect: a too-narrow search (honest miss or partial answer), not a leak.
+```
+SC "the last Engineering Leaders meeting" => {"mostRecent":1}
+SC "the latest Engineering Leaders" => {"mostRecent":1}
+SC "most recent Eng Leaders sync" => {"mostRecent":1}
+SC "last week's Engineering Leaders meeting" => {"dateFrom":"2026-11-09","dateTo":"2026-11-15"}
+SC "the last two Engineering Leaders meetings" => {"mostRecent":2}
+SC "the Engineering Leaders meeting before last" => {"mostRecent":1,"skip":1}
+SC "last time we discussed the vendor" => null
+SC "the last meeting" => {"mostRecent":1}
+SC "what did Michael say last" => {"mostRecent":1}
+SC "the \"Last Mile\" review" => null
+SC "the previous Engineering Leaders meeting" => {"mostRecent":1}
+SC "previous decisions on pricing" => null
+SC "prior to the launch" => null
+SC "at last we agreed on pricing" => {"mostRecent":1}
+SC "the past two years of revenue" => {"mostRecent":2}
+SC "the last 3 quarters of revenue" => {"mostRecent":3}
+SC "last-minute changes" => {"mostRecent":1}
+SC "the second most recent sync" => {"mostRecent":1,"skip":1}
+SC "previous week" => {"dateFrom":"2026-11-09","dateTo":"2026-11-15"}
+SC "what lasting decisions" => null
+SA "Meeting with Priya" => [{"name":"Priya S.","known":true}]
+SA "Von / Michael 1:1" => [{"name":"Michael R.","known":true}]
+SA "1on1_Dana" => [{"name":"Dana K.","known":true}]
+SA "1on1_Dana.md" => [{"name":"Dana K.","known":true}]
+SA "Sync w/ Jordan" => [{"name":"Jordan","known":false}]
+SA "Priya-budget-notes.docx" => [{"name":"Priya S.","known":true}]
+SA "Q1 planning.pptx" => []
+SA "Marchesi review" => []
+SA "Sync with Marchesi" => [{"name":"Marchesi","known":false}]
+SA "Weekly sync" => []
+SA "Meeting with the team" => []
+SA "Sync with Von" => []
+SA "Budget/Forecast review" => []
+SA "Lunch with ACME" => []
+SA "Sync with José" => [{"name":"José","known":false}]
+SA "meeting with priya" => [{"name":"Priya S.","known":true}]
+SA "Meeting with Priya and Dana" => [{"name":"Priya S.","known":true},{"name":"Dana K.","known":true}]
+SA "Call with May" => []
+SA "Michael's 1:1" => [{"name":"Michael R.","known":true}]
+SA "Q3/Q4 planning" => []
+SA "\"Meeting with Priya\" <script>" => [{"name":"Priya S.","known":true}]
+SA21 [{"name":"Michael R.","known":true},{"name":"Michael T.","known":true}]
+SB "Speaker 1" key= "Speaker 1" match= {"kind":"numbered","label":"Speaker 1"}
+SB "speaker 2" key= "speaker 2" match= {"kind":"numbered","label":"speaker 2"}
+SB "Speaker  3" key= "Speaker  3" match= {"kind":"numbered","label":"Speaker  3"}
+SB "SPEAKER 4" key= "SPEAKER 4" match= {"kind":"numbered","label":"SPEAKER 4"}
+SB "Speaker" key= "Unknown speaker" match= {"kind":"unknown","label":"Unknown speaker"}
+SB "" key= "Unknown speaker" match= {"kind":"unknown","label":"Unknown speaker"}
+SB "   " key= "Unknown speaker" match= {"kind":"unknown","label":"Unknown speaker"}
+SB null key= "Unknown speaker" match= {"kind":"unknown","label":"Unknown speaker"}
+SB "Von Ellis" key= "Von Ellis" match= {"kind":"person","label":"Von Ellis","person":"Von"}
+SB "Sam" key= "Sam" match= {"kind":"unmatched","label":"Sam"}
+SB "Speaker 10" key= "Speaker 10" match= {"kind":"numbered","label":"Speaker 10"}
+SB "Priya S. (Guest)" key= "Priya S. (Guest)" match= {"kind":"person","label":"Priya S. (Guest)","person":"Priya S."}
+SB "priya@x.example" key= "priya@x.example" match= {"kind":"unmatched","label":"priya@x.example"}
+SB7 {"kind":"ambiguous","label":"Michael","candidates":["Michael R.","Michael T."]}
+```
