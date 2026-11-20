@@ -124,3 +124,17 @@ SB "Priya S. (Guest)" key= "Priya S. (Guest)" match= {"kind":"person","label":"P
 SB "priya@x.example" key= "priya@x.example" match= {"kind":"unmatched","label":"priya@x.example"}
 SB7 {"kind":"ambiguous","label":"Michael","candidates":["Michael R.","Michael T."]}
 ```
+
+## Claim 5 -- Owner picker (AC-T13, changed flow): CONFIRMED (code + pure-function level; UI not looked at)
+- Server side unchanged: `git diff origin/main...HEAD -- src/features/huddle/lib/proposals src/features/huddle/lib/actions | wc -l` = 0, and `meeting-triage.ts` / `actions.server.ts` are not in the PR's file list. So storage, reading and acting on an existing delegated row run exactly today's code.
+- Client payload: old Mine sent `{ choice: "mine" }`; old "For someone" sent `{ choice: "someone", name: n.slice(0, 80) }` (removed lines in the ActionsView / ProposalChecklistItem diffs). New: `OwnerTriageMenuItems` (`PeoplePicker.tsx:109-123`) sends `triageForPick(name, owner)` (`meeting-triage-core.ts:98-104`); the typed-box path (`onAddNew` -> `naming`) still sends the same `{choice:"someone", name: n.slice(0,80)}` plus `rememberPersonName`. Shape check with the real function:
+```
+["Von","Von"] => {"choice":"mine"}        ["von","Von"] => {"choice":"mine"}     [" Von ","Von"] => {"choice":"mine"}
+["Priya S.","Von"] => {"choice":"someone","name":"Priya S."}
+["X*100","Von"] => {"choice":"someone","name":<80 X>}
+["Me",null] => {"choice":"mine"}           ["Me",""] => {"choice":"mine"}         ["Priya S.",null] => {"choice":"someone","name":"Priya S."}
+["Von Ellis","Von"] => someone "Von Ellis" ["Von","Von Ellis"] => someone "Von"
+```
+Byte-identical to the old payloads. Regression suites for the shared files are green (actions-view 264, actions-view-server 50, meeting-triage 69/34/7, task-proposals 199/45).
+- One picker: `OwnerTriageMenuItems` is used by `ActionsView.tsx:709` (row menu), `:804` (row "For someone" button) and `ProposalChecklistItem.tsx:207` (chat checklist). `MeetingsView.tsx:67` uses the same component family (`PeopleMenuItems`, which `OwnerTriageMenuItems` wraps) and the same `usePeople` list.
+- LOW: if the people list holds the owner under a different spelling than `owner` (e.g. owner "Von", list entry "Von Ellis"), picking "Von Ellis" stores `someone: "Von Ellis"` instead of Mine. The owner row is always pinned first as "<owner> (me)", so the normal pick is Mine.
