@@ -26,13 +26,14 @@ const t = (name: string, fn: () => Promise<void> | void) =>
   });
 
 type Call = { sql: string; params: unknown[] | undefined };
-function fakePool(calls: Call[], opts: { fail42P10Once?: boolean } = {}) {
-  let failed = false;
+// azurePgStore caches its pool on first use, so the 42P10 path is driven by a flag on the SAME pool.
+const failNext = { on: false };
+function fakePool(calls: Call[]) {
   return {
     query: async (sql: string, params?: unknown[]) => {
       calls.push({ sql, params });
-      if (opts.fail42P10Once && !failed && /ON CONFLICT/.test(sql)) {
-        failed = true;
+      if (failNext.on && /ON CONFLICT/.test(sql)) {
+        failNext.on = false;
         const e = new Error("no unique or exclusion constraint matching the ON CONFLICT specification") as Error & {
           code: string;
         };
@@ -45,8 +46,7 @@ function fakePool(calls: Call[], opts: { fail42P10Once?: boolean } = {}) {
 }
 
 const sharedCalls: Call[] = [];
-let sharedOpts: { fail42P10Once?: boolean } = {};
-let sharedPool = fakePool(sharedCalls);
+const sharedPool = fakePool(sharedCalls);
 mock.module(P("db/shared-pool.server.ts"), () => ({
   SHARED_POOL_MAX: 8,
   getSharedPool: () => sharedPool,
@@ -82,12 +82,13 @@ async function exercise(store: typeof azurePgStore): Promise<void> {
 t("M3a existing azurePgStore SQL + params are byte-for-byte the pre-refactor golden", async () => {
   sharedCalls.length = 0;
   await exercise(azurePgStore);
-  // the 42P10 fallback path too
-  const fbCalls: Call[] = [];
-  sharedPool = fakePool(fbCalls, { fail42P10Once: true });
+  const main = [...sharedCalls];
+  // the 42P10 fallback path too (ON CONFLICT refused -> plain INSERT)
+  sharedCalls.length = 0;
+  failNext.on = true;
   await azurePgStore.writeChunk({ scope: "global", text: "fb", embedding: VEC });
-  sharedPool = fakePool(sharedCalls);
-  const got = { main: sharedCalls, fallback: fbCalls };
+  const got = { main, fallback: [...sharedCalls] };
+  if (got.fallback.length !== 2) throw new Error(`42P10 fallback not exercised: ${got.fallback.length} calls`);
   if (process.env.GOLDEN_WRITE === "1") {
     writeFileSync(GOLDEN, JSON.stringify(got, null, 2) + "\n");
     console.log(`wrote golden: ${GOLDEN}`);

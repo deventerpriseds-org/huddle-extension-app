@@ -112,7 +112,9 @@
         "x",
         30
       ]
-    },
+    }
+  ],
+  "fallback": [
     {
       "sql": "INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata, author_agent_ids, owner_entra_oid) VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8) ON CONFLICT (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text))\n       DO UPDATE SET text = EXCLUDED.text,\n                     -- owner_entra_oid IS in the DO UPDATE, and that is the whole point of AC D2.\n                     -- Adding the column to the INSERT list alone stamps only rows that are BRAND NEW;\n                     -- every repeated utterance takes this conflict branch instead and would stay\n                     -- NULL-owned forever. The two rows measured NULL on 2026-09-08 are exactly the\n                     -- kind this path keeps re-touching.\n                     --\n                     -- COALESCE(existing, incoming) -- FIRST NON-NULL WRITER WINS, deliberately in\n                     -- this order. An existing NULL row is stamped (D2 satisfied); an owned row is\n                     -- never REASSIGNED to a later writer. Identical text under the same\n                     -- (scope, agent_id, source) is the dedup key, so with two people that collision\n                     -- is reachable, and silently flipping ownership on a shared row would be worse\n                     -- than the NULL it replaced.\n                     owner_entra_oid = COALESCE(rag_chunks.owner_entra_oid, EXCLUDED.owner_entra_oid),\n                     author_agent_ids = CASE\n                       WHEN EXCLUDED.author_agent_ids <@ rag_chunks.author_agent_ids\n                         THEN rag_chunks.author_agent_ids\n                       ELSE rag_chunks.author_agent_ids || EXCLUDED.author_agent_ids\n                     END RETURNING id",
       "params": [
@@ -125,7 +127,19 @@
         [],
         null
       ]
+    },
+    {
+      "sql": "INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata, author_agent_ids, owner_entra_oid) VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8) RETURNING id",
+      "params": [
+        "global",
+        null,
+        "fb",
+        null,
+        "[0.1,0.2,0.3]",
+        {},
+        [],
+        null
+      ]
     }
-  ],
-  "fallback": []
+  ]
 }
