@@ -162,3 +162,19 @@ my new phrasings
 
 **Impact:** the search narrows to the single most recent source, so a semantic question can come back as a "couldn't find" miss. This is answer quality: no isolation, provenance or data-loss effect. LOW.
 
+## Claim M -- mutation proofs re-run by the verifier: RT-I5 PROVEN; tombstone guards PROVEN (one equivalent mutation)
+
+`mutate.sh` setup:
+- Anchors and replacements are files in the session scratchpad (`v2/a*.txt`, `v2/r*.txt`).
+- Each pattern is the full bare test name.
+- The test command rewrites bun's `(fail) ` to `FAIL ` so mutate.sh can read the marker: `set -o pipefail; bun test <file> 2>&1 | sed "s/^(fail) /FAIL /"`. Without that rewrite, the first two RT-I5 runs reported UNDETERMINED exit 4, which proves nothing. They are recorded here, not counted.
+
+| # | file | mutation | test | outcome |
+|---|---|---|---|---|
+| m1 | huddle.functions.ts | `if (turnUsedTrinnex(trinnexSearchedThisTurn, toolUses)) return;` -> `void 0;` | RT-I5 an agent reply built from search_trinnex results is NOT persisted into PERSONAL rag_chunks | **FIRED (control EQUIVALENT) exit 0**. The loop-1 INERT is resolved. |
+| m2 | library.server.ts | `shouldStop: removed,` -> `shouldStop: undefined,` | RACE-embed Remove during the embed stage ... | **FIRED (control EQUIVALENT) exit 0** |
+| m3 | library.server.ts | drop `removalTombstones.add(item.id);` at the top of runRemoval | RACE-embed ... | INERT exit 1. Behaviourally equivalent: `beginRemoval` sets status `removing`, which `isRemoved` reads, and `completeRemoval` adds the tombstone again. **Not proven**, not broken. |
+| m4 | library.server.ts | `if (inFlight) {` -> `if (false && inFlight) {` (defer-to-worker) | XPROC-embed Remove from ANOTHER process while the worker holds the lease ... | **FIRED (control EQUIVALENT) exit 0** |
+
+`git status --short` was empty after all four runs, and each run reported `restored: ... matches HEAD`.
+
