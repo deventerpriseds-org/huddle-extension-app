@@ -232,7 +232,10 @@ t("FIL1 'the last Engineering Leaders meeting' searches ONLY the max-date meetin
   trinnexRows = (sql) => (sql.includes("LIKE 'trinnex:%'") ? catalogRows : []);
   await mem.searchTrinnex({ query: "to-dos", series: "Engineering Leaders", question: "to-dos from the last Engineering Leaders meeting" });
   const s = trinnexCalls.find((c) => c.sql.includes("ORDER BY embedding"))!;
-  expect(s.params).toContainEqual(["trinnex:meeting:c"]);
+  const at = (s.params ?? []).findIndex((p) => JSON.stringify(p) === JSON.stringify(["trinnex:meeting:c"]));
+  expect(at).toBeGreaterThan(-1);
+  // the param must actually be bound into the WHERE, not merely sent
+  expect(s.sql).toContain(`source = ANY($${at + 1}::text[])`);
 });
 t("FIL2 'what did Michael say' filters to speaker Michael R. through metadata", async () => {
   trinnexRows = (sql) => (sql.includes("LIKE 'trinnex:%'") ? catalogRows : []);
