@@ -25,3 +25,9 @@ EVIDENCE:   the two runs above; azure-pg-query shape counts (29 untriaged meetin
 - Result: `FIRED (control EQUIVALENT)`, exit 0; the file was restored to HEAD.
 - Note: a first attempt used `[set.slice(-1)]`. C1 stayed green because the last address is the one holding the meetings;
   only C7 caught it. That mutation was a poor choice, not a gap in the guard.
+
+## Live UAT after deploy 44707603382 (main a28adce4)
+| Run | Size | Product checks | Notes |
+|---|---|---|---|
+| 44707889765 | 1000x680 | 8/8 (Meetings opens, detail + "Who is speaking", no h-scroll; Library opens, Add material, Your library, no h-scroll) + no console errors + no 4xx/5xx | Library card reads "29 waiting for triage". The detail takes the full page with a "< Meetings" back link because the page is under 42rem with both panels open. Script error: "no visible Huddle view button" (rail label is "Huddles") |
+| 44707895133 | 390x844 | 8/8 + composer visible + no console errors + no 4xx/5xx | Modules/Apps sheets now open. Iris not reachable without "Open navigation" -> script fixed on claude_trinnex-uat-script |

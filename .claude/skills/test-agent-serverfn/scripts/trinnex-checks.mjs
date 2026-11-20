@@ -74,10 +74,15 @@ export const checks = [
 
   async function irisOneToOneUnchanged({ page, check, screenshot }) {
     // Back to the chat view first: after the Library the composer is not on screen at all (that, not Iris, is why
-    // this check failed on 2026-11-20). "Huddle" is the first view in ViewSwitcher ENTRIES on both layouts.
-    await clickVisible(page.getByRole("button", { name: "Huddle", exact: true }), "Huddle view button");
+    // this check failed on 2026-11-20). Desktop rail: aria-label "Huddles" (Rail.tsx); phone bar: text "Huddle"
+    // (ViewSwitcher.tsx ENTRIES). Run 44707889765 showed the exact-"Huddle" name misses the desktop rail.
+    await clickVisible(page.getByRole("button", { name: /^Huddles?$/ }), "Huddle view button");
     await page.waitForTimeout(1000);
-    const iris = page.getByRole("button", { name: /Iris/ });
+    // Phone: the channel list sits behind the top bar's "Open navigation" (HuddleApp.tsx). Desktop: already visible.
+    const menu = page.locator('button[aria-label="Open navigation"]');
+    for (let i = 0; i < (await menu.count()); i++) if (await menu.nth(i).isVisible()) { await menu.nth(i).click(); await page.waitForTimeout(600); break; }
+    // The sidebar names the channel "#iris-chase" (lower case), so match case-insensitively.
+    const iris = page.getByRole("button", { name: /iris/i });
     let opened = false;
     try {
       opened = await clickVisible(iris, "Iris entry");
