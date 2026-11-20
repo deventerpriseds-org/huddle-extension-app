@@ -161,3 +161,21 @@ Anchors/replacements: `/tmp/claude-0/-home-user/5d755b8c-dcaa-530d-9f68-5c64e83e
 | M3' | same | same | `RT-I1 ...` and my `VA1 ...` | UNDETERMINED (suite rc=1 but bare `bun:test` prints `(fail)` lower-case, which mutate.sh does not read; neither file has the `FAIL <name>` wrapper) | 4 |
 
 LOW: `RT-I5` is INERT against the real defect: it only regex-matches /trinnex/i inside the persist block, and the block's own comment says "Trinnex", so deleting the guard leaves it green. The guard IS covered by PERS2 (source position) and PERS1 (behaviour of `turnUsedTrinnex`). There is still no behavioural test that runs `persistResearchedMemory` after a search_trinnex turn and counts personal writes; PERS2 is a text-position check.
+
+## SUMMARY
+
+| # | Claim | Verdict | Key evidence |
+|---|---|---|---|
+| 1 | Isolation: retrieval, search_memory/lookup_facts, voice, other agents, both paths; no persist; URL guard; owner scoping | CONFIRMED (LOW: group-huddle transcript shows Iris's Trinnex-derived text to the room) | VA1 (21 URL spellings vs pg-connection-string, 0 accepted), VA4 (every AGENTS id, 0 Trinnex queries), VA5, writer sweep, `huddle.functions.ts:7834` |
+| 2a | Delete means gone (memory layer), re-ingest replaces | CONFIRMED | VA6, VA7; `memory.server.ts:358-389` |
+| 2b | Library Remove deletes memory + blob + row, "Removal incomplete" on partial failure | **REFUTED (race)** | VA9 failing: Remove during in-flight ingest returns removed, deletes row + blob, 5 passages + 3 facts written afterwards survive with no row left to remove them |
+| 3 | Facts provenance + quota surfaced + passages kept | CONFIRMED (2 LOW) | VA7, VA8, `isQuotaError("OpenAI 429 insufficient_quota") = true` |
+| 4 | Spelling table section 5 | CONFIRMED for 54 inputs; S-C2/C8/C9 NOT REACHED; 4 LOW over-matches | real-function driver output above |
+| 5 | Owner picker keeps the stored assignee shape | CONFIRMED (UI not looked at) | 0-line server diff; `triageForPick` payloads equal the old ones |
+| 6 | Deploy + infra (pin, no new secret, DB-only bootstrap, pool 2, private container, no content logs) | CONFIRMED (LOW: allow-list overwrite risk; live blob 409 NOT REACHED) | deploy-swa.yml / bootstrap-trinnex-db.yml diff read |
+| 7 | Regression + build | CONFIRMED | all listed suites green; fireflies-minutes G3/G5/G8 fail identically on origin/main; build rc=0 |
+| 8 | Mutation: I5, owner delete, URL guard | CONFIRMED (FIRED, control EQUIVALENT, exit 0 x4); RT-I5 itself INERT (LOW) | table above |
+
+UI: no browser was run in this loop (MeetingsView, TrinnexLibraryView, PeoplePicker, ActionsView/Checklist pickers are UI-UNVERIFIED).
+
+**Verdict: FIX FIRST** -- one FIX-FIRST class defect: a delete that leaves rows behind (claim 2b, Library Remove racing the in-flight ingest worker). Repro: `bun test scripts/verify-trinnex-attack.test.ts -t VA9` on this branch. Everything else is LOW. After the fix, a browser UAT is still owed for the UI claims (MERGE-PENDING-UAT at best until then).
