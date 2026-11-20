@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trinnex Library</title>
+<!--
+WHAT:       Clickable prototype of "Trinnex Library", a new app in Huddle's Apps launcher: the loader that
+            turns work files, policies, transcripts and notes into searchable memory (passages + facts).
+WHY:        Owner 2026-11-20 asked for a Trinnex data loader prototype to confirm before any real build.
+            No backend: files are read for name and size only, nothing is uploaded, state lives in memory.
+SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), PolishView.tsx (header anatomy:
+            ai-soft icon tile + 17px title; right-side sheet max 440px), lib/rag/types.ts (ChunkRow = passage
+            with a source; TripleRow = subject / predicate / object linked to a chunk via sourceChunkId).
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="base.css">
+<style>
+  /* Page-specific CSS, built only from base.css tokens. */
+  .head { display: flex; align-items: flex-start; gap: 10px; }
+  .app-tile { width: 32px; height: 32px; flex: none; border-radius: calc(var(--radius) - 2px); display: grid; place-items: center; background: var(--ai-soft); color: var(--ai); }
+  .app-tile svg { width: 16px; height: 16px; }
+  .h-app { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+  .scope { background: var(--muted); box-shadow: none; display: flex; gap: 10px; align-items: flex-start; }
+  .scope svg { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--muted-foreground); }
+  .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+
+  .drop { border: 1.5px dashed var(--border); border-radius: var(--radius); background: var(--surface-2); padding: 24px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+  .drop.over { border-color: var(--ai); background: var(--ai-soft); }
+  .drop > svg { width: 22px; height: 22px; color: var(--muted-foreground); }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+
+  .pending { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--surface); }
+  .pending-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .pending-head svg { width: 16px; height: 16px; flex: none; color: var(--muted-foreground); }
+  .fname { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .field label, .field .label { font-size: 12px; font-weight: 600; color: var(--muted-foreground); }
+  .tagbox { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 34px; padding: 4px 6px; border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px); background: var(--surface); }
+  .tagbox:focus-within { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .tagbox input { border: 0; outline: 0; background: transparent; flex: 1; min-width: 80px; height: 24px; }
+  .chip button svg { width: 12px; height: 12px; }
+  .chip button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; border-radius: 50%; }
+
+  .combo { position: relative; }
+  .combo-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 6; margin: 0; padding: 4px; list-style: none; background: var(--card); border-radius: calc(var(--radius) - 2px); box-shadow: var(--shadow-hair), var(--shadow-pop); max-height: 200px; overflow: auto; }
+  .combo-list li { padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .combo-list li[aria-selected="true"], .combo-list li:hover { background: var(--muted); }
+
+  .stepper { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+  .step { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted-foreground); min-width: 0; }
+  .step .bar { height: 4px; border-radius: 999px; background: var(--secondary); overflow: hidden; }
+  .step .bar span { display: block; height: 100%; width: 0; background: var(--ai); transition: width 0.55s ease; }
+  .step.done .bar span, .step.active .bar span { width: 100%; }
+  .step.done { color: var(--foreground); }
+  .step.active { color: var(--ai); font-weight: 600; }
+  .step-label { display: inline-flex; align-items: center; gap: 4px; }
+  .step-label svg { width: 13px; height: 13px; flex: none; }
+  @media (max-width: 520px) { .stepper { grid-template-columns: 1fr; } .step { flex-direction: row-reverse; justify-content: flex-end; align-items: center; } .step .bar { width: 48px; flex: none; } }
+
+  .tip { position: relative; display: inline-flex; }
+  .tip-btn { border: 0; background: none; padding: 0; cursor: help; color: inherit; display: inline-flex; }
+  .tip-btn svg { width: 13px; height: 13px; }
+  .tip-body { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); width: 240px; max-width: 70vw; padding: 8px 10px; border-radius: calc(var(--radius) - 2px); background: var(--foreground); color: var(--background); font-size: 12px; font-weight: 400; line-height: 1.4; box-shadow: var(--shadow-pop); z-index: 8; display: none; }
+  .tip:hover .tip-body, .tip:focus-within .tip-body { display: block; }
+
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .search { position: relative; flex: 1 1 220px; min-width: 0; }
+  .search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; color: var(--muted-foreground); }
+  .search .input { width: 100%; padding-left: 32px; }
+  .pills { flex-wrap: wrap; max-width: 100%; }
+
+  .list { display: flex; flex-direction: column; }
+  .lrow { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 8px; border: 0; border-top: 1px solid var(--border); background: transparent; text-align: left; cursor: pointer; width: 100%; border-radius: 0; }
+  .lrow:first-child { border-top: 0; }
+  .lrow:hover { background: var(--surface-2); }
+  .lrow:focus-visible { outline-offset: -2px; border-radius: 6px; }
+  .kind-ico { width: 32px; height: 32px; border-radius: calc(var(--radius) - 2px); display: grid; place-items: center; background: var(--secondary); color: var(--secondary-foreground); }
+  .kind-ico svg { width: 16px; height: 16px; }
+  .lmeta { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 12px; color: var(--muted-foreground); }
+  .lrow .chip { height: 22px; }
+  .empty { padding: 24px 8px; text-align: center; }
+  @media (max-width: 520px) { .lrow { grid-template-columns: 32px minmax(0, 1fr); } .lrow .status-cell { grid-column: 2; justify-self: start; } }
+
+  .ff { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .ff .kind-ico { background: var(--accent); color: var(--accent-foreground); }
+  .ff a { color: var(--primary); font-weight: 500; }
+  a.btn { text-decoration: none; }
+
+  .scrim { position: fixed; inset: 0; background: oklch(0 0 0 / 0.32); z-index: 10; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100%); background: var(--card); box-shadow: var(--shadow-pop); z-index: 11; display: flex; flex-direction: column; transform: translateX(0); transition: transform 0.22s ease; }
+  .drawer[hidden], .scrim[hidden] { display: none; }
+  .drawer-head { border-bottom: 1px solid var(--hairline); padding: 16px 20px; padding-right: 52px; position: relative; display: flex; flex-direction: column; gap: 6px; }
+  .drawer-close { position: absolute; right: 12px; top: 12px; }
+  .drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 24px; display: flex; flex-direction: column; gap: 18px; }
+  .drawer-foot { border-top: 1px solid var(--hairline); padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px)); display: flex; gap: 8px; flex-wrap: wrap; }
+  .passage { border-left: 3px solid var(--ai); background: var(--surface-2); border-radius: 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px) 0; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .passage .loc { font-size: 11.5px; color: var(--muted-foreground); display: inline-flex; gap: 4px; align-items: center; }
+  .passage .loc svg { width: 12px; height: 12px; }
+  .facts { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
+  .facts th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); padding: 6px; border-bottom: 1px solid var(--border); }
+  .facts td { padding: 6px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+  .facts td:nth-child(2) { color: var(--ai); }
+  .confirm { border: 1px solid var(--destructive); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 8px; background: color-mix(in oklch, var(--destructive) 8%, var(--surface)); }
+  .btn-danger { background: var(--destructive); border-color: var(--destructive); color: var(--primary-foreground); }
+  :root[data-theme="dark"] .btn-danger { color: var(--background); }
+
+  .ask-form { display: flex; gap: 8px; flex-wrap: wrap; }
+  .ask-form .input { flex: 1 1 240px; }
+  .suggest { display: flex; flex-wrap: wrap; gap: 6px; }
+  .suggest button { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; color: var(--muted-foreground); text-align: left; }
+  .suggest button:hover { color: var(--foreground); background: var(--muted); }
+  .theme-toggle { margin-left: auto; }
+</style>
+</head>
+<body>
+<div class="shell">
+<nav class="rail" aria-label="Huddle">
+  <div class="rail-group">
+    <span class="rail-logo" aria-hidden="true">H</span>
+    <a class="rail-btn" href="ask.html" title="Huddles" aria-label="Huddles"><i data-lucide="message-square"></i></a>
+    <a class="rail-btn" href="#" title="Board" aria-label="Board"><i data-lucide="layout-grid"></i></a>
+    <a class="rail-btn" href="#" title="Artifacts" aria-label="Artifacts"><i data-lucide="folder-open"></i></a>
+    <a class="rail-btn" href="#" title="Memory" aria-label="Memory"><i data-lucide="compass"></i></a>
+    <span class="rail-sep" aria-hidden="true"></span>
+    <a class="rail-btn rail-labelled" href="meetings.html" title="Modules" aria-label="Modules"><i data-lucide="layout-dashboard"></i><span>Modules</span></a>
+    <a class="rail-btn rail-labelled" href="library.html" title="Apps" aria-label="Apps" aria-current="page"><i data-lucide="blocks"></i><span>Apps</span></a>
+  </div>
+  <div class="rail-group">
+    <a class="rail-btn" href="#" title="Settings" aria-label="Settings"><i data-lucide="settings"></i></a>
+    <span class="rail-you">You</span>
+  </div>
+</nav>
+
+<main class="main">
+<div class="page">
+
+  <div class="legend" role="note">
+    <span class="new-tag">New</span>
+    <span>This whole page is a new app in Apps. Dashed violet outlines mark the key new controls. Prototype only: nothing is uploaded or saved.</span>
+    <button type="button" class="btn btn-ghost theme-toggle" id="theme-toggle" aria-label="Switch light or dark theme"><i data-lucide="sun-moon"></i>Theme</button>
+  </div>
+
+  <!-- 1. Header -->
+  <header class="head">
+    <span class="app-tile" aria-hidden="true"><i data-lucide="library"></i></span>
+    <div class="stack" style="gap:2px">
+      <h1 class="h-app">Trinnex Library</h1>
+      <p class="muted" style="margin:0">Work files and meetings your assistants can answer from</p>
+    </div>
+  </header>
+  <div class="card scope">
+    <i data-lucide="lock"></i>
+    <p class="small muted" style="margin:0">Kept in its own Trinnex collection inside your memory. Only you and your agents can search it.</p>
+  </div>
+
+  <!-- 2. Add material -->
+  <section class="card stack" aria-labelledby="add-h" style="gap:12px">
+    <div class="section-head">
+      <h2 class="h-section" id="add-h">Add material</h2>
+      <span class="small muted">PDF, Word, PowerPoint, Excel, text, Markdown, VTT or SRT transcripts</span>
+    </div>
+    <div class="drop new" id="drop-zone">
+      <i data-lucide="upload-cloud"></i>
+      <div><strong>Drop files here</strong> <span class="muted">or</span></div>
+      <label for="file-input" class="btn btn-primary" id="choose-btn" tabindex="0" role="button"><i data-lucide="file-plus"></i>Choose files</label>
+      <input type="file" id="file-input" class="sr-only" multiple accept=".pdf,.docx,.pptx,.xlsx,.txt,.md,.vtt,.srt">
+      <span class="small muted">Each file becomes passages your assistants can quote, plus short facts they can look up.</span>
+    </div>
+    <div class="small" id="reject-note" role="status" aria-live="polite"></div>
+    <div class="stack" id="pending-list" style="gap:10px"></div>
+  </section>
+
+  <!-- 5. Fireflies row -->
+  <section class="card ff" aria-labelledby="ff-h">
+    <span class="kind-ico" aria-hidden="true"><i data-lucide="mic"></i></span>
+    <div class="stack" style="gap:2px; flex:1 1 220px">
+      <h2 class="h-section" id="ff-h">Fireflies meetings arrive here after you triage them in Meetings</h2>
+      <span class="small muted" id="ff-count"></span>
+    </div>
+    <a class="btn" href="meetings.html" id="ff-link"><i data-lucide="list-checks"></i>Open Meetings</a>
+  </section>
+
+  <!-- 4. Library list -->
+  <section class="card stack" aria-labelledby="lib-h" style="gap:12px">
+    <div class="section-head">
+      <h2 class="h-section" id="lib-h">In your library</h2>
+      <span class="small muted num" id="lib-total"></span>
+    </div>
+    <div class="toolbar">
+      <div class="search">
+        <i data-lucide="search"></i>
+        <label for="lib-search" class="sr-only">Search the library</label>
+        <input id="lib-search" class="input" type="search" placeholder="Search names and tags">
+      </div>
+      <div class="pills" role="group" aria-label="Filter by kind" id="kind-pills"></div>
+    </div>
+    <div class="list" id="lib-list"></div>
+  </section>
+
+  <!-- 7. Try a question -->
+  <section class="card stack new" aria-labelledby="ask-h" style="gap:10px">
+    <h2 class="h-section" id="ask-h">Ask Iris about this library</h2>
+    <form class="ask-form" id="ask-form">
+      <label for="ask-input" class="sr-only">Your question</label>
+      <input id="ask-input" class="input" type="text" placeholder="For example: what is the policy on travel points?" autocomplete="off">
+      <button type="submit" class="btn btn-ai" id="ask-submit"><i data-lucide="sparkles"></i>Ask Iris</button>
+    </form>
+    <div class="suggest" id="ask-suggest" aria-label="Sample questions"></div>
+    <span class="small muted">Opens Ask with your question. Iris answers with the passages it used.</span>
+  </section>
+
+</div>
+</main>
+</div>
+
+<!-- 6. Detail drawer -->
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden></aside>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="data.js"></script>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var S = window.TRINNEX_SAMPLE || { library: [], meetings: [], people: [], qa: [] };
+  var REDUCED = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var KINDS = ["Policy", "Transcript", "File", "Notes"];
+  var KIND_FILTERS = [["All", "All"], ["Policy", "Policies"], ["Transcript", "Transcripts"], ["File", "Files"], ["Notes", "Notes"]];
+  var KIND_ICON = { Policy: "shield-check", Transcript: "audio-lines", File: "file-text", Notes: "notebook-pen" };
+  var STEPS = ["Uploaded", "Read", "Split into passages", "Facts pulled out", "Searchable"];
+  var ACCEPT = ["pdf", "docx", "pptx", "xlsx", "txt", "md", "vtt", "srt"];
+  var FACT_TIP = "Short who/what/value statements, like 'Corporate card points | belong to | company', that let Iris answer exact questions";
+
+  var state = {
+    library: S.library.map(function (d) { return Object.assign({}, d, { tags: (d.tags || []).slice(), participants: (d.participants || []).slice() }); }),
+    pending: [],
+    filter: "All",
+    query: "",
+    openId: null,
+    confirmRemove: false,
+    editingTags: false,
+    seq: 0
+  };
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function icons() { if (window.lucide) window.lucide.createIcons(); }
+  function ext(name) { var m = /\.([a-z0-9]+)$/i.exec(name); return m ? m[1].toLowerCase() : ""; }
+  function fmtSize(b) { if (b < 1024) return b + " B"; if (b < 1048576) return Math.round(b / 1024) + " KB"; return (b / 1048576).toFixed(1) + " MB"; }
+  function fmtDate(iso) { if (!iso) return ""; var d = new Date(iso + "T12:00:00"); return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); }
+  function today() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+  function guessKind(name) {
+    var e = ext(name), n = name.toLowerCase();
+    if (e === "vtt" || e === "srt") return "Transcript";
+    if (e === "md" && n.indexOf("transcript") >= 0) return "Transcript";
+    if (/polic|handbook|guideline|standard/.test(n)) return "Policy";
+    if (e === "md" || e === "txt") return "Notes";
+    return "File";
+  }
+  function countsFor(size, kind) {
+    // Plausible: roughly one passage per ~6 KB of source, facts ~1.4x passages (fewer for transcripts).
+    var kb = Math.max(1, size / 1024);
+    var chunks = Math.max(3, Math.min(420, Math.round(kb / 6 + 4)));
+    var ratio = kind === "Transcript" ? 0.55 : kind === "Policy" ? 1.6 : 1.1;
+    return { chunks: chunks, facts: Math.max(2, Math.round(chunks * ratio)) };
+  }
+
+  var toastTimer = null;
+  function toast(msg) {
+    var t = $("toast"); t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 2800);
+  }
+
+  // ── Theme toggle (base.css reads data-theme) ──
+  $("theme-toggle").addEventListener("click", function () {
+    var r = document.documentElement;
+    var dark = r.getAttribute("data-theme") ? r.getAttribute("data-theme") === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    r.setAttribute("data-theme", dark ? "light" : "dark");
+  });
+
+  // ── 2. Add material ──
+  var drop = $("drop-zone"), input = $("file-input");
+  $("choose-btn").addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
+  input.addEventListener("change", function () { addFiles(input.files); input.value = ""; });
+  ["dragenter", "dragover"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("over"); }); });
+  ["dragleave", "drop"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("over"); }); });
+  drop.addEventListener("drop", function (e) { if (e.dataTransfer) addFiles(e.dataTransfer.files); });
+
+  function addFiles(list) {
+    var rejected = [];
+    Array.prototype.forEach.call(list || [], function (f) {
+      if (ACCEPT.indexOf(ext(f.name)) < 0) { rejected.push(f.name); return; }
+      var kind = guessKind(f.name);
+      state.seq += 1;
+      state.pending.push({ pid: "p" + state.seq, name: f.name, size: f.size, kind: kind, date: today(), tags: [], participants: [], phase: "form", step: -1, counts: null });
+    });
+    $("reject-note").innerHTML = rejected.length ? '<span class="chip chip-warn"><i data-lucide="alert-triangle"></i>Not added, unsupported type: ' + esc(rejected.join(", ")) + "</span>" : "";
+    renderPending(); icons();
+  }
+
+  function chipHTML(text, removeAttr, label) {
+    return '<span class="chip">' + esc(text) + ' <button type="button" ' + removeAttr + ' aria-label="Remove ' + esc(label) + '"><i data-lucide="x"></i></button></span>';
+  }
+
+  function stepperHTML(item) {
+    return '<ol class="stepper" aria-label="Processing steps">' + STEPS.map(function (s, i) {
+      var cls = i < item.step ? "done" : i === item.step ? (item.phase === "done" ? "done" : "active") : "";
+      var ico = cls === "done" ? '<i data-lucide="check"></i>' : "";
+      var tip = i === 3 ? '<span class="tip"><button type="button" class="tip-btn" id="tip-' + item.pid + '" aria-label="What are facts?" aria-describedby="tipb-' + item.pid + '"><i data-lucide="info"></i></button><span class="tip-body" role="tooltip" id="tipb-' + item.pid + '">' + esc(FACT_TIP) + "</span></span>" : "";
+      return '<li class="step ' + cls + '"' + (i === item.step && item.phase !== "done" ? ' aria-current="step"' : "") + '><span class="bar"><span></span></span><span class="step-label">' + ico + esc(s) + tip + "</span></li>";
+    }).join("") + "</ol>";
+  }
+
+  function renderPending() {
+    var host = $("pending-list");
+    host.innerHTML = state.pending.map(function (p) {
+      var head = '<div class="pending-head"><i data-lucide="' + KIND_ICON[p.kind] + '"></i><span class="fname" title="' + esc(p.name) + '">' + esc(p.name) + '</span><span class="small muted num" style="flex:none">' + fmtSize(p.size) + "</span>";
+      if (p.phase === "form") head += '<button type="button" class="btn btn-ghost" style="margin-left:auto" data-act="discard" data-pid="' + p.pid + '" aria-label="Discard ' + esc(p.name) + '"><i data-lucide="x"></i></button>';
+      head += "</div>";
+      if (p.phase !== "form") {
+        var foot = p.phase === "done"
+          ? '<div class="row"><span class="chip chip-ok"><i data-lucide="check-circle-2"></i>Searchable</span><span class="small num">' + p.counts.chunks + " passages, " + p.counts.facts + ' facts</span><button type="button" class="btn btn-ghost" style="margin-left:auto" data-act="dismiss" data-pid="' + p.pid + '">Done</button></div>'
+          : '<div class="small muted" aria-live="polite">' + esc(STEPS[Math.max(0, p.step)]) + "&hellip;</div>";
+        return '<div class="pending">' + head + stepperHTML(p) + foot + "</div>";
+      }
+      var kindOpts = KINDS.map(function (k) { return '<option value="' + k + '"' + (k === p.kind ? " selected" : "") + ">" + k + "</option>"; }).join("");
+      var tags = p.tags.map(function (t, i) { return chipHTML(t, 'data-act="rm-tag" data-pid="' + p.pid + '" data-i="' + i + '"', t); }).join("");
+      var people = "";
+      if (p.kind === "Transcript") {
+        people = '<div class="field" style="grid-column:1/-1"><label for="ppl-' + p.pid + '">Participants</label><div class="tagbox">' +
+          p.participants.map(function (n, i) { return chipHTML(n, 'data-act="rm-ppl" data-pid="' + p.pid + '" data-i="' + i + '"', n); }).join("") +
+          '<span class="combo" style="flex:1; min-width:120px"><input id="ppl-' + p.pid + '" data-pid="' + p.pid + '" class="ppl-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="ppl-list-' + p.pid + '" placeholder="Add a person" autocomplete="off"><ul class="combo-list" role="listbox" id="ppl-list-' + p.pid + '" hidden></ul></span></div></div>';
+      }
+      return '<div class="pending new">' + head +
+        '<div class="form-grid">' +
+        '<div class="field"><label for="kind-' + p.pid + '">Kind</label><select class="input select" id="kind-' + p.pid + '" data-pid="' + p.pid + '" data-field="kind">' + kindOpts + "</select></div>" +
+        '<div class="field"><label for="date-' + p.pid + '">Date</label><input class="input" type="date" id="date-' + p.pid + '" data-pid="' + p.pid + '" data-field="date" value="' + esc(p.date) + '"></div>' +
+        '<div class="field" style="grid-column:1/-1"><label for="tag-' + p.pid + '">Tags</label><div class="tagbox">' + tags + '<input id="tag-' + p.pid + '" data-pid="' + p.pid + '" class="tag-input" placeholder="Type a tag, press Enter" autocomplete="off"></div></div>' +
+        people + "</div>" +
+        '<div class="row"><button type="button" class="btn btn-primary" id="add-' + p.pid + '" data-act="ingest" data-pid="' + p.pid + '"><i data-lucide="library"></i>Add to library</button><span class="small muted">Nothing is uploaded in this prototype.</span></div></div>';
+    }).join("");
+  }
+
+  function findPending(pid) { for (var i = 0; i < state.pending.length; i++) if (state.pending[i].pid === pid) return state.pending[i]; return null; }
+
+  var pendingHost = $("pending-list");
+  pendingHost.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-act]"); if (!b) return;
+    var p = findPending(b.getAttribute("data-pid")); if (!p) return;
+    var act = b.getAttribute("data-act"), i = +b.getAttribute("data-i");
+    if (act === "discard" || act === "dismiss") state.pending = state.pending.filter(function (x) { return x !== p; });
+    else if (act === "rm-tag") p.tags.splice(i, 1);
+    else if (act === "rm-ppl") p.participants.splice(i, 1);
+    else if (act === "ingest") { ingest(p); return; }
+    renderPending(); icons();
+  });
+  pendingHost.addEventListener("change", function (e) {
+    var el = e.target, p = findPending(el.getAttribute("data-pid")); if (!p || !el.getAttribute("data-field")) return;
+    p[el.getAttribute("data-field")] = el.value;
+    if (el.getAttribute("data-field") === "kind") { renderPending(); icons(); var k = $("kind-" + p.pid); if (k) k.focus(); }
+  });
+  pendingHost.addEventListener("keydown", function (e) {
+    var el = e.target;
+    if (el.classList.contains("tag-input")) {
+      if ((e.key === "Enter" || e.key === ",") && el.value.trim()) {
+        e.preventDefault(); var p = findPending(el.getAttribute("data-pid")); var v = el.value.trim().replace(/,$/, "");
+        if (p.tags.indexOf(v) < 0) p.tags.push(v);
+        renderPending(); icons(); $("tag-" + p.pid).focus();
+      } else if (e.key === "Backspace" && !el.value) {
+        var p2 = findPending(el.getAttribute("data-pid")); if (p2.tags.length) { p2.tags.pop(); renderPending(); icons(); $("tag-" + p2.pid).focus(); }
+      }
+    }
+    if (el.classList.contains("ppl-input")) comboKey(e, el);
+  });
+  pendingHost.addEventListener("input", function (e) { if (e.target.classList.contains("ppl-input")) comboOpen(e.target); });
+  pendingHost.addEventListener("focusin", function (e) { if (e.target.classList.contains("ppl-input")) comboOpen(e.target); });
+  pendingHost.addEventListener("focusout", function (e) {
+    if (e.target.classList.contains("ppl-input")) { var el = e.target; setTimeout(function () { comboClose(el); }, 150); }
+  });
+  pendingHost.addEventListener("mousedown", function (e) {
+    var li = e.target.closest(".combo-list li"); if (!li) return;
+    e.preventDefault(); var list = li.parentNode; var inp = list.previousElementSibling; pickPerson(inp, li.getAttribute("data-name"));
+  });
+
+  // Participants combobox reads TRINNEX_SAMPLE.people; a typed new name can be added too.
+  function comboOptions(el) {
+    var p = findPending(el.getAttribute("data-pid")); var q = el.value.trim().toLowerCase();
+    var opts = (S.people || []).filter(function (n) { return p.participants.indexOf(n) < 0 && n.toLowerCase().indexOf(q) >= 0; });
+    if (q && (S.people || []).map(function (n) { return n.toLowerCase(); }).indexOf(q) < 0) opts.push({ add: el.value.trim() });
+    return opts;
+  }
+  function comboOpen(el) {
+    var list = $("ppl-list-" + el.getAttribute("data-pid")); var opts = comboOptions(el);
+    if (!opts.length) { comboClose(el); return; }
+    list.innerHTML = opts.map(function (o, i) {
+      var name = typeof o === "string" ? o : o.add;
+      var label = typeof o === "string" ? esc(o) : 'Add "' + esc(o.add) + '"';
+      return '<li role="option" id="opt-' + el.getAttribute("data-pid") + "-" + i + '" data-name="' + esc(name) + '" aria-selected="' + (i === 0) + '">' + label + "</li>";
+    }).join("");
+    list.hidden = false; el.setAttribute("aria-expanded", "true");
+    el.setAttribute("aria-activedescendant", "opt-" + el.getAttribute("data-pid") + "-0");
+  }
+  function comboClose(el) { var list = $("ppl-list-" + el.getAttribute("data-pid")); if (list) list.hidden = true; el.setAttribute("aria-expanded", "false"); el.removeAttribute("aria-activedescendant"); }
+  function comboKey(e, el) {
+    var list = $("ppl-list-" + el.getAttribute("data-pid")); var items = list ? Array.prototype.slice.call(list.querySelectorAll("li")) : [];
+    var cur = items.findIndex(function (li) { return li.getAttribute("aria-selected") === "true"; });
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault(); if (list.hidden) { comboOpen(el); return; }
+      var n = items.length ? (cur + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length : -1;
+      items.forEach(function (li, i) { li.setAttribute("aria-selected", String(i === n)); });
+      if (n >= 0) el.setAttribute("aria-activedescendant", items[n].id);
+    } else if (e.key === "Enter") {
+      e.preventDefault(); if (!list.hidden && cur >= 0) pickPerson(el, items[cur].getAttribute("data-name"));
+    } else if (e.key === "Escape") { comboClose(el); }
+  }
+  function pickPerson(el, name) {
+    var p = findPending(el.getAttribute("data-pid")); if (!name || p.participants.indexOf(name) >= 0) return;
+    p.participants.push(name);
+    if ((S.people || []).indexOf(name) < 0) S.people.push(name);
+    renderPending(); icons(); var ni = $("ppl-" + p.pid); if (ni) ni.focus();
+  }
+
+  // ── 3. Processing stepper ──
+  function ingest(p) {
+    p.phase = "running"; p.step = 0; p.counts = countsFor(p.size, p.kind);
+    renderPending(); icons();
+    var delay = REDUCED ? 150 : 600;
+    var timer = setInterval(function () {
+      if (state.pending.indexOf(p) < 0) { clearInterval(timer); return; }
+      p.step += 1;
+      if (p.step >= STEPS.length - 1) {
+        clearInterval(timer); p.step = STEPS.length - 1; p.phase = "done";
+        state.seq += 1;
+        state.library.unshift({ id: "doc-new-" + state.seq, name: p.name, kind: p.kind, addedAt: p.date, pages: null, chunks: p.counts.chunks, facts: p.counts.facts, status: "Searchable", tags: p.tags.slice(), participants: p.participants.slice(), fresh: true });
+        renderList();
+        toast("Added to library: " + p.counts.chunks + " passages, " + p.counts.facts + " facts");
+      }
+      renderPending(); icons();
+    }, delay);
+  }
+
+  // ── 4. Library list ──
+  $("kind-pills").innerHTML = KIND_FILTERS.map(function (k) { return '<button type="button" id="pill-' + k[0].toLowerCase() + '" data-kind="' + k[0] + '" aria-pressed="' + (k[0] === "All") + '">' + k[1] + "</button>"; }).join("");
+  $("kind-pills").addEventListener("click", function (e) {
+    var b = e.target.closest("button"); if (!b) return; state.filter = b.getAttribute("data-kind");
+    Array.prototype.forEach.call(this.children, function (c) { c.setAttribute("aria-pressed", String(c === b)); });
+    renderList();
+  });
+  $("lib-search").addEventListener("input", function () { state.query = this.value.trim().toLowerCase(); renderList(); });
+
+  function renderList() {
+    var rows = state.library.filter(function (d) {
+      if (state.filter !== "All" && d.kind !== state.filter) return false;
+      if (!state.query) return true;
+      return (d.name + " " + d.tags.join(" ") + " " + (d.participants || []).join(" ")).toLowerCase().indexOf(state.query) >= 0;
+    });
+    var total = state.library.length;
+    $("lib-total").textContent = total + (total === 1 ? " item" : " items");
+    $("lib-list").innerHTML = rows.length ? rows.map(function (d) {
+      var status = d.status === "Searchable" ? '<span class="chip chip-ok"><i data-lucide="check-circle-2"></i>Searchable</span>' : '<span class="chip chip-warn"><i data-lucide="clock"></i>Waiting for triage</span>';
+      var counts = d.status === "Searchable" ? '<span class="num">' + d.chunks + " passages · " + d.facts + " facts</span>" : "<span>Not searchable yet</span>";
+      var tags = d.tags.map(function (t) { return '<span class="chip">' + esc(t) + "</span>"; }).join("");
+      return '<button type="button" class="lrow" id="row-' + esc(d.id) + '" data-id="' + esc(d.id) + '" aria-haspopup="dialog">' +
+        '<span class="kind-ico" aria-hidden="true"><i data-lucide="' + KIND_ICON[d.kind] + '"></i></span>' +
+        '<span class="stack" style="gap:3px"><span class="fname">' + esc(d.name) + (d.fresh ? ' <span class="new-tag">Just added</span>' : "") + "</span>" +
+        '<span class="lmeta"><span>' + esc(d.kind) + "</span><span>" + fmtDate(d.addedAt) + "</span>" + counts + "</span>" +
+        (tags ? '<span class="row" style="gap:4px">' + tags + "</span>" : "") + "</span>" +
+        '<span class="status-cell">' + status + "</span></button>";
+    }).join("") : '<div class="empty muted">Nothing matches. Try another search or kind.</div>';
+    icons();
+  }
+  $("lib-list").addEventListener("click", function (e) { var r = e.target.closest(".lrow"); if (r) openDrawer(r.getAttribute("data-id")); });
+
+  // ── 5. Fireflies count ──
+  var waiting = (S.meetings || []).filter(function (m) { return !m.triaged; }).length;
+  $("ff-count").innerHTML = waiting ? '<span class="chip chip-warn num">' + waiting + (waiting === 1 ? " meeting" : " meetings") + " waiting for triage</span>" : "No meetings waiting.";
+
+  // ── 6. Detail drawer: passages (chunks) and facts (triples) ──
+  var DETAIL = {
+    "doc-1": {
+      passages: [
+        ["page 9, section 4.3", "Rewards points accrued on corporate cards for business expenses are company property and may only be redeemed for business travel."],
+        ["page 4, section 2.1", "Economy class is the standard for flights under six hours. Business class may be booked for longer flights with your manager's approval."],
+        ["page 11, section 5.2", "Submit expense reports within 30 days of the trip end date, with itemised receipts for any single item over $25."]
+      ],
+      facts: [["Corporate card points", "belong to", "company"], ["Corporate card points", "redeemable for", "business travel only"], ["Flights under 6 hours", "booked in", "economy class"], ["Expense report", "due within", "30 days of trip end"], ["Receipt", "required over", "$25 per item"]]
+    },
+    "doc-2": {
+      passages: [
+        ["Michael R. · 15:02", "I'll take the on-call rotation redesign. The current one burns out the same three people every month."],
+        ["Von · 27:44", "I'll write up the incident review template so we run every review the same way."],
+        ["Priya S. · 31:10", "Let's agree reviews happen within five working days of the incident, blameless by default."]
+      ],
+      facts: [["On-call rotation redesign", "owner", "Michael R."], ["Incident review template", "owner", "Von"], ["Incident review", "held within", "5 working days"], ["Incident review", "style", "blameless"]]
+    },
+    "doc-4": {
+      passages: [
+        ["slide 19", "Recommendation: renew 12 months; add termination for convenience (90 days)."],
+        ["slide 7", "Support response times met the agreed level in 11 of 12 months; the miss was during the March outage."],
+        ["slide 14", "Switching cost estimate: 4 to 6 months of migration effort for two engineers."]
+      ],
+      facts: [["Vendor renewal", "term", "12 months"], ["Vendor renewal", "includes", "90-day exit clause"], ["Vendor support", "met target in", "11 of 12 months"], ["Vendor switch", "estimated effort", "4 to 6 months, 2 engineers"]]
+    }
+  };
+  function genericDetail(d) {
+    var base = d.name.replace(/\.[a-z0-9]+$/i, "");
+    var tag = d.tags[0] || "this topic";
+    var who = (d.participants && d.participants[0]) || "Von";
+    if (d.kind === "Transcript") return {
+      passages: [[who + " · 02:14", "Quick context before we start: the goal today is to agree next steps on " + tag + "."], ["Von · 09:40", "Can we write down who owns each follow-up so nothing slips?"], [who + " · 18:05", "I'll send the summary and the open questions by Friday."]],
+      facts: [[base, "topic", tag], ["Summary and open questions", "owner", who], ["Summary and open questions", "due", "Friday"], [base, "held on", fmtDate(d.addedAt)]]
+    };
+    var loc = d.kind === "Notes" ? ["paragraph 1", "paragraph 3", "paragraph 6"] : ["page 1", "page 3", "page 6"];
+    return {
+      passages: [[loc[0], "This document covers " + tag + " for the Trinnex team and who it applies to."], [loc[1], "Requests go to the owning team first; anything over the agreed limit needs a manager's approval."], [loc[2], "This replaces the earlier version and applies from " + fmtDate(d.addedAt) + "."]],
+      facts: [[base, "covers", tag], [base, "applies to", "Trinnex team"], ["Requests over limit", "need", "manager approval"], [base, "effective from", fmtDate(d.addedAt)]]
+    };
+  }
+  function findDoc(id) { for (var i = 0; i < state.library.length; i++) if (state.library[i].id === id) return state.library[i]; return null; }
+
+  var lastFocus = null;
+  function openDrawer(id) {
+    lastFocus = document.activeElement; state.openId = id; state.confirmRemove = false; state.editingTags = false;
+    renderDrawer(); $("scrim").hidden = false; $("drawer").hidden = false;
+    var c = $("drawer-close"); if (c) c.focus();
+  }
+  function closeDrawer() {
+    $("drawer").hidden = true; $("scrim").hidden = true; state.openId = null;
+    if (lastFocus && document.body.contains(lastFocus)) lastFocus.focus();
+  }
+  function renderDrawer() {
+    var d = findDoc(state.openId); if (!d) { closeDrawer(); return; }
+    var det = DETAIL[d.id] || genericDetail(d);
+    var waitingTriage = d.status !== "Searchable";
+    var html = '<div class="drawer-head"><span class="eyebrow">' + esc(d.kind) + " · " + fmtDate(d.addedAt) + '</span><h2 class="h-section" id="drawer-title" style="overflow-wrap:anywhere">' + esc(d.name) + "</h2>" +
+      '<div class="row">' + (waitingTriage ? '<span class="chip chip-warn"><i data-lucide="clock"></i>Waiting for triage</span>' : '<span class="chip chip-ok"><i data-lucide="check-circle-2"></i>Searchable</span><span class="small muted num">' + d.chunks + " passages · " + d.facts + " facts</span>") + "</div>" +
+      '<button type="button" class="btn btn-ghost drawer-close" id="drawer-close" aria-label="Close"><i data-lucide="x"></i></button></div><div class="drawer-body">';
+
+    // Tags
+    html += '<div class="stack"><span class="eyebrow">Tags</span>';
+    if (state.editingTags) {
+      html += '<div class="tagbox">' + d.tags.map(function (t, i) { return chipHTML(t, 'data-dact="rm-tag" data-i="' + i + '"', t); }).join("") + '<input id="drawer-tag-input" placeholder="Type a tag, press Enter" autocomplete="off"></div>';
+    } else {
+      html += d.tags.length ? '<div class="row" style="gap:4px">' + d.tags.map(function (t) { return '<span class="chip">' + esc(t) + "</span>"; }).join("") + "</div>" : '<span class="small muted">No tags yet.</span>';
+    }
+    if (d.participants && d.participants.length) html += '<span class="small muted">Participants: ' + esc(d.participants.join(", ")) + "</span>";
+    html += "</div>";
+
+    if (waitingTriage) {
+      html += '<div class="card scope"><i data-lucide="info"></i><p class="small muted" style="margin:0">This meeting is not split into passages yet. Triage it in <a href="meetings.html">Meetings</a> (title, participants, action items) and it becomes searchable here.</p></div>';
+    } else {
+      html += '<div class="stack"><span class="eyebrow">Sample passages</span><span class="small muted">Iris quotes passages like these, each tied back to where it came from.</span>' +
+        det.passages.map(function (p) { return '<div class="passage"><span class="loc"><i data-lucide="' + (d.kind === "Transcript" ? "user-round" : "bookmark") + '"></i>' + esc(p[0]) + "</span><span>" + esc(p[1]) + "</span></div>"; }).join("") + "</div>";
+      html += '<div class="stack"><span class="eyebrow row" style="gap:4px">Facts <span class="tip"><button type="button" class="tip-btn" id="drawer-fact-tip" aria-label="What are facts?" aria-describedby="drawer-fact-tipb"><i data-lucide="info"></i></button><span class="tip-body" role="tooltip" id="drawer-fact-tipb" style="text-transform:none;letter-spacing:0">' + esc(FACT_TIP) + "</span></span></span>" +
+        '<table class="facts"><thead><tr><th scope="col">Subject</th><th scope="col">Predicate</th><th scope="col">Object</th></tr></thead><tbody>' +
+        det.facts.map(function (f) { return "<tr><td>" + esc(f[0]) + "</td><td>" + esc(f[1]) + "</td><td>" + esc(f[2]) + "</td></tr>"; }).join("") + "</tbody></table>" +
+        '<span class="small muted">Each fact links back to the passage it was pulled from.</span></div>';
+    }
+
+    if (state.confirmRemove) {
+      html += '<div class="confirm" role="alertdialog" aria-labelledby="confirm-h"><strong id="confirm-h">Remove from memory?</strong><span class="small">Iris will no longer find ' + (waitingTriage ? "this meeting" : d.chunks + " passages and " + d.facts + " facts") + ' from this item. The original file is not touched.</span>' +
+        '<div class="row"><button type="button" class="btn btn-danger" id="confirm-remove-yes"><i data-lucide="trash-2"></i>Yes, remove</button><button type="button" class="btn" id="confirm-remove-no">Keep it</button></div></div>';
+    }
+    html += "</div>";
+    html += '<div class="drawer-foot"><button type="button" class="btn new" id="edit-tags-btn" aria-pressed="' + state.editingTags + '"><i data-lucide="' + (state.editingTags ? "check" : "tags") + '"></i>' + (state.editingTags ? "Done editing" : "Edit tags") + "</button>" +
+      '<button type="button" class="btn new" id="remove-btn" style="color:var(--destructive)"><i data-lucide="trash-2"></i>Remove from memory</button></div>';
+    $("drawer").innerHTML = html; icons();
+  }
+
+  $("scrim").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && state.openId) { if (state.confirmRemove) { state.confirmRemove = false; renderDrawer(); $("remove-btn").focus(); } else closeDrawer(); } });
+  $("drawer").addEventListener("click", function (e) {
+    var t = e.target.closest("button"); if (!t) return; var d = findDoc(state.openId); if (!d) return;
+    if (t.id === "drawer-close") closeDrawer();
+    else if (t.id === "edit-tags-btn") { state.editingTags = !state.editingTags; renderDrawer(); renderList(); var inp = $("drawer-tag-input"); (inp || $("edit-tags-btn")).focus(); }
+    else if (t.getAttribute("data-dact") === "rm-tag") { d.tags.splice(+t.getAttribute("data-i"), 1); renderDrawer(); renderList(); $("drawer-tag-input").focus(); }
+    else if (t.id === "remove-btn") { state.confirmRemove = true; renderDrawer(); $("confirm-remove-yes").focus(); }
+    else if (t.id === "confirm-remove-no") { state.confirmRemove = false; renderDrawer(); $("remove-btn").focus(); }
+    else if (t.id === "confirm-remove-yes") {
+      var name = d.name; state.library = state.library.filter(function (x) { return x !== d; });
+      lastFocus = $("lib-search"); closeDrawer(); renderList(); toast("Removed from memory: " + name);
+    }
+  });
+  $("drawer").addEventListener("keydown", function (e) {
+    var d = findDoc(state.openId);
+    if (e.target.id === "drawer-tag-input" && d) {
+      if ((e.key === "Enter" || e.key === ",") && e.target.value.trim()) {
+        e.preventDefault(); var v = e.target.value.trim().replace(/,$/, ""); if (d.tags.indexOf(v) < 0) d.tags.push(v);
+        renderDrawer(); renderList(); $("drawer-tag-input").focus();
+      }
+    }
+    if (e.key === "Tab") { // keep focus inside the open drawer
+      var f = Array.prototype.slice.call($("drawer").querySelectorAll("button, input, a[href]"));
+      if (!f.length) return; var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  // ── 7. Try a question ──
+  var STOP = { what: 1, is: 1, the: 1, a: 1, an: 1, of: 1, for: 1, on: 1, in: 1, to: 1, did: 1, we: 1, as: 1, about: 1, was: 1, say: 1, and: 1, our: 1, my: 1, me: 1, i: 1, do: 1, does: 1, last: 1 };
+  function words(s) { return s.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).filter(function (w) { return w && !STOP[w]; }).map(function (w) { return w.replace(/s$/, ""); }); }
+  function matchQuestion(q) {
+    var qw = words(q), best = -1, bestScore = 0;
+    (S.qa || []).forEach(function (item, n) {
+      var iw = words(item.q); var score = qw.filter(function (w) { return iw.indexOf(w) >= 0; }).length;
+      if (score > bestScore) { bestScore = score; best = n; }
+    });
+    return bestScore >= 2 ? best : -1;
+  }
+  $("ask-suggest").innerHTML = (S.qa || []).map(function (item, n) { return '<button type="button" id="sample-q-' + n + '" data-n="' + n + '">' + esc(item.q) + "</button>"; }).join("");
+  $("ask-suggest").addEventListener("click", function (e) { var b = e.target.closest("button"); if (!b) return; $("ask-input").value = S.qa[+b.getAttribute("data-n")].q; $("ask-input").focus(); });
+  $("ask-form").addEventListener("submit", function (e) {
+    e.preventDefault(); var q = $("ask-input").value.trim();
+    var n = q ? matchQuestion(q) : -1;
+    window.location.href = n >= 0 ? "ask.html#q-" + (n + 1) : "ask.html";
+  });
+
+  renderList(); renderPending(); icons();
+})();
+</script>
+</body>
+</html>

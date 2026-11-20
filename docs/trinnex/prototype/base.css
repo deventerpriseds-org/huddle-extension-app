@@ -38,6 +38,7 @@ EVIDENCE:   src/styles.css :root/.dark (Compass), src/features/huddle/components
   --input: oklch(0.92 0.008 220);
   --ring: oklch(0.55 0.05 200);
   --band-cream: oklch(0.975 0.032 92);
+  --band-cream-text: var(--warning-foreground);
   --rail-fg-dim: color-mix(in oklch, var(--primary-foreground) 60%, transparent);
   --rail-hover: color-mix(in oklch, var(--primary-foreground) 10%, transparent);
   --rail-active: color-mix(in oklch, var(--primary-foreground) 15%, transparent);
@@ -58,7 +59,7 @@ EVIDENCE:   src/styles.css :root/.dark (Compass), src/features/huddle/components
     --destructive: oklch(0.68 0.19 22); --warning: oklch(0.78 0.15 60); --warning-foreground: oklch(0.20 0.04 60);
     --success: oklch(0.70 0.13 155); --success-foreground: oklch(0.16 0.02 220);
     --border: oklch(1 0 0 / 0.10); --hairline: oklch(1 0 0 / 0.09); --input: oklch(1 0 0 / 0.12); --ring: oklch(0.70 0.06 200);
-    --band-cream: oklch(0.255 0.030 92);
+    --band-cream: oklch(0.255 0.030 92); --band-cream-text: var(--warning);
     color-scheme: dark;
   }
 }
@@ -73,7 +74,7 @@ EVIDENCE:   src/styles.css :root/.dark (Compass), src/features/huddle/components
   --destructive: oklch(0.68 0.19 22); --warning: oklch(0.78 0.15 60); --warning-foreground: oklch(0.20 0.04 60);
   --success: oklch(0.70 0.13 155); --success-foreground: oklch(0.16 0.02 220);
   --border: oklch(1 0 0 / 0.10); --hairline: oklch(1 0 0 / 0.09); --input: oklch(1 0 0 / 0.12); --ring: oklch(0.70 0.06 200);
-  --band-cream: oklch(0.255 0.030 92);
+  --band-cream: oklch(0.255 0.030 92); --band-cream-text: var(--warning);
   color-scheme: dark;
 }
 
@@ -133,8 +134,8 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; }
 .chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border-radius: 999px; background: var(--secondary); color: var(--secondary-foreground); font-size: 12px; font-weight: 500; }
 .chip button { border: 0; background: none; padding: 0; cursor: pointer; color: var(--muted-foreground); display: grid; place-items: center; }
 .chip-ai { background: var(--ai-soft); color: var(--ai); }
-.chip-ok { background: color-mix(in oklch, var(--success) 16%, var(--surface)); color: var(--foreground); }
-.chip-warn { background: var(--band-cream); color: var(--warning-foreground); }
+.chip-ok { background: color-mix(in srgb, var(--success) 16%, var(--surface)); color: var(--foreground); }
+.chip-warn { background: var(--band-cream); color: var(--band-cream-text); }
 .pills { display: inline-flex; padding: 3px; gap: 2px; border-radius: var(--radius); background: var(--secondary); }
 .pills button { border: 0; background: transparent; height: 28px; padding: 0 10px; border-radius: calc(var(--radius) - 3px); font-size: 13px; cursor: pointer; color: var(--muted-foreground); }
 .pills button[aria-pressed="true"] { background: var(--surface); color: var(--foreground); box-shadow: var(--shadow-hair); }
@@ -142,7 +143,7 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; }
 /* ── The proposal marker: everything NEW wears this, everything existing does not ── */
 .new { outline: 1.5px dashed var(--ai); outline-offset: 3px; border-radius: var(--radius); }
 .new-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; background: var(--ai-soft); color: var(--ai); }
-.changed-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; background: var(--band-cream); color: var(--warning-foreground); }
+.changed-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; background: var(--band-cream); color: var(--band-cream-text); }
 .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted-foreground); }
 
 /* ── Toast (sonner-like) ────────────────────────────────────────── */

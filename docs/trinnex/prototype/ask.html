@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ask Iris</title>
+<!--
+WHAT:       Clickable prototype of "Ask": a Huddle 1:1 with Iris answering from the owner's Trinnex work
+            memory, with sources and the facts used, plus a "How Iris knows this" panel showing the flow.
+WHY:        Owner 2026-11-20 asked to see a Trinnex RAG prototype before the module is built. Static page:
+            no backend, sample data only (data.js), nothing here ships.
+SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+EVIDENCE:   HuddleView.tsx (MessageRow bubbles: user = rounded-2xl rounded-br-sm bg-primary, agent = avatar
+            + name + plain text; composer = rounded-2xl card with @handle meta row and round send button);
+            lib/rag/types.ts (ChunkRow text+source+metadata, TripleRow subject/predicate/object);
+            lib/rag/memory-context.server.ts (auto-retrieval every turn, top 8 of 20, score floor 0.3).
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="base.css">
+<style>
+  .ask-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .ask-layout { grid-template-columns: minmax(0, 1fr); } }
+
+  /* Thread column: header | messages | composer, like HuddleView */
+  .thread { display: flex; flex-direction: column; min-width: 0; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-hair), var(--shadow-soft); overflow: hidden; }
+  .thread-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--hairline); }
+  .thread-who { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .who-box { width: 32px; height: 32px; border-radius: 8px; background: var(--muted); display: grid; place-items: center; flex: none; }
+  .who-name { font-size: 14px; font-weight: 600; }
+  .who-sub { font-size: 11px; color: var(--muted-foreground); }
+  .scope { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 100%; padding: 4px; }
+  .scope-note { font-size: 11px; color: var(--muted-foreground); text-align: right; max-width: 280px; }
+  @media (max-width: 520px) { .scope { align-items: flex-start; } .scope-note { text-align: left; } }
+
+  .msgs { display: flex; flex-direction: column; gap: 16px; padding: 20px 16px; min-height: 340px; max-height: 70vh; overflow-y: auto; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 10px; font-weight: 600; flex: none; }
+  .avatar-md { width: 36px; height: 36px; font-size: 12px; }
+  .avatar-agent { background: var(--primary); color: var(--primary-foreground); }
+  .avatar-user { background: color-mix(in oklch, var(--primary) 12%, transparent); color: var(--primary); }
+
+  .m-user { display: flex; align-items: flex-end; justify-content: flex-end; gap: 8px; }
+  .m-user .col { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 70%; }
+  @media (max-width: 520px) { .m-user .col { max-width: 85%; } }
+  .bubble-user { border-radius: 16px 16px 4px 16px; background: var(--primary); color: var(--primary-foreground); padding: 8px 16px; font-size: 14px; box-shadow: var(--shadow-soft); overflow-wrap: anywhere; }
+  .m-agent { display: flex; gap: 12px; }
+  .m-agent .body { min-width: 0; flex: 1; }
+  .m-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .m-name { font-size: 14px; font-weight: 600; }
+  .m-time { font-size: 11px; color: var(--muted-foreground); }
+  .m-text { margin-top: 4px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+  .m-text a { color: var(--ai); }
+
+  .searching { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; padding: 8px 12px; border-radius: 16px; background: var(--muted); font-size: 13px; color: var(--muted-foreground); }
+  .searching svg { width: 14px; height: 14px; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* The new answer anatomy */
+  .answer-extras { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; padding: 10px; }
+  .mem-tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--ai-soft); color: var(--ai); font-size: 11px; font-weight: 600; }
+  .mem-tag svg { width: 12px; height: 12px; }
+  .src-list { display: flex; flex-direction: column; gap: 8px; }
+  .src { border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface-2); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .src-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .src-icon { width: 26px; height: 26px; border-radius: 6px; background: var(--muted); color: var(--muted-foreground); display: grid; place-items: center; flex: none; }
+  .src-icon svg { width: 14px; height: 14px; }
+  .src-title { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+  .src-sub { font-size: 11px; color: var(--muted-foreground); }
+  .src-quote { margin: 0; padding: 6px 10px; border-left: 2px solid var(--border); background: var(--muted); border-radius: 0 6px 6px 0; font-size: 12.5px; color: var(--muted-foreground); line-height: 1.5; }
+  details.facts summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted-foreground); display: inline-flex; align-items: center; gap: 6px; list-style: none; border-radius: 6px; padding: 2px 4px; }
+  details.facts summary::-webkit-details-marker { display: none; }
+  details.facts summary svg { width: 14px; height: 14px; transition: transform 0.15s; }
+  details.facts[open] summary svg.chev { transform: rotate(90deg); }
+  .triples { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .triple { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+  .triple .t { padding: 2px 8px; border-radius: 6px; background: var(--secondary); color: var(--secondary-foreground); }
+  .triple .p { color: var(--ai); font-weight: 600; }
+  .triple .arr { color: var(--muted-foreground); }
+  .miss { margin-top: 4px; padding: 10px 12px; border-radius: var(--radius); background: var(--band-cream); color: var(--foreground); font-size: 13px; display: flex; gap: 8px; align-items: flex-start; }
+  .miss svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+  .miss a { color: inherit; font-weight: 600; }
+
+  /* Composer, like HuddleView */
+  .composer { border-top: 1px solid var(--hairline); padding: 10px 16px calc(12px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 10px; }
+  .suggest { display: flex; flex-direction: column; gap: 6px; padding: 6px; }
+  .suggest-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .suggest-chip { border: 1px solid var(--hairline); background: var(--surface-2); color: var(--foreground); border-radius: 999px; padding: 6px 12px; font-size: 12.5px; cursor: pointer; text-align: left; display: inline-flex; gap: 6px; align-items: center; max-width: 100%; }
+  .suggest-chip:hover { background: var(--muted); }
+  .suggest-chip svg { width: 13px; height: 13px; color: var(--ai); flex: none; }
+  .compose-card { border: 1px solid var(--border); border-radius: 16px; background: var(--background); padding: 8px 12px 6px; }
+  .compose-card:focus-within { border-color: var(--ring); box-shadow: 0 0 0 2px var(--ring); }
+  .compose-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted-foreground); margin-bottom: 4px; }
+  .compose-meta .handle { border-radius: 4px; background: var(--muted); padding: 1px 6px; font-weight: 500; }
+  .compose-card textarea { display: block; width: 100%; border: 0; outline: none; resize: none; background: transparent; font-size: 14px; line-height: 20px; padding: 0; min-height: 20px; }
+  .compose-card textarea::placeholder { color: var(--muted-foreground); }
+  .compose-actions { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .round { width: 36px; height: 36px; border-radius: 50%; display: inline-grid; place-items: center; border: 1px solid var(--hairline); background: var(--surface); color: var(--muted-foreground); cursor: pointer; }
+  .round svg { width: 16px; height: 16px; }
+  .round-send { margin-left: auto; border: 0; background: var(--primary); color: var(--primary-foreground); box-shadow: var(--shadow-soft); }
+  .round-send:disabled { opacity: 0.4; cursor: default; }
+
+  /* How Iris knows this */
+  .how summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border-radius: 6px; }
+  .how summary::-webkit-details-marker { display: none; }
+  .how summary svg.chev { width: 16px; height: 16px; transition: transform 0.15s; margin-left: auto; color: var(--muted-foreground); }
+  .how[open] summary svg.chev { transform: rotate(90deg); }
+  .flow { margin-top: 14px; display: flex; flex-direction: column; align-items: stretch; }
+  .step { border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface-2); padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start; }
+  .step-n { width: 22px; height: 22px; border-radius: 50%; background: var(--ai-soft); color: var(--ai); font-size: 11px; font-weight: 700; display: grid; place-items: center; flex: none; }
+  .step-t { font-size: 13px; font-weight: 600; }
+  .step-d { font-size: 12px; color: var(--muted-foreground); margin-top: 2px; }
+  .step-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .step-tags .chip { height: 20px; font-size: 11px; }
+  .step-final { background: var(--ai-soft); border-color: transparent; }
+  .arrow { display: grid; place-items: center; height: 22px; color: var(--muted-foreground); }
+  .arrow svg { width: 16px; height: 16px; }
+  .examples { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .ex { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; }
+  .ex .q { padding: 4px 8px; border-radius: 6px; background: var(--secondary); overflow-wrap: anywhere; }
+  .ex .f { padding: 4px 8px; border-radius: 6px; background: var(--ai-soft); color: var(--ai); font-weight: 600; overflow-wrap: anywhere; }
+  .ex svg { width: 14px; height: 14px; color: var(--muted-foreground); }
+  .triage-note { margin-top: 14px; padding: 10px 12px; border-radius: var(--radius); background: var(--band-cream); color: var(--foreground); font-size: 12px; display: flex; gap: 8px; }
+  .triage-note svg { width: 15px; height: 15px; flex: none; margin-top: 1px; }
+  .triage-note a { color: inherit; font-weight: 600; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="shell">
+<nav class="rail" aria-label="Huddle">
+  <div class="rail-group">
+    <span class="rail-logo" aria-hidden="true">H</span>
+    <a class="rail-btn" href="ask.html" title="Huddles" aria-label="Huddles" aria-current="page"><i data-lucide="message-square"></i></a>
+    <a class="rail-btn" href="#" title="Board" aria-label="Board"><i data-lucide="layout-grid"></i></a>
+    <a class="rail-btn" href="#" title="Artifacts" aria-label="Artifacts"><i data-lucide="folder-open"></i></a>
+    <a class="rail-btn" href="#" title="Memory" aria-label="Memory"><i data-lucide="compass"></i></a>
+    <span class="rail-sep" aria-hidden="true"></span>
+    <a class="rail-btn rail-labelled" href="meetings.html" title="Modules" aria-label="Modules"><i data-lucide="layout-dashboard"></i><span>Modules</span></a>
+    <a class="rail-btn rail-labelled" href="library.html" title="Apps" aria-label="Apps"><i data-lucide="blocks"></i><span>Apps</span></a>
+  </div>
+  <div class="rail-group">
+    <a class="rail-btn" href="#" title="Settings" aria-label="Settings"><i data-lucide="settings"></i></a>
+    <span class="rail-you">You</span>
+  </div>
+</nav>
+
+<main class="main">
+  <div class="page">
+    <div class="stack" style="gap:4px">
+      <span class="eyebrow">Prototype · Trinnex</span>
+      <h1 class="h-page">Ask Iris about your Trinnex work</h1>
+      <p class="muted small" style="margin:0">Sample data only. Click a suggested question, type your own, or open <a href="#q-1">#q-1</a>, <a href="#q-2">#q-2</a>, <a href="#q-3">#q-3</a>.</p>
+    </div>
+    <div class="legend" role="note">
+      <span class="row" style="gap:6px"><span class="new-tag">New</span> dashed violet outline = proposed, not in Huddle today</span>
+      <span>No outline = how Huddle already looks</span>
+      <span class="row" style="gap:6px"><span class="mem-tag"><i data-lucide="sparkles"></i>Violet</span> = produced by AI</span>
+    </div>
+
+    <div class="ask-layout">
+      <section class="thread" aria-label="Huddle with Iris">
+        <header class="thread-head">
+          <div class="thread-who">
+            <div class="who-box"><span class="avatar avatar-agent" aria-hidden="true">IC</span></div>
+            <div style="min-width:0">
+              <div class="who-name">Iris</div>
+              <div class="who-sub">1:1 · Team lead</div>
+            </div>
+          </div>
+          <div class="scope new">
+            <div class="row" style="gap:6px;justify-content:flex-end">
+              <span class="new-tag">New</span>
+              <div class="pills" role="group" aria-label="Answer from">
+                <button type="button" id="scope-trinnex" aria-pressed="true" data-scope="trinnex">Trinnex</button>
+                <button type="button" id="scope-everything" aria-pressed="false" data-scope="everything">Everything</button>
+              </div>
+            </div>
+            <div class="scope-note" id="scope-note" aria-live="polite">Answers only from your Trinnex meetings and library, with sources.</div>
+          </div>
+        </header>
+
+        <div class="msgs" id="msgs" aria-live="polite"></div>
+
+        <div class="composer">
+          <div class="suggest new" id="suggest">
+            <div class="row" style="gap:6px"><span class="new-tag">New</span><span class="small muted">Try asking</span></div>
+            <div class="suggest-row" id="suggest-row"></div>
+          </div>
+          <form class="compose-card" id="compose" autocomplete="off">
+            <div class="compose-meta"><span class="handle">@iris-chase</span><span>one-to-one huddle</span></div>
+            <label for="ask-input" class="sr-only">Message Iris</label>
+            <textarea id="ask-input" rows="1" placeholder="Ask about your Trinnex meetings and documents"></textarea>
+            <div class="compose-actions">
+              <button type="button" class="round" aria-label="Attach a file" title="Not part of this prototype"><i data-lucide="paperclip"></i></button>
+              <button type="button" class="round" aria-label="Start voice conversation" title="Not part of this prototype"><i data-lucide="audio-lines"></i></button>
+              <button type="submit" class="round round-send" id="send-btn" aria-label="Send" disabled><i data-lucide="send"></i></button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <aside class="card new" aria-label="How Iris knows this">
+        <details class="how" id="how" open>
+          <summary>
+            <i data-lucide="workflow" style="width:16px;height:16px;color:var(--ai)"></i>
+            <span class="h-section">How Iris knows this</span>
+            <span class="new-tag">New</span>
+            <i data-lucide="chevron-right" class="chev"></i>
+          </summary>
+          <div class="flow" id="flow"></div>
+          <div class="examples">
+            <span class="eyebrow">Worked examples</span>
+            <div id="examples" class="stack"></div>
+          </div>
+          <div class="triage-note">
+            <i data-lucide="list-checks"></i>
+            <span>Why triage matters: the edited title, series and participants you set in <a href="meetings.html">Meetings</a> are what make these filters work. An untriaged "Weekly sync" cannot be found by series.</span>
+          </div>
+        </details>
+      </aside>
+    </div>
+  </div>
+</main>
+</div>
+
+<script src="data.js"></script>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script>
+(function () {
+  var S = window.TRINNEX_SAMPLE || { qa: [], owner: "Von" };
+  var QA = S.qa || [];
+  var state = { scope: "trinnex", busy: false, msgs: [] };
+  var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var msgsEl = document.getElementById("msgs");
+  var input = document.getElementById("ask-input");
+  var sendBtn = document.getElementById("send-btn");
+
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function icons() { if (window.lucide) window.lucide.createIcons(); }
+  function now() { var d = new Date(); return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+  function niceDate(iso) {
+    var p = String(iso).split("-");
+    var m = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(p[1]) - 1];
+    return m ? m + " " + Number(p[2]) + ", " + p[0] : iso;
+  }
+  var KIND_ICON = { Transcript: "mic", File: "file-text", Policy: "shield-check" };
+
+  // ── Matching: simple keyword overlap against the sample questions ──
+  var STOP = "a an the and or of to in on for at by with as is are was were be been what who whom which how when where why did do does we our us you your i me my it this that there their they them about from into than then so as last say said discuss discussed".split(" ");
+  function words(s) {
+    return String(s).toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).filter(function (w) { return w.length > 2 && STOP.indexOf(w) < 0; })
+      .map(function (w) { return w.replace(/(ies)$/, "y").replace(/s$/, ""); });
+  }
+  function match(text) {
+    var tw = words(text); if (!tw.length) return -1;
+    var best = -1, bestScore = 0;
+    QA.forEach(function (item, i) {
+      var qw = words(item.q + " " + item.a);
+      var hits = tw.filter(function (w) { return qw.indexOf(w) >= 0; }).length;
+      if (hits > bestScore) { bestScore = hits; best = i; }
+    });
+    return bestScore >= 2 || (bestScore === 1 && tw.length === 1) ? best : -1;
+  }
+
+  // ── Rendering ──
+  function userRow(m) {
+    return '<div class="m-user"><div class="col"><div class="bubble-user">' + esc(m.text) + '</div><span class="m-time">' + esc(m.time) + '</span></div><span class="avatar avatar-user" aria-hidden="true">' + esc((S.owner || "Y").slice(0, 1)) + '</span></div>';
+  }
+  function agentHead(m) {
+    return '<span class="avatar avatar-md avatar-agent" aria-hidden="true">IC</span><div class="body"><div class="m-meta"><span class="m-name">Iris Chase</span><span class="m-time">' + esc(m.time) + '</span></div>';
+  }
+  function sourceCard(s) {
+    var where = [niceDate(s.date)];
+    if (s.speaker) where.push(s.speaker);
+    if (s.at) where.push(/^\d/.test(s.at) ? "at " + s.at : s.at);
+    return '<li class="src"><div class="src-top"><span class="src-icon" title="' + esc(s.kind) + '"><i data-lucide="' + (KIND_ICON[s.kind] || "file") + '"></i></span><div style="min-width:0"><div class="src-title">' + esc(s.title) + '</div><div class="src-sub">' + esc(s.kind) + ' · ' + esc(where.join(" · ")) + '</div></div></div><blockquote class="src-quote">' + esc(s.quote) + '</blockquote></li>';
+  }
+  function answerRow(m) {
+    var item = QA[m.qa];
+    var tag = m.scope === "trinnex" ? "From Trinnex memory" : "From Trinnex memory (searched everything)";
+    var facts = item.facts.map(function (f) {
+      return '<li class="triple"><span class="t">' + esc(f[0]) + '</span><span class="arr" aria-hidden="true">&rarr;</span><span class="p">' + esc(f[1]) + '</span><span class="arr" aria-hidden="true">&rarr;</span><span class="t">' + esc(f[2]) + '</span></li>';
+    }).join("");
+    return '<div class="m-agent">' + agentHead(m) +
+      '<div class="m-text">' + esc(item.a) + '</div>' +
+      '<div class="answer-extras new">' +
+        '<div class="row" style="gap:6px"><span class="mem-tag"><i data-lucide="sparkles"></i>' + esc(tag) + '</span><span class="new-tag">New</span></div>' +
+        '<div><div class="eyebrow" style="margin-bottom:6px">Sources (' + item.sources.length + ')</div><ul class="src-list" style="margin:0;padding:0;list-style:none">' + item.sources.map(sourceCard).join("") + '</ul></div>' +
+        '<details class="facts"><summary><i data-lucide="chevron-right" class="chev"></i>Facts used (' + item.facts.length + ')</summary><ul class="triples">' + facts + '</ul></details>' +
+      '</div></div></div>';
+  }
+  function missRow(m) {
+    var txt = m.scope === "trinnex"
+      ? 'I couldn\'t find that in your Trinnex material. Add the document in <a href="library.html">Trinnex Library</a>, or switch to Everything.'
+      : 'I couldn\'t find that in your memory, so I won\'t guess. If it is Trinnex material, add the document in <a href="library.html">Trinnex Library</a>.';
+    return '<div class="m-agent">' + agentHead(m) + '<div class="miss new"><i data-lucide="search-x"></i><span>' + txt + '</span></div></div></div>';
+  }
+  function textRow(m) { return '<div class="m-agent">' + agentHead(m) + '<div class="m-text">' + esc(m.text) + '</div></div></div>'; }
+  function searchingRow() {
+    return '<div class="m-agent"><span class="avatar avatar-md avatar-agent" aria-hidden="true">IC</span><div class="body"><div class="m-meta"><span class="m-name">Iris Chase</span></div><div class="searching new" role="status"><i data-lucide="loader-2"></i>' + (state.scope === "trinnex" ? "Searching Trinnex memory..." : "Searching all memory...") + '</div></div></div>';
+  }
+  function render() {
+    var html = state.msgs.map(function (m) {
+      if (m.kind === "user") return userRow(m);
+      if (m.kind === "answer") return answerRow(m);
+      if (m.kind === "miss") return missRow(m);
+      return textRow(m);
+    }).join("");
+    if (state.busy) html += searchingRow();
+    msgsEl.innerHTML = html;
+    icons();
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+  }
+
+  function ask(text, forcedIdx) {
+    text = String(text || "").trim();
+    if (!text || state.busy) return;
+    state.msgs.push({ kind: "user", text: text, time: now() });
+    var idx = typeof forcedIdx === "number" ? forcedIdx : match(text);
+    var scope = state.scope;
+    function finish() {
+      state.busy = false;
+      state.msgs.push(idx >= 0 ? { kind: "answer", qa: idx, scope: scope, time: now() } : { kind: "miss", scope: scope, time: now() });
+      render();
+      sendBtn.disabled = !input.value.trim();
+    }
+    if (reduced) { finish(); return; }
+    state.busy = true; sendBtn.disabled = true; render();
+    setTimeout(finish, 700);
+  }
+
+  // ── Suggested questions ──
+  var row = document.getElementById("suggest-row");
+  row.innerHTML = QA.map(function (item, i) {
+    return '<button type="button" class="suggest-chip" id="suggest-' + (i + 1) + '" data-i="' + i + '"><i data-lucide="sparkles"></i><span>' + esc(item.q) + '</span></button>';
+  }).join("");
+  row.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-i]"); if (!b) return;
+    var i = Number(b.getAttribute("data-i")); ask(QA[i].q, i);
+  });
+
+  // ── Composer ──
+  function grow() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 112) + "px"; }
+  input.addEventListener("input", function () { sendBtn.disabled = !input.value.trim() || state.busy; grow(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.getElementById("compose").requestSubmit(); }
+  });
+  document.getElementById("compose").addEventListener("submit", function (e) {
+    e.preventDefault(); var t = input.value; input.value = ""; grow(); sendBtn.disabled = true; ask(t);
+  });
+
+  // ── Scope switch ──
+  var NOTES = {
+    trinnex: "Answers only from your Trinnex meetings and library, with sources.",
+    everything: "Answers from all your memory. Trinnex sources are still shown when they are used."
+  };
+  document.querySelectorAll("[data-scope]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.scope = b.getAttribute("data-scope");
+      document.querySelectorAll("[data-scope]").forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+      document.getElementById("scope-note").textContent = NOTES[state.scope];
+      input.placeholder = state.scope === "trinnex" ? "Ask about your Trinnex meetings and documents" : "Ask Iris anything";
+    });
+  });
+
+  // ── How Iris knows this ──
+  var STEPS = [
+    { t: "Sources", d: "Fireflies meetings, after you triage them. Files you upload to Trinnex Library.", tags: ["Fireflies meetings", "Library uploads"], icon: "inbox" },
+    { t: "Split into passages", d: "Each passage is tagged so it can be filtered later.", tags: ["meeting", "date", "series", "participants", "speaker"], icon: "scissors" },
+    { t: "Facts pulled out", d: "Short subject, predicate, object facts.", tags: ["who said what", "owners", "decisions", "policy rules"], icon: "git-commit-horizontal" },
+    { t: "Trinnex collection in your memory", d: "Same design as your existing memory: passages plus facts, kept as its own collection.", tags: ["passages", "facts"], icon: "database" },
+    { t: "Iris searches by meaning and filters", d: "Finds passages that mean the same thing as your question, then narrows them.", tags: ["person", "meeting series", "“last” = most recent date"], icon: "search" },
+    { t: "Answer with sources", d: "Every claim points back to the passage it came from. No match means Iris says so.", tags: [], icon: "message-square-quote", final: true }
+  ];
+  document.getElementById("flow").innerHTML = STEPS.map(function (s, i) {
+    var box = '<div class="step' + (s.final ? " step-final" : "") + '"><span class="step-n">' + (i + 1) + '</span><div style="min-width:0"><div class="step-t">' + esc(s.t) + '</div><div class="step-d">' + esc(s.d) + '</div>' +
+      (s.tags.length ? '<div class="step-tags">' + s.tags.map(function (x) { return '<span class="chip">' + esc(x) + '</span>'; }).join("") + '</div>' : "") + '</div></div>';
+    return box + (i < STEPS.length - 1 ? '<div class="arrow" aria-hidden="true"><i data-lucide="arrow-down"></i></div>' : "");
+  }).join("");
+  var EX = [
+    { q: "“Michael”", f: "speaker filter", n: 1 },
+    { q: "“last Engineering Leaders meeting”", f: "series + most recent date", n: 2 },
+    { q: "“travel points policy”", f: "policy documents", n: 3 }
+  ];
+  document.getElementById("examples").innerHTML = EX.map(function (x) {
+    return '<a class="ex" href="#q-' + x.n + '" style="color:inherit;text-decoration:none;border-radius:6px" title="Ask sample question ' + x.n + '"><span class="q">' + esc(x.q) + '</span><i data-lucide="arrow-right" aria-hidden="true"></i><span class="f">' + esc(x.f) + '</span></a>';
+  }).join("");
+
+  // ── Greeting + deep link ──
+  state.msgs.push({ kind: "text", text: "Hi " + (S.owner || "there") + ". Ask me anything about your Trinnex meetings and documents. I'll show where each answer came from.", time: now() });
+  render();
+
+  function fromHash() {
+    var m = /^#q-(\d+)$/.exec(location.hash || "");
+    if (!m) return;
+    var i = Number(m[1]) - 1;
+    if (QA[i]) ask(QA[i].q, i);
+  }
+  window.addEventListener("hashchange", fromHash);
+  fromHash();
+  icons();
+})();
+</script>
+</body>
+</html>
