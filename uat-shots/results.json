@@ -1,0 +1,48 @@
+{
+  "results": [
+    {
+      "name": "Meetings module opens from Modules",
+      "pass": true
+    },
+    {
+      "name": "Meetings list rendered (no meetings to open)",
+      "pass": true,
+      "detail": "no rows present"
+    },
+    {
+      "name": "Meetings: no horizontal scroll",
+      "pass": true
+    },
+    {
+      "name": "Trinnex Library opens from Apps",
+      "pass": true
+    },
+    {
+      "name": "Library shows 'Add material'",
+      "pass": true
+    },
+    {
+      "name": "Library shows 'Your library'",
+      "pass": true
+    },
+    {
+      "name": "Library: no horizontal scroll",
+      "pass": true
+    },
+    {
+      "name": "Iris 1:1 renders a composer",
+      "pass": false
+    },
+    {
+      "name": "No console/page errors during the run",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "No failed/4xx/5xx requests during the run",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "failedRequests": []
+}
