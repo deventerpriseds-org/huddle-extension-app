@@ -342,6 +342,10 @@ t("REC4 a date range compares the meeting's day in the OWNER's zone", () => {
   expect(ny.kind === "sources" && ny.sources.includes("trinnex:meeting:m3")).toBe(true); // Sunday 22:30 NY
   const utc = S.selectSources(CAT, { ...wk, timeZone: "UTC" });
   expect(utc.kind === "sources" && utc.sources.includes("trinnex:meeting:m3")).toBe(false); // Monday in UTC
+  // the START of the range too: 03:00 UTC Mon 9th is Sun 8th 22:00 in New York, so it is OUT of Nov 9-15 there
+  const early = [{ source: "trinnex:meeting:e1", title: "Test-E", date: "2026-11-09T03:00:00Z", series: null, participants: [], speakers: [] }];
+  expect(S.selectSources(early, { ...wk, timeZone: "America/New_York" }).kind).toBe("none");
+  expect(S.selectSources(early, { ...wk, timeZone: "UTC" }).kind).toBe("sources");
 });
 t("REC5 searchTrinnex threads the owner's zone; huddle.functions resolves it the shared way", () => {
   const src = readFileSync(`${LIB}/huddle.functions.ts`, "utf8");
