@@ -67,18 +67,26 @@ export const rememberVoiceTurn = createServerFn({ method: "POST" })
 
     // SECONDARY (cross-huddle): also write to shared RAG memory so auto-retrieval can surface voice
     // content from OTHER huddles/agents (the conversation object is per 1:1 only).
-    // Loop-2 Trinnex guard (same rule as the text path's persistResearchedMemory): a reply from a Trinnex agent may
-    // repeat Trinnex material from its 1:1, so it is NEVER copied into PERSONAL memory. It still joins that agent's
-    // own 1:1 conversation above.
+    // Trinnex guard, narrowed 2026-11-20: a Trinnex agent's reply skips PERSONAL memory only when that agent's 1:1
+    // history holds a turn that ran search_trinnex (the runTrinnexSearch breadcrumb). Every other reply is written
+    // exactly as before. It still joins that agent's own 1:1 conversation above.
     try {
-      const { voiceReplyMayCarryTrinnex } = await import("../trinnex/search");
+      const { voiceReplySkipsPersonalMemory } = await import("../trinnex/search");
       const { AGENT_BY_ID } = await import("../../data/agents");
-      if (voiceReplyMayCarryTrinnex(AGENT_BY_ID[data.agentId as keyof typeof AGENT_BY_ID], data.role)) {
+      const { oneToOneHasToolTurn } = await import("../tasks/turns.server");
+      const skip = await voiceReplySkipsPersonalMemory({
+        agent: AGENT_BY_ID[data.agentId as keyof typeof AGENT_BY_ID],
+        agentId: data.agentId,
+        role: data.role,
+        ownerEmail: email,
+        historyHasToolTurn: oneToOneHasToolTurn,
+      });
+      if (skip) {
         result.ok = result.conversation;
         return result;
       }
     } catch {
-      result.ok = result.conversation; // cannot tell: fail closed, no personal write
+      result.ok = result.conversation; // the guard itself failed to load: cannot tell, fail closed
       return result;
     }
     try {
