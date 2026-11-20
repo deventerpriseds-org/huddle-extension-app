@@ -15,3 +15,4 @@ Branch `claude_trinnex-meetings`, cut from `origin/claude_trinnex-workspace` (dd
 ## Steps (one line each: what, AC ids, test)
 
 - 0. Branch cut, BUILD file created.
+- 1. Shared parser `lib/trinnex/names.ts` (suggestNames, matchSpeaker, speakerKey): S-A1..S-A22 + S-B1..S-B9 -> `bun scripts/trinnex-names.test.ts` (43 checks green). Follows the TABLE where prototypes disagree: 1on1_Dana -> Dana K., Budget/Forecast -> none, ACME -> none, José -> José.
