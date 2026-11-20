@@ -18,3 +18,10 @@ EVIDENCE:   the two runs above; azure-pg-query shape counts (29 untriaged meetin
   main b930d488 -> 211 pass, 1 fail (GUARD3); `bun test scripts/trinnex-redteam-fixes.test.ts` alone -> 19/19. Pre-existing
   cross-file interference, not this change.
 - `npx tsc --noEmit -p .` -> 0 errors.  `npx vite build` -> rc 0.
+
+## Mutation proof (scripts/mutate.sh)
+- Defect reinstated: count only the FIRST address (`[set.slice(0, 1)]`, the old signed-in-only behaviour).
+- Test: `C1 rows stored under a second linked address are counted (the UAT 0-vs-29 defect)`.
+- Result: `FIRED (control EQUIVALENT)`, exit 0; the file was restored to HEAD.
+- Note: a first attempt used `[set.slice(-1)]`. C1 stayed green because the last address is the one holding the meetings;
+  only C7 caught it. That mutation was a poor choice, not a gap in the guard.
