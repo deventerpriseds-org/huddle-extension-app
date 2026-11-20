@@ -299,6 +299,10 @@ export async function runDueScheduledJobs(): Promise<number> {
   const proposals = asJob("Task proposals", () => import("../proposals/proposals.server")
     .then((m) => m.runProposalsPass()))
     .catch(() => undefined);
+  // Trinnex Library (2026-11-20): uploaded files -> text -> Trinnex memory. Same shape; one file per tick; never throws.
+  const trinnexLibrary = asJob("Trinnex Library", () => import("../trinnex/library.server")
+    .then((m) => m.processDueLibraryItems(1)))
+    .catch(() => 0);
   try {
     await ensureGroomJobs(now);
   } catch {
@@ -321,6 +325,7 @@ export async function runDueScheduledJobs(): Promise<number> {
     await fireflies;
     await correspondence;
     await proposals;
+    await trinnexLibrary;
     return 0;
   }
   let fired = 0;
@@ -372,5 +377,6 @@ export async function runDueScheduledJobs(): Promise<number> {
   await fireflies; // keep the request alive until the minutes pass finishes (it never throws)
   await correspondence; // same for the correspondence pass (never throws; bounded by PASS_BUDGET_MS)
   await proposals; // same for the proposals pass (never throws; transcripts bounded at 25s)
+  await trinnexLibrary; // same for the Trinnex Library pass (never throws; one file per tick)
   return fired;
 }

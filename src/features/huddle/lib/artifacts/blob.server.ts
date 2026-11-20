@@ -39,20 +39,22 @@ async function service() {
   return _svc;
 }
 
-let _ensured = false;
-async function container() {
-  const client = (await service()).getContainerClient(CONTAINER);
-  if (!_ensured) {
+// Containers already ensured this process. Optional `name` (2026-11-20, Trinnex Library): the SAME storage account
+// and connection string, a separate PRIVATE container (`trinnex-library`). Every existing caller omits it.
+const _ensured = new Set<string>();
+async function container(name: string = CONTAINER) {
+  const client = (await service()).getContainerClient(name);
+  if (!_ensured.has(name)) {
     // No `access` argument => PRIVATE container (no anonymous blob/container read). Idempotent.
     await client.createIfNotExists();
-    _ensured = true;
+    _ensured.add(name);
   }
   return client;
 }
 
 /** Upload bytes to `path` with the given content-type. Overwrites (id-keyed paths are unique per artifact). */
-export async function putArtifactBlob(path: string, bytes: Buffer | Uint8Array, mime: string): Promise<void> {
-  const c = await container();
+export async function putArtifactBlob(path: string, bytes: Buffer | Uint8Array, mime: string, containerName?: string): Promise<void> {
+  const c = await container(containerName);
   const blob = c.getBlockBlobClient(path);
   const data = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
   await blob.upload(data, data.length, {
@@ -61,9 +63,9 @@ export async function putArtifactBlob(path: string, bytes: Buffer | Uint8Array, 
 }
 
 /** Read a stored blob's full bytes (for mirroring to a cloud drive). Null if missing/unreadable. */
-export async function getArtifactBlobBytes(path: string): Promise<Buffer | null> {
+export async function getArtifactBlobBytes(path: string, containerName?: string): Promise<Buffer | null> {
   try {
-    const c = await container();
+    const c = await container(containerName);
     return await c.getBlockBlobClient(path).downloadToBuffer();
   } catch {
     return null;
@@ -71,9 +73,9 @@ export async function getArtifactBlobBytes(path: string): Promise<Buffer | null>
 }
 
 /** Delete a stored blob. Idempotent — returns true whether or not it existed (never throws on 404). */
-export async function deleteArtifactBlob(path: string): Promise<boolean> {
+export async function deleteArtifactBlob(path: string, containerName?: string): Promise<boolean> {
   try {
-    const c = await container();
+    const c = await container(containerName);
     await c.getBlockBlobClient(path).deleteIfExists();
     return true;
   } catch {
