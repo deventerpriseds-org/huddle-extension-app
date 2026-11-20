@@ -5564,3 +5564,9 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
       /automation/Fireflies Transcripts has 28/28 named files in the same drive (probes 44734555516, 44734811029). Built on
       claude_trinnex-speaker-context: titles from file names (fail-soft) + up to 5 identifying lines per speaker.
       Evidence docs/qc-evidence/BUILD-trinnex-named-titles.md. NOT owner-confirmed.
+      2026-11-20 #297 merged 79194a1c, deploy 44736183354 OK. #298 made trinnex-checks count-only (public shots branch).
+      Live UAT 44736565142 + 44736572362 (1000x680, 390x844): 15/15 each -- 28 of 29 meetings show the file name, 12
+      speaker cards with clue lines, "More of what they said" opens. NOT owner-confirmed.
+      PRIVACY FINDING: earlier verify-uat runs today (44705323308, 44705328676, 44707889765, 44707895133, 44708491612,
+      44708497787) pushed meeting-detail / chat screenshots to PUBLIC uat-shots-run-* branches; they self-prune after 7 days.
+      Owner decides: delete now or let them expire.
