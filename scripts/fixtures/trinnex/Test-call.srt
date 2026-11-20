@@ -1,0 +1,7 @@
+1
+00:00:01,000 --> 00:00:02,000
+Von Ellis: Test-opening line
+
+2
+00:00:03,500 --> 00:00:05,000
+Speaker 2: Test-reply
