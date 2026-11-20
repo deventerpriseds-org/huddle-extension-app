@@ -137,5 +137,16 @@ t("AC-L9 passages under the cap, no text lost", [long.length, Math.max(...long.m
 // AC-T19
 t("AC-T19 empty transcript", [speakerRows([], ctx), segmentsFor([], {})], [[], []]);
 
+// AC-T2 guard (source read): a Fireflies redelivery runs recordMeetingInfo, which must never touch the owner's edit,
+// and every new column is added idempotently.
+{
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(new URL("../src/features/huddle/lib/fireflies/minutes-store.server.ts", import.meta.url), "utf8");
+  const rmi = src.slice(src.indexOf("export async function recordMeetingInfo"), src.indexOf("export async function recordEmailSent"));
+  t("AC-T2 recordMeetingInfo never writes the owner's edit", /display_title|series|participants|speaker_map/.test(rmi), false);
+  const adds = src.match(/ALTER TABLE chat\.fireflies_meetings ADD COLUMN[^;]*;/g) ?? [];
+  t("AC-T1 new columns idempotent", adds.every((a) => a.includes("IF NOT EXISTS")) && ["display_title", "series", "participants", "speaker_map", "triaged_at", "onedrive_file_name"].every((c) => adds.some((a) => a.includes(` ${c} `))), true);
+}
+
 console.log(`trinnex-meetings: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

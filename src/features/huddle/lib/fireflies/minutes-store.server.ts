@@ -72,7 +72,7 @@ ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS queue_version BIGIN
 -- so attempts never moved and the meeting was retried every 3 minutes forever. Every claim now adds one
 -- unfinished pass and every release resets it; MAX_UNFINISHED_PASSES in a row ends in a visible failure.
 ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS unfinished_passes INT NOT NULL DEFAULT 0;
--- Trinnex Meetings triage (2026-11-20, AC-trinnex-workspace.md section 1). The Fireflies `title` is never written by
+-- Trinnex Meetings triage (2026-11-20, AC-trinnex-workspace.md section 1). The Fireflies title column is never written by
 -- triage (AC-T1/T2: recordMeetingInfo keeps COALESCE-ing it); the owner's edit lives in display_title. speaker_map is
 -- {"Speaker 3": "<person>"}; onedrive_file_name is the owner's chosen transcript name, which the writer uses (AC-T8).
 ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS display_title TEXT;
