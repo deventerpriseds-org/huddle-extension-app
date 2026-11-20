@@ -1,5 +1,11 @@
 # Project Memory — huddle-extension-app
 
+## Trinnex Meetings lane (2026-11-20, branch claude_trinnex-meetings, NOT merged, NOT live) -- ACT:trinnex-meetings
+- One shared name parser `lib/trinnex/names.ts` (titles AND file names; S-A/S-B table in AC-trinnex-workspace.md s5).
+- MEASURED (azure-pg-query run 44671380860): every stored Fireflies speaker label is `Speaker N` (18988 sentences,
+  30 meetings); Fireflies has never sent a name. Mapping voices is the owner's job in triage, never inferred.
+- `lib/trinnex/memory.server.ts` on this branch is a STUB until the memory lane lands.
+
 ## Iris email alerts: subject exclusion list (2026-11-18, #286 MERGED 3f5fac37, deploy-swa 44376446505 SUCCESS; NOT owner-confirmed live) -- ACT:alert-exclusions
 - **Live dry run** (run-inbound-email 44376789048, 72h): 10 minutes emails `excluded-subject`, 43 real asks still kept. The 19:03 minutes email got no owed row and no Iris turn (azure-pg-query after deploy); owed minutes rows = 0.
 - **Settings writers never write after a failed read (verify loop 1 C4):** `settingsRead()` in actions.server.ts reports `readFailed`; "Stop flagging this list" refuses, the page sets `settingsUnreadable` and ActionsView refuses to save defaults. The 7 already-owed minutes rows were dismissed (DATAFIX-alert-exclusions-owed-minutes.md, undo SQL there).

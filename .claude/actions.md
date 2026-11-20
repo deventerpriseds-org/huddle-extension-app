@@ -5516,3 +5516,8 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - PR deventerpriseds-org/huddle-extension-app#286. Verify loop 1: 6 CONFIRMED, C4 REFUTED (a failed settings read could write defaults over the saved list) -> fixed 2d23aef3; loop 2: 7/7 (VERIFY-alert-exclusions-1/2.md).
 - Data fix DONE: 7 owed minutes rows dismissed by id, settled_at = received_at (run 44374957433: owed 20 -> 13, minutes owed 0); undo SQL in DATAFIX-alert-exclusions-owed-minutes.md.
 - Remaining (was: PR -> verifier -> merge/deploy -> dismiss the 7 owed minutes rows (by id, with undo SQL) -> live dry run -> owner confirms no draft on the next minutes email.
+
+
+## ACT:trinnex-meetings -- Trinnex Meetings triage module (2026-11-20) -- IN PROGRESS
+**Asked for:** owner "go on prototype" (AC-trinnex-workspace.md s1, s5 name rows, s9, s10).
+- Build log + evidence: docs/qc-evidence/BUILD-trinnex-meetings.md. Branch claude_trinnex-meetings, NOT merged, NOT live.
