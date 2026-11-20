@@ -93,3 +93,24 @@ The new list is always the existing list plus `VECTOR`, or unchanged. Suite: `tr
 
 **Process note:** the eds-push-gate (G14) refused one push on this branch ("substantive change with no ledger update", because `scripts/verify-trinnex-attack-2.test.ts` is under scripts/). I did not use `LEDGER_OPT_OUT`. Instead I added the ledger row it asks for to `.claude/actions.md` in the same commit.
 
+## Claim Q -- quota and failure kinds surfaced, no message text logged: PASS
+
+**Source read:**
+- `memory.server.ts`: an embed failure leads to `embedFailureKind` -> `deps.reportFailure(k)` -> `realReportFailure` -> `runAsAiJob("Trinnex memory", owner, () => noteAiFailure(new Error("OpenAI <kind>")))` (l.116-125, 320-329). Fact failures take the same path (l.398).
+- `triples.server.ts` returns kinds only: `no_api_key`, `timeout`/`network_error`, `<status> <code>`, `bad_output`.
+- Meetings stores `trinnex_error = ingest_failed:<kind>` (meetings.server.ts:408). The kind is accepted only if it matches `^[a-z0-9_ ]{1,64}$`. The fallback log uses `code()`, which prints the message only when it is a bare slug (l.37-40).
+
+**Probe:** `embedFailureKind` fed provider bodies carrying the marker `SECRET`:
+```
+429 {message:"SECRET user passage text",code:insufficient_quota} -> "429 insufficient_quota"
+400 {message:"SECRET ...",code:context_length_exceeded}          -> "400 context_length_exceeded"
+"OPENAI_API_KEY not configured"                                  -> "no_api_key"
+"fetch failed: SECRET contents"                                  -> "embed_error"
+500 <html>SECRET</html>                                          -> "500"
+429 {"code":"SECRET with spaces"}                                -> "429"
+ingestFailReason(TrinnexEmbedError quota) -> ai_quota ; (no_api_key) -> no_api_key
+```
+No output carries `SECRET`.
+
+**Suite:** `trinnex-quota-surfacing` 5/0. Its logs show `kind=429 insufficient_quota`, `kind=500`, `kind=no_api_key` for embed, and `facts failed ... kind=no_api_key`. A missing key is therefore a named reason, not a silent "0 facts".
+
