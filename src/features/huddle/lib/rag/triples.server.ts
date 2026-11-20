@@ -44,9 +44,22 @@ const SYSTEM =
   "Skip ephemeral chit-chat. Normalize subjects (e.g. 'the user' → 'user'). " +
   "Confidence 0–1. Return at most 5 triples. Empty array if no durable facts.";
 
+/** extractTriples's result WITH the failure kind (AC-C5, Trinnex). `failureKind` is the HTTP status plus the
+ *  provider's error CODE (e.g. "429 insufficient_quota"), never message text; null on success or "no facts". */
+export interface ExtractResult {
+  triples: Triple[];
+  failureKind: string | null;
+}
+
+/** Unchanged contract for every existing caller: any failure is an empty list. */
 export async function extractTriples(text: string): Promise<Triple[]> {
+  return (await extractTriplesDetailed(text)).triples;
+}
+
+export async function extractTriplesDetailed(text: string): Promise<ExtractResult> {
+  const none = (failureKind: string | null = null): ExtractResult => ({ triples: [], failureKind });
   const key = process.env.OPENAI_API_KEY;
-  if (!key) return [];
+  if (!key) return none();
 
   const body = {
     model: "gpt-5.5",
@@ -64,18 +77,31 @@ export async function extractTriples(text: string): Promise<Triple[]> {
     },
   };
 
-  const res = await fetch("https://api.openai.com/v1/responses", {
+  let res: Response;
+  try {
+    res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${key}`,
     },
     body: JSON.stringify(body),
-  });
+    });
+  } catch (e) {
+    return none(/timeout|abort/i.test(String((e as Error)?.name ?? "")) ? "timeout" : "network_error");
+  }
 
   if (!res.ok) {
-    // Non-fatal — just skip extraction on failure.
-    return [];
+    // Non-fatal for the caller -- but the KIND is returned: status + provider code only, never the message.
+    let code = "";
+    try {
+      const j = (await res.json()) as { error?: { code?: unknown; type?: unknown } };
+      const c = j?.error?.code ?? j?.error?.type;
+      if (typeof c === "string" && /^[a-z0-9_]{1,64}$/i.test(c)) code = c;
+    } catch {
+      /* no body: the status alone is the kind */
+    }
+    return none(code ? `${res.status} ${code}` : String(res.status));
   }
 
   const json = (await res.json()) as {
@@ -86,12 +112,12 @@ export async function extractTriples(text: string): Promise<Triple[]> {
     json.output_text ??
     json.output?.flatMap((o) => o.content ?? []).find((c) => c?.type === "output_text" || c?.text)?.text ??
     "";
-  if (!raw) return [];
+  if (!raw) return none();
 
   try {
     const parsed = JSON.parse(raw) as { triples: Triple[] };
-    return Array.isArray(parsed.triples) ? parsed.triples.slice(0, 5) : [];
+    return { triples: Array.isArray(parsed.triples) ? parsed.triples.slice(0, 5) : [], failureKind: null };
   } catch {
-    return [];
+    return none("bad_output");
   }
 }

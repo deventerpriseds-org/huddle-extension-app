@@ -12,6 +12,7 @@ import type { Pool } from "pg";
 import { getSharedPool } from "../db/shared-pool.server";
 import { ensureMinutesSchema } from "../fireflies/minutes-store.server";
 import { normName, suggestNames, type NameSuggestion } from "./names";
+import { factsFailReason, factsFailureNotice } from "./library-core";
 import {
   canRemovePerson,
   cleanPersonName,
@@ -108,6 +109,8 @@ export interface MeetingListItem {
   participants: string[];
   triaged: boolean;
   trinnexState: string | null;
+  /** AC-C5: "Facts not extracted: AI quota exhausted" (or the kind) when the passages went in without facts. */
+  factsNotice: string | null;
 }
 
 interface MeetingDbRow {
@@ -123,6 +126,7 @@ interface MeetingDbRow {
   onedrive_path: string | null;
   onedrive_file_name: string | null;
   trinnex_state: string | null;
+  trinnex_error?: string | null;
 }
 
 const iso = (v: string | Date | null) => (v == null ? null : v instanceof Date ? v.toISOString() : String(v));
@@ -137,11 +141,12 @@ const listItem = (r: MeetingDbRow): MeetingListItem => {
     participants: r.participants ?? [],
     triaged: !!r.triaged_at,
     trinnexState: r.trinnex_state,
+    factsNotice: factsFailureNotice(r.trinnex_error),
   };
 };
 
 const COLS = `meeting_id, title, display_title, series, participants, speaker_map, meeting_at, triaged_at,
-  title_with_participants, onedrive_path, onedrive_file_name, trinnex_state`;
+  title_with_participants, onedrive_path, onedrive_file_name, trinnex_state, trinnex_error`;
 
 export async function listMeetings(caller: Caller): Promise<
   { ok: true; owner: string; people: string[]; series: string[]; meetings: MeetingListItem[] } | { ok: false; error: string }
@@ -315,6 +320,7 @@ export async function saveMeeting(caller: Caller, input: SaveInput): Promise<Sav
 
   // 4. Trinnex memory (brief step 7, section 10). Never fails the save.
   let memory = "skipped";
+  let factsError: string | null = null;
   if (input.addToMemory) {
     const mem = await import("./memory.server");
     if (!mem.trinnexConfigured()) {
@@ -331,8 +337,15 @@ export async function saveMeeting(caller: Caller, input: SaveInput): Promise<Sav
           series,
           participants,
           segments,
+          ownerEmail: s.owners[0], // AC-C7: the same resolved email the library rows and search_trinnex use
         });
         memory = "ingested";
+        // AC-C5: passages stored; a fact-extraction failure is recorded by KIND and shown on the meeting.
+        if (r.factsFailure) {
+          factsError = factsFailReason(r.factsFailure);
+          const n = factsFailureNotice(factsError);
+          if (n) notes.push(`${n}.`);
+        }
         console.log("[trinnex-meetings] ingested", input.meetingId, r.chunks, r.facts);
       } catch (e) {
         memory = "failed";
@@ -344,7 +357,7 @@ export async function saveMeeting(caller: Caller, input: SaveInput): Promise<Sav
       .query(`UPDATE chat.fireflies_meetings SET trinnex_state = $2, trinnex_error = $3, updated_at = now() WHERE meeting_id = $1`, [
         input.meetingId,
         memory,
-        memory === "failed" ? "ingest_failed" : null,
+        memory === "failed" ? "ingest_failed" : factsError,
       ])
       .catch(() => {});
   }

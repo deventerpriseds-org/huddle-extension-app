@@ -54,6 +54,18 @@ export function trinnexToolsFor(agent: { trinnexAccess?: boolean } | undefined |
   return agentHasTrinnexAccess(agent) ? [SEARCH_TRINNEX_TOOL] : [];
 }
 
+/**
+ * The Lovable (AI SDK) fallback path's copy of the SAME gate: `{ search_trinnex: <tool> }` for an agent with
+ * `trinnexAccess`, `{}` for every other. `makeTool` builds the SDK tool from the one schema above, so the two
+ * dispatch paths can never offer different tools. huddle.functions.ts spreads the result into lovableTools.
+ */
+export function trinnexLovableToolsFor<T>(
+  agent: { trinnexAccess?: boolean } | undefined | null,
+  makeTool: (def: typeof SEARCH_TRINNEX_TOOL) => T,
+): Record<string, T> {
+  return agentHasTrinnexAccess(agent) ? { [SEARCH_TRINNEX_TOOL.name]: makeTool(SEARCH_TRINNEX_TOOL) } : {};
+}
+
 // ── recency (spelling table S-C) ─────────────────────────────────────────────────────────────────────
 
 export interface Recency {

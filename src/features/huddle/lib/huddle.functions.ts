@@ -4131,8 +4131,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
           if (c.name === "search_trinnex") {
             // The executor re-checks the agents.ts data gate, so no other agent can reach the Trinnex DB.
+            // AC-C7: the search is scoped to the caller's resolved email (the library/meetings rows' owner key).
             const { dispatchTrinnexTool } = await import("./trinnex/memory.server");
-            return await dispatchTrinnexTool(winner.id, c.arguments);
+            const trinnexOwner =
+              (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+            return await dispatchTrinnexTool(winner.id, c.arguments, trinnexOwner);
           }
           if (c.name === "list_artifacts") {
             // Read-only, so no ledger claim (claimAction guards MUTATING actions). The executor is
@@ -6885,6 +6888,26 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             perAgentFallbacks.push(ev.inline);
           }
         }
+
+        // Trinnex work memory on the Lovable fallback path: the SAME agents.ts data gate as the OpenAI path
+        // (trinnexAccess), the SAME schema, the SAME executor (which re-checks the gate and scopes to the owner).
+        Object.assign(
+          lovableTools,
+          (await import("./trinnex/search")).trinnexLovableToolsFor(winner, (def) =>
+            tool({
+              description: def.description,
+              inputSchema: jsonSchema(def.parameters as unknown as Parameters<typeof jsonSchema>[0]),
+              execute: async (args) => {
+                const { dispatchTrinnexTool } = await import("./trinnex/memory.server");
+                const trinnexOwner =
+                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
+                  data.caller?.entra_email ??
+                  null;
+                return await dispatchTrinnexTool(winner.id, args as Record<string, unknown>, trinnexOwner);
+              },
+            }),
+          ),
+        );
 
         // Journey-voice proxy tools (opt-in per agent).
         if (agentBackend.journey?.enabled) {

@@ -17,6 +17,7 @@ import {
   ACCEPTED_EXTS,
   FAIL_LABEL,
   type FailReason,
+  factsFailureNotice,
   type LibraryKind,
   MAX_UPLOAD_BYTES,
   STEPS,
@@ -79,8 +80,13 @@ interface Pending {
 }
 
 function statusChip(item: LibraryItem) {
-  if (item.status === "searchable")
-    return { cls: "bg-ai-soft text-ai", text: "Searchable" };
+  if (item.status === "searchable") {
+    // AC-C5: passages are searchable, but say so when the facts could not be extracted (quota named).
+    const notice = factsFailureNotice(item.failReason);
+    return notice
+      ? { cls: "bg-band-cream text-warning-foreground", text: `Searchable · ${notice}` }
+      : { cls: "bg-ai-soft text-ai", text: "Searchable" };
+  }
   if (item.status === "waiting_memory") return { cls: "bg-muted text-muted-foreground", text: "Waiting for Trinnex memory" };
   if (item.status === "failed")
     return { cls: "bg-destructive/10 text-destructive", text: `Failed: ${item.failedStep ?? "step"} (${FAIL_LABEL[item.failReason as FailReason] ?? item.failReason ?? "error"})` };

@@ -16,6 +16,7 @@ import type { Pool } from "pg";
 import { getSharedPool } from "../db/shared-pool.server";
 import {
   type FailReason,
+  factsFailReason,
   type LibraryKind,
   type LibraryStatus,
   type Segment,
@@ -142,7 +143,8 @@ export interface MemoryPort {
     category: string;
     participants: string[];
     segments: Segment[];
-  }): Promise<{ chunks: number; facts: number }>;
+    ownerEmail: string;
+  }): Promise<{ chunks: number; facts: number; factsFailure?: string | null }>;
   remove(sourceId: string): Promise<{ chunks: number; facts: number }>;
 }
 
@@ -193,7 +195,7 @@ export async function runPipeline(item: LibraryItem, deps: PipelineDeps): Promis
     log("waiting_memory", { id: item.id, segments: segments.length });
     return "waiting_memory";
   }
-  let counts: { chunks: number; facts: number };
+  let counts: { chunks: number; facts: number; factsFailure?: string | null };
   try {
     counts = await deps.memory.ingest({
       sourceId: item.id,
@@ -203,6 +205,7 @@ export async function runPipeline(item: LibraryItem, deps: PipelineDeps): Promis
       category: item.category,
       participants: item.participants,
       segments,
+      ownerEmail: item.ownerEmail,
     });
   } catch (e) {
     const reason = ingestFailReason(e);
@@ -215,7 +218,9 @@ export async function runPipeline(item: LibraryItem, deps: PipelineDeps): Promis
   }
   if (!counts.chunks) return fail(STEPS[3], "no_readable_text");
   await deps.update(item.id, { status: "facts", chunks: counts.chunks, facts: counts.facts });
-  await deps.update(item.id, { status: "searchable" });
+  // AC-C5: passages are searchable, but a fact-extraction failure is RECORDED (kind only) so the item says
+  // "Facts not extracted: AI quota exhausted" instead of silently showing 0 facts.
+  await deps.update(item.id, { status: "searchable", failReason: counts.factsFailure ? factsFailReason(counts.factsFailure) : null });
   log("searchable", { id: item.id, chunks: counts.chunks, facts: counts.facts });
   return "searchable";
 }

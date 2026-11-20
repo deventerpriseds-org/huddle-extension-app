@@ -78,11 +78,14 @@ beforeEach(() => {
     getPool: () => trinnexPool,
     configured: () => configured,
     embed: async () => [0.1, 0.2, 0.3],
-    extractTriples: async () => extracted,
+    extractTriples: async () => ({ triples: extracted, failureKind: null }),
+    reportFailure: async () => {},
   });
 });
 
+const OWNER = "test-owner@example.com";
 const meeting = {
+  ownerEmail: OWNER,
   sourceId: "ff-123",
   sourceKind: "meeting" as const,
   title: "Test-Leadership weekly",
@@ -175,7 +178,7 @@ t("ISO1 search_trinnex is offered only to iris-chase and eli-vaughn (every agent
 t("ISO2 every other agent's search_trinnex call is refused without touching the Trinnex pool", async () => {
   for (const a of AGENTS) {
     if (a.id === "iris-chase" || a.id === "eli-vaughn") continue;
-    const out = JSON.parse(await mem.dispatchTrinnexTool(a.id, { query: "vendor" }));
+    const out = JSON.parse(await mem.dispatchTrinnexTool(a.id, { query: "vendor" }, OWNER));
     expect(out.error).toContain("not available");
   }
   expect(trinnexCalls.length).toBe(0);
@@ -190,7 +193,7 @@ t("ISO3 personal auto-retrieval never queries the Trinnex pool", async () => {
 
 // ── honest miss, Trinnex only (AC-M14) + unavailable (AC-M16) ──
 t("MISS1 Trinnex miss is honest; personal search_memory miss stays silent", async () => {
-  const r = await mem.searchTrinnex({ query: "vendor" });
+  const r = await mem.searchTrinnex({ query: "vendor" }, OWNER);
   expect(r.status).toBe("miss");
   expect((r as any).message).toBe(search.TRINNEX_MISS_TEXT);
   const emptyStore = { ...azurePgStore, searchChunks: async () => [] };
@@ -200,12 +203,12 @@ t("MISS1 Trinnex miss is honest; personal search_memory miss stays silent", asyn
 });
 t("MISS2 a below-floor hit is a miss, not a citation", async () => {
   trinnexRows = (sql) => (sql.includes("ORDER BY embedding") ? [{ id: "c1", text: "weak", source: "trinnex:meeting:1", score: 0.1, metadata: {} }] : []);
-  const r = await mem.searchTrinnex({ query: "vendor" });
+  const r = await mem.searchTrinnex({ query: "vendor" }, OWNER);
   expect(r.status).toBe("miss");
 });
 t("UNAV1 a Trinnex DB error says unavailable and never falls back to personal memory", async () => {
   trinnexThrows = true;
-  const r = await mem.searchTrinnex({ query: "vendor", speaker: "Michael" });
+  const r = await mem.searchTrinnex({ query: "vendor", speaker: "Michael" }, OWNER);
   expect(r.status).toBe("unavailable");
   expect(sharedCalls.length).toBe(0);
 });
@@ -215,7 +218,7 @@ t("CITE1 a hit returns title, date, speaker, at and a verbatim quote", async () 
     sql.includes("ORDER BY embedding")
       ? [{ id: "c1", text, source: "trinnex:meeting:ff-123", score: 0.5, metadata: { title: "T", date: "2026-11-18", speaker: "Michael R.", at: "65.2", sourceId: "ff-123" } }]
       : [];
-  const r: any = await mem.searchTrinnex({ query: "vendor" });
+  const r: any = await mem.searchTrinnex({ query: "vendor" }, OWNER);
   expect(r.status).toBe("ok");
   expect(r.results[0]).toMatchObject({ title: "T", date: "2026-11-18", speaker: "Michael R.", at: "65.2" });
   expect(text.includes(r.results[0].quote)).toBe(true);
@@ -230,7 +233,7 @@ const catalogRows = [
 ];
 t("FIL1 'the last Engineering Leaders meeting' searches ONLY the max-date meeting of that series", async () => {
   trinnexRows = (sql) => (sql.includes("LIKE 'trinnex:%'") ? catalogRows : []);
-  await mem.searchTrinnex({ query: "to-dos", series: "Engineering Leaders", question: "to-dos from the last Engineering Leaders meeting" });
+  await mem.searchTrinnex({ query: "to-dos", series: "Engineering Leaders", question: "to-dos from the last Engineering Leaders meeting" }, OWNER);
   const s = trinnexCalls.find((c) => c.sql.includes("ORDER BY embedding"))!;
   const at = (s.params ?? []).findIndex((p) => JSON.stringify(p) === JSON.stringify(["trinnex:meeting:c"]));
   expect(at).toBeGreaterThan(-1);
@@ -239,7 +242,7 @@ t("FIL1 'the last Engineering Leaders meeting' searches ONLY the max-date meetin
 });
 t("FIL2 'what did Michael say' filters to speaker Michael R. through metadata", async () => {
   trinnexRows = (sql) => (sql.includes("LIKE 'trinnex:%'") ? catalogRows : []);
-  await mem.searchTrinnex({ query: "vendor outcome", speaker: "Michael" });
+  await mem.searchTrinnex({ query: "vendor outcome", speaker: "Michael" }, OWNER);
   const s = trinnexCalls.find((c) => c.sql.includes("ORDER BY embedding"))!;
   expect(s.sql).toContain("lower(metadata->>");
   expect(s.params).toContain("Michael R.");
@@ -248,7 +251,7 @@ t("FIL2 'what did Michael say' filters to speaker Michael R. through metadata", 
 t("FIL3 two Michaels is ambiguous, never auto-picked", async () => {
   trinnexRows = (sql) =>
     sql.includes("LIKE 'trinnex:%'") ? [...catalogRows, { source: "trinnex:meeting:e", metadata: { date: "2026-11-01", speaker: "Michael T." } }] : [];
-  const r: any = await mem.searchTrinnex({ query: "x", speaker: "Michael" });
+  const r: any = await mem.searchTrinnex({ query: "x", speaker: "Michael" }, OWNER);
   expect(r.status).toBe("ambiguous");
   expect(r.options.sort()).toEqual(["Michael R.", "Michael T."]);
 });

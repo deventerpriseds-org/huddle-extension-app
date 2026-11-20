@@ -85,6 +85,19 @@ export const FAIL_LABEL: Record<FailReason, string> = {
   ingest_error: "memory error",
 };
 
+/** AC-C5: a fact-extraction failure on an otherwise searchable item is stored as `facts:<kind>` in fail_reason
+ *  (the kind is "429 insufficient_quota", "500", "timeout": status + provider code, never message text). */
+export const FACTS_QUOTA_TEXT = "Facts not extracted: AI quota exhausted";
+export const isQuotaKind = (kind: string | null | undefined): boolean => /insufficient_quota/.test(kind ?? "");
+export const factsFailReason = (kind: string): string => `facts:${kind}`.slice(0, 80);
+/** The owner-facing notice for a stored fact failure, or null when facts were extracted. Used by the Library and
+ *  Meetings items alike. */
+export function factsFailureNotice(stored: string | null | undefined): string | null {
+  if (!stored || !stored.startsWith("facts:")) return null;
+  const kind = stored.slice("facts:".length);
+  return isQuotaKind(kind) ? FACTS_QUOTA_TEXT : `Facts not extracted (${kind || "error"})`;
+}
+
 /** Pure: lower-case extension of a file name, "" when there is none (an extensionless file is rejected). */
 export function extOf(name: string): string {
   const m = /\.([a-z0-9]+)$/i.exec(String(name ?? ""));

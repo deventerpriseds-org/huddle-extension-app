@@ -13,7 +13,7 @@
 import { createRagStore, RagStoreUnavailableError, type PoolLike } from "../rag/azure-pg.server";
 import { getTrinnexPool, trinnexPgConfigured } from "../db/shared-pool.server";
 import { embed as realEmbed } from "../rag/embed.server";
-import { extractTriples as realExtractTriples } from "../rag/triples.server";
+import { extractTriplesDetailed as realExtractTriples, type ExtractResult } from "../rag/triples.server";
 import { chunkText } from "../rag/chunk";
 import type { ChunkRow, RagStore } from "../rag/types";
 import { AGENT_BY_ID, type AgentId } from "../../data/agents";
@@ -48,7 +48,24 @@ export interface TrinnexIngestInput {
   category?: string | null;
   participants: string[];
   segments: TrinnexSegment[];
+  /** AC-C7: the owner's email, resolved the same way as the library and meetings rows (resolveTaskEmail). Every
+   *  passage is stamped with it (metadata.owner_email, lower-cased) and every search filters on it. */
+  ownerEmail: string;
 }
+
+export interface TrinnexIngestResult {
+  chunks: number;
+  facts: number;
+  /** AC-C5: the KIND of the first fact-extraction failure ("429 insufficient_quota", "500", "timeout"), or null.
+   *  Passages are stored either way; only the facts are missing. Never message text. */
+  factsFailure: string | null;
+}
+
+// AC-C5 wording + quota test live in the pure library-core so the Library and Meetings UIs share them.
+import { isQuotaKind, FACTS_QUOTA_TEXT, factsFailReason } from "./library-core";
+export { isQuotaKind, FACTS_QUOTA_TEXT, factsFailReason };
+
+const ownerKey = (email: string | null | undefined) => (email ?? "").trim().toLowerCase();
 
 // ── dependencies (injectable for tests; no test ever reaches a live DB or model) ─────────────────────
 
@@ -56,13 +73,28 @@ interface Deps {
   getPool: () => PoolLike;
   configured: () => boolean;
   embed: (text: string) => Promise<number[]>;
-  extractTriples: (text: string) => Promise<Array<{ subject: string; predicate: string; object: string; confidence: number }>>;
+  extractTriples: (text: string) => Promise<ExtractResult>;
+  /** AC-C5: surface a fact-extraction failure through the EXISTING background-AI quota alert (ai-quota: bell row +
+   *  Iris notice for a quota kind; kind logged for every other). Never throws. */
+  reportFailure: (kind: string, ownerEmail: string) => Promise<void>;
+}
+/** The error the existing quota alert classifies: "OpenAI <kind>" (status + provider code). Never content. */
+export const trinnexAlertError = (kind: string): Error => new Error(`OpenAI ${kind}`);
+async function realReportFailure(kind: string, ownerEmail: string): Promise<void> {
+  try {
+    const q = await import("../ai-quota/ai-quota.server");
+    // The message carries the KIND only (status + provider code), never content.
+    await q.runAsAiJob("Trinnex memory", ownerEmail, async () => q.noteAiFailure(trinnexAlertError(kind)));
+  } catch {
+    /* the item's own status still tells the owner */
+  }
 }
 const REAL: Deps = {
   getPool: getTrinnexPool,
   configured: trinnexPgConfigured,
   embed: realEmbed,
   extractTriples: realExtractTriples,
+  reportFailure: realReportFailure,
 };
 let deps: Deps = REAL;
 let _store: RagStore | null = null;
@@ -211,9 +243,11 @@ export function validFact(t: { subject?: unknown; predicate?: unknown; object?: 
  * own rows in the shared dedup key (a fact asserted by two sources is two rows, and deleting one source
  * cannot take the other's fact with it).
  */
-export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<{ chunks: number; facts: number }> {
+export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<TrinnexIngestResult> {
   if (!trinnexConfigured()) throw new TrinnexNotConfiguredError();
   if (!input.sourceId?.trim()) throw new Error("sourceId is required");
+  const owner = ownerKey(input.ownerEmail);
+  if (!owner) throw new Error("ownerEmail is required"); // AC-C7: never an unowned passage
   const source = trinnexSourceKey(input.sourceKind, input.sourceId);
   await deleteTrinnexSource(input.sourceId);
 
@@ -224,6 +258,7 @@ export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<{ 
     const vec = await deps.embed(p.text);
     const metadata: Record<string, unknown> = {
       sourceId: input.sourceId,
+      owner_email: owner,
       kind,
       sourceKind: input.sourceKind,
       title: input.title,
@@ -243,8 +278,17 @@ export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<{ 
   }
 
   let facts = 0;
+  let factsFailure: string | null = null;
   for (const w of written) {
-    const triples = (await deps.extractTriples(w.text)).filter(validFact);
+    const ex = await deps.extractTriples(w.text);
+    if (ex.failureKind) {
+      // AC-C5: record the KIND, never treat it as "no facts". A quota failure fails every later call the same
+      // way, so stop extracting; the passages above stay stored and searchable.
+      factsFailure ??= ex.failureKind;
+      if (isQuotaKind(ex.failureKind)) break;
+      continue;
+    }
+    const triples = ex.triples.filter(validFact);
     if (triples.length === 0) continue;
     const res = await store().writeTriples(
       triples.map((t) => ({
@@ -260,8 +304,12 @@ export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<{ 
     );
     facts += res.ids.length;
   }
+  if (factsFailure) {
+    console.warn(`[trinnex] facts failed source_kind=${input.sourceKind} kind=${factsFailure}`);
+    await deps.reportFailure(factsFailure, owner);
+  }
   console.info(`[trinnex] ingest source_kind=${input.sourceKind} passages=${chunkIds.size} facts=${facts}`);
-  return { chunks: chunkIds.size, facts };
+  return { chunks: chunkIds.size, facts, factsFailure };
 }
 
 /**
@@ -316,9 +364,10 @@ export const TRINNEX_NOT_SET_UP_TEXT = "Trinnex memory is not set up yet. Say so
 
 const QUOTE_CAP = 600;
 
-async function loadCatalog(pool: PoolLike): Promise<CatalogEntry[]> {
+async function loadCatalog(pool: PoolLike, owner: string): Promise<CatalogEntry[]> {
   const { rows } = await pool.query(
-    `SELECT source, metadata FROM rag_chunks WHERE source LIKE 'trinnex:%'`,
+    `SELECT source, metadata FROM rag_chunks WHERE source LIKE 'trinnex:%' AND lower(metadata->>'owner_email') = $1`,
+    [owner],
   );
   const by = new Map<string, CatalogEntry>();
   for (const r of rows as Array<{ source: string; metadata: Record<string, unknown> | null }>) {
@@ -348,8 +397,15 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
-export async function searchTrinnex(args: Record<string, unknown>, now = new Date()): Promise<TrinnexSearchResult> {
+export async function searchTrinnex(
+  args: Record<string, unknown>,
+  ownerEmail: string | null | undefined,
+  now = new Date(),
+): Promise<TrinnexSearchResult> {
   if (!trinnexConfigured()) return { status: "unavailable", message: TRINNEX_NOT_SET_UP_TEXT };
+  // AC-C7: no resolved owner means no search at all -- never an unscoped read.
+  const owner = ownerKey(ownerEmail);
+  if (!owner) return { status: "unavailable", message: TRINNEX_UNAVAILABLE_TEXT };
   const query = str(args.query) ?? str(args.question) ?? "";
   if (!query) return { status: "miss", message: TRINNEX_MISS_TEXT, hint: TRINNEX_LIBRARY_HINT };
   try {
@@ -370,7 +426,7 @@ export async function searchTrinnex(args: Record<string, unknown>, now = new Dat
     };
     const pool = deps.getPool();
     const needsCatalog = Object.values(filters).some((v) => v !== undefined && !(Array.isArray(v) && v.length === 0));
-    const sel = needsCatalog ? selectSources(await loadCatalog(pool), filters) : ({ kind: "all" } as const);
+    const sel = needsCatalog ? selectSources(await loadCatalog(pool, owner), filters) : ({ kind: "all" } as const);
     if (sel.kind === "ambiguous") {
       return {
         status: "ambiguous",
@@ -389,7 +445,8 @@ export async function searchTrinnex(args: Record<string, unknown>, now = new Dat
       scope: "global",
       withMetadata: true,
       sources: sel.kind === "sources" ? sel.sources : undefined,
-      metadataMatch: sel.kind === "sources" && sel.speaker ? { speaker: sel.speaker } : undefined,
+      // owner_email ALWAYS (AC-C7); speaker only when the filter resolved one.
+      metadataMatch: { owner_email: owner, ...(sel.kind === "sources" && sel.speaker ? { speaker: sel.speaker } : {}) },
     });
     const hits = rows.filter((r) => (r.score ?? 0) >= TRINNEX_MIN_SCORE && (r.source ?? "").startsWith("trinnex:"));
     console.info(`[trinnex] search candidates=${rows.length} cited=${hits.length} filtered=${sel.kind === "sources"}`);
@@ -423,9 +480,13 @@ export async function searchTrinnex(args: Record<string, unknown>, now = new Dat
  * The search_trinnex executor. Re-checks the data gate itself, so a tool call that reached here for any
  * agent without `trinnexAccess` is refused before the Trinnex pool is ever touched (AC-M7).
  */
-export async function dispatchTrinnexTool(agentId: string, args: Record<string, unknown>): Promise<string> {
+export async function dispatchTrinnexTool(
+  agentId: string,
+  args: Record<string, unknown>,
+  ownerEmail: string | null | undefined,
+): Promise<string> {
   if (!agentHasTrinnexAccess(AGENT_BY_ID[agentId as AgentId])) {
     return JSON.stringify({ error: "search_trinnex is not available to this agent" });
   }
-  return JSON.stringify(await searchTrinnex(args));
+  return JSON.stringify(await searchTrinnex(args, ownerEmail));
 }
