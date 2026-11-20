@@ -366,7 +366,9 @@ export function turnsFromCues(
   const out: Segment[] = [];
   for (const c of cues) {
     const label = keyOf(c.speaker);
-    const speaker = speakerMap[label]?.trim() || label;
+    // RT-N4: own keys only (a cue labelled "constructor" must not read Object.prototype.constructor).
+    const mapped = Object.prototype.hasOwnProperty.call(speakerMap, label) ? speakerMap[label] : undefined;
+    const speaker = (typeof mapped === "string" ? mapped.trim() : "") || label;
     const last = out[out.length - 1];
     if (last && last.speaker === speaker && last.text.length + c.text.length + 1 <= PASSAGE_MAX_CHARS) {
       last.text += `\n${c.text}`;

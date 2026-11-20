@@ -147,7 +147,8 @@ t("IN2 every stored fact carries source_chunk_id; invalid model output is droppe
   expect(tri.length).toBe(3); // one valid fact per passage x 3 passages
   expect(r.facts).toBe(3);
   expect(tri.every((c) => typeof c.params![6] === "string" && (c.params![6] as string).startsWith("id-"))).toBe(true);
-  expect(tri.every((c) => c.params![0] === "agent" && c.params![1] === "trinnex:meeting:ff-123")).toBe(true);
+  // RT-I3 contract change: a fact's agent_id is the source PLUS the owner tag, so two owners never share a fact row.
+  expect(tri.every((c) => c.params![0] === "agent" && c.params![1] === "trinnex:meeting:ff-123|trinnex-owner:test-owner@example.com")).toBe(true);
   expect(trinnexCalls.some((c) => /superseded_at = now\(\)/.test(c.sql))).toBe(false);
 });
 t("IN3 not configured: trinnexConfigured() false, ingest refuses, nothing is queried", async () => {
@@ -159,7 +160,7 @@ t("IN3 not configured: trinnexConfigured() false, ingest refuses, nothing is que
 
 // ── delete (AC-L7) ──
 t("DEL1 delete removes facts explicitly (incl. superseded + orphaned) before passages", async () => {
-  await mem.deleteTrinnexSource("ff-123");
+  await mem.deleteTrinnexSource("ff-123", OWNER);
   expect(trinnexCalls.length).toBe(2);
   const [f, c] = trinnexCalls;
   expect(f.sql).toContain("DELETE FROM rag_triples");
@@ -168,6 +169,10 @@ t("DEL1 delete removes facts explicitly (incl. superseded + orphaned) before pas
   expect(f.sql).not.toContain("superseded_at IS NULL");
   expect(c.sql).toContain("DELETE FROM rag_chunks");
   expect(f.params![0]).toEqual(["trinnex:meeting:ff-123", "trinnex:upload:ff-123"]);
+  // RT-I3: both deletes are scoped to the caller-owner.
+  expect(f.params![1]).toBe(OWNER);
+  expect(c.sql).toContain("lower(metadata->>'owner_email') = $2");
+  expect(c.params![1]).toBe(OWNER);
 });
 
 // ── isolation (AC-M7) ──

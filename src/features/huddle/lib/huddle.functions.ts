@@ -3,6 +3,7 @@ import { generateText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { z } from "zod";
 import { AGENTS, AGENT_BY_ID, type AgentId } from "../data/agents";
 import { isUserTurn } from "./turn-identity";
+import { turnUsedTrinnex } from "./trinnex/search";
 import { agentBudgetMs, turnDeadlineMs } from "./turn-deadline";
 import { joinOpenerAndBlock } from "./chat-format";
 import type { ChecklistPayload, HuddleMessage, NavLink, SuggestedTaskDraft, TaskLane } from "../data/seed";
@@ -2324,6 +2325,10 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // writes so two agents in a group turn can't double-fire the same intent. `claimAction` returns
   // false when the action was already done (caller should skip). Read-only tools are never ledgered.
   const turnActionLedger = new Set<string>(resume?.claimedActions ?? []);
+  // RT-I5: set by runTrinnexSearch (the ONE search_trinnex executor wrapper, both dispatch paths). When set, this
+  // turn's agent replies are kept OUT of personal memory (persistResearchedMemory), because a reply built from
+  // Trinnex work passages would otherwise become a scope='global' personal chunk served to every agent.
+  let trinnexSearchedThisTurn = false;
   const claimAction = (key: string): boolean => {
     const k = key.trim().toLowerCase().slice(0, 240);
     if (turnActionLedger.has(k)) return false;
@@ -2511,6 +2516,25 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
       // Durably record this tool call against the ceremony run (no-op outside a ceremony) — the real
       // error + the args are what make a failure debuggable.
       trackCeremonyTool(agentId, tool, ok, summary, detail, args);
+    };
+    // search_trinnex executor, the ONE wrapper both dispatch paths (OpenAI + Lovable) call. It marks the turn
+    // BEFORE searching (RT-I5: even a failed search keeps the turn's replies out of personal memory), records a
+    // breadcrumb (which survives a resumed turn), and dispatches through the executor that re-checks the agents.ts
+    // data gate. AC-C7: scoped to the caller's resolved email (the library/meetings rows' owner key).
+    const runTrinnexSearch = async (args: Record<string, unknown>): Promise<string> => {
+      trinnexSearchedThisTurn = true;
+      const { dispatchTrinnexTool } = await import("./trinnex/memory.server");
+      const trinnexOwner =
+        (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
+      const out = await dispatchTrinnexTool(winner.id, args, trinnexOwner);
+      let status = "error";
+      try {
+        status = String((JSON.parse(out) as { status?: unknown }).status ?? "error");
+      } catch {
+        /* keep "error" */
+      }
+      recordToolUse(winner.id, "search_trinnex", `search_trinnex · ${status}`, status === "ok" || status === "miss");
+      return out;
     };
     // Snapshot the fully-populated buffers into a result. Called at each return
     // point (after all pushes), so the buffers are complete.
@@ -4131,11 +4155,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
           if (c.name === "search_trinnex") {
             // The executor re-checks the agents.ts data gate, so no other agent can reach the Trinnex DB.
-            // AC-C7: the search is scoped to the caller's resolved email (the library/meetings rows' owner key).
-            const { dispatchTrinnexTool } = await import("./trinnex/memory.server");
-            const trinnexOwner =
-              (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ?? data.caller?.entra_email ?? null;
-            return await dispatchTrinnexTool(winner.id, c.arguments, trinnexOwner);
+            return await runTrinnexSearch(c.arguments);
           }
           if (c.name === "list_artifacts") {
             // Read-only, so no ledger claim (claimAction guards MUTATING actions). The executor is
@@ -6897,14 +6917,7 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
             tool({
               description: def.description,
               inputSchema: jsonSchema(def.parameters as unknown as Parameters<typeof jsonSchema>[0]),
-              execute: async (args) => {
-                const { dispatchTrinnexTool } = await import("./trinnex/memory.server");
-                const trinnexOwner =
-                  (await (await import("./journey/identity")).resolveTaskEmail(data.caller)) ??
-                  data.caller?.entra_email ??
-                  null;
-                return await dispatchTrinnexTool(winner.id, args as Record<string, unknown>, trinnexOwner);
-              },
+              execute: async (args) => await runTrinnexSearch(args as Record<string, unknown>),
             }),
           ),
         );
@@ -7814,6 +7827,9 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
     // carry a week-old detail, which is the symptom that started this. Per the owner's layer contract:
     // chunks are safe for BOTH sides of a 1:1 -- it is TRIPLES that are user-only (see below).
     if (data.memoryMode !== "researched" || !openaiKey) return;
+    // RT-I5: a turn that searched Trinnex never copies its agent replies into PERSONAL memory. The user's own
+    // message is still written as for every turn (known limit, BUILD-trinnex-integration.md red-team round).
+    if (turnUsedTrinnex(trinnexSearchedThisTurn, toolUses)) return;
     const anyShared = data.members.some((id) => {
       const c = agentsCfg[id]?.rag;
       return c?.store === "azure" && c.chunks && (c.sharing ?? "shared") === "shared";

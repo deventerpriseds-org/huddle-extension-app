@@ -192,7 +192,9 @@ export function segmentsFor(
     const text = typeof s.text === "string" ? collapse(s.text) : "";
     if (!text) continue;
     const label = speakerKey(s.speaker);
-    const speaker = map[label] || label;
+    // RT-N4: OWN keys only. `map["constructor"]` on a plain object is Object.prototype.constructor, a function.
+    const mapped = Object.prototype.hasOwnProperty.call(map, label) ? map[label] : undefined;
+    const speaker = typeof mapped === "string" && mapped ? mapped : label;
     const last = out[out.length - 1];
     if (last && last.speakerLabel === label && last.text.length + 1 + text.length <= SEGMENT_MAX_CHARS) {
       last.text += ` ${text}`;
@@ -208,7 +210,8 @@ export function segmentsFor(
 
 /** Pure: a client speaker map -> only known labels, values cleaned; an empty value means unmapped. */
 export function cleanSpeakerMap(raw: unknown, labels: readonly string[]): Record<string, string> {
-  const out: Record<string, string> = {};
+  // RT-N4: no prototype, so a label like "constructor" or "__proto__" is an ordinary key.
+  const out: Record<string, string> = Object.create(null);
   if (!raw || typeof raw !== "object") return out;
   const ok = new Set(labels);
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {

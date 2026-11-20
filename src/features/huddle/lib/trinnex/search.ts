@@ -50,6 +50,16 @@ export function agentHasTrinnexAccess(agent: { trinnexAccess?: boolean } | undef
   return agent?.trinnexAccess === true;
 }
 
+/**
+ * RT-I5: did this turn run search_trinnex? `marked` is the turn flag set by the ONE executor wrapper both dispatch
+ * paths call; `toolUses` is the turn's breadcrumb list, which survives a chunked/resumed turn. Either one is
+ * enough. When true, the turn's agent replies are NOT copied into personal memory (they may quote work material,
+ * and personal scope='global' chunks are auto-retrieved for every agent).
+ */
+export function turnUsedTrinnex(marked: boolean, toolUses: ReadonlyArray<{ tool?: string | null }> | null | undefined): boolean {
+  return marked || (toolUses ?? []).some((t) => t?.tool === SEARCH_TRINNEX_TOOL.name);
+}
+
 export function trinnexToolsFor(agent: { trinnexAccess?: boolean } | undefined | null): unknown[] {
   return agentHasTrinnexAccess(agent) ? [SEARCH_TRINNEX_TOOL] : [];
 }

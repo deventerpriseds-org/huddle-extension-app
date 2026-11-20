@@ -145,7 +145,8 @@ export interface MemoryPort {
     segments: Segment[];
     ownerEmail: string;
   }): Promise<{ chunks: number; facts: number; factsFailure?: string | null }>;
-  remove(sourceId: string): Promise<{ chunks: number; facts: number }>;
+  /** RT-I3: removes only THIS owner's rows for the source. */
+  remove(sourceId: string, ownerEmail: string): Promise<{ chunks: number; facts: number }>;
 }
 
 export interface PipelineDeps {
@@ -210,7 +211,7 @@ export async function runPipeline(item: LibraryItem, deps: PipelineDeps): Promis
   } catch (e) {
     const reason = ingestFailReason(e);
     try {
-      await deps.memory.remove(item.id);
+      await deps.memory.remove(item.id, item.ownerEmail);
     } catch {
       /* the failed status below still tells the owner; Retry re-ingests, which replaces by source */
     }
@@ -242,7 +243,7 @@ export async function runRemoval(item: LibraryItem, deps: PipelineDeps): Promise
   const mayHaveMemory = item.chunks > 0 || item.facts > 0 || ["split", "facts", "searchable", "removing", "remove_incomplete"].includes(item.status);
   if (deps.memory.configured()) {
     try {
-      await deps.memory.remove(item.id);
+      await deps.memory.remove(item.id, item.ownerEmail);
     } catch {
       remaining.push("memory");
     }
@@ -285,7 +286,7 @@ async function liveDeps(): Promise<PipelineDeps> {
     memory: {
       configured: () => mem.trinnexConfigured(),
       ingest: (input) => mem.ingestTrinnexSource({ ...input, series: null }),
-      remove: (id) => mem.deleteTrinnexSource(id),
+      remove: (id, ownerEmail) => mem.deleteTrinnexSource(id, ownerEmail),
     },
     update,
     deleteRow: async (id) => {

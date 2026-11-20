@@ -35,6 +35,8 @@ export type TrinnexSourceKind = "meeting" | "upload";
 export interface TrinnexSegment {
   text: string;
   speaker?: string | null;
+  /** AC-M4: the ORIGINAL Fireflies label ("Speaker 1", "Dana Smith") when `speaker` is the mapped person. */
+  speakerLabel?: string | null;
   at?: string | null;
   page?: string | null;
 }
@@ -46,6 +48,9 @@ export interface TrinnexIngestInput {
   date: string | null;
   series?: string | null;
   category?: string | null;
+  /** AC-M4: a meeting's title as Fireflies sent it (`title` is the owner-edited one). Stored as
+   *  metadata.fireflies_title so the S-C8 title fallback can match it. */
+  firefliesTitle?: string | null;
   participants: string[];
   segments: TrinnexSegment[];
   /** AC-C7: the owner's email, resolved the same way as the library and meetings rows (resolveTaskEmail). Every
@@ -145,6 +150,21 @@ export function trinnexSourceKey(kind: TrinnexSourceKind, sourceId: string): str
   return `trinnex:${kind}:${sourceId}`;
 }
 
+/**
+ * RT-I3: the OWNER is part of every Trinnex row's identity, so two owners holding the same source id (a shared
+ * Fireflies meeting id) can never merge into, or delete, each other's rows.
+ * - passages: `agent_id` = this tag. agent_id is in the rag_chunks dedup key (CHUNK_DEDUP_KEY), so identical
+ *   text from two owners is two rows; scope stays 'global', whose search ignores agent_id.
+ * - facts: `agent_id` = source + owner tag (the rag_triples dedup key includes agent_id).
+ * Every delete is additionally predicated on metadata.owner_email.
+ */
+export function trinnexOwnerTag(ownerEmail: string): string {
+  return `trinnex-owner:${ownerKey(ownerEmail)}`;
+}
+export function trinnexFactKey(source: string, ownerEmail: string): string {
+  return `${source}|${trinnexOwnerTag(ownerEmail)}`;
+}
+
 // ── chunking ─────────────────────────────────────────────────────────────────────────────────────────
 
 /** Passage target. Well under the embed cap (embed.server.ts truncates input at 8000 chars, AC-L9). */
@@ -154,6 +174,8 @@ export const EMBED_INPUT_CAP = 8000;
 export interface TrinnexPassage {
   text: string;
   speaker: string | null;
+  /** The original Fireflies label of this turn (AC-M4). Null for documents and when none was given. */
+  speakerLabel?: string | null;
   at: string | null;
   page: string | null;
 }
@@ -174,13 +196,16 @@ export function chunkTrinnexSegments(segments: TrinnexSegment[]): { kind: "trans
   const isTranscript = segs.some((s) => clean(s.speaker) !== null);
   const passages: TrinnexPassage[] = [];
   if (isTranscript) {
-    let cur: { speaker: string | null; lines: TrinnexSegment[] } | null = null;
-    const turns: Array<{ speaker: string | null; lines: TrinnexSegment[] }> = [];
+    // A turn is one (speaker, original label) run: two labels mapped to one person stay separate passages,
+    // so each passage's speaker_label is exact and a later re-map can move it.
+    let cur: { speaker: string | null; label: string | null; lines: TrinnexSegment[] } | null = null;
+    const turns: Array<{ speaker: string | null; label: string | null; lines: TrinnexSegment[] }> = [];
     for (const s of segs) {
       const sp = clean(s.speaker);
-      if (cur && cur.speaker === sp) cur.lines.push(s);
+      const lb = clean(s.speakerLabel) ?? sp;
+      if (cur && cur.speaker === sp && cur.label === lb) cur.lines.push(s);
       else {
-        cur = { speaker: sp, lines: [s] };
+        cur = { speaker: sp, label: lb, lines: [s] };
         turns.push(cur);
       }
     }
@@ -188,7 +213,7 @@ export function chunkTrinnexSegments(segments: TrinnexSegment[]): { kind: "trans
       let buf = "";
       let bufAt: string | null = null;
       const flush = () => {
-        if (buf) passages.push({ text: buf, speaker: turn.speaker, at: bufAt, page: null });
+        if (buf) passages.push({ text: buf, speaker: turn.speaker, speakerLabel: turn.label, at: bufAt, page: null });
         buf = "";
         bufAt = null;
       };
@@ -197,7 +222,7 @@ export function chunkTrinnexSegments(segments: TrinnexSegment[]): { kind: "trans
         if (text.length > TRINNEX_PASSAGE_CHARS) {
           flush();
           for (const part of chunkText(text, { maxChars: TRINNEX_PASSAGE_CHARS, overlap: 0 })) {
-            passages.push({ text: part, speaker: turn.speaker, at: clean(line.at), page: null });
+            passages.push({ text: part, speaker: turn.speaker, speakerLabel: turn.label, at: clean(line.at), page: null });
           }
           continue;
         }
@@ -249,7 +274,7 @@ export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<Tr
   const owner = ownerKey(input.ownerEmail);
   if (!owner) throw new Error("ownerEmail is required"); // AC-C7: never an unowned passage
   const source = trinnexSourceKey(input.sourceKind, input.sourceId);
-  await deleteTrinnexSource(input.sourceId);
+  await deleteTrinnexSource(input.sourceId, owner);
 
   const { kind, passages } = chunkTrinnexSegments(input.segments);
   const chunkIds = new Set<string>();
@@ -270,7 +295,19 @@ export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<Tr
       at: p.at,
       page: p.page,
     };
-    const { id } = await store().writeChunk({ scope: "global", text: p.text, source, metadata, embedding: vec });
+    if (input.sourceKind === "meeting") {
+      // AC-M4 / RT-I4: the Fireflies title (S-C8 fallback) and the speaker's ORIGINAL label (re-mapping).
+      metadata.fireflies_title = clean(input.firefliesTitle) ?? input.title;
+      metadata.speaker_label = p.speakerLabel ?? p.speaker;
+    }
+    const { id } = await store().writeChunk({
+      scope: "global",
+      agentId: trinnexOwnerTag(owner),
+      text: p.text,
+      source,
+      metadata,
+      embedding: vec,
+    });
     if (!chunkIds.has(id)) {
       chunkIds.add(id);
       written.push({ id, text: p.text });
@@ -293,7 +330,7 @@ export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<Tr
     const res = await store().writeTriples(
       triples.map((t) => ({
         scope: "agent" as const,
-        agentId: source,
+        agentId: trinnexFactKey(source, owner),
         subject: t.subject.trim(),
         predicate: t.predicate.trim(),
         object: t.object.trim(),
@@ -318,19 +355,28 @@ export async function ingestTrinnexSource(input: TrinnexIngestInput): Promise<Tr
  * and leave them searchable (AC-L7). Then the passages. A failure between the two leaves passages only,
  * and a retry finishes the job (AC-L8).
  */
-export async function deleteTrinnexSource(sourceId: string): Promise<{ chunks: number; facts: number }> {
+export async function deleteTrinnexSource(sourceId: string, ownerEmail: string): Promise<{ chunks: number; facts: number }> {
   if (!trinnexConfigured()) throw new TrinnexNotConfiguredError();
+  // RT-I3: only the CALLER-OWNER's rows. No owner means no delete at all, never an unscoped one.
+  const owner = ownerKey(ownerEmail);
+  if (!owner) throw new Error("ownerEmail is required");
   const sources = [trinnexSourceKey("meeting", sourceId), trinnexSourceKey("upload", sourceId)];
+  const factKeys = sources.map((s) => trinnexFactKey(s, owner));
   const pool = deps.getPool();
   try {
+    // Facts: this owner's fact key, or any fact pointing at one of THIS owner's passages (which also catches
+    // facts written before the owner was part of the key, agent_id = bare source).
     const f = await pool.query(
       `DELETE FROM rag_triples
-        WHERE agent_id = ANY($1::text[])
-           OR source_chunk_id IN (SELECT id FROM rag_chunks WHERE source = ANY($1::text[]))
+        WHERE agent_id = ANY($3::text[])
+           OR source_chunk_id IN (SELECT id FROM rag_chunks WHERE source = ANY($1::text[]) AND lower(metadata->>'owner_email') = $2)
         RETURNING id`,
-      [sources],
+      [sources, owner, factKeys],
     );
-    const c = await pool.query(`DELETE FROM rag_chunks WHERE source = ANY($1::text[]) RETURNING id`, [sources]);
+    const c = await pool.query(
+      `DELETE FROM rag_chunks WHERE source = ANY($1::text[]) AND lower(metadata->>'owner_email') = $2 RETURNING id`,
+      [sources, owner],
+    );
     return { chunks: c.rows.length, facts: f.rows.length };
   } catch (err) {
     console.error(`[trinnex] delete failed code=${(err as { code?: string })?.code ?? "unknown"}`);

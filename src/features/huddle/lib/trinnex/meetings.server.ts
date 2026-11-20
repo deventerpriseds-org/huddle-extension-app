@@ -358,11 +358,18 @@ export async function saveMeeting(caller: Caller, input: SaveInput): Promise<Sav
       notes.push("Trinnex memory is not set up yet.");
     } else {
       try {
-        const segments = segmentsFor(sentences, speakerMap).map((x) => ({ text: x.text, speaker: x.speaker, at: x.at }));
+        // AC-M4 / RT-I4: each passage keeps the ORIGINAL speaker label next to the mapped person.
+        const segments = segmentsFor(sentences, speakerMap).map((x) => ({
+          text: x.text,
+          speaker: x.speaker,
+          speakerLabel: x.speakerLabel,
+          at: x.at,
+        }));
         const r = await mem.ingestTrinnexSource({
           sourceId: input.meetingId,
           sourceKind: "meeting",
           title: shown,
+          firefliesTitle: row.title ?? null, // AC-M4: the title as Fireflies sent it (S-C8 fallback)
           date: iso(row.meeting_at),
           series,
           participants,
