@@ -176,3 +176,30 @@ trinnex-bootstrap-allowlist 4/0, trinnex-integration 13/0, trinnex-library 23/0,
 
 **Replaced by ONE test, `scripts/trinnex-voice-none.test.ts` (VOICE-NONE, 3/0):** every src file whose path names "voice" (19 files: lib/voice/*, the voice hooks, AgentVoiceField) neither imports `trinnex/` nor names `search_trinnex` / `SEARCH_TRINNEX`; and the voice-memory file is byte-identical to `origin/main` (falls back to `main`; no ref at all FAILS, never skips).
 
+
+### 2. VC3a (MEDIUM, VERIFY-trinnex-workspace-3): lease renewed on a timer for the whole run
+
+**Finding.** runPipeline renewed the 3-minute lease only from its before-every-write `removed()` check, which ingest calls through `shouldStop`. A facts phase whose passages yield no facts makes no check: 40 passages at 15 s each gave a 600 s gap against the 180 s lease, so a heartbeat `claim()` could start a second concurrent ingest (double AI spend, and the first worker's `release()` then clears the second's lease).
+
+**Fix (library.server.ts).** `runPipeline` is now a wrapper: it starts a repeating renewal every `LEASE_RENEW_MS` (60 s) before any step, runs the steps (`runPipelineSteps`, the old body, unchanged), and stops the timer in a `finally`. The timer fires regardless of what the run writes. A failed renewal is logged by kind only (`lease_renew_error`) and never throws into the run. New optional `PipelineDeps.every(ms, fn) -> stop` (default `setInterval`, unref'd) exists only so a test can drive the timer from a fake clock. The old throttled renewal inside `removed()` is kept (LEASE3 still covers it); duplicate renewals are harmless.
+
+**Tests.**
+- `scripts/verify-trinnex-attack-3.test.ts` VC3a: was an OBSERVE probe; now asserts through the REAL runPipeline + REAL ingestTrinnexSource (fake pool, fake clock). Output: `shouldStop calls=41 maxGapSec=600; lease renewals=10 maxRenewGapSec=60 elapsedSec=640 lease=180s`. The shouldStop gap is still 600 s (by design; ingest makes no check without facts). The renewal gap is what matters, and it is now 60 s. attack-3 25/0.
+- `scripts/trinnex-removal-lease.test.ts` new LEASE6 "a run of 40 slow passages with 0 facts never lets a second claim succeed": models claim (lease until t+180 s), renewal (now+180 s) and a second worker that checks for a lapsed lease at every event instant. Output: `elapsed=1280s renewals=21 maxGapSec=60 secondClaims=0`. It also asserts the run outlives 3 leases, the renewal gap is at most `LEASE_RENEW_MS`, and no timer is left running after the run (the `finally`). Real `Date.now` is used, so the old `removed()` renewal never fires here: the test proves the TIMER on its own. removal-lease 6/0.
+
+### 3. Mutation proofs (mutate.sh)
+Anchors and replacements are in FILES at /tmp/claude-0/-home-user/5d755b8c-dcaa-530d-9f68-5c64e83e2a0f/scratchpad/lease4/{m1,m2,v1}.{a,r}. Test names are BARE. Test cmd: `bash .../lease4/t.sh <file>`, which runs `bun test ./<file>` and rewrites bun's `(fail) ` to `FAIL ` so mutate.sh can read it; the exit code is bun's. Note: passing `FAIL <name>` as the pattern gives UNDETERMINED (exit 4). Pass the bare name.
+
+| # | Guard (file) | Mutation | Test (bare name) | Outcome | exit |
+|---|---|---|---|---|---|
+| m1 | timer start (library.server.ts) | `const stopRenewing = renew` -> `= false` (no timer) | LEASE6 a run of 40 slow passages with 0 facts never lets a second claim succeed | FIRED (control EQUIVALENT) | 0 |
+| m2 | timer stop in `finally` | `stopRenewing();` -> `void stopRenewing;` | same | FIRED (control EQUIVALENT) | 0 |
+| v1 | VOICE-NONE (voice/realtime-tools.server.ts) | adds `import { SEARCH_TRINNEX_TOOL } from "../trinnex/search";` | VOICE-NONE no voice file imports lib/trinnex/ or names search_trinnex | FIRED (control EQUIVALENT) | 0 |
+
+Every run printed "restored: ... matches HEAD". Not mutation-proved: the byte-identity assertion of VOICE-NONE. It is an identity check by design, so a comment-only control would fire too.
+
+### Known, left as is
+LOW recency over-matches from VERIFY-trinnex-workspace-3 claim R: "last laugh" (R1) and "the last word" (R2) both parse as `{mostRecent:1}`. They stay as `test.failing` rows in verify-trinnex-attack-3 and are not fixed.
+
+### 4. Regression (one file per process, all rc=0; plain scripts run with `bun <file>`)
+trinnex-bootstrap-allowlist 4/0, trinnex-integration 13/0, trinnex-library 23/0, trinnex-live-sources 12/0, trinnex-meetings 34/0 (script), trinnex-memory 52/0, trinnex-names 43/0 (script), trinnex-people 5/0, trinnex-quota-surfacing 5/0, trinnex-redteam-fixes 19/0, -isolation 5/0, -names 5/0, -search 5/0, trinnex-removal-lease 6/0 (+LEASE6), trinnex-removal-race 11/0, trinnex-scope-gate 5/0, trinnex-voice-none 3/0 (new; replaces voice-guard and voice-history), verify-trinnex-attack 9/0, -2 5/0, -3 25/0 (R1/R2 are `test.failing`), rag-store-pool-param 3/0, memory-context 11/0, meeting-triage 69/0 (script), -sql 34/0 (script), -server 7/0 (script), actions-view 264/0 (script), -server 50/0 (script). Total: 727 pass, 0 fail across 27 files. `nice -n 10 npm run build` rc=0. No live calls and no real data. The lease fix is proven on fakes only; it is NOT confirmed live.
