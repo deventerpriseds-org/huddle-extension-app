@@ -1,5 +1,18 @@
 # Project Memory — huddle-extension-app
 
+## Trinnex workspace UAT fixes (2026-11-20, claude_trinnex-uat-fixes) -- ACT:trinnex-uat-fixes
+- Status (2026-11-20): main b930d488 has the workspace LIVE and Trinnex memory CONNECTED (deploy 44705109244). NOT owner-confirmed.
+- First UAT (verify-uat 44705323308 at 1000x680, 44705328676 at 390x844) found: Library "0 waiting" vs Meetings "29 to triage"
+  (firefliesWaiting matched ONE address; Fireflies rows sit under another linked address -> now uses callerOwners set,
+  test scripts/trinnex-library-count.test.ts); Meetings detail crushed when sidebar+context panel open (split is now a
+  CONTAINER query @2xl on the page width, not the md screen breakpoint); phone UAT clicks hit HIDDEN desktop copies
+  (script now clicks visible controls only).
+- The meeting titles that read like dates ARE the Fireflies titles: all 29 are date-time strings (azure-pg-query shape count).
+- Combined-run test flake: `bun test scripts/trinnex-*.test.ts` fails GUARD3 (trinnex-redteam-fixes) ONLY when files run together;
+  passes alone; identical on clean main b930d488 -> pre-existing ordering interference, not this change.
+- Stale-worktree hazard: NEVER `git checkout -B` in a reused worktree; use `git worktree add` fresh from origin/main and check
+  `git diff --stat origin/main` before every commit (2768fa9a reverted ~5,000 lines that way).
+
 ## Trinnex verifier loop-1 fixes (2026-11-20, claude_trinnex-workspace, PR #289, NOT merged, NOT live) -- ACT:trinnex-verify1-fixes
 - Library Remove vs the worker: `runRemoval` raises a tombstone (in-process + DB `removing` via `beginRemoval`) BEFORE deleting; the pipeline and `ingestTrinnexSource({shouldStop})` check it before every write. A worker holding the lease owns the deletes (Remove returns `pending`), so the row outlives every passage. A `removing` row older than 2 min is finished by the heartbeat claim.
 - bootstrap-trinnex-db.yml never writes `azure.extensions` after a failed/empty read; it only appends VECTOR (scripts/trinnex-extensions-allowlist.sh). The allow-list is shared by every DB on eds-postgresql.

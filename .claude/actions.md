@@ -5550,3 +5550,8 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
       2026-11-20 restore #290 merged (14ae195b, deploy 44703999311): main == reviewed 8755f8e3 + 3 intended files. Bootstrap
       44704265091 OK (Trinnex_Memory: vector, rag_chunks/rag_triples, dedup indexes, 0 rows). deploy-swa's Trinnex step had the
       same `db show -d` bug -> TRINNEX_PG_URL left empty (Trinnex still OFF). Fix: claude_trinnex-deploy-dbflag.
+- [~] 2026-11-20 ACT:trinnex-uat-fixes -- the first live UAT of the Trinnex workspace (verify-uat 44705323308 desktop 9/10,
+      44705328676 phone 3/5) found three defects, fixed on claude_trinnex-uat-fixes: (1) Library's Fireflies "waiting for triage"
+      count used one address, Meetings uses the linked-address set -> 0 vs 29; (2) Meetings detail pane one word wide with both
+      panels open at 1000px -> container query; (3) UAT script clicked hidden desktop controls on the phone and looked for the
+      composer outside the chat view. Evidence: docs/qc-evidence/BUILD-trinnex-uat-fixes.md. NOT owner-confirmed.
