@@ -30,3 +30,37 @@ export function getSharedPool(): Pool {
   _shared.on("error", (e) => console.error("[shared-pool] idle client error:", e.message));
   return _shared;
 }
+
+// ── Trinnex memory pool (Trinnex workspace, AC-M1/M3) ─────────────────────────────────────────────────
+// A SECOND database (`Trinnex_Memory`) on the SAME server, so it lives in this file: the server allows 50
+// connections shared with other apps (see header), and scripts/shared-pool.test.ts keeps every pool here.
+// Kept at 2 per instance: Trinnex traffic is one owner's ingestion + Iris/Eli searches. Absent
+// TRINNEX_PG_URL means "not set up yet" -- trinnexPgConfigured() is false and nothing is opened.
+
+/** Connections the Trinnex pool may hold per server instance. */
+export const TRINNEX_POOL_MAX = 2;
+
+let _trinnex: Pool | null = null;
+
+export function trinnexPgConfigured(): boolean {
+  return !!process.env.TRINNEX_PG_URL?.trim();
+}
+
+export function getTrinnexPool(): Pool {
+  if (_trinnex) return _trinnex;
+  const url = process.env.TRINNEX_PG_URL?.trim();
+  if (!url) throw new Error("TRINNEX_PG_URL not configured");
+  // Never the personal memory database: a mis-assembled setting must fail, not silently mix the two.
+  if (/\/RAG_AI_Agents(\?|$)/i.test(url) || url === process.env.AZURE_PG_URL?.trim()) {
+    throw new Error("TRINNEX_PG_URL points at the personal memory database; refusing");
+  }
+  _trinnex = new Pool({
+    connectionString: url,
+    ssl: { rejectUnauthorized: false },
+    max: TRINNEX_POOL_MAX,
+    idleTimeoutMillis: 20_000,
+    connectionTimeoutMillis: 15_000,
+  });
+  _trinnex.on("error", (e) => console.error("[trinnex-pool] idle client error:", e.message));
+  return _trinnex;
+}

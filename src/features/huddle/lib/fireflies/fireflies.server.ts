@@ -36,6 +36,7 @@ import {
   planEmail,
   retryDelaySec,
   safeMeetingId,
+  transcriptFileName,
   SUMMARY_WAIT_MS,
   TRANSCRIPT_WAIT_MS,
   STANDARD_SUMMARY_NOTICE,
@@ -308,7 +309,7 @@ export function minutesOwner(): string {
   return (env("FIREFLIES_OWNER_EMAIL") || onedriveMailbox()).toLowerCase();
 }
 
-async function saveTranscript(transcript: FirefliesTranscript, meetingId: string): Promise<string> {
+async function saveTranscript(transcript: FirefliesTranscript, meetingId: string, chosenName?: string | null): Promise<string> {
   if (!graphEmailConfigured()) throw new Error("graph_not_configured");
   const mailbox = onedriveMailbox();
   if (!mailbox) throw new Error("onedrive_mailbox_not_configured");
@@ -321,8 +322,9 @@ async function saveTranscript(transcript: FirefliesTranscript, meetingId: string
   const bytes = new TextEncoder().encode(formatTranscript(transcript));
   if (bytes.length > MAX_TRANSCRIPT_BYTES) throw new Error("transcript_too_large");
 
-  // Stable meeting-id filename: a retry or a Fireflies resend overwrites the same file (Graph PUT by path).
-  const path = TRANSCRIPT_FOLDER + "/fireflies-" + id + ".md";
+  // Stable filename: a retry or a Fireflies resend overwrites the same file (Graph PUT by path). Trinnex AC-T8: a
+  // name the owner chose in Meetings triage (onedrive_file_name) wins, so a resend never recreates fireflies-<id>.md.
+  const path = TRANSCRIPT_FOLDER + "/" + transcriptFileName(id, chosenName);
   const response = await fetch(GRAPH + graphUserPath(mailbox) + "/root:/" + encodePath(path) + ":/content", {
     method: "PUT",
     headers: { Authorization: "Bearer " + token, "Content-Type": "text/markdown; charset=utf-8" },
@@ -331,6 +333,32 @@ async function saveTranscript(transcript: FirefliesTranscript, meetingId: string
   });
   if (!response.ok) throw new Error("onedrive_upload_" + response.status);
   return "/" + path;
+}
+
+/** Trinnex AC-T7/T9 (2026-11-20): MOVE the saved transcript to the owner's chosen name (Graph PATCH name, never a
+ *  copy). Returns the new path, or throws an error CODE ("onedrive_rename_409" ...); the caller keeps the old path
+ *  and tells the owner "File name not changed". */
+export async function renameTranscriptFile(meetingId: string, currentPath: string | null, chosenName: string): Promise<string> {
+  if (!graphEmailConfigured()) throw new Error("graph_not_configured");
+  const mailbox = onedriveMailbox();
+  if (!mailbox) throw new Error("onedrive_mailbox_not_configured");
+  const id = safeMeetingId(meetingId);
+  if (!id) throw new Error("invalid_meeting_id");
+  const from = (currentPath || "/" + TRANSCRIPT_FOLDER + "/" + transcriptFileName(id, null)).replace(/^\/+/, "");
+  if (!from.startsWith(TRANSCRIPT_FOLDER + "/")) throw new Error("onedrive_rename_bad_path");
+  const name = transcriptFileName(id, chosenName);
+  const to = TRANSCRIPT_FOLDER + "/" + name;
+  if (to === from) return "/" + to;
+  const token = await getAppToken();
+  const response = await fetch(GRAPH + graphUserPath(mailbox) + "/root:/" + encodePath(from), {
+    method: "PATCH",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    // conflictBehavior fail: never silently overwrite another file of that name (a 409 is reported to the owner).
+    body: JSON.stringify({ name, "@microsoft.graph.conflictBehavior": "fail" }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw new Error("onedrive_rename_" + response.status);
+  return "/" + to;
 }
 
 /** The default recipients: the owner's own linked addresses (identity.profile_emails) that Huddle's
@@ -586,7 +614,7 @@ export async function processMeeting(
       : Promise.resolve(undefined),
     row.pending_onedrive
       ? (async () => {
-          const path = await saveTranscript(t, id);
+          const path = await saveTranscript(t, id, row.onedrive_file_name);
           await store.recordOneDrive(id, v, { ok: true, path });
           return { ok: true as const, path };
         })()

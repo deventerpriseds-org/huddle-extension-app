@@ -1,0 +1,92 @@
+# WHAT:          One-shot, idempotent provisioning of the Trinnex memory database: creates database
+#                `Trinnex_Memory` on the EXISTING server `eds-postgresql` if it is missing, enables `vector`,
+#                and runs the SAME BOOTSTRAP_SQL the personal memory uses (lib/rag/azure-pg.server.ts),
+#                plus the owner_entra_oid columns writeChunk/writeTriples insert (sql/rag_ai_agents/001).
+# WHY:           Owner decision "A" (2026-11-20): Trinnex work material lives in a SEPARATE database that only
+#                iris-chase and eli-vaughn can search (AC-M1, AC-M2). Memory is never auto-bootstrapped
+#                (CLAUDE.md "The canonical Azure DB is PINNED"), so this is an explicit, dispatched step.
+# COST:          a new DATABASE on the existing server bills $0 while idle (no new server, no compute,
+#                storage is the server's existing allocation). Idle cost: $0/month.
+# SUPERSEDES:    nothing. SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:      docs/qc-evidence/AC-trinnex-workspace.md AC-M1/M2; docs/qc-evidence/BUILD-trinnex-memory.md.
+#
+# workflow_dispatch ONLY -- deliberately NO push trigger, so pushing this file never runs it.
+# After a green run, the NEXT deploy-swa.yml run writes TRINNEX_PG_URL (it stays empty until the DB exists).
+name: Bootstrap Trinnex DB
+
+on:
+  workflow_dispatch: {}
+
+env:
+  AZURE_RESOURCE_GROUP: EnterpriseDS_ResourceGRP
+  TRINNEX_PG_SERVER: eds-postgresql
+  TRINNEX_PG_DB: Trinnex_Memory
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Render the bootstrap SQL from code (never a copy)
+        run: |
+          set -euo pipefail
+          bun install --no-save >/dev/null 2>&1 || bun install --no-save
+          bun scripts/print-trinnex-bootstrap-sql.ts > /tmp/trinnex-bootstrap.sql
+          echo "Rendered $(wc -c < /tmp/trinnex-bootstrap.sql) bytes of bootstrap SQL."
+
+      - uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Create the database if missing, then run the bootstrap
+        env:
+          PG_PW: ${{ secrets.AZURE_ADMIN_PW }}
+        run: |
+          set -euo pipefail
+          RG="$AZURE_RESOURCE_GROUP"; SRV="$TRINNEX_PG_SERVER"; DB="$TRINNEX_PG_DB"
+          if [ "$DB" = "postgres" ] || [ "$DB" = "RAG_AI_Agents" ]; then echo "::error::refusing DB $DB"; exit 1; fi
+          if az postgres flexible-server db show -g "$RG" -s "$SRV" -d "$DB" -o none 2>/dev/null; then
+            echo "Database $SRV/$DB already exists."
+          else
+            az postgres flexible-server db create -g "$RG" -s "$SRV" -d "$DB" -o none
+            echo "Created database $SRV/$DB."
+          fi
+          # vector must be allow-listed on the server (it already is for RAG_AI_Agents; append-only check).
+          CURRENT=$(az postgres flexible-server parameter show -g "$RG" -s "$SRV" --name azure.extensions --query value -o tsv 2>/dev/null || echo "")
+          if ! printf '%s' "$CURRENT" | tr ',' '\n' | grep -qix 'vector'; then
+            if [ -z "$CURRENT" ]; then NEW="VECTOR"; else NEW="${CURRENT},VECTOR"; fi
+            az postgres flexible-server parameter set -g "$RG" -s "$SRV" --name azure.extensions --value "$NEW" -o none
+            echo "Allow-listed VECTOR on $SRV."
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          HOST=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query fullyQualifiedDomainName -o tsv)
+          ADMIN=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query administratorLogin -o tsv)
+          IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          RULE="ghq-trinnex-${IP//./-}"
+          az postgres flexible-server firewall-rule create -g "$RG" --server-name "$SRV" \
+            --name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" --only-show-errors >/dev/null \
+            || echo "::warning::firewall-rule create failed (relying on existing rules)."
+          trap 'az postgres flexible-server firewall-rule delete -g "$RG" --server-name "$SRV" --name "$RULE" --yes --only-show-errors || echo "::warning::firewall rule $RULE NOT removed -- delete it by hand."' EXIT
+          sleep 8
+          EADMIN=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$ADMIN")
+          EPW=$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$PG_PW")
+          URL="postgresql://${EADMIN}:${EPW}@${HOST}:5432/${DB}?sslmode=require"
+          echo "::add-mask::$URL"
+          psql "$URL" -v ON_ERROR_STOP=1 --pset pager=off -f /tmp/trinnex-bootstrap.sql
+          echo "=== verify (AC-M2) ==="
+          psql "$URL" -v ON_ERROR_STOP=1 --pset pager=off \
+            -c "SELECT current_database();" \
+            -c "SELECT extname FROM pg_extension WHERE extname='vector';" \
+            -c "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('rag_chunks','rag_triples') ORDER BY 1;" \
+            -c "SELECT indexname FROM pg_indexes WHERE schemaname='public' AND indexname IN ('rag_chunks_dedup_idx','rag_triples_dedup_idx') ORDER BY 1;" \
+            -c "SELECT count(*) AS chunks FROM rag_chunks;" -c "SELECT count(*) AS facts FROM rag_triples;"
+          echo "Done. Next: run deploy-swa.yml so TRINNEX_PG_URL is written to the app settings."

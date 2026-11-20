@@ -14,6 +14,8 @@ export interface ChunkRow {
   authorAgentIds: string[];
   score?: number;
   createdAt: string;
+  /** Present only when SearchChunksInput.withMetadata was set (Trinnex search cites from it). */
+  metadata?: Record<string, unknown>;
 }
 
 export interface TripleRow {
@@ -68,6 +70,12 @@ export interface SearchChunksInput {
   mode?: SharingMode;
   /** Reuse an existing embedding of `query` rather than re-embedding it. */
   queryVec?: number[];
+  /** Restrict to these exact `source` values (Trinnex: one or more `trinnex:<kind>:<id>`). */
+  sources?: string[];
+  /** Case-insensitive equality on `metadata->>key` for each entry (Trinnex: speaker). */
+  metadataMatch?: Record<string, string>;
+  /** Also return each row's `metadata` (Trinnex citations). */
+  withMetadata?: boolean;
 }
 
 export interface LookupTriplesInput {

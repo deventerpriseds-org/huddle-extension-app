@@ -50,19 +50,31 @@ function getPool(): Pool {
   return _pool;
 }
 
-async function q<T extends Record<string, unknown> = Record<string, unknown>>(
-  sql: string,
-  params?: unknown[],
-) {
-  try {
-    return await getPool().query<T>(sql, params);
-  } catch (err) {
-    throw new RagStoreUnavailableError(
-      `Azure Postgres query failed: ${err instanceof Error ? err.message : String(err)}`,
-      err,
-    );
-  }
+/**
+ * The pool a store runs against, as a PARAMETER (AC-M3, Trinnex workspace). The SAME store code serves
+ * the main Huddle database (getPool -> getSharedPool) and the separate Trinnex database
+ * (lib/trinnex/memory.server.ts -> getTrinnexPool). Only the structural `query` method is needed, which
+ * is also what lets a test hand in a fake pool.
+ */
+export type PoolLike = Pick<Pool, "query">;
+
+function makeQuery(getP: () => PoolLike, label: string) {
+  return async function q<T extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    params?: unknown[],
+  ) {
+    try {
+      return await (getP() as Pool).query<T>(sql, params);
+    } catch (err) {
+      throw new RagStoreUnavailableError(
+        `${label} query failed: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      );
+    }
+  };
 }
+
+const q = makeQuery(getPool, "Azure Postgres");
 
 /**
  * The rag_chunks write-time dedup key, as ONE string interpolated into BOTH the CREATE UNIQUE INDEX
@@ -497,8 +509,25 @@ function scopeClause(
   return { sql: `TRUE`, params: [] as unknown[] };
 }
 
-export const azurePgStore: RagStore = {
+export interface RagStoreOptions {
+  /** The pool every store method queries. Called per query, so a lazily-created pool works. */
+  getPool: () => PoolLike;
+  /** Prefix for RagStoreUnavailableError messages, e.g. "Trinnex Postgres". */
+  label?: string;
+  /** Override bootstrap()/ping(). Default: the main database's runBootstrap()/diagnoseAzurePg(). */
+  bootstrap?: () => Promise<void>;
+  ping?: RagStore["ping"];
+}
+
+/**
+ * Build a RagStore over the given pool. `azurePgStore` below is this over the shared Huddle pool;
+ * its SQL is pinned byte-for-byte by scripts/rag-store-pool-param.test.ts.
+ */
+export function createRagStore(opts: RagStoreOptions): RagStore {
+  const q = makeQuery(opts.getPool, opts.label ?? "Azure Postgres");
+  const store: RagStore = {
   async bootstrap() {
+    if (opts.bootstrap) return opts.bootstrap();
     const r = await runBootstrap();
     if (!r.ok) {
       throw new RagStoreUnavailableError(
@@ -509,6 +538,7 @@ export const azurePgStore: RagStore = {
   },
 
   async ping() {
+    if (opts.ping) return opts.ping();
     // Kept for the RagStore interface but the diagnostic fn is what the UI uses.
     const d = await diagnoseAzurePg();
     if (d.handshake.ok && d.server.version) {
@@ -748,12 +778,22 @@ export const azurePgStore: RagStore = {
     if (kRequested > 20) console.warn(`[rag] searchChunks k=${kRequested} clamped to ${k}`);
     const clause = scopeClause(input.mode, input.scope, input.agentId);
     const params: unknown[] = [toPgVector(vec)];
-    const where = clause.sql.replace("$AGENT", `$${params.length + 1}`);
+    let where = clause.sql.replace("$AGENT", `$${params.length + 1}`);
     params.push(...clause.params);
+    // Optional filters (Trinnex search). Every one is ABSENT for every pre-existing caller, so their SQL
+    // is unchanged (pinned by scripts/rag-store-pool-param.test.ts).
+    if (input.sources) {
+      params.push(input.sources);
+      where += ` AND source = ANY($${params.length}::text[])`;
+    }
+    for (const [key, value] of Object.entries(input.metadataMatch ?? {})) {
+      params.push(key, value);
+      where += ` AND lower(metadata->>$${params.length - 1}) = lower($${params.length})`;
+    }
     params.push(k);
 
     const { rows } = await q(
-      `SELECT id, scope, agent_id, text, source, created_at, author_agent_ids,
+      `SELECT id, scope, agent_id, text, source, created_at, author_agent_ids,${input.withMetadata ? " metadata," : ""}
               1 - (embedding::halfvec(${EMBED_DIM}) <=> ($1::vector)::halfvec(${EMBED_DIM})) AS score
        FROM rag_chunks
        WHERE ${where}
@@ -771,8 +811,9 @@ export const azurePgStore: RagStore = {
         author_agent_ids: string[] | null;
         score: number | string;
         created_at: string;
+        metadata?: Record<string, unknown> | null;
       };
-      return {
+      const out: ChunkRow = {
         id: row.id,
         scope: row.scope,
         agentId: row.agent_id,
@@ -782,6 +823,8 @@ export const azurePgStore: RagStore = {
         score: Number(row.score),
         createdAt: row.created_at,
       };
+      if (input.withMetadata) out.metadata = row.metadata ?? {};
+      return out;
     });
   },
 
@@ -845,7 +888,11 @@ export const azurePgStore: RagStore = {
       };
     });
   },
-};
+  };
+  return store;
+}
+
+export const azurePgStore: RagStore = createRagStore({ getPool });
 
 export interface RoundTripResult {
   ok: boolean;

@@ -1,0 +1,145 @@
+{
+  "main": [
+    {
+      "sql": "INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata, author_agent_ids, owner_entra_oid) VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8) ON CONFLICT (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text))\n       DO UPDATE SET text = EXCLUDED.text,\n                     -- owner_entra_oid IS in the DO UPDATE, and that is the whole point of AC D2.\n                     -- Adding the column to the INSERT list alone stamps only rows that are BRAND NEW;\n                     -- every repeated utterance takes this conflict branch instead and would stay\n                     -- NULL-owned forever. The two rows measured NULL on 2026-09-08 are exactly the\n                     -- kind this path keeps re-touching.\n                     --\n                     -- COALESCE(existing, incoming) -- FIRST NON-NULL WRITER WINS, deliberately in\n                     -- this order. An existing NULL row is stamped (D2 satisfied); an owned row is\n                     -- never REASSIGNED to a later writer. Identical text under the same\n                     -- (scope, agent_id, source) is the dedup key, so with two people that collision\n                     -- is reachable, and silently flipping ownership on a shared row would be worse\n                     -- than the NULL it replaced.\n                     owner_entra_oid = COALESCE(rag_chunks.owner_entra_oid, EXCLUDED.owner_entra_oid),\n                     author_agent_ids = CASE\n                       WHEN EXCLUDED.author_agent_ids <@ rag_chunks.author_agent_ids\n                         THEN rag_chunks.author_agent_ids\n                       ELSE rag_chunks.author_agent_ids || EXCLUDED.author_agent_ids\n                     END RETURNING id",
+      "params": [
+        "global",
+        null,
+        "hello world",
+        "huddle:all-members",
+        "[0.1,0.2,0.3]",
+        {},
+        [
+          "iris-chase"
+        ],
+        "oid-1"
+      ]
+    },
+    {
+      "sql": "INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata, author_agent_ids, owner_entra_oid) VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8) ON CONFLICT (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text))\n       DO UPDATE SET text = EXCLUDED.text,\n                     -- owner_entra_oid IS in the DO UPDATE, and that is the whole point of AC D2.\n                     -- Adding the column to the INSERT list alone stamps only rows that are BRAND NEW;\n                     -- every repeated utterance takes this conflict branch instead and would stay\n                     -- NULL-owned forever. The two rows measured NULL on 2026-09-08 are exactly the\n                     -- kind this path keeps re-touching.\n                     --\n                     -- COALESCE(existing, incoming) -- FIRST NON-NULL WRITER WINS, deliberately in\n                     -- this order. An existing NULL row is stamped (D2 satisfied); an owned row is\n                     -- never REASSIGNED to a later writer. Identical text under the same\n                     -- (scope, agent_id, source) is the dedup key, so with two people that collision\n                     -- is reachable, and silently flipping ownership on a shared row would be worse\n                     -- than the NULL it replaced.\n                     owner_entra_oid = COALESCE(rag_chunks.owner_entra_oid, EXCLUDED.owner_entra_oid),\n                     author_agent_ids = CASE\n                       WHEN EXCLUDED.author_agent_ids <@ rag_chunks.author_agent_ids\n                         THEN rag_chunks.author_agent_ids\n                       ELSE rag_chunks.author_agent_ids || EXCLUDED.author_agent_ids\n                     END RETURNING id",
+      "params": [
+        "agent",
+        "finn-reid",
+        "x",
+        null,
+        "[0.1,0.2,0.3]",
+        {},
+        [],
+        null
+      ]
+    },
+    {
+      "sql": "UPDATE rag_triples SET superseded_at = now()\n             WHERE scope = $1 AND lower(subject) = lower($2) AND lower(predicate) = lower($3)\n               AND coalesce(agent_id, '') = coalesce($5, '')\n               AND lower(object) <> lower($4)\n               AND superseded_at IS NULL",
+      "params": [
+        "global",
+        "user",
+        "likes",
+        "tea",
+        null
+      ]
+    },
+    {
+      "sql": "INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id, author_agent_ids, owner_entra_oid)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (scope, coalesce(agent_id, ''), lower(subject), lower(predicate), md5(lower(object)), length(object)) WHERE superseded_at IS NULL\n         DO UPDATE SET confidence = greatest(rag_triples.confidence, EXCLUDED.confidence),\n                       created_at = now(),\n                       -- Same first-non-null-wins rule as writeChunk, for the same reason (AC D4):\n                       -- a re-asserted fact collapses onto the live row via this branch, so without\n                       -- it a repeated fact would never gain an owner.\n                       owner_entra_oid = COALESCE(rag_triples.owner_entra_oid, EXCLUDED.owner_entra_oid),\n                       author_agent_ids = CASE\n                         WHEN EXCLUDED.author_agent_ids <@ rag_triples.author_agent_ids\n                           THEN rag_triples.author_agent_ids\n                         ELSE rag_triples.author_agent_ids || EXCLUDED.author_agent_ids\n                       END RETURNING id",
+      "params": [
+        "global",
+        null,
+        "user",
+        "likes",
+        "tea",
+        0.8,
+        "c1",
+        [],
+        null
+      ]
+    },
+    {
+      "sql": "INSERT INTO rag_triples (scope, agent_id, subject, predicate, object, confidence, source_chunk_id, author_agent_ids, owner_entra_oid)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (scope, coalesce(agent_id, ''), lower(subject), lower(predicate), md5(lower(object)), length(object)) WHERE superseded_at IS NULL\n         DO UPDATE SET confidence = greatest(rag_triples.confidence, EXCLUDED.confidence),\n                       created_at = now(),\n                       -- Same first-non-null-wins rule as writeChunk, for the same reason (AC D4):\n                       -- a re-asserted fact collapses onto the live row via this branch, so without\n                       -- it a repeated fact would never gain an owner.\n                       owner_entra_oid = COALESCE(rag_triples.owner_entra_oid, EXCLUDED.owner_entra_oid),\n                       author_agent_ids = CASE\n                         WHEN EXCLUDED.author_agent_ids <@ rag_triples.author_agent_ids\n                           THEN rag_triples.author_agent_ids\n                         ELSE rag_triples.author_agent_ids || EXCLUDED.author_agent_ids\n                       END RETURNING id",
+      "params": [
+        "agent",
+        "a",
+        "s",
+        "p",
+        "o",
+        0.4,
+        null,
+        [],
+        null
+      ]
+    },
+    {
+      "sql": "SELECT id, scope, agent_id, text, source, created_at, author_agent_ids,\n              1 - (embedding::halfvec(3072) <=> ($1::vector)::halfvec(3072)) AS score\n       FROM rag_chunks\n       WHERE (scope = 'global' OR (scope = 'agent' AND agent_id = $2))\n       ORDER BY embedding::halfvec(3072) <=> ($1::vector)::halfvec(3072)\n       LIMIT $3",
+      "params": [
+        "[0.1,0.2,0.3]",
+        "iris-chase",
+        20
+      ]
+    },
+    {
+      "sql": "SELECT id, scope, agent_id, text, source, created_at, author_agent_ids,\n              1 - (embedding::halfvec(3072) <=> ($1::vector)::halfvec(3072)) AS score\n       FROM rag_chunks\n       WHERE (scope = 'agent' AND agent_id = $2)\n       ORDER BY embedding::halfvec(3072) <=> ($1::vector)::halfvec(3072)\n       LIMIT $3",
+      "params": [
+        "[0.1,0.2,0.3]",
+        "iris-chase",
+        6
+      ]
+    },
+    {
+      "sql": "SELECT id, scope, agent_id, text, source, created_at, author_agent_ids,\n              1 - (embedding::halfvec(3072) <=> ($1::vector)::halfvec(3072)) AS score\n       FROM rag_chunks\n       WHERE scope = 'global'\n       ORDER BY embedding::halfvec(3072) <=> ($1::vector)::halfvec(3072)\n       LIMIT $2",
+      "params": [
+        "[0.1,0.2,0.3]",
+        6
+      ]
+    },
+    {
+      "sql": "SELECT id, scope, agent_id, text, source, created_at, author_agent_ids,\n              1 - (embedding::halfvec(3072) <=> ($1::vector)::halfvec(3072)) AS score\n       FROM rag_chunks\n       WHERE scope = 'global'\n       ORDER BY embedding::halfvec(3072) <=> ($1::vector)::halfvec(3072)\n       LIMIT $2",
+      "params": [
+        "[0.1,0.2,0.3]",
+        20
+      ]
+    },
+    {
+      "sql": "SELECT id, scope, agent_id, subject, predicate, object, confidence, created_at, author_agent_ids\n       FROM rag_triples\n       WHERE (scope = 'global' OR (scope = 'agent' AND agent_id = $1)) AND subject ILIKE $2 AND predicate ILIKE $3 AND to_tsvector('english', subject || ' ' || predicate || ' ' || object) @@ plainto_tsquery('english', $4) AND superseded_at IS NULL\n       ORDER BY confidence DESC, created_at DESC\n       LIMIT $5",
+      "params": [
+        "x",
+        "%user%",
+        "%likes%",
+        "tea",
+        8
+      ]
+    },
+    {
+      "sql": "SELECT id, scope, agent_id, subject, predicate, object, confidence, created_at, author_agent_ids\n       FROM rag_triples\n       WHERE (scope = 'agent' AND agent_id = $1)\n       ORDER BY confidence DESC, created_at DESC\n       LIMIT $2",
+      "params": [
+        "x",
+        30
+      ]
+    }
+  ],
+  "fallback": [
+    {
+      "sql": "INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata, author_agent_ids, owner_entra_oid) VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8) ON CONFLICT (scope, coalesce(agent_id, ''), coalesce(source, ''), md5(text), length(text))\n       DO UPDATE SET text = EXCLUDED.text,\n                     -- owner_entra_oid IS in the DO UPDATE, and that is the whole point of AC D2.\n                     -- Adding the column to the INSERT list alone stamps only rows that are BRAND NEW;\n                     -- every repeated utterance takes this conflict branch instead and would stay\n                     -- NULL-owned forever. The two rows measured NULL on 2026-09-08 are exactly the\n                     -- kind this path keeps re-touching.\n                     --\n                     -- COALESCE(existing, incoming) -- FIRST NON-NULL WRITER WINS, deliberately in\n                     -- this order. An existing NULL row is stamped (D2 satisfied); an owned row is\n                     -- never REASSIGNED to a later writer. Identical text under the same\n                     -- (scope, agent_id, source) is the dedup key, so with two people that collision\n                     -- is reachable, and silently flipping ownership on a shared row would be worse\n                     -- than the NULL it replaced.\n                     owner_entra_oid = COALESCE(rag_chunks.owner_entra_oid, EXCLUDED.owner_entra_oid),\n                     author_agent_ids = CASE\n                       WHEN EXCLUDED.author_agent_ids <@ rag_chunks.author_agent_ids\n                         THEN rag_chunks.author_agent_ids\n                       ELSE rag_chunks.author_agent_ids || EXCLUDED.author_agent_ids\n                     END RETURNING id",
+      "params": [
+        "global",
+        null,
+        "fb",
+        null,
+        "[0.1,0.2,0.3]",
+        {},
+        [],
+        null
+      ]
+    },
+    {
+      "sql": "INSERT INTO rag_chunks (scope, agent_id, text, source, embedding, metadata, author_agent_ids, owner_entra_oid) VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8) RETURNING id",
+      "params": [
+        "global",
+        null,
+        "fb",
+        null,
+        "[0.1,0.2,0.3]",
+        {},
+        [],
+        null
+      ]
+    }
+  ]
+}

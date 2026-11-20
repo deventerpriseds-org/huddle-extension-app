@@ -5516,3 +5516,23 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - PR deventerpriseds-org/huddle-extension-app#286. Verify loop 1: 6 CONFIRMED, C4 REFUTED (a failed settings read could write defaults over the saved list) -> fixed 2d23aef3; loop 2: 7/7 (VERIFY-alert-exclusions-1/2.md).
 - Data fix DONE: 7 owed minutes rows dismissed by id, settled_at = received_at (run 44374957433: owed 20 -> 13, minutes owed 0); undo SQL in DATAFIX-alert-exclusions-owed-minutes.md.
 - Remaining (was: PR -> verifier -> merge/deploy -> dismiss the 7 owed minutes rows (by id, with undo SQL) -> live dry run -> owner confirms no draft on the next minutes email.
+
+## ACT:trinnex-memory — Trinnex memory lane (separate DB, search for Iris + Eli only) (2026-11-20) — IN PROGRESS
+- **Asked for:** owner decision "A" (separate Trinnex database), "Huddle Iris and Eli first". Spec: `docs/qc-evidence/AC-trinnex-workspace.md` §3, §9, §10.
+- **Built on branch** `claude_trinnex-memory` (NOT merged, NOT deployed). Step log with test runs: `docs/qc-evidence/BUILD-trinnex-memory.md`.
+
+## ACT:trinnex-meetings -- Trinnex Meetings triage module (2026-11-20) -- IN PROGRESS
+**Asked for:** owner "go on prototype" (AC-trinnex-workspace.md s1, s5 name rows, s9, s10).
+- Build log + evidence: docs/qc-evidence/BUILD-trinnex-meetings.md. Branch claude_trinnex-meetings, NOT merged, NOT live.
+- Step 3 (pure triage core + 32 tests, meeting columns + people table, writer uses the chosen file name; BUILD step 3/3b).
+- Step 4 (server store + fns: lib/trinnex/meetings.server.ts, meetings.functions.ts; owner picks via EXISTING actOnProposal triage; AC-T2 source guard).
+- Step 5 (MeetingsView + PeoplePicker + Modules entry 'Meetings'; view wired in store/HuddleApp/ViewSwitcher).
+- Step 6 (4 mutation proofs FIRED; not-covered list in BUILD step 6).
+- Step 7 (build exit 0).
+## ACT:trinnex-library -- Trinnex Library app: upload, extract, ingest, remove (2026-11-20) -- BUILDING on claude_trinnex-library, NOT live
+- Lane of the Trinnex workspace build (spec docs/qc-evidence/AC-trinnex-workspace.md section 2). Step log + evidence: docs/qc-evidence/BUILD-trinnex-library.md.
+- [~] 2026-11-20 ACT:trinnex-workspace-build -- PR #289 (claude_trinnex-workspace @8755f8e3+). Lanes memory/meetings/library merged,
+      integration gaps closed, red-team 15 BROKEN -> 14 fixed (S1 kept by design), verifier loops 1-3: FIX FIRST, FIX FIRST,
+      MERGE-PENDING-UAT (docs/qc-evidence/VERIFY-trinnex-workspace-{1,2,3}.md). Voice guard REMOVED (voice cannot reach Trinnex;
+      it changed existing behaviour). Lease renewed on a timer. 727 tests pass. Next: merge -> deploy -> bootstrap-trinnex-db.yml
+      -> redeploy -> UAT via verify-uat.yml checks_file=.claude/skills/test-agent-serverfn/scripts/trinnex-checks.mjs. NOT owner-confirmed.

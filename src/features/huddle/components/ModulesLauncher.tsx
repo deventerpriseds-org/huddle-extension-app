@@ -11,7 +11,7 @@
 // EVIDENCE:   docs/qc-evidence/AC-actions-view-modules.md section A; docs/qc-evidence/BUILD-actions-view.md.
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, Inbox, LayoutDashboard, ListChecks } from "lucide-react";
+import { CalendarDays, Inbox, LayoutDashboard, ListChecks, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -25,6 +25,7 @@ export const HUDDLE_MODULES: HuddleApp[] = [
   { id: "priorities", label: "Priorities", blurb: "Your ranked list and topics", icon: ListChecks, view: "priorities" },
   { id: "schedule", label: "Schedule", blurb: "Today's meetings, classes and tasks", icon: CalendarDays, view: "schedule" },
   { id: "actions", label: "Actions", blurb: "Mail, Teams and meetings that need you", icon: Inbox, view: "actions" },
+  { id: "meetings", label: "Meetings", blurb: "Triage titles, people and voices", icon: Mic, view: "meetings" },
 ];
 
 /** Views that count as "inside Modules", so the launcher shows as current there (AC-M-4, AC-M-9). */
