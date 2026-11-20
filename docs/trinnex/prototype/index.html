@@ -1,0 +1,78 @@
+<title>Trinnex Workspace</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!--
+WHAT:       Landing page of the Trinnex prototype: links the three clickable prototypes (Meetings triage,
+            Trinnex Library, Ask Iris) and lists what changes versus Huddle today.
+WHY:        Owner 2026-11-20: "Let's confirm the prototype before adding the module".
+SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+EVIDENCE:   docs/trinnex/prototype/{base.css,data.js,shell.html}; lib/proposals/meeting-triage.ts (today's
+            Mine / For someone / Skip); lib/fireflies/minutes-store.server.ts (chat.fireflies_meetings).
+-->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="base.css">
+<style>
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 820px) { .grid3 { grid-template-columns: 1fr; } }
+  .proto { display: flex; flex-direction: column; gap: 8px; text-decoration: none; color: inherit; }
+  .proto:hover { box-shadow: var(--shadow-hair), var(--shadow-pop); }
+  .proto .where { font-size: 12px; color: var(--muted-foreground); }
+  .open { margin-top: auto; color: var(--primary); font-weight: 600; font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--border); }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-foreground); font-weight: 600; border-top: 0; }
+  .scroll { overflow-x: auto; }
+  .sample { font-size: 12px; color: var(--band-cream-text); background: var(--band-cream); border-radius: calc(var(--radius) - 2px); padding: 6px 10px; }
+</style>
+<div class="shell">
+  <nav class="rail" aria-label="Huddle">
+    <div class="rail-group"><span class="rail-logo" aria-hidden="true">H</span></div>
+    <div class="rail-group"><span class="rail-you">You</span></div>
+  </nav>
+  <main class="main">
+    <div class="page">
+      <div class="stack">
+        <span class="eyebrow">Prototype for review</span>
+        <h1 class="h-page">Trinnex workspace in Huddle</h1>
+        <p class="muted" style="margin:0;max-width:65ch">Three pieces that work together: triage Fireflies meetings so they carry real titles, people and owners; load Trinnex files into a library; then ask Iris or Eli about any of it and get answers with sources. Everything is clickable. Nothing is saved.</p>
+        <p class="sample">All people, meetings and policies shown are invented examples, not your data.</p>
+        <div class="legend"><span><span class="new-tag">New</span> added by this proposal</span><span><span class="changed-tag">Changes today's flow</span> alters something Huddle already does</span><span>Everything unmarked is Huddle as it is today</span></div>
+      </div>
+
+      <div class="grid3">
+        <a class="card proto" href="meetings.html">
+          <span class="eyebrow">1 · Modules › Meetings</span>
+          <h2 class="h-section">Meeting triage</h2>
+          <p class="where" style="margin:0">Edit vague Fireflies titles, add participants as tags (and to the title and OneDrive file name if you want), pick who owns each action item. Von is always first; names you add stay in the list.</p>
+          <span class="open">Open the prototype →</span>
+        </a>
+        <a class="card proto" href="library.html">
+          <span class="eyebrow">2 · Apps › Trinnex Library</span>
+          <h2 class="h-section">Trinnex data loader</h2>
+          <p class="where" style="margin:0">Drop in policies, decks, notes and transcripts. Each one is split into passages and short facts, then becomes searchable. Triaged meetings arrive here on their own.</p>
+          <span class="open">Open the prototype →</span>
+        </a>
+        <a class="card proto" href="ask.html">
+          <span class="eyebrow">3 · Huddles › Iris 1:1</span>
+          <h2 class="h-section">Ask about your work</h2>
+          <p class="where" style="margin:0">"What did Michael say was the outcome?", "To-dos from the last Engineering Leaders meeting?", "Travel points policy?" Answers cite the meeting, speaker and time, or the page.</p>
+          <span class="open">Open the prototype →</span>
+        </a>
+      </div>
+
+      <section class="card stack">
+        <h2 class="h-section">What changes compared with today</h2>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Huddle today</th><th>With this</th><th>Why</th><th>What you notice</th><th>Reversible</th></tr></thead>
+            <tbody>
+              <tr><td>A Fireflies meeting keeps Fireflies' title; OneDrive file is <code>fireflies-&lt;id&gt;.md</code>; no participants field</td><td>Editable title, optional series, participants stored as tags; optional rename of the OneDrive file to <code>date title - people.md</code></td><td>Vague titles make meetings unfindable, for you and for Iris</td><td>A Meetings page under Modules; nicer file names if you turn the rename on</td><td>Yes. The original Fireflies title is kept beside your edit</td></tr>
+              <tr><td>Action item triage: Mine / For someone (you type a name) / Skip</td><td><span class="changed-tag">Changes today's flow</span> Owner picker: Von first and pinned, then your people list, then "add new name". Skip stays</td><td>No more retyping names; spelling stays consistent, so "what does Michael owe me" works</td><td>A dropdown instead of a text box, here and in Actions › Meetings</td><td>Yes. Same stored fields (Mine = you, For someone = the picked name)</td></tr>
+              <tr><td>Transcripts are emailed and saved to OneDrive, but never put in memory</td><td>After triage, a meeting's transcript goes into a Trinnex collection in your existing memory (passages + facts), with title, date, series, people and speaker attached</td><td>So Iris and Eli can answer from your conversations</td><td>Answers in chat cite the meeting and time</td><td>Yes. Remove a meeting or file from the Library and it leaves memory</td></tr>
+              <tr><td>No way to add work documents to memory</td><td>Trinnex Library app: upload, tag, see what was learned, remove</td><td>Policy and file questions ("travel points") need the source document</td><td>A new entry under Apps</td><td>Yes</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
