@@ -229,3 +229,36 @@ my new phrasings
 - **Container:** `trinnex-library` is created with `createIfNotExists()` and no `access` argument, so it is private (blob.server.ts:48-49).
 - **Logs:** Library log lines carry `id`/`step`/`reason`/counts; Meetings logs pass through `code()` (slug-only); memory logs kinds and counts. LOW: `shared-pool.server.ts` logs a pg idle-client `e.message`. pg connection errors do not carry content, so this is not a content leak.
 
+## Radius challenge
+
+The stated radius left out two files that do sit on claim 2b:
+- `library.functions.ts` upload **Replace** (l.94-98): a UI path to a second Remove.
+- `setSpeakerMap` in `library.server.ts` (l.450-451): clears the worker's lease.
+
+Both were tested above (VB1/VB1c, VB2b). `voice/voice-memory.functions.ts` is a personal-memory writer outside the radius; claim 1 covers it (LOW, inference).
+
+## SUMMARY
+
+| claim | verdict | key evidence |
+|---|---|---|
+| S suite + build | PASS | all Trinnex suites 0 fail, VA1-VA9 9/0, build rc=0; fireflies G3/G5/G8 fail identically with main's fireflies files |
+| 1 isolation | PASS | gate on both paths + executor; 7 URL spellings; writer sweep (voice writer LOW) |
+| 2b Remove during processing | **FAIL** | VB1: 2nd Remove bypasses defer-to-worker, transient orphan. VB1c: worker death -> 1 passage left with no Library row, permanent. VB2b: `setSpeakerMap` clears the lease, same window |
+| 3 fact provenance | PASS | single writer, `sourceChunkId: w.id`, facts deleted first |
+| 4 spelling table | PASS | 28/0 incl. RT-S5a..h |
+| 5 assignee shape | PASS | T13 5/0; `lib/proposals/` diff empty |
+| 6 deploy/secret/pool/container/logs | PASS | pinned + hard-fail on wrong DB; 6 existing secrets; max 2; private container |
+| B bootstrap allow-list | PASS | empty/blank/no-arg rc=2; append-only; mixed case/spaces UNCHANGED; read error aborts |
+| Q quota kinds | PASS | `SECRET` marker never appears; quota/no_api_key surfaced via runAsAiJob+noteAiFailure; `ingest_failed:<kind>` |
+| G group exposure | PASS (LOW) | real client gated; spoofed huddleId/scope accepted because members are not cross-checked, owner-only impact |
+| R recency | PASS loop-1 rows; LOW new | last resort / last-ditch / last but not least / last mile / last couple of weeks over-match; "past few months" under-matches |
+| M mutation | PASS | RT-I5 FIRED (ctrl EQUIV) exit 0; shouldStop FIRED; defer-to-worker FIRED; drop-runRemoval-tombstone INERT (equivalent, not proven) |
+
+UI was not looked at in a browser this loop (Removing... label, Removal incomplete state). That would be MERGE-PENDING-UAT on its own, but FIX FIRST takes precedence.
+
+**Verdict: FIX FIRST.** A delete can leave rows. A second Remove (direct server call, or a second upload Replace) or a speaker remap mid-run makes `beginRemoval` report `in_flight=false` while a worker is still writing. If the worker dies in that window, a passage survives with no Library row (VB1c), and nothing can find it to remove it.
+
+Probable fix, for the builder to decide:
+- make `in_flight` depend on the lease alone, or include `removing` in the status list;
+- stop `setSpeakerMap` clearing a live lease;
+- renew the lease, or re-check it, during long runs.
