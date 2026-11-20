@@ -60,3 +60,77 @@ RT-S6a-g and RT-S5a-h re-ran green inside trinnex-memory (52/0). Four of my own 
 - **R2 "who gets the last word on pricing" -> `{"mostRecent":1}` (expected null) LOW over-match**
 Effect: the search is narrowed to the single newest source, so the answer can be a false miss or come from the wrong
 meeting. Narrowing only; never widens scope or crosses owners. R1/R2 are committed as `test.failing` (suite: 25 pass 0 fail).
+
+### V. Voice guard -- PASS on safety; this is a BEHAVIOUR CHANGE for the owner to approve
+- `git diff origin/main...HEAD -- voice/voice-memory.functions.ts`: a single +22-line hunk inserted BEFORE the unchanged
+  personal-memory write. Nothing removed or edited. With `skip=false` the code path after it is main's, byte for byte.
+- `bun test ./scripts/trinnex-voice-guard.test.ts` -> `5 pass 0 fail`. VOICE3 asserts Iris's and Eli's replies are written exactly
+  as on main (`{text:"<id> (on a voice call): ...", source:"voice:dm-<id>"}`, `{ok,conversation,rag}` all true) when the 1:1 has
+  no Trinnex turn. VOICE5: every other agent is written as on main with ZERO history lookups.
+- Claim "voice is never seeded from the 1:1 conversation and cannot call search_trinnex", by reading:
+  `useVoiceCallRealtimeSpeak.ts:372-387` sends `getRealtimeSession({agentId, caller, huddleId, memoryQuery, webSearch, journey})`,
+  where `memoryQuery` = the text of the LAST dm-<agent> message. `realtime-tools.server.ts:153-166` uses it ONLY as the query for
+  `retrieveAgentMemory` (personal store) and injects the retrieved personal chunks, never the query text itself. No file under
+  `lib/voice/` mentions `search_trinnex` or trinnex (grep, excluding voice-memory's guard), and voice-toolset-hidden is 36/0.
+  So: CONFIRMED by reading. Trinnex content can reach a voice reply only if personal memory already holds it (the guards on
+  every personal writer, claim 1, keep that from happening) or if the owner says it aloud. The guard therefore blocks
+  nothing that can carry Trinnex content today. It is purely defensive.
+- **User-visible effect (needs the owner's go-ahead per huddle CLAUDE.md "never change existing behaviour without a thumbs-up"):**
+  | Today (main) | With this PR | Impact |
+  |---|---|---|
+  | Every spoken reply from Iris or Eli on a voice call is added to cross-conversation memory | Once the owner has EVER run a Trinnex search (likely even a refused `not_here` one: :2533 calls `recordToolUse(winner.id, "search_trinnex", ...)` for it too; that it lands in pending_turns `toolUses` as `{tool:"search_trinnex"}` is inference, not run) in Iris's (or Eli's) text 1:1, ALL of that agent's later spoken replies stop going into cross-conversation memory, permanently. They still land in that agent's own 1:1 thread | Other agents (and later recall in other huddles) cannot surface what Iris or Eli said on calls. Reversible by code |
+  Also: with an unresolved caller email (`ownerEmail` null) or when the guard fails to load, Iris's and Eli's spoken replies are
+  skipped (fail closed). On main they were written. LOW.
+
+### 1. Isolation -- PASS (re-checked)
+- VA1-VA8 re-ran green (verify-trinnex-attack 9/0). `trinnexAccess: true` appears exactly twice in agents.ts (lines 441
+  iris-chase, 610 eli-vaughn); `agentHasTrinnexAccess` is `=== true`. Both tool lists and the executor go through `trinnexHere` (G).
+- Every personal-memory writer (grep `writeChunk(` / `writeTriples(` across src): huddle.functions.ts:1162/1175/1195 write the
+  USER's own message (known, documented limit); :7873 `persistResearchedMemory` returns early on `turnUsedTrinnex(...)` (:7845);
+  voice-memory.functions.ts:97 is behind the V guard; rag.functions.ts:101/118 is the owner's manual "save memory" action;
+  trinnex/memory.server.ts:363/391 writes to the Trinnex pool only. No new unguarded writer.
+- URL guard, three spellings of my own, compared with what pg-connection-string would actually open:
+  `U1 sslmode + uppercase host -> guard=personal_db_name pg.database="RAG_AI_Agents"`;
+  `U2 percent-encoded underscores, lowercase -> guard=personal_db_name pg.database="rag_ai_agents"`;
+  `U3 empty authority, host in query (postgres:///RAG_AI_Agents?host=eds-postgresql...) -> guard=personal_db_name pg.database="RAG_AI_Agents" pg.host=eds-postgresql...`;
+  control `U4 .../trinnex -> ALLOWED`. Read pg-connection-string index.js:40-67: query params are copied first, then
+  `config.database` is ALWAYS overwritten from the pathname, so `?database=` cannot smuggle a name past the path check.
+
+### M. Mutation proofs (mutate.sh; anchors/replacements in FILES at /tmp/claude-0/-home-user/5d755b8c-dcaa-530d-9f68-5c64e83e2a0f/scratchpad/mut3/m{1,2,3}.{a,r}; BARE test names; test cmd `bash .../mut3/t.sh <file>` = `bun test ./<file>` with `(fail) ` rewritten to `FAIL `, exit = bun's)
+| # | Guard | Mutation | Test | Result | exit |
+|---|---|---|---|---|---|
+| m1 | live-source filter (memory.server.ts `const hits = candidates.filter((r) => live!.has(...))`) | `const hits = candidates;` | VC1a | `FIRED (control EQUIVALENT)` | 0 |
+| m2 | sweeper not-live predicate (`sweepEligible`: `if (live) return false;`) | `if (false) return false;` | VC2a | `FIRED (control EQUIVALENT)` | 0 |
+| m3 | lease-alone beginRemoval (library.server.ts `RETURNING (old.lease_until ... > now()) AS in_flight`) | adds `AND old.status <> 'removing'` (the old status-list shape) | LEASE1 | `FIRED (control EQUIVALENT)` | 0 |
+Each restore was asserted against HEAD by mutate.sh ("matches HEAD", "tree clean"). Caveat on m3: LEASE1 is a SOURCE-TEXT
+assertion on the SQL; with no Postgres here, the SQL's runtime behaviour is unproven. m1/m2 are behavioural (my own probes).
+
+### 3, 5, 6, Q -- reduced depth -- PASS
+- 3: ingestTrinnexSource writes every triple with `sourceChunkId: w.id` (memory.server.ts ~391-403); deletes remove facts BEFORE
+  passages; the sweeper uses the same deleteTrinnexSource. trinnex-memory 52/0.
+- 5: `git diff --stat origin/main...HEAD -- src/features/huddle/lib/proposals/` printed nothing (empty).
+- 6: the deploy pins `TRINNEX_PG_SERVER: eds-postgresql`, `TRINNEX_PG_DB: Trinnex_Memory` (deploy-swa.yml:411-412), leaves
+  TRINNEX_PG_URL empty when the server/db/password is missing, and echoes only `$SRV/$DB`. The `secrets.*` names used by
+  deploy-swa.yml + bootstrap-trinnex-db.yml on this branch are the IDENTICAL set to main's deploy-swa.yml (37 names, diffed),
+  so no new secret. `TRINNEX_POOL_MAX = 2` (shared-pool.server.ts:41, used at :123). Library container `trinnex-library` is
+  created with no `access` argument (blob.server.ts:48-49, private). bootstrap aborts if azure.extensions cannot be read or
+  reads back empty; trinnex-bootstrap-allowlist 4/0.
+- Q: trinnex-quota-surfacing 5/0; the sweeper logs `kind=` plus counts only.
+
+## SUMMARY
+| Claim | Result | Evidence |
+|---|---|---|
+| S suite + build | PASS | 783 pass / 0 fail over 29 files; fireflies-minutes G3/G5/G8 fail identically on main; build rc=0 |
+| 1 isolation | PASS | VA1-VA8 green; 2 agents only; every personal writer guarded or user-originated; URL U1-U3 refused |
+| 2b remove during processing | PASS (MEDIUM liveness note) | VC1a-c, VC2a-c, VC3c green; VC3a: lease not renewed in a no-fact facts phase (600 s gap vs 180 s lease) -> duplicate ingest / double AI spend possible, no orphan |
+| G 1:1 gate | PASS | G1-G12; client-trusted fields stated; worst case = caller's own data |
+| R recency | PASS + 2 LOW | RT-S5/S6 green; R3/R4 correct; R1 "last laugh", R2 "last word" -> mostRecent:1 (narrowing only) |
+| V voice guard | PASS (safety); BEHAVIOUR CHANGE needs owner OK | VOICE3/5 byte-identical off-path; voice cannot reach Trinnex; guard permanently stops Iris/Eli spoken replies entering shared memory after any Trinnex use |
+| M mutations | PASS | m1, m2, m3 all `FIRED (control EQUIVALENT)`, exit 0 |
+| 3 / 5 / 6 / Q | PASS | see above |
+
+Verdict: **MERGE-PENDING-UAT.** None of the FIX-FIRST conditions was found: no isolation leak, no visible or permanent row
+without a live source, no live source swept, no unprovenanced fact, no assignee-shape change, no crash, and no deploy that can
+reach RAG_AI_Agents. The Library and drawer UI (Remove / Replace refusals, "Removing...", the speaker-map refusal message)
+has not been looked at in a browser in this loop. Separately, the V voice guard changes existing behaviour and needs the
+owner's go-ahead under huddle's CLAUDE.md rule, independent of merge.
