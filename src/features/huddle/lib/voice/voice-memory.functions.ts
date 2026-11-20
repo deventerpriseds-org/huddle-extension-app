@@ -67,6 +67,20 @@ export const rememberVoiceTurn = createServerFn({ method: "POST" })
 
     // SECONDARY (cross-huddle): also write to shared RAG memory so auto-retrieval can surface voice
     // content from OTHER huddles/agents (the conversation object is per 1:1 only).
+    // Loop-2 Trinnex guard (same rule as the text path's persistResearchedMemory): a reply from a Trinnex agent may
+    // repeat Trinnex material from its 1:1, so it is NEVER copied into PERSONAL memory. It still joins that agent's
+    // own 1:1 conversation above.
+    try {
+      const { voiceReplyMayCarryTrinnex } = await import("../trinnex/search");
+      const { AGENT_BY_ID } = await import("../../data/agents");
+      if (voiceReplyMayCarryTrinnex(AGENT_BY_ID[data.agentId as keyof typeof AGENT_BY_ID], data.role)) {
+        result.ok = result.conversation;
+        return result;
+      }
+    } catch {
+      result.ok = result.conversation; // cannot tell: fail closed, no personal write
+      return result;
+    }
     try {
       const { azurePgStore } = await import("../rag/azure-pg.server");
       const { embed } = await import("../rag/embed.server");

@@ -2332,7 +2332,7 @@ export async function runHuddleTurn(data: z.infer<typeof Input>, opts?: RunHuddl
   // Verifier loop 1 scope gate: search_trinnex only in the owner's 1:1 with that agent (huddle dm-<agent>, scope
   // one-to-one, not a ceremony barge). Read by BOTH dispatch paths and the executor wrapper.
   const trinnexHere = (agent: { id?: string; trinnexAccess?: boolean } | null | undefined): boolean =>
-    trinnexOfferedHere(agent, { huddleId: data.huddleId, scope: data.scope, ceremony: data.ceremonyBarge === true || !!data.ceremonyRunId });
+    trinnexOfferedHere(agent, { huddleId: data.huddleId, scope: data.scope, members: data.members, ceremony: data.ceremonyBarge === true || !!data.ceremonyRunId });
   const claimAction = (key: string): boolean => {
     const k = key.trim().toLowerCase().slice(0, 240);
     if (turnActionLedger.has(k)) return false;

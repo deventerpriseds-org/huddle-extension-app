@@ -60,11 +60,26 @@ export function turnUsedTrinnex(marked: boolean, toolUses: ReadonlyArray<{ tool?
   return marked || (toolUses ?? []).some((t) => t?.tool === SEARCH_TRINNEX_TOOL.name);
 }
 
+/**
+ * Loop-2 (voice writer): may a VOICE-call reply carry Trinnex material? The voice path never offers search_trinnex,
+ * but a call with a Trinnex agent continues that agent's 1:1 conversation object, which can hold an earlier
+ * Trinnex-based text reply the model may repeat. The voice path cannot tell which replies do, so EVERY agent reply on
+ * a call with a Trinnex agent is treated as possibly Trinnex-based: the same rule as the text path (turnUsedTrinnex),
+ * applied at the only granularity the voice path has. The owner's own words (role "user") are unaffected.
+ */
+export function voiceReplyMayCarryTrinnex(agent: { trinnexAccess?: boolean } | undefined | null, role: string): boolean {
+  return role === "agent" && agentHasTrinnexAccess(agent);
+}
+
 /** Where a turn runs: the huddle id, its scope ("one-to-one" | "group") and whether it is a ceremony barge. */
 export interface TrinnexTurnScope {
   huddleId?: string | null;
   scope?: string | null;
   ceremony?: boolean;
+  /** Loop-2 G: the huddle's agent members. A 1:1 is the signed-in owner (the caller, implicit) plus EXACTLY this one
+   *  agent. Members arrive in the client payload only (schema: z.array(AgentIds)), so the server ALSO requires the
+   *  huddle id to be `dm-<agentId>` -- the 1:1 id format -- and the two must agree. */
+  members?: ReadonlyArray<string> | null;
 }
 
 /**
@@ -75,7 +90,9 @@ export interface TrinnexTurnScope {
 export function trinnexScopeAllows(agentId: string | null | undefined, where: TrinnexTurnScope | null | undefined): boolean {
   if (!agentId || !where || where.ceremony) return false;
   if (where.scope !== "one-to-one") return false;
-  return where.huddleId === `dm-${agentId}`;
+  if (where.huddleId !== `dm-${agentId}`) return false;
+  // Loop-2 G: exactly the owner plus this one agent -- a hand-built payload naming more members is refused.
+  return Array.isArray(where.members) && where.members.length === 1 && where.members[0] === agentId;
 }
 
 /** The two gates together: the agents.ts data gate AND the 1:1 scope gate. Both dispatch paths use this. */
@@ -226,6 +243,13 @@ export const RECENCY_RULES: readonly RecencyRule[] = [
     re: /\b(?:last|past|previous)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\s+(days?|weeks?|months?|quarters?|years?)\b/,
     out: (m, n, tz) => pastSpan(n, tz, numOf(m[1]) ?? 1, m[2]),
   },
+  // RT-S6 (verifier loop 2): "the last couple of weeks" / "the past few months" are rolling date ranges
+  // (couple = 2, few = 3), never "the single most recent meeting".
+  {
+    row: "RT-S6 couple/few",
+    re: /\b(?:last|past|previous)\s+(couple(?:\s+of)?|few)\s+(days?|weeks?|months?|quarters?|years?)\b/,
+    out: (m, n, tz) => pastSpan(n, tz, m[1].startsWith("couple") ? 2 : 3, m[2]),
+  },
   {
     row: "S-C4 / RT-S3",
     re: /\b(?:last|latest|most\s+recent|previous|past)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\b/,
@@ -236,6 +260,8 @@ export const RECENCY_RULES: readonly RecencyRule[] = [
   // right after) still falls through to the most-recent rule.
   { row: "RT-S5 at last", re: /\bat\s+(?:long\s+)?last\b(?!\s+(?:the\s+)?(?:meetings?|syncs?|calls?|sessions?|standups?|1on1s?|1:1s?|check-?ins?|reviews?)\b)/, out: () => null },
   { row: "RT-S5 last-minute", re: /\blast[\s-]+minute\b/, out: () => null },
+  // RT-S6 (verifier loop 2): idioms with "last" that are not recency.
+  { row: "RT-S6 idioms", re: /\blast[\s-]+(?:resort|ditch)\b|\blast\s+but\s+not\s+least\b|\blast[\s-]+mile\b/, out: () => null },
   // RT-S1: "the previous <series> meeting" applies recency. AS SHIPPED it is the most recent one (= "the last");
   // the alternative reading "the one before the latest" is ONE edit here: ({ mostRecent: 1, skip: 1 }).
   // Only when it qualifies a meeting word within a few words ("the previous Engineering Leaders meeting"), so
