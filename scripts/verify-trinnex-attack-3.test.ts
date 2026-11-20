@@ -188,10 +188,59 @@ async function ingestGaps(passages: number, extractMs: number, triplesPerPassage
   return { maxGapMs, calls: seen.length - 2 };
 }
 
-test("VC3a OBSERVE: a facts phase where extraction finds NO facts calls shouldStop (the only renewal point) how often?", async () => {
-  const r = await ingestGaps(20, 15_000, 0); // 20 passages, 15 s per extraction, no facts
-  console.log(`VC3a passages=20 extract=15s facts=0 -> shouldStop calls=${r.calls} maxGapSec=${r.maxGapMs / 1000} lease=180s`);
-  expect(r.calls).toBeGreaterThan(0);
+// Fixed 2026-11-20 (BUILD "Final fixes before merge"): runPipeline now renews on a timer for the whole run. VC3a was
+// an OBSERVE probe of the shouldStop gap (still 600 s: ingest makes no check in a no-fact facts phase, by design);
+// it now ASSERTS the thing that matters, the gap between lease renewals through the real runPipeline + real ingest.
+async function renewalGaps(passages: number, extractMs: number): Promise<{ maxGapMs: number; renewals: number; elapsedMs: number }> {
+  let clock = 0;
+  let last = 0;
+  let maxGapMs = 0;
+  let renewals = 0;
+  const timers: Array<{ next: number; ms: number; fn: () => void }> = [];
+  const advance = (dt: number) => {
+    const target = clock + dt;
+    for (let due; (due = timers.filter((x) => x.next <= target).sort((a, b) => a.next - b.next)[0]); due.next += due.ms) {
+      clock = due.next;
+      due.fn();
+    }
+    clock = target;
+  };
+  let idSeq = 0;
+  mem.__setTrinnexDepsForTest({
+    getPool: () => ({
+      query: async (sql: string) => (/INSERT INTO rag_(chunks|triples)/.test(sql) ? { rows: [{ id: `id-${++idSeq}` }] } : { rows: [] }),
+    }),
+    configured: () => true,
+    embed: async () => { advance(1_000); return [0.1, 0.2, 0.3]; },
+    extractTriples: async () => { advance(extractMs); return { triples: [], failureKind: null }; },
+    reportFailure: async () => {},
+  });
+  await lib.runPipeline(
+    { id: crypto.randomUUID(), ownerEmail: A, name: "Test-long.pdf", kind: "document", blobPath: "p", docDate: null, category: "General",
+      participants: [], speakerMap: {}, chunks: 0, facts: 0, status: "uploaded" } as never,
+    {
+      getBytes: async () => new Uint8Array([1]),
+      deleteBytes: async () => true,
+      extract: async () => ({ segments: Array.from({ length: passages }, (_, i) => ({ text: `Test-paragraph ${i} `.repeat(200), page: String(i + 1) })), cues: [] }),
+      memory: { configured: () => true, ingest: mem.ingestTrinnexSource, remove: async () => ({ chunks: 0, facts: 0 }) },
+      update: async () => {},
+      deleteRow: async () => {},
+      isRemoved: async () => false,
+      renewLease: async () => { renewals++; maxGapMs = Math.max(maxGapMs, clock - last); last = clock; },
+      every: (ms: number, fn: () => void) => { const t = { next: clock + ms, ms, fn }; timers.push(t); return () => void timers.splice(timers.indexOf(t), 1); },
+    } as never,
+  );
+  maxGapMs = Math.max(maxGapMs, clock - last);
+  return { maxGapMs, renewals, elapsedMs: clock };
+}
+
+test("VC3a a facts phase where extraction finds NO facts still renews the lease well inside 180 s", async () => {
+  const g = await ingestGaps(20, 15_000, 0); // 20 segments (40 passages), 15 s per extraction, no facts
+  const r = await renewalGaps(20, 15_000);
+  console.log(`VC3a passages=20 extract=15s facts=0 -> shouldStop calls=${g.calls} maxGapSec=${g.maxGapMs / 1000}; lease renewals=${r.renewals} maxRenewGapSec=${r.maxGapMs / 1000} elapsedSec=${r.elapsedMs / 1000} lease=180s`);
+  expect(r.elapsedMs).toBeGreaterThan(180_000);
+  expect(r.maxGapMs).toBeLessThanOrEqual(lib.LEASE_RENEW_MS);
+  expect(r.maxGapMs).toBeLessThan(180_000);
 });
 
 test("VC3b with facts found on every passage the gap stays one extraction long", async () => {
