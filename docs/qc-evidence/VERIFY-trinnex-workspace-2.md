@@ -205,3 +205,27 @@ my new phrasings
   | voice/voice-memory.functions.ts:75 (`rememberVoiceTurn`) | voice-call AGENT replies, scope=global | no Trinnex guard. The voice path never offers search_trinnex (no reference under lib/voice), so a voice reply cannot come from a Trinnex search directly. LOW, inference only, not traced: if a 1:1 voice call is seeded from the same `dm-iris-chase` conversation object that holds an earlier Trinnex-based text reply, the model could repeat it and `rememberVoiceTurn` would store it. |
   | trinnex/memory.server.ts:351/379 | the Trinnex store (separate pool) | by design |
 
+## Claim 3 -- every fact has a source_chunk_id (reduced depth): PASS
+
+- The only Trinnex fact writer is `memory.server.ts:379` `writeTriples`, called with `sourceChunkId: w.id`. `w.id` is the id `writeChunk` returned for that passage (l.351-358, 387); there is no other `writeTriples`/`INSERT INTO rag_triples` in `lib/trinnex/`.
+- Removal deletes facts BEFORE passages (`deleteTrinnexSource`, l.410-430), so the FK's `ON DELETE SET NULL` cannot leave an unprovenanced fact.
+- In VB1/VB1c the leftover rows are passages only (`factsLeft:0`).
+
+## Claim 4 -- spelling table (reduced depth): PASS
+
+- `bun test scripts/trinnex-memory.test.ts -t 'RT-S5|S-C'`: 28 pass, 0 fail. RT-S5a..h are rows 278-287; the 8 rows plus the S-C rows all pass.
+- My own 12 phrasings are in claim R. They add five LOW over-matches beyond the table.
+
+## Claim 5 -- owner picker, stored assignee shape (reduced depth): PASS
+
+- `trinnex-people` 5/0, including `T13 a pick sends exactly the old typed-box shape` and `T13 an existing delegated row still reads and acts the same`. The latter checks that `triageProposal` receives the identical `["delegated", cleanTriageName(...)]` via picker and typed box, and `["proposed", null]` for Mine.
+- Server-side diff: `git diff --stat origin/main...HEAD -- src/features/huddle/lib/proposals/` is EMPTY. `triageProposal` (`proposals/meeting-triage.ts`) and `cleanTriageName` (`proposals/engine.ts`) are byte-identical to main, so the stored assignee shape cannot have changed server-side.
+
+## Claim 6 -- deploy pinning, no new secret, pool, container, logs (reduced depth): PASS
+
+- **Deploy pinning:** `deploy-swa.yml` "Resolve Trinnex database connection string" pins `TRINNEX_PG_SERVER: eds-postgresql`, `TRINNEX_PG_DB: Trinnex_Memory`. It hard-fails if the pin is `postgres` or `RAG_AI_Agents`, leaves the URL empty (warning) if the DB is missing, and masks the password and URL.
+- **No new secret:** the six password secrets it reads are each already referenced in main's `deploy-swa.yml` (`grep -c` = 6).
+- **Pool:** `TRINNEX_POOL_MAX = 2` (shared-pool.server.ts:41), used by the Trinnex `new Pool`.
+- **Container:** `trinnex-library` is created with `createIfNotExists()` and no `access` argument, so it is private (blob.server.ts:48-49).
+- **Logs:** Library log lines carry `id`/`step`/`reason`/counts; Meetings logs pass through `code()` (slug-only); memory logs kinds and counts. LOW: `shared-pool.server.ts` logs a pg idle-client `e.message`. pg connection errors do not carry content, so this is not a content leak.
+
