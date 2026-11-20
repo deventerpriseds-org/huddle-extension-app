@@ -5528,3 +5528,6 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
       2026-11-20 owner: names from the file/meeting title; set who Speaker 1/2/... is during triage "for the benefit of the rag".
       Added "Who is speaking" (Meetings + Library transcripts, same people picker) and "From the title/file name" suggestions.
       Headless: Meetings 65/65 checks, Library 56/56, 0 page errors, no 390px scroll. Answered: NO second database (see memory).
+- [~] 2026-11-20 OWNER DECISIONS: "A, Huddle Iris and Eli first, go on prototype". So: Trinnex memory = separate DATABASE on
+      eds-postgresql (same schema/code); Huddle iris-chase + eli-vaughn search it first (journey voice Iris = later bridge);
+      BUILD all three modules (Meetings triage, Trinnex Library, Trinnex memory/Ask). Tier 1 (stores extracted facts): AC first.
