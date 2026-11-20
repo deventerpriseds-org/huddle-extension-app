@@ -34,3 +34,40 @@ One file per process (`bun test` for bun:test files, `bun <file>` otherwise), th
 
 **fireflies G3/G5/G8 on main:** the branch DOES modify `lib/fireflies/{fireflies.server,minutes-store.server,minutes}.ts`, so "fails on main too" had to be measured, not assumed. Scratch copy with those three files and the test file taken from `origin/main` (`git show origin/main:...`): the same three lines print `FAIL G3 subject carries title and date`, `FAIL G5 two CONCURRENT heartbeats`, `FAIL G8 a NEWER resend`. Pre-existing, not introduced by this PR.
 
+## Claim 2b -- Remove during processing: FAIL (two bypasses of the defer-to-worker guard)
+
+**Re-runs:** `trinnex-removal-race` 11 pass 0 fail; VA9 `removal={"removed":true} rowExists=false trinnexChunksLeft=0 factsLeft=0`, 9/0. The loop-1 path itself is closed.
+
+**New attacks** in `scripts/verify-trinnex-attack-2.test.ts`. Same fakes as `trinnex-removal-race`, with `beginRemoval` modelled on the live SQL: `in_flight` = lease unexpired AND OLD status in uploaded/read/split/facts/waiting_memory. The worker is paused INSIDE a passage INSERT, after its `shouldStop` check passed. That is the one window `stopped()` cannot close. Raw output:
+
+```
+VB1  {"r1":{"removed":false,"pending":true},"r2":{"removed":true},"rowAfterR2":false,"left":0,"factsLeft":0,"rowExists":false,"orphanMoments":1,"writesAfterRemovedTrue":1}   (fail)
+VB1c {"r2":{"removed":true},"end":"died:process died","left":1,"factsLeft":0,"rowExists":false,"orphanMoments":1}                                                         (fail)
+VB2  {"afterRun1":{"chunks":6,"facts":6,"status":"searchable"},"r":{"pending":true},"left":0,"factsLeft":0,"rowExists":false,"orphanMoments":0}                           pass
+VB2b {"r":{"removed":true},"left":0,"factsLeft":0,"rowExists":false,"orphanMoments":1}                                                                                       pass (asserts eventual state only)
+VB3  {"r":{"pending":true},"end":"died:process died","stranded":{"rowExists":true,"status":"removing","chunks":1},"hb":{"removed":true},"left":0,"orphanMoments":0}         pass
+```
+
+**Observation:**
+- VB1 (Remove twice): the 2nd Remove returns `removed:true` and deletes the row while the worker is mid-write. One passage is written after "removed" and exists with no Library row. The worker cleans it at its next check.
+- VB1c (Remove twice, then the worker dies right after that write commits): **1 passage left permanently, row gone.** Nothing can find it, because the heartbeat only claims Library rows.
+- VB2 (remap re-ingest, lease held): clean.
+- VB2b: same window via a cleared lease. Transient orphan only.
+- VB3 (worker dies after a deferred Remove): the row survives as `removing` and the heartbeat path finishes cleanly.
+
+**Root cause, read from source (library.server.ts):**
+1. `beginRemoval` (l.350-358) computes `in_flight` from `old.status IN ('uploaded','read','split','facts','waiting_memory')`. The FIRST Remove already set the status to `removing`, so a SECOND Remove reads `in_flight=false` even though the worker still holds the lease. It then runs `completeRemoval` immediately.
+2. `setSpeakerMap` (l.450-451) sets `lease_until = NULL` with no check that a worker holds the lease. A speaker remap during processing hides the running worker from `beginRemoval`, and the next Remove deletes immediately (VB2b). This also lets the heartbeat claim the item a second time. A run longer than the 3-minute lease (never renewed: `lease_until` is written only in `claim`) has the same effect.
+
+**Reachability of the second Remove, and the "Removing..." state:**
+- The UI disables Remove when `open.status === "removing"` or a request is in flight (TrinnexLibraryView.tsx:391,404). That is client-side only.
+- `removeTrinnexFileFn` -> `removeLibraryItem` (library.functions.ts:178) accepts any status, so the server function can be called directly.
+- **Upload Replace** is a UI path that reaches it with no hand-crafted request. `library.functions.ts:94-98` calls `removeLibraryItem(dup.id)`, and the first try returns `replace_incomplete` while the worker runs. `findDuplicate` (library.server.ts:401) does not filter on status, so a second Replace removes the `removing` row again.
+- **Verdict on "Removing... cannot be bypassed from the server function": REFUTED.**
+
+**Severity, calibrated:**
+- The steady state self-heals unless the worker dies inside a window of about one passage.
+- Even so, the invariant "no window where derived rows live without a Library row" does not hold.
+- A permanent orphan is demonstrated (VB1c).
+- Under the brief's FIX FIRST list this is "a delete leaving rows".
+
