@@ -5542,3 +5542,4 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - [x] ACT:verify-trinnex-workspace-2 -- verifier loop 2 on PR #289 at 6c62d6e8; probes scripts/verify-trinnex-attack-2.test.ts (VB1-VB3, verifier-written, no product code). Evidence: docs/qc-evidence/VERIFY-trinnex-workspace-2.md
 - [ ] ACT:verify-trinnex-workspace-3 -- verifier loop 3 on PR #289 at 957bad98; probes scripts/verify-trinnex-attack-3.test.ts (VC1-VC3, verifier-written, no product code). Evidence: docs/qc-evidence/VERIFY-trinnex-workspace-3.md
   - loop-3 progress: claims S, 2b, G, R recorded (G1-G12, R1-R4 added to the probe file).
+  - loop-3 complete: S, 1, 2b, G, R, V, M, 3/5/6/Q recorded; verdict MERGE-PENDING-UAT. Evidence: docs/qc-evidence/VERIFY-trinnex-workspace-3.md
