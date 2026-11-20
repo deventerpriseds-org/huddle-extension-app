@@ -5516,3 +5516,9 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - PR deventerpriseds-org/huddle-extension-app#286. Verify loop 1: 6 CONFIRMED, C4 REFUTED (a failed settings read could write defaults over the saved list) -> fixed 2d23aef3; loop 2: 7/7 (VERIFY-alert-exclusions-1/2.md).
 - Data fix DONE: 7 owed minutes rows dismissed by id, settled_at = received_at (run 44374957433: owed 20 -> 13, minutes owed 0); undo SQL in DATAFIX-alert-exclusions-owed-minutes.md.
 - Remaining (was: PR -> verifier -> merge/deploy -> dismiss the 7 owed minutes rows (by id, with undo SQL) -> live dry run -> owner confirms no draft on the next minutes email.
+
+### ACT:trinnex-workspace-proto -- Fireflies triage + Trinnex Library + Trinnex RAG (owner 2026-11-20: "Let's confirm the prototype before adding the module")
+- [~] 2026-11-20 Clickable prototype built in the Huddle skin: docs/trinnex/prototype/ (index, meetings, library, ask; base.css = Compass tokens).
+      Published privately: https://claude.ai/artifact/25dG6n5GB9m1DBdynxTSyA. Branch claude_trinnex-prototype @1ccbe236. WAITING on owner review.
+      Extends, does not duplicate: chat.fireflies_meetings (title/participants/series), proposals/meeting-triage.ts (owner picker replaces typed
+      "For someone"), rag_chunks/rag_triples (Trinnex collection via source/metadata). Open: data-location OK for work material; which Iris.

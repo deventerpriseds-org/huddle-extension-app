@@ -4187,3 +4187,11 @@ here as fact three times before being checked.)
   is URGENT -> bell + Iris chat (dm-iris-chase, push) + self-email, once per incident (feed-staleness 'incomplete'
   state reads chat.external_feed_state.last_status; email/sent only). Container restarted 3x in ~30 min and killed
   verifier loop 5 twice -- commit+push per step.
+
+## 2026-11-20 -- Trinnex workspace PROTOTYPE (not built, awaiting owner confirmation)
+- Existing pieces it extends: `chat.fireflies_meetings` has title/meeting_at only (no participants); OneDrive file is
+  `/Automation/transcripts/fireflies-{id}.md`; meeting action items already go through `proposals/meeting-triage.ts`
+  (Mine / For someone typed name <=80 / Skip) into chat.task_proposals with `assignee`; transcripts are NEVER written to
+  rag_chunks today. Exec assistant agent = `eli-vaughn`; `iris-chase` = Team lead; both share search_memory/lookup_facts.
+- Prototype: docs/trinnex/prototype/ on branch claude_trinnex-prototype; artifact https://claude.ai/artifact/25dG6n5GB9m1DBdynxTSyA.
+- When built: triple extraction from transcripts admits model output into stored claims => TIER 1 (AC subagent first).
