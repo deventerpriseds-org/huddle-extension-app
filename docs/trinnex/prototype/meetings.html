@@ -80,14 +80,27 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
   .btn-danger { background: var(--destructive); border-color: var(--destructive); color: var(--primary-foreground); }
   .mt-confirm { flex-basis: 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px; border-radius: calc(var(--radius) - 2px); background: var(--surface); box-shadow: var(--shadow-hair); }
   .mt-foot-row { justify-content: flex-end; }
+  /* NEW: Speakers ("Who is speaking") */
+  .mt-spk-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .mt-spk { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--hairline); }
+  .mt-spk-text { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 5px; }
+  .mt-spk-label { font-weight: 600; overflow-wrap: anywhere; }
+  .mt-bar { flex: 0 0 120px; height: 6px; border-radius: 999px; background: var(--muted); overflow: hidden; }
+  .mt-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--primary); }
+  .mt-quote { margin: 0; padding-left: 10px; border-left: 2px solid var(--hairline); color: var(--muted-foreground); font-style: italic; font-size: 13px; overflow-wrap: anywhere; }
+  .mt-spk-ctrl { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+  .mt-spk-ctrl .mt-suggest { height: auto; min-height: 26px; padding: 3px 10px; }
+  .mt-warn { display: flex; align-items: flex-start; gap: 6px; padding: 8px 10px; border-radius: calc(var(--radius) - 2px); background: var(--band-cream); color: var(--band-cream-text); font-size: 12px; }
+  .mt-passages { padding: 10px 12px; border-radius: calc(var(--radius) - 2px); background: var(--surface-2); box-shadow: var(--shadow-hair); display: flex; flex-direction: column; gap: 6px; }
+  .mt-passages p { margin: 0; }
   .mt-done-banner { display: flex; align-items: center; gap: 8px; }
   .mt-back { display: none; }
   .btn.new .new-tag { margin-left: 2px; }
   /* Dark mode: base.css pairs the dark cream band with a dark warning text, which is unreadable; lift the text. */
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .chip-warn, :root:not([data-theme="light"]) .changed-tag { color: var(--warning); }
+    :root:not([data-theme="light"]) .chip-warn, :root:not([data-theme="light"]) .changed-tag, :root:not([data-theme="light"]) .mt-warn { color: var(--warning); }
   }
-  :root[data-theme="dark"] .chip-warn, :root[data-theme="dark"] .changed-tag { color: var(--warning); }
+  :root[data-theme="dark"] .chip-warn, :root[data-theme="dark"] .changed-tag, :root[data-theme="dark"] .mt-warn { color: var(--warning); }
   @media (max-width: 760px) {
     .mt-layout { grid-template-columns: 1fr; }
     .mt-list { position: static; }
@@ -98,6 +111,9 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
     .mt-owner-btn { width: 100%; }
     .mt-owner-btn .mt-owner-name { max-width: none; }
     .mt-pop { left: 0; right: auto; }
+    .mt-spk { flex-direction: column; align-items: stretch; }
+    .mt-spk-ctrl { align-items: stretch; }
+    .mt-bar { flex-basis: 90px; }
     .mt-foot-row { justify-content: stretch; }
     .mt-foot-row .btn { flex: 1 1 100%; justify-content: center; height: auto; min-height: 36px; padding-block: 6px; }
     .mt-preview { grid-template-columns: 1fr; gap: 2px; }
@@ -145,6 +161,9 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
     "ff-01JCZ1": "Engineering Leaders weekly: incident review and on-call"
   };
 
+  // Prototype stand-in for the timestamp of each speaker's sample line (Fireflies sentences[].start_time).
+  var SAMPLE_STAMPS = { "ff-01JD8Q": { "Speaker 1": "20:12" }, "ff-01JD3K": { "Speaker 1": "06:48" } };
+
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -160,6 +179,7 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
     editingTitle: false,
     titleDraft: "",
     openPicker: null,
+    openSpeaker: null,
     managing: false,
     confirmRemove: null,
     peopleDraft: "",
@@ -172,13 +192,37 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
       onedriveFile: m.onedriveFile, originalFile: "fireflies-" + m.id.replace(/^ff-/, "") + ".md",
       attendees: m.attendees.slice(), participants: m.participants.slice(), series: m.series, summary: m.summary,
       actionItems: m.actionItems.map(function (a) { return { text: a.text, stamp: a.stamp, assignee: a.assignee, skipped: false }; }),
-      triaged: m.triaged, inMemory: m.triaged, titleWithParticipants: titleWithParticipants, renameFile: true
+      triaged: m.triaged, inMemory: m.triaged, titleWithParticipants: titleWithParticipants, renameFile: true,
+      speakers: (m.speakers || []).map(function (sp) {
+        return { label: sp.label, known: sp.known, lines: sp.lines, talkPct: sp.talkPct, sample: sp.sample,
+          person: sp.person || (sp.known ? knownPerson(sp.label) : null) };
+      })
     };
     copy.savedTitle = fullTitle(copy);
     return copy;
   });
   var firstOpen = state.meetings.filter(function (m) { return !m.triaged; })[0];
   state.selectedId = (firstOpen || state.meetings[0]).id;
+
+  // A voice Fireflies names ("Von Ellis") is matched to a person by full name or first name.
+  function knownPerson(label) {
+    var l = String(label || "").toLowerCase().trim(), first = l.split(/\s+/)[0];
+    return S.people.filter(function (p) { return p.toLowerCase() === l; })[0] ||
+      S.people.filter(function (p) { return p.toLowerCase().split(/\s+/)[0] === first; })[0] || null;
+  }
+  function voicesSet(m) { return m.speakers.filter(function (sp) { return sp.person; }).length; }
+  function voicesLine(m) { return voicesSet(m) + " of " + m.speakers.length + " voices set"; }
+  function sampleStamp(m, i) {
+    var map = SAMPLE_STAMPS[m.id] || {}, sp = m.speakers[i];
+    if (map[sp.label]) return map[sp.label];
+    var t = Math.round(m.durationMin * 60 * (i + 1) / (m.speakers.length + 1));
+    return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
+  }
+  // Mapping a voice to someone also puts them on the meeting's participants (Von is never a participant tag).
+  function setSpeaker(m, i, who) {
+    m.speakers[i].person = who;
+    if (who && who !== OWNER && m.participants.indexOf(who) < 0) m.participants.push(who);
+  }
 
   function cur() { return state.meetings.filter(function (m) { return m.id === state.selectedId; })[0] || null; }
   function findPerson(n) {
@@ -274,6 +318,7 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
         '<span class="row mt-item-top"><span class="small muted num">' + niceDate(m) + '</span>' + chip + '</span>' +
         '<span class="mt-item-title">' + esc(m.savedTitle) + '</span>' +
         '<span class="small muted row"><i data-lucide="users" class="ic"></i>' + m.attendees.length + ' attendees<span aria-hidden="true">·</span>' + m.durationMin + ' min</span>' +
+        (m.speakers.length ? '<span class="small muted row"><i data-lucide="audio-lines" class="ic"></i><span class="num" id="voices-row-' + m.id + '">' + voicesLine(m) + '</span><span class="new-tag">New</span></span>' : '') +
       '</button>';
     }).join("") : '<p class="muted small mt-list-empty">' + (state.filter === "needs" ? "Nothing to triage. You are all caught up." : "No meetings here yet.") + '</p>';
     return '<section class="card mt-list" aria-label="Meetings">' + body + '</section>';
@@ -281,7 +326,7 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
 
   function detailHTML(m) {
     return '<div class="mt-detail" id="detail">' +
-      overviewHTML(m) + titleHTML(m) + participantsHTML(m) + summaryHTML(m) + actionsHTML(m) + footerHTML(m) +
+      overviewHTML(m) + titleHTML(m) + participantsHTML(m) + speakersHTML(m) + summaryHTML(m) + actionsHTML(m) + footerHTML(m) +
     '</div>';
   }
 
@@ -295,7 +340,9 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
       '<div class="mt-title">' + esc(m.savedTitle) + '</div>' +
       '<div class="row small muted"><i data-lucide="calendar" class="ic"></i>' + niceDate(m) + ', ' + niceTime(m) +
         '<span aria-hidden="true">·</span>' + m.durationMin + ' min<span aria-hidden="true">·</span>' + m.attendees.length + ' attendees</div>' +
-      '<div class="row">' + status + '</div>' +
+      '<div class="row">' + status +
+        (m.speakers.length ? '<span class="chip new" id="voices-head"><i data-lucide="audio-lines" class="ic"></i><span class="num">' + voicesLine(m) + '</span></span>' : '') +
+      '</div>' +
     '</section>';
   }
 
@@ -327,12 +374,41 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
     '</section>';
   }
 
+  // ── NEW: names from the Fireflies title ────────────────────────────
+  var TITLE_STOP = ["the", "team", "weekly", "sync", "meeting", "call", "review", "standup", "all", "me", "us", "everyone", "leadership"];
+  function reEsc(x) { return x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+  function hasWord(text, w) { return new RegExp("(^|[^A-Za-z])" + reEsc(w) + "(?![A-Za-z])", "i").test(text); }
+  function titleNames(m) {
+    var t = String(m.firefliesTitle || ""), out = [];
+    function push(n) { if (n && n !== OWNER && out.indexOf(n) < 0) out.push(n); }
+    // 1. Anyone already in your people, by full name or first name (case-insensitive, whole words).
+    state.people.forEach(function (p) {
+      if (p === OWNER) return;
+      var first = p.split(/\s+/)[0].replace(/\.$/, "");
+      if (hasWord(t, p) || (first.length > 1 && hasWord(t, first))) push(p);
+    });
+    // 2. A capitalised word after with / and / & / "/" / 1:1 / x / vs is offered as a name.
+    var re = /(?:(?:^|[\s(])(?:[Ww]ith|[Aa]nd|[xX]|[Vv][Ss]\.?|1:1)\s+|\s*(?:&|\/)\s*)([A-Z][A-Za-z'\-]+)/g, mt;
+    while ((mt = re.exec(t))) {
+      var w = mt[1];
+      if (w.toLowerCase() === OWNER.toLowerCase() || TITLE_STOP.indexOf(w.toLowerCase()) >= 0) continue;
+      var known = findPerson(w) || state.people.filter(function (p) { return p.split(/\s+/)[0].replace(/\.$/, "").toLowerCase() === w.toLowerCase(); })[0];
+      push(known || cleanName(w));
+    }
+    return out;
+  }
+  function titleSuggestions(m) {
+    return titleNames(m).filter(function (n) { return m.participants.indexOf(n) < 0; });
+  }
+
   function inviteSuggestions(m) {
-    return m.attendees.filter(function (a) { return a !== OWNER && m.participants.indexOf(a) < 0; });
+    var fromTitle = titleSuggestions(m);
+    return m.attendees.filter(function (a) { return a !== OWNER && m.participants.indexOf(a) < 0 && fromTitle.indexOf(a) < 0; });
   }
 
   function participantsHTML(m) {
     var sugg = inviteSuggestions(m);
+    var tsugg = titleSuggestions(m);
     var chips = m.participants.length ? m.participants.map(function (p, i) {
       return '<span class="chip">' + esc(p) + '<button type="button" class="mt-chip-x" id="part-remove-' + i + '" data-action="part-remove" data-name="' + esc(p) + '" aria-label="Remove ' + esc(p) + '"><i data-lucide="x" class="ic"></i></button></span>';
     }).join("") : '<span class="small muted">No participants yet. Add them from the invite or the box below.</span>';
@@ -340,6 +416,15 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
       '<div class="mt-sec-head"><h2 class="h-section" id="sec-part">Participants</h2><span class="new-tag">New</span></div>' +
       '<p class="small muted" style="margin:0">Kept as tags on the meeting record, so you can find meetings by who was there.</p>' +
       '<div class="row" aria-label="Participants on this meeting">' + chips + '</div>' +
+      (tsugg.length
+        ? '<div class="row new" id="title-names"><span class="small muted">From the title</span><span class="new-tag">New</span>' +
+            tsugg.map(function (n, i) {
+              var isNew = !findPerson(n);
+              return '<button type="button" class="chip mt-suggest" id="title-add-' + i + '" data-action="part-add" data-name="' + esc(n) + '"><i data-lucide="' + (isNew ? "user-plus" : "plus") + '" class="ic"></i>' + esc(n) +
+                (isNew ? '<span class="small muted">new name</span>' : '') + '</button>';
+            }).join("") +
+          '</div>'
+        : '') +
       (sugg.length
         ? '<div class="row"><span class="small muted">From the invite</span>' +
             sugg.map(function (n, i) {
@@ -363,6 +448,77 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
         '<span class="small muted">Today</span><span class="mt-code">' + esc(m.originalFile) + '</span>' +
       '</div>' +
     '</section>';
+  }
+
+  // ── NEW: Who is speaking ───────────────────────────────────────────
+  function speakerName(m, i) {
+    var sp = m.speakers[i];
+    return sp.person ? sp.person : sp.label + " (unassigned)";
+  }
+  // If exactly one "Speaker N" is unmapped and exactly one title name is not yet on a voice, offer it.
+  // It is only a suggestion: the owner confirms it with one click, nothing is set automatically.
+  function speakerSuggestion(m, i) {
+    var unmapped = [];
+    m.speakers.forEach(function (sp, k) { if (!sp.person && /^speaker\s*\d+$/i.test(sp.label)) unmapped.push(k); });
+    if (unmapped.length !== 1 || unmapped[0] !== i) return null;
+    var mapped = m.speakers.map(function (sp) { return sp.person; }).filter(Boolean);
+    var free = titleNames(m).filter(function (n) { return mapped.indexOf(n) < 0; });
+    return free.length === 1 ? free[0] : null;
+  }
+
+  function speakersHTML(m) {
+    if (!m.speakers.length) return "";
+    var rows = m.speakers.map(function (sp, i) {
+      var open = state.openSpeaker === i;
+      var label = sp.person ? displayOwner(sp.person) : "Choose who";
+      var sugg = !sp.person ? speakerSuggestion(m, i) : null;
+      return '<li class="mt-spk" id="spk-row-' + i + '">' +
+        '<div class="mt-spk-text">' +
+          '<span class="row"><span class="mt-spk-label">' + esc(sp.label) + '</span>' +
+            (sp.known ? '<span class="small muted">Named by Fireflies</span>' : '') + '</span>' +
+          '<span class="row small muted"><span class="mt-bar" role="img" aria-label="' + sp.talkPct + '% of the talking"><span style="width:' + Math.max(0, Math.min(100, sp.talkPct)) + '%"></span></span>' +
+            '<span class="num">' + sp.talkPct + '% · ' + sp.lines + ' lines</span></span>' +
+          '<p class="mt-quote">"' + esc(sp.sample) + '"</p>' +
+        '</div>' +
+        '<div class="mt-spk-ctrl">' +
+          '<div class="mt-picker">' +
+            '<button type="button" class="btn mt-owner-btn' + (sp.person ? "" : " is-empty") + '" id="spk-btn-' + i + '" data-action="spk-toggle" data-i="' + i + '" aria-haspopup="listbox" aria-expanded="' + open + '" aria-label="' + esc(sp.label) + ' is: ' + esc(label) + '">' +
+              '<i data-lucide="' + (sp.person === OWNER ? "lock" : "user") + '"></i><span class="mt-owner-name">' + esc(label) + '</span><i data-lucide="chevron-down"></i>' +
+            '</button>' +
+            (open ? spkPickerHTML(i) : '') +
+          '</div>' +
+          (sugg
+            ? '<button type="button" class="chip mt-suggest" id="spk-suggest-' + i + '" data-action="spk-suggest" data-i="' + i + '" data-name="' + esc(sugg) + '"><i data-lucide="check" class="ic"></i>' + esc(sugg) + '</button>' +
+              '<span class="small muted">Suggested from the title</span>'
+            : '') +
+        '</div>' +
+      '</li>';
+    }).join("");
+    var counts = {};
+    m.speakers.forEach(function (sp) { if (sp.person) counts[sp.person] = (counts[sp.person] || 0) + 1; });
+    var warns = Object.keys(counts).filter(function (k) { return counts[k] > 1; }).map(function (k) {
+      return '<div class="mt-warn" role="status"><i data-lucide="triangle-alert" class="ic"></i><span class="spk-dup">' +
+        (counts[k] === 2 ? "Two" : counts[k]) + ' voices are set to ' + esc(k) + (/\.$/.test(k) ? '' : '.') + ' If that is right, it is fine; Fireflies sometimes splits one person.</span></div>';
+    }).join("");
+    var passages = m.speakers.slice(0, 2).map(function (sp, i) {
+      return '<p class="mt-code" id="passage-' + i + '">' + esc(speakerName(m, i)) + ' (' + sampleStamp(m, i) + '): ' + esc(sp.sample) + '</p>';
+    }).join("");
+    return '<section class="card new mt-section" aria-labelledby="sec-spk">' +
+      '<div class="mt-sec-head"><h2 class="h-section" id="sec-spk">Who is speaking</h2><span class="new-tag">New</span>' +
+        '<span class="small muted num mt-push" id="voices-sec">' + voicesLine(m) + '</span></div>' +
+      '<p class="small muted" style="margin:0">Fireflies could not name some voices. Set who each one is so every saved passage says who said it.</p>' +
+      '<ul class="mt-spk-list">' + rows + '</ul>' +
+      warns +
+      '<div class="mt-passages" aria-live="polite" id="passage-preview"><span class="small muted">Passages will be saved as:</span>' + passages + '</div>' +
+    '</section>';
+  }
+
+  function spkPickerHTML(i) {
+    return '<div class="mt-pop" data-pop="spk-' + i + '">' +
+      '<label class="sr-only" for="spk-q-' + i + '">Find or add who this voice is</label>' +
+      '<input id="spk-q-' + i + '" class="input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="spk-list-' + i + '" autocomplete="off" maxlength="' + NAME_MAX + '" placeholder="Find someone or type a new name" data-spk-q="' + i + '">' +
+      '<ul id="spk-list-' + i + '" class="mt-listbox mt-listbox-inline" role="listbox" aria-label="People"></ul>' +
+    '</div>';
   }
 
   function summaryHTML(m) {
@@ -483,9 +639,15 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
     return opts;
   }
 
+  function comboIds(kind, i) {
+    if (kind === "person") return { input: "person-q", list: "person-list", prefix: "person-opt-" };
+    if (kind === "speaker") return { input: "spk-q-" + i, list: "spk-list-" + i, prefix: "spk-opt-" + i + "-" };
+    return { input: "owner-q-" + i, list: "owner-list-" + i, prefix: "owner-opt-" + i + "-" };
+  }
   function fillCombo(kind, i, q) {
-    var input = document.getElementById(kind === "person" ? "person-q" : "owner-q-" + i);
-    var list = document.getElementById(kind === "person" ? "person-list" : "owner-list-" + i);
+    var ids = comboIds(kind, i);
+    var input = document.getElementById(ids.input);
+    var list = document.getElementById(ids.list);
     if (!input || !list) return;
     combo.kind = kind; combo.i = i;
     combo.opts = kind === "person" ? personOptions(q) : ownerOptions(q);
@@ -501,8 +663,8 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
     }
     if (combo.active >= combo.opts.length || combo.active < 0) combo.active = combo.opts.length ? 0 : -1;
     var m = cur();
-    var currentOwner = kind === "owner" && m ? m.actionItems[i].assignee : null;
-    var prefix = kind === "person" ? "person-opt-" : "owner-opt-" + i + "-";
+    var currentOwner = !m ? null : kind === "owner" ? m.actionItems[i].assignee : kind === "speaker" ? m.speakers[i].person : null;
+    var prefix = ids.prefix;
     list.innerHTML = combo.opts.length ? combo.opts.map(function (o, k) {
       return '<li role="option" id="' + prefix + k + '" class="mt-opt' + (o.kind !== "pick" ? " mt-opt-add" : "") + '" data-action="combo-pick" data-idx="' + k + '" aria-selected="' + (k === combo.active) + '">' +
         '<i data-lucide="' + o.icon + '" class="ic"></i><span>' + esc(o.label) + '</span>' +
@@ -531,11 +693,18 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
     }
     var i = combo.i;
     if (o.kind === "focus") {
-      var inp = document.getElementById("owner-q-" + i);
+      var inp = document.getElementById(comboIds(combo.kind, i).input);
       if (inp) { inp.placeholder = "Type the new name, then press Enter"; inp.focus(); }
       return;
     }
     var who = o.kind === "new" ? addPerson(o.name) : o.name;
+    if (combo.kind === "speaker") {
+      if (who) setSpeaker(m, i, who);
+      state.openSpeaker = null;
+      state.focus = "spk-btn-" + i;
+      render();
+      return;
+    }
     if (who) { m.actionItems[i].assignee = who; m.actionItems[i].skipped = false; }
     state.openPicker = null;
     state.focus = "owner-btn-" + i;
@@ -550,8 +719,8 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
   document.addEventListener("click", function (e) {
     var el = e.target.closest("[data-action]");
     var m = cur();
-    if (state.openPicker !== null && !e.target.closest(".mt-picker")) {
-      state.openPicker = null;
+    if ((state.openPicker !== null || state.openSpeaker !== null) && !e.target.closest(".mt-picker")) {
+      state.openPicker = null; state.openSpeaker = null;
       if (!el) { render(); return; }
     }
     if (!el) return;
@@ -560,7 +729,7 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
       case "filter": state.filter = el.getAttribute("data-f"); state.focus = el.id; render(); break;
       case "select":
         state.selectedId = el.getAttribute("data-id");
-        state.editingTitle = false; state.openPicker = null; state.confirmRemove = null;
+        state.editingTitle = false; state.openPicker = null; state.openSpeaker = null; state.confirmRemove = null;
         render();
         if (window.matchMedia("(max-width: 760px)").matches) {
           var d = document.getElementById("detail"); if (d) d.scrollIntoView({ block: "start" });
@@ -590,10 +759,22 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
       case "picker-toggle":
         var pi = +el.getAttribute("data-i");
         if (state.openPicker === pi) { state.openPicker = null; state.focus = "owner-btn-" + pi; render(); break; }
-        state.openPicker = pi; combo.active = 0; render();
+        state.openPicker = pi; state.openSpeaker = null; combo.active = 0; render();
         fillCombo("owner", pi, "");
         var q = document.getElementById("owner-q-" + pi); if (q) q.focus();
         break;
+      case "spk-toggle":
+        var ki = +el.getAttribute("data-i");
+        if (state.openSpeaker === ki) { state.openSpeaker = null; state.focus = "spk-btn-" + ki; render(); break; }
+        state.openSpeaker = ki; state.openPicker = null; combo.active = 0; render();
+        fillCombo("speaker", ki, "");
+        var kq = document.getElementById("spk-q-" + ki); if (kq) kq.focus();
+        break;
+      case "spk-suggest":
+        var gi = +el.getAttribute("data-i"), gname = el.getAttribute("data-name");
+        var gwho = findPerson(gname) || addPerson(gname);
+        if (gwho) setSpeaker(m, gi, gwho);
+        state.focus = "spk-btn-" + gi; render(); break;
       case "combo-pick": chooseCombo(+el.getAttribute("data-idx")); break;
       case "skip":
         var si = +el.getAttribute("data-i"), it2 = m.actionItems[si];
@@ -634,6 +815,7 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
     else if (t.id === "people-add") state.peopleDraft = t.value;
     else if (t.id === "person-q") { combo.active = 0; fillCombo("person", null, cleanName(t.value)); }
     else if (t.hasAttribute("data-owner-q")) { combo.active = -2; fillCombo("owner", +t.getAttribute("data-owner-q"), cleanName(t.value)); }
+    else if (t.hasAttribute("data-spk-q")) { combo.active = -2; fillCombo("speaker", +t.getAttribute("data-spk-q"), cleanName(t.value)); }
   });
 
   // The people list opens on a click, typing or an arrow key, never on focus alone (focus returns here after
@@ -650,11 +832,11 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
 
   document.addEventListener("keydown", function (e) {
     var t = e.target;
-    var isCombo = t.id === "person-q" || (t.hasAttribute && t.hasAttribute("data-owner-q"));
+    var isCombo = t.id === "person-q" || (t.hasAttribute && (t.hasAttribute("data-owner-q") || t.hasAttribute("data-spk-q")));
     if (isCombo) {
-      var kind = t.id === "person-q" ? "person" : "owner";
-      var i = kind === "owner" ? +t.getAttribute("data-owner-q") : null;
-      var listEl = document.getElementById(kind === "person" ? "person-list" : "owner-list-" + i);
+      var kind = t.id === "person-q" ? "person" : t.hasAttribute("data-spk-q") ? "speaker" : "owner";
+      var i = kind === "owner" ? +t.getAttribute("data-owner-q") : kind === "speaker" ? +t.getAttribute("data-spk-q") : null;
+      var listEl = document.getElementById(comboIds(kind, i).list);
       if (kind === "person" && listEl && listEl.hidden) {
         if (e.key === "ArrowDown") { e.preventDefault(); combo.active = 0; fillCombo(kind, i, cleanName(t.value)); }
         return;
@@ -670,6 +852,7 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
       } else if (e.key === "Escape") {
         e.preventDefault();
         if (kind === "owner") { state.openPicker = null; state.focus = "owner-btn-" + i; render(); }
+        else if (kind === "speaker") { state.openSpeaker = null; state.focus = "spk-btn-" + i; render(); }
         else { t.value = ""; closePersonList(); }
       }
       return;
@@ -680,6 +863,7 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
     }
     if (t.id === "people-add" && e.key === "Enter") { e.preventDefault(); document.getElementById("people-add-btn").click(); }
     if (e.key === "Escape" && state.openPicker !== null) { var p = state.openPicker; state.openPicker = null; state.focus = "owner-btn-" + p; render(); }
+    if (e.key === "Escape" && state.openSpeaker !== null) { var sk = state.openSpeaker; state.openSpeaker = null; state.focus = "spk-btn-" + sk; render(); }
   });
 
   function saveTitle() {
@@ -695,12 +879,14 @@ Static prototype: no backend, all state in memory, nothing is saved anywhere.
     m.savedTitle = fullTitle(m);
     m.triaged = true;
     m.inMemory = memory || m.inMemory;
-    state.openPicker = null; state.editingTitle = false;
+    state.openPicker = null; state.openSpeaker = null; state.editingTitle = false;
     state.focus = memory ? "save-memory" : "save-plain";
     render();
-    toast(memory
+    var unset = m.speakers.length - voicesSet(m);
+    toast((memory
       ? "Saved. Title, participants and owners are stored on the meeting; the transcript is queued for your Trinnex memory."
-      : "Saved. Title, participants and owners are stored on the meeting. The transcript was not added to your Trinnex memory.");
+      : "Saved. Title, participants and owners are stored on the meeting. The transcript was not added to your Trinnex memory.") +
+      (unset ? " Unset voices are saved as Speaker N and can be set later." : ""));
   }
 
   render();
