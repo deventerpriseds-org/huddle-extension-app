@@ -220,3 +220,52 @@ test("VA8 extraction failure (quota) still stores passages, stores 0 facts, and 
   expect(r.factsFailure).toBe("429 insufficient_quota");
   expect(reported).toEqual(["429 insufficient_quota"]);
 });
+
+test("VA9 RACE: Remove while the worker is mid-ingest -> library row + blob deleted, but late passages/facts survive in Trinnex", async () => {
+  chunks.length = 0;
+  triples.length = 0;
+  const lib = await import(`${SRC}/trinnex/library.server.ts`);
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let embeds = 0;
+  mem.__setTrinnexDepsForTest({
+    getPool: () => fakePool,
+    configured: () => true,
+    embed: async () => {
+      embeds++;
+      if (embeds === 2) await gate; // worker is slow on passage 2 (a real embed call takes ~0.3-2 s)
+      return new Array(3072).fill(0.01);
+    },
+    extractTriples: async (text: string) => ({ triples: [{ subject: "Vendor", predicate: "said", object: text.slice(0, 20), confidence: 0.9 }], failureKind: null }),
+    reportFailure: async () => {},
+  });
+  const rowState = { exists: true, status: "split" as string };
+  const deps = {
+    getBytes: async () => new Uint8Array([1]),
+    deleteBytes: async () => true,
+    extract: async () => ({ segments: [1, 2, 3].map((p) => ({ text: `Page ${p} words. `.repeat(150), page: String(p) })), cues: [] }),
+    memory: {
+      configured: () => true,
+      ingest: (input: Parameters<typeof mem.ingestTrinnexSource>[0]) => mem.ingestTrinnexSource({ ...input, series: null }),
+      remove: (id: string, owner: string) => mem.deleteTrinnexSource(id, owner),
+    },
+    update: async (_id: string, p: { status?: string }) => {
+      if (rowState.exists && p.status) rowState.status = p.status; // a deleted row updates 0 rows, silently
+    },
+    deleteRow: async () => {
+      rowState.exists = false;
+    },
+  };
+  const item = { id: "11111111-1111-1111-1111-111111111111", ownerEmail: "owner@x.com", name: "Test-race.pdf", kind: "document", blobPath: "p", docDate: null, category: "General", participants: [], speakerMap: {}, chunks: 0, facts: 0, status: "split" };
+  const pipeline = lib.runPipeline(item as never, deps as never);
+  while (embeds < 2) await new Promise((r) => setTimeout(r, 1));
+  const removal = await lib.runRemoval({ ...item, status: "split" } as never, deps as never);
+  release();
+  await pipeline;
+  const left = chunks.filter((c) => c.source === `trinnex:upload:${item.id}`).length;
+  console.log(`VA9 removal=${JSON.stringify(removal)} rowExists=${rowState.exists} trinnexChunksLeft=${left} factsLeft=${triples.length}`);
+  expect(removal.removed).toBe(true);
+  expect(rowState.exists).toBe(false);
+  // The defect: anything > 0 here is searchable by Iris with no Library row left to remove it from.
+  expect(left).toBe(0);
+});

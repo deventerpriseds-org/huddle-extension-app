@@ -37,3 +37,14 @@ LOW: `trinnex.library_items` (file name, category, participants, speaker map, st
 ## Claim 2 -- Delete means gone: CONFIRMED (memory layer); library layer see below
 Read `memory.server.ts:358-389`: facts deleted FIRST by `agent_id = ANY(owner fact keys) OR source_chunk_id IN (owner's chunks of the source)` with no `superseded_at` filter, then chunks by `source = ANY(meeting|upload) AND lower(metadata->>'owner_email') = owner`. `ingestTrinnexSource` calls it first (`:293`).
 VA6 (in-memory model of both tables incl. the FK ON DELETE SET NULL): after delete, 0 owner chunks, 0 owner facts, the planted SUPERSEDED fact is gone, 0 orphan (NULL source_chunk_id) facts, other owner's and other source's rows unchanged. VA7: a 5-page ingest re-ingested as 1 page leaves exactly 1 chunk and no earlier chunk id.
+
+### Claim 2b -- Library delete (blob + row + "Removal incomplete"): REFUTED for one reachable path (FIX FIRST)
+Read `library.server.ts:240-262` `runRemoval`: memory delete, then blob delete, then row delete; any failure -> `remove_incomplete` naming `memory`/`file`, row kept; UI `TrinnexLibraryView.tsx:93,240` shows "Removal incomplete" and a "Retry remove" button (`:393-396`). Sequential happy and failed paths are correct.
+**DEFECT (race, delete leaves rows behind):** `removeLibraryItem` (`:444-448`) does not check the worker lease, and the Remove button is enabled for every status except `removing` (`TrinnexLibraryView.tsx:393`), including the in-flight `split`/`facts` states. `runPipeline` (`:172-227`) never re-checks that the row still exists, and `update` on a deleted row silently updates 0 rows. So: worker mid-`ingestTrinnexSource` (sequential embed per passage) -> owner clicks Remove -> passages written so far are deleted, blob deleted, row deleted, "removed" returned -> worker keeps writing the remaining passages and facts. Those rows are searchable by Iris/Eli (owner-scoped search) and no Library row is left to remove them from.
+Reproduced, VA9 in `scripts/verify-trinnex-attack.test.ts` (real `runPipeline`, `runRemoval`, `ingestTrinnexSource`, `deleteTrinnexSource`; fake pool modelling rag_chunks/rag_triples):
+```
+VA9 removal={"removed":true,"remaining":[]} rowExists=false trinnexChunksLeft=5 factsLeft=3
+Expected: 0  Received: 5
+(fail) VA9 RACE: Remove while the worker is mid-ingest ...
+```
+VA9 is left FAILING on purpose on this verifier branch as the regression test for the fix.
