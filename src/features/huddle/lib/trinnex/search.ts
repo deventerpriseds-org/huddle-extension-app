@@ -60,47 +60,6 @@ export function turnUsedTrinnex(marked: boolean, toolUses: ReadonlyArray<{ tool?
   return marked || (toolUses ?? []).some((t) => t?.tool === SEARCH_TRINNEX_TOOL.name);
 }
 
-/**
- * Voice writer guard, NARROWED 2026-11-20 (the loop-2 version skipped EVERY Iris/Eli voice reply, which changed
- * today's behaviour for every call without the owner's sign-off). The voice path never offers search_trinnex, so a
- * call can only carry Trinnex material from its 1:1 history. A voice reply is kept out of PERSONAL memory only when
- * ALL hold: it is an agent reply (the owner's own words are unaffected), the agent has Trinnex access, and that
- * agent's 1:1 history holds a turn marked as having run search_trinnex (`historyHasTrinnexTurn`, read from the
- * runTrinnexSearch breadcrumb; the caller passes true when it cannot tell). Otherwise the reply is written exactly as
- * on main.
- */
-export function voiceReplyMayCarryTrinnex(
-  agent: { trinnexAccess?: boolean } | undefined | null,
-  role: string,
-  historyHasTrinnexTurn: boolean,
-): boolean {
-  return role === "agent" && agentHasTrinnexAccess(agent) && historyHasTrinnexTurn;
-}
-
-/**
- * The voice writer's whole decision, with the history lookup injected so it is testable without a DB. Only a Trinnex
- * agent's reply costs a lookup; every other agent and every user utterance returns false with no lookup at all (the
- * main behaviour). No resolved owner, or a lookup that throws, means "cannot tell": treated as marked (fail closed).
- */
-export async function voiceReplySkipsPersonalMemory(args: {
-  agent: { trinnexAccess?: boolean } | undefined | null;
-  agentId: string;
-  role: string;
-  ownerEmail: string | null;
-  historyHasToolTurn: (ownerEmail: string, huddleId: string, toolName: string) => Promise<boolean>;
-}): Promise<boolean> {
-  if (args.role !== "agent" || !agentHasTrinnexAccess(args.agent)) return false;
-  let marked = true;
-  if (args.ownerEmail) {
-    try {
-      marked = await args.historyHasToolTurn(args.ownerEmail, `dm-${args.agentId}`, SEARCH_TRINNEX_TOOL.name);
-    } catch {
-      marked = true;
-    }
-  }
-  return voiceReplyMayCarryTrinnex(args.agent, args.role, marked);
-}
-
 /** Where a turn runs: the huddle id, its scope ("one-to-one" | "group") and whether it is a ceremony barge. */
 export interface TrinnexTurnScope {
   huddleId?: string | null;

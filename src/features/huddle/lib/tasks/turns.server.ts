@@ -499,31 +499,6 @@ export async function getRecentUserUtterances(
     }));
 }
 
-/**
- * Voice guard (narrowed 2026-11-20): does this owner's 1:1 history (`huddleId`, e.g. dm-iris-chase) hold a text turn
- * that ran `toolName` (search_trinnex)? Reads the SAME marker the text path writes: runTrinnexSearch records a
- * `toolUses` breadcrumb that lands in the turn's `result` (finished) and `progress` (resumable) columns, which is
- * what turnUsedTrinnex reads. Scope resolution mirrors getUserTurnsSince. Throws on a DB error; the caller fails closed.
- */
-export async function oneToOneHasToolTurn(userEmail: string, huddleId: string, toolName: string): Promise<boolean> {
-  await ensureBootstrapped();
-  const { resolveScopeByEmail } = await import("../identity/identity.server");
-  const { userId, emails } = await resolveScopeByEmail(userEmail);
-  const marker = JSON.stringify([{ tool: toolName }]);
-  const used = `(result->'toolUses' @> $2::jsonb OR progress->'toolUses' @> $2::jsonb)`;
-  const res = await getPool().query<{ hit: boolean }>(
-    userId
-      ? `SELECT EXISTS (SELECT 1 FROM chat.pending_turns
-          WHERE huddle_id = $1 AND ${used}
-            AND (user_id = $3 OR (user_id IS NULL AND lower(user_email) = ANY($4)))) AS hit`
-      : `SELECT EXISTS (SELECT 1 FROM chat.pending_turns
-          WHERE huddle_id = $1 AND ${used}
-            AND lower(user_email) = lower($3)) AS hit`,
-    userId ? [huddleId, marker, userId, emails] : [huddleId, marker, userEmail],
-  );
-  return res.rows[0]?.hit === true;
-}
-
 // ---- Delegation / orchestration (Pillar 2) -------------------------------------------------------
 
 export interface OrchestrationWorker {

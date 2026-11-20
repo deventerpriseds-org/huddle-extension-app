@@ -134,6 +134,8 @@ trinnex-bootstrap-allowlist 4/0, trinnex-integration 13/0, trinnex-library 23/0,
 
 ## Voice guard narrowed (2026-11-20)
 
+> **SUPERSEDED-BY:** "Final fixes before merge (2026-11-20)" below. The guard described here was REMOVED; voice-memory.functions.ts is byte-identical to main and trinnex-voice-guard / trinnex-voice-history were deleted.
+
 **Why.** The loop-2 fix made `rememberVoiceTurn` (voice/voice-memory.functions.ts) skip writing EVERY Iris/Eli voice-call reply to personal memory. That changed existing behaviour for every voice call, which Huddle's CLAUDE.md forbids without the owner's thumbs-up (not given). The real risk is narrow: a call with a Trinnex agent whose 1:1 already holds a reply built from `search_trinnex`.
 
 | Existing behaviour (origin/main) | Loop-2 (8a5f1bbe) | Now | Reversible? |
@@ -159,3 +161,18 @@ Every run printed "restored: ... matches HEAD". Not mutation-proved: the SQL of 
 
 ### Regression after the voice narrowing (one file per process, all rc=0)
 trinnex-bootstrap-allowlist 4/0, trinnex-integration 13/0, trinnex-library 23/0, trinnex-live-sources 12/0, trinnex-meetings 34/0 (script runner), trinnex-memory 52/0, trinnex-names 43/0 (script runner), trinnex-people 5/0, trinnex-quota-surfacing 5/0, trinnex-redteam-fixes 19/0, -isolation 5/0, -names 5/0, -search 5/0, trinnex-removal-lease 5/0, trinnex-removal-race 11/0, trinnex-scope-gate 5/0, trinnex-voice-guard 5/0 (was 2/0), trinnex-voice-history 1/0 (new), verify-trinnex-attack 9/0, verify-trinnex-attack-2 5/0, memory-context 11/0. `nice -n 10 npm run build` rc=0. No live calls, no real data. NOT confirmed live; the "any marked turn, no time window" reading is a judgment call for the owner (see above).
+
+## Final fixes before merge (2026-11-20)
+
+### 1. Voice guard removed entirely
+
+**Why.** Verifier loop 3 (VERIFY-trinnex-workspace-3.md, claim V) confirmed that the voice session is never seeded from the 1:1 conversation and cannot call `search_trinnex`. The guard therefore protected nothing, yet it changed behaviour: after any Trinnex use in a 1:1, Iris's and Eli's voice replies stopped going into personal memory. Huddle's CLAUDE.md forbids changing existing behaviour without the owner's thumbs-up, so the change is withdrawn rather than put to him.
+
+| Existing behaviour (origin/main) | Previous branch state | Now | Reversible? |
+|---|---|---|---|
+| every voice turn (user + agent, all agents) written to personal memory | Iris/Eli voice replies skipped after a Trinnex-marked 1:1 turn | exactly main: `src/features/huddle/lib/voice/voice-memory.functions.ts` restored, `git diff origin/main -- <file>` is empty | yes (git) |
+
+**Removed:** `voiceReplySkipsPersonalMemory` and `voiceReplyMayCarryTrinnex` (its only caller) from `lib/trinnex/search.ts`; `oneToOneHasToolTurn` from `lib/tasks/turns.server.ts` (no other user; that file is now identical to main); tests `scripts/trinnex-voice-guard.test.ts` and `scripts/trinnex-voice-history.test.ts`.
+
+**Replaced by ONE test, `scripts/trinnex-voice-none.test.ts` (VOICE-NONE, 3/0):** every src file whose path names "voice" (19 files: lib/voice/*, the voice hooks, AgentVoiceField) neither imports `trinnex/` nor names `search_trinnex` / `SEARCH_TRINNEX`; and the voice-memory file is byte-identical to `origin/main` (falls back to `main`; no ref at all FAILS, never skips).
+

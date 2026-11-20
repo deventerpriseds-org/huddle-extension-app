@@ -67,28 +67,6 @@ export const rememberVoiceTurn = createServerFn({ method: "POST" })
 
     // SECONDARY (cross-huddle): also write to shared RAG memory so auto-retrieval can surface voice
     // content from OTHER huddles/agents (the conversation object is per 1:1 only).
-    // Trinnex guard, narrowed 2026-11-20: a Trinnex agent's reply skips PERSONAL memory only when that agent's 1:1
-    // history holds a turn that ran search_trinnex (the runTrinnexSearch breadcrumb). Every other reply is written
-    // exactly as before. It still joins that agent's own 1:1 conversation above.
-    try {
-      const { voiceReplySkipsPersonalMemory } = await import("../trinnex/search");
-      const { AGENT_BY_ID } = await import("../../data/agents");
-      const { oneToOneHasToolTurn } = await import("../tasks/turns.server");
-      const skip = await voiceReplySkipsPersonalMemory({
-        agent: AGENT_BY_ID[data.agentId as keyof typeof AGENT_BY_ID],
-        agentId: data.agentId,
-        role: data.role,
-        ownerEmail: email,
-        historyHasToolTurn: oneToOneHasToolTurn,
-      });
-      if (skip) {
-        result.ok = result.conversation;
-        return result;
-      }
-    } catch {
-      result.ok = result.conversation; // the guard itself failed to load: cannot tell, fail closed
-      return result;
-    }
     try {
       const { azurePgStore } = await import("../rag/azure-pg.server");
       const { embed } = await import("../rag/embed.server");
