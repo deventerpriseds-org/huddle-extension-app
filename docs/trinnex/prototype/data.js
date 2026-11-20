@@ -23,6 +23,14 @@ window.TRINNEX_SAMPLE = {
       attendees: ["Von", "Michael R.", "Priya S.", "Dana K."],
       participants: [],
       series: "",
+      // Fireflies' own speaker labels, as it sends them (sentences[].speaker_name). Unknown voices arrive as
+      // "Speaker N"; triage maps each label to a person so every stored passage says who said it.
+      speakers: [
+        { label: "Von Ellis", known: true, lines: 41, talkPct: 34, sample: "Let's lock the roadmap once we have the platform number." },
+        { label: "Speaker 1", known: false, lines: 37, talkPct: 31, sample: "So the outcome is we stay with them one more year, but we put a 90-day exit in the renewal." },
+        { label: "Speaker 2", known: false, lines: 22, talkPct: 20, sample: "I can have the data-platform estimate to the group by Friday." },
+        { label: "Speaker 3", known: false, lines: 15, talkPct: 15, sample: "Recruiting says January is realistic for both senior roles." }
+      ],
       summary: "Q1 roadmap sign-off is held until the data-platform estimate is in. Michael confirmed the outcome of the vendor review: keep the current vendor for one more year with a 90-day exit clause. Hiring for two senior engineers moves to January.",
       actionItems: [
         { text: "Send the data-platform estimate to the leadership group", stamp: "12:40", assignee: null },
@@ -42,6 +50,10 @@ window.TRINNEX_SAMPLE = {
       attendees: ["Von", "Priya S."],
       participants: [],
       series: "",
+      speakers: [
+        { label: "Von Ellis", known: true, lines: 29, talkPct: 48, sample: "So the points just stay on the company side?" },
+        { label: "Speaker 1", known: false, lines: 31, talkPct: 52, sample: "Points on company travel stay with the company, they're not personal rewards." }
+      ],
       summary: "Reviewed the travel booking change: business-card points on company travel stay with the company and are not personal rewards. Priya will share the updated policy PDF.",
       actionItems: [
         { text: "Share the updated travel and expense policy PDF", stamp: "08:15", assignee: null },
@@ -59,6 +71,12 @@ window.TRINNEX_SAMPLE = {
       attendees: ["Von", "Michael R.", "Priya S.", "Dana K."],
       participants: ["Michael R.", "Priya S.", "Dana K."],
       series: "Engineering Leaders",
+      speakers: [
+        { label: "Von Ellis", known: true, lines: 33, talkPct: 30, sample: "Let's agree the incident review steps today.", person: "Von" },
+        { label: "Speaker 1", known: false, lines: 40, talkPct: 36, sample: "I'll take the on-call rotation redesign.", person: "Michael R." },
+        { label: "Speaker 2", known: false, lines: 21, talkPct: 19, sample: "We should timebox reviews to 30 minutes.", person: "Priya S." },
+        { label: "Speaker 3", known: false, lines: 17, talkPct: 15, sample: "I'll share last quarter's incident list.", person: "Dana K." }
+      ],
       summary: "Incident review process agreed. Michael owns the on-call rotation redesign.",
       actionItems: [
         { text: "Redesign the on-call rotation", stamp: "15:02", assignee: "Michael R." },
