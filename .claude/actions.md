@@ -5520,3 +5520,12 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 ## ACT:trinnex-memory — Trinnex memory lane (separate DB, search for Iris + Eli only) (2026-11-20) — IN PROGRESS
 - **Asked for:** owner decision "A" (separate Trinnex database), "Huddle Iris and Eli first". Spec: `docs/qc-evidence/AC-trinnex-workspace.md` §3, §9, §10.
 - **Built on branch** `claude_trinnex-memory` (NOT merged, NOT deployed). Step log with test runs: `docs/qc-evidence/BUILD-trinnex-memory.md`.
+
+## ACT:trinnex-meetings -- Trinnex Meetings triage module (2026-11-20) -- IN PROGRESS
+**Asked for:** owner "go on prototype" (AC-trinnex-workspace.md s1, s5 name rows, s9, s10).
+- Build log + evidence: docs/qc-evidence/BUILD-trinnex-meetings.md. Branch claude_trinnex-meetings, NOT merged, NOT live.
+- Step 3 (pure triage core + 32 tests, meeting columns + people table, writer uses the chosen file name; BUILD step 3/3b).
+- Step 4 (server store + fns: lib/trinnex/meetings.server.ts, meetings.functions.ts; owner picks via EXISTING actOnProposal triage; AC-T2 source guard).
+- Step 5 (MeetingsView + PeoplePicker + Modules entry 'Meetings'; view wired in store/HuddleApp/ViewSwitcher).
+- Step 6 (4 mutation proofs FIRED; not-covered list in BUILD step 6).
+- Step 7 (build exit 0).

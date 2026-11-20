@@ -149,5 +149,6 @@ export const VIEW_TITLE: Record<View, string | null> = {
   priorities: "Priorities",
   schedule: "Schedule",
   actions: "Actions",
+  meetings: "Meetings",
   polish: "Polish",
 };

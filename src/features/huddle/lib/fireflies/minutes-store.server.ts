@@ -72,11 +72,35 @@ ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS queue_version BIGIN
 -- so attempts never moved and the meeting was retried every 3 minutes forever. Every claim now adds one
 -- unfinished pass and every release resets it; MAX_UNFINISHED_PASSES in a row ends in a visible failure.
 ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS unfinished_passes INT NOT NULL DEFAULT 0;
+-- Trinnex Meetings triage (2026-11-20, AC-trinnex-workspace.md section 1). The Fireflies title column is never written by
+-- triage (AC-T1/T2: recordMeetingInfo keeps COALESCE-ing it); the owner's edit lives in display_title. speaker_map is
+-- {"Speaker 3": "<person>"}; onedrive_file_name is the owner's chosen transcript name, which the writer uses (AC-T8).
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS display_title TEXT;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS series TEXT;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS participants TEXT[];
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS speaker_map JSONB;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS triaged_at TIMESTAMPTZ;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS title_with_participants BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS onedrive_file_name TEXT;
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS trinnex_state TEXT;   -- NULL | queued | ingested | not_configured | failed
+ALTER TABLE chat.fireflies_meetings ADD COLUMN IF NOT EXISTS trinnex_error TEXT;
+-- The owner's people list (AC-T14/T15). The owner himself is never a row: he is pinned first at read time.
+CREATE TABLE IF NOT EXISTS chat.trinnex_people (
+  owner_email TEXT NOT NULL,
+  name_key    TEXT NOT NULL,          -- lower-cased, whitespace-collapsed: case-insensitive dedup
+  name        TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner_email, name_key)
+);
 CREATE INDEX IF NOT EXISTS fireflies_meetings_due_idx ON chat.fireflies_meetings(next_attempt_at)
   WHERE pending_email OR pending_onedrive;
 `;
 
 let bootstrapped: Promise<void> | null = null;
+/** Exported for the Trinnex meetings store, which reads/writes the columns this bootstrap adds. */
+export async function ensureMinutesSchema(): Promise<void> {
+  return ensureBootstrapped();
+}
 async function ensureBootstrapped() {
   if (bootstrapped) return bootstrapped;
   bootstrapped = (async () => {
@@ -142,6 +166,8 @@ export interface MeetingRow {
   last_reprocessed_at: string | null;
   attempts: number;
   queue_version: string; // BIGINT comes back as a string from pg
+  /** Trinnex AC-T8: the owner's chosen transcript file name (NULL = fireflies-<id>.md). */
+  onedrive_file_name?: string | null;
   created_at: string;
   updated_at: string;
 }
