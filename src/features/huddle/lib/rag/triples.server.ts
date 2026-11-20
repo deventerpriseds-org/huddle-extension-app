@@ -59,7 +59,9 @@ export async function extractTriples(text: string): Promise<Triple[]> {
 export async function extractTriplesDetailed(text: string): Promise<ExtractResult> {
   const none = (failureKind: string | null = null): ExtractResult => ({ triples: [], failureKind });
   const key = process.env.OPENAI_API_KEY;
-  if (!key) return none();
+  // AC-C5 (verifier loop 1): a missing key is a KIND, not "no facts". extractTriples (every existing caller)
+  // still gets [].
+  if (!key) return none("no_api_key");
 
   const body = {
     model: "gpt-5.5",

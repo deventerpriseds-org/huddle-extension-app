@@ -174,7 +174,9 @@ const removalTombstones = new Set<string>();
 
 /** Classify an AI/ingest failure KIND (AC-C5). Never returns or logs the message text. */
 export function ingestFailReason(e: unknown): FailReason {
-  const s = `${(e as { status?: unknown })?.status ?? ""} ${(e as { code?: unknown })?.code ?? ""} ${String((e as Error)?.message ?? "")}`;
+  const kind = (e as { kind?: unknown })?.kind; // TrinnexEmbedError (memory.server embedFailureKind)
+  const s = `${(e as { status?: unknown })?.status ?? ""} ${(e as { code?: unknown })?.code ?? ""} ${typeof kind === "string" ? kind : ""} ${String((e as Error)?.message ?? "")}`;
+  if (/\bno_api_key\b|OPENAI_API_KEY not configured/.test(s)) return "no_api_key";
   return /insufficient_quota|\b429\b|quota/i.test(s) ? "ai_quota" : "ingest_error";
 }
 

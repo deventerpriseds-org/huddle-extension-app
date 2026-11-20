@@ -351,6 +351,7 @@ export async function saveMeeting(caller: Caller, input: SaveInput): Promise<Sav
   // 4. Trinnex memory (brief step 7, section 10). Never fails the save.
   let memory = "skipped";
   let factsError: string | null = null;
+  let ingestKind: string | null = null;
   if (input.addToMemory) {
     const mem = await import("./memory.server");
     if (!mem.trinnexConfigured()) {
@@ -386,15 +387,25 @@ export async function saveMeeting(caller: Caller, input: SaveInput): Promise<Sav
         console.log("[trinnex-meetings] ingested", input.meetingId, r.chunks, r.facts);
       } catch (e) {
         memory = "failed";
-        console.error("[trinnex-meetings] ingest failed", code(e, "ingest_failed"));
-        notes.push("Saved, but adding it to Trinnex memory failed. Try again later.");
+        // AC-C5 (verifier loop 1): an embedding failure carries its KIND (TrinnexEmbedError.kind, already sent to
+        // the ai-quota alert by the memory lane); record it on the meeting instead of a bare "ingest_failed".
+        const k = (e as { kind?: unknown })?.kind;
+        if (typeof k === "string" && /^[a-z0-9_ ]{1,64}$/i.test(k)) ingestKind = k;
+        console.error("[trinnex-meetings] ingest failed", ingestKind ?? code(e, "ingest_failed"));
+        notes.push(
+          ingestKind === "no_api_key"
+            ? "Saved, but not added to Trinnex memory: the AI key is not set."
+            : /insufficient_quota/.test(ingestKind ?? "")
+              ? "Saved, but not added to Trinnex memory: AI quota exhausted. Try again later."
+              : "Saved, but adding it to Trinnex memory failed. Try again later.",
+        );
       }
     }
     await pool()
       .query(`UPDATE chat.fireflies_meetings SET trinnex_state = $2, trinnex_error = $3, updated_at = now() WHERE meeting_id = $1`, [
         input.meetingId,
         memory,
-        memory === "failed" ? "ingest_failed" : factsError,
+        memory === "failed" ? (ingestKind ? `ingest_failed:${ingestKind}` : "ingest_failed") : factsError,
       ])
       .catch(() => {});
   }

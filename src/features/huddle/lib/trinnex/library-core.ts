@@ -71,6 +71,7 @@ export type FailReason =
   | "corrupt_file"
   | "storage_error"
   | "ai_quota"
+  | "no_api_key"
   | "ingest_error";
 
 export const FAIL_LABEL: Record<FailReason, string> = {
@@ -82,12 +83,15 @@ export const FAIL_LABEL: Record<FailReason, string> = {
   corrupt_file: "file could not be read",
   storage_error: "storage error",
   ai_quota: "AI quota",
+  no_api_key: "AI key not set",
   ingest_error: "memory error",
 };
 
 /** AC-C5: a fact-extraction failure on an otherwise searchable item is stored as `facts:<kind>` in fail_reason
  *  (the kind is "429 insufficient_quota", "500", "timeout": status + provider code, never message text). */
 export const FACTS_QUOTA_TEXT = "Facts not extracted: AI quota exhausted";
+/** AC-C5 (verifier loop 1): a missing OpenAI key is shown, never a silent "0 facts". */
+export const FACTS_NO_KEY_TEXT = "Facts not extracted: AI key not set";
 export const isQuotaKind = (kind: string | null | undefined): boolean => /insufficient_quota/.test(kind ?? "");
 export const factsFailReason = (kind: string): string => `facts:${kind}`.slice(0, 80);
 /** The owner-facing notice for a stored fact failure, or null when facts were extracted. Used by the Library and
@@ -95,6 +99,7 @@ export const factsFailReason = (kind: string): string => `facts:${kind}`.slice(0
 export function factsFailureNotice(stored: string | null | undefined): string | null {
   if (!stored || !stored.startsWith("facts:")) return null;
   const kind = stored.slice("facts:".length);
+  if (kind === "no_api_key") return FACTS_NO_KEY_TEXT;
   return isQuotaKind(kind) ? FACTS_QUOTA_TEXT : `Facts not extracted (${kind || "error"})`;
 }
 
