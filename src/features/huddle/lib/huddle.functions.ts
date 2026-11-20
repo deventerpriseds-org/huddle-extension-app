@@ -4090,6 +4090,8 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           ...emailTools,
           ...snapshotTools,
           ...ragTools,
+          // Trinnex work memory: offered ONLY to agents agents.ts marks trinnexAccess (iris-chase, eli-vaughn).
+          ...(await import("./trinnex/search")).trinnexToolsFor(winner),
           ...journeyTools,
           ...webSearchTools,
           ...nexusTools,
@@ -4126,6 +4128,11 @@ Do NOT repeat, restate, agree with, second-opinion, or add color to what the pri
           }
           if (c.name === "delegate_to_specialist") {
             return await dispatchDelegate(c.arguments);
+          }
+          if (c.name === "search_trinnex") {
+            // The executor re-checks the agents.ts data gate, so no other agent can reach the Trinnex DB.
+            const { dispatchTrinnexTool } = await import("./trinnex/memory.server");
+            return await dispatchTrinnexTool(winner.id, c.arguments);
           }
           if (c.name === "list_artifacts") {
             // Read-only, so no ledger claim (claimAction guards MUTATING actions). The executor is

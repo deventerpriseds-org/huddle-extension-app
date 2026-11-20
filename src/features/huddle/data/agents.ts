@@ -381,6 +381,9 @@ export interface Agent {
   special?: "coordinator" | "standup-host" | "queue-owner";
   /** Exclusive powers this agent owns (data-driven ownership; see AgentCapability). */
   capabilities?: AgentCapability[];
+  /** May search the separate Trinnex work-memory database (search_trinnex tool). Owner decision
+   *  2026-11-20: "Huddle Iris and Eli first". Read only by lib/trinnex/search.ts agentHasTrinnexAccess. */
+  trinnexAccess?: boolean;
   systemPrompt: string;
   avatarUrl?: string;
 }
@@ -435,6 +438,7 @@ export const AGENTS: Agent[] = [
     // be among a pool of tools but elle and iris should be prime to use it immediately if i request it."
     capabilities: [NEXUS_ASSIGNMENTS_CAPABILITY],
     avatarUrl: "/agents/iris-chase.jpg",
+    trinnexAccess: true,
     systemPrompt: p(
       "Iris Chase, the team lead who owns the day plan, calendar and shared task board",
       "warm, orderly, day-of-focused",
@@ -603,6 +607,7 @@ export const AGENTS: Agent[] = [
     tone: "formal",
     voiceId: "TVtDNgumMv4lb9zzFzA2",
     avatarUrl: "/agents/eli-vaughn.jpg",
+    trinnexAccess: true,
     systemPrompt: p(
       "Eli Vaughn, the executive assistant",
       "polished, discreet, precise",
