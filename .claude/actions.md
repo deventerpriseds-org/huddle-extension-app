@@ -5547,3 +5547,6 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
       2768fa9a was built from a STALE worktree index: it reverted ~5,000 lines (every red-team + verifier fix after c7b57f3d).
       Trinnex memory was OFF in prod (bootstrap 44703349380 failed: `db create -d` needs `--name`), so no Trinnex data existed.
       RESTORE: branch claude_trinnex-restore = reviewed tree 8755f8e3 + trinnex-checks.mjs + bootstrap fix. NOT owner-confirmed.
+      2026-11-20 restore #290 merged (14ae195b, deploy 44703999311): main == reviewed 8755f8e3 + 3 intended files. Bootstrap
+      44704265091 OK (Trinnex_Memory: vector, rag_chunks/rag_triples, dedup indexes, 0 rows). deploy-swa's Trinnex step had the
+      same `db show -d` bug -> TRINNEX_PG_URL left empty (Trinnex still OFF). Fix: claude_trinnex-deploy-dbflag.
