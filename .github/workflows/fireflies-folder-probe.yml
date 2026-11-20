@@ -7,7 +7,7 @@ name: Probe the named Fireflies transcripts folder (read-only, counts only)
 #             owner's OneDrive files for the same meetings are named "Nov 10- 09-37 AM-Engineering ...". Before
 #             building a reader, prove Huddle's Graph app can see that folder at all.
 # SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
-# EVIDENCE:   .claude/actions.md ACT:trinnex-named-titles.
+# EVIDENCE:   .claude/actions.md ACT:trinnex-named-titles. Run 44734555516: same drive, folder not at root, search 403.
 # PRIVACY:    this repo is PUBLIC, so its logs are public. File names hold people's names: NEVER print a name,
 #             a path below the folder, or the drive URL. Booleans and counts only.
 
@@ -61,11 +61,22 @@ jobs:
           st, item = get(base + "/drive/root:/" + urllib.parse.quote(folder))
           print("folder_at_root_http", st)
           if st != 200:
-              st2, found = get(base + "/drive/root/search(q='" + urllib.parse.quote(folder) + "')")
-              hits = [i for i in (found or {}).get("value", []) if i.get("folder") and i.get("name", "").lower() == folder.lower()]
-              print("search_http", st2, "matching_folders", len(hits))
-              item = hits[0] if hits else None
-              if item: print("folder_depth", str(item.get("parentReference", {}).get("path", "")).count("/"))
+              # Search is refused to the app-only token (run 44734555516: 403), so walk folders breadth-first.
+              # Prints only the FOLDER path of the match (folder names, never file names).
+              item, queue, seen = None, [("root", "", 0)], 0
+              while queue and not item and seen < 400:
+                  iid, path, depth = queue.pop(0)
+                  url = base + ("/drive/root/children" if iid == "root" else "/drive/items/" + iid + "/children") + "?$top=200&$select=id,name,folder"
+                  while url and not item:
+                      st2, page = get(url)
+                      if st2 != 200: break
+                      for c in page.get("value", []):
+                          if not c.get("folder"): continue
+                          seen += 1
+                          if c.get("name", "").lower() == folder.lower(): item = c; print("found_under", path or "/"); break
+                          if depth < 2: queue.append((c["id"], path + "/" + c.get("name", ""), depth + 1))
+                      url = page.get("@odata.nextLink")
+              print("folders_walked", seen, "found", bool(item))
           if not item: raise SystemExit(0)
           names, url = [], base + "/drive/items/" + item["id"] + "/children?$top=200&$select=name,file"
           while url:
