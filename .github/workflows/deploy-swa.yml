@@ -425,7 +425,10 @@ jobs:
           read -r SRV RG HOST ADMIN <<< "$LINE"
           DB="$TRINNEX_PG_DB"
           if [ "$DB" = "postgres" ] || [ "$DB" = "RAG_AI_Agents" ]; then echo "::error::Trinnex DB pin is wrong ($DB)"; exit 1; fi
-          if ! az postgres flexible-server db show -g "$RG" -s "$SRV" -d "$DB" -o none 2>/dev/null; then
+          # Existence via `db list` (flag-spelling-proof): current az wants `--name/-n`, so `db show -d` failed
+          # silently and left TRINNEX_PG_URL empty (deploy 44704735865) although the DB existed (bootstrap 44704265091).
+          EXISTS=$(az postgres flexible-server db list -g "$RG" -s "$SRV" --query "length([?name=='$DB'])" -o tsv 2>/dev/null || echo 0)
+          if [ "$EXISTS" != "1" ]; then
             echo "::warning::Trinnex: database $DB does not exist yet on $SRV (run bootstrap-trinnex-db.yml); TRINNEX_PG_URL left empty."
             exit 0
           fi
