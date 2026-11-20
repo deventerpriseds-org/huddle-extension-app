@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Meetings</title>
+<!--
+WHAT:       Clickable prototype of the new Huddle "Meetings" module: triage a Fireflies meeting (title, series,
+            participants, OneDrive file name, an owner per action item) and save it, optionally into Trinnex memory.
+WHY:        Owner 2026-11-20: confirm the transcript/summary triage design before any real module is built.
+            Today's triage (lib/proposals/meeting-triage.ts) is Mine / For someone (typed name, max 80) / Skip.
+SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample data, invented examples only),
+            src/features/huddle/lib/proposals/meeting-triage.ts (TRIAGE_NAME_MAX = 80), ActionsView.tsx (anatomy).
+Static prototype: no backend, all state in memory, nothing is saved anywhere.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="base.css">
+<style>
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .ic { width: 14px; height: 14px; stroke-width: 1.8; flex: none; }
+  .mt-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .mt-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .mt-list { display: flex; flex-direction: column; gap: 2px; padding: 6px; position: sticky; top: 24px; }
+  .mt-list-empty { padding: 12px; }
+  .mt-item { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; border: 1px solid transparent; background: transparent; color: var(--foreground); border-radius: calc(var(--radius) - 2px); padding: 10px; cursor: pointer; }
+  .mt-item:hover { background: var(--muted); }
+  .mt-item[aria-current="true"] { background: var(--accent); color: var(--accent-foreground); border-color: var(--border); }
+  .mt-item-top { justify-content: space-between; }
+  .mt-item-title { font-weight: 600; overflow-wrap: anywhere; }
+  .mt-detail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .mt-section { display: flex; flex-direction: column; gap: 10px; }
+  .mt-sec-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .mt-sec-head .mt-push { margin-left: auto; }
+  .mt-title { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+  .mt-grow { flex: 1 1 220px; }
+  .mt-label { font-size: 13px; font-weight: 500; }
+  .mt-field { gap: 4px; }
+  .mt-chip-btn { border: 0; cursor: pointer; height: auto; min-height: 26px; padding: 3px 10px; text-align: left; }
+  .mt-chip-btn:hover { background: color-mix(in oklch, var(--ai) 18%, var(--surface)); }
+  .mt-suggest { border: 1px dashed var(--muted-foreground); background: transparent; color: var(--foreground); cursor: pointer; height: 26px; }
+  .mt-suggest:hover { background: var(--muted); }
+  .mt-chip-x { width: 16px; height: 16px; border-radius: 999px; }
+  .mt-chip-x:hover { background: var(--muted); color: var(--foreground); }
+  .mt-combo-wrap, .mt-picker { position: relative; }
+  .mt-combo-wrap .input { width: 100%; }
+  .mt-listbox { list-style: none; margin: 4px 0 0; padding: 4px; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-hair), var(--shadow-pop); max-height: 240px; overflow: auto; }
+  .mt-combo-wrap .mt-listbox { position: absolute; z-index: 10; left: 0; right: 0; top: 100%; }
+  .mt-listbox-inline { position: static; box-shadow: none; padding: 0; margin-top: 6px; }
+  .mt-opt { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: calc(var(--radius) - 4px); cursor: pointer; font-size: 13px; }
+  .mt-opt:hover, .mt-opt[aria-selected="true"] { background: var(--muted); }
+  .mt-opt .mt-opt-sub { margin-left: auto; font-size: 11px; color: var(--muted-foreground); }
+  .mt-opt-add { color: var(--primary); font-weight: 500; }
+  .mt-opt-hint { padding: 7px 8px; font-size: 12px; color: var(--muted-foreground); }
+  .mt-switch { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px; }
+  .mt-switch input { appearance: none; -webkit-appearance: none; margin: 0; flex: none; width: 34px; height: 20px; border-radius: 999px; background: var(--input); position: relative; cursor: pointer; transition: background 0.15s; }
+  .mt-switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow-hair); transition: transform 0.15s; }
+  .mt-switch input:checked { background: var(--primary); }
+  .mt-switch input:checked::after { transform: translateX(14px); }
+  .mt-switch input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .mt-preview { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; align-items: baseline; padding: 10px; border-radius: calc(var(--radius) - 2px); background: var(--surface-2); box-shadow: var(--shadow-hair); }
+  .mt-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+  .mt-actions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .mt-action { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--hairline); }
+  .mt-action-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .mt-action.is-skipped .mt-action-main { color: var(--muted-foreground); text-decoration: line-through; }
+  .mt-action-ctrl { display: flex; align-items: center; gap: 6px; flex: none; }
+  .mt-owner-btn { min-width: 160px; justify-content: space-between; }
+  .mt-owner-btn .mt-owner-name { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+  .mt-owner-btn.is-empty { color: var(--muted-foreground); }
+  .mt-pop { position: absolute; z-index: 12; top: calc(100% + 4px); right: 0; width: min(290px, calc(100vw - 32px)); background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-hair), var(--shadow-pop); padding: 8px; }
+  .mt-pop .input { width: 100%; }
+  .mt-status { display: inline-flex; align-items: center; gap: 4px; }
+  .mt-people { padding: 12px; border-radius: calc(var(--radius) - 2px); background: var(--surface-2); box-shadow: var(--shadow-hair); display: flex; flex-direction: column; gap: 8px; }
+  .mt-people ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .mt-people li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--hairline); }
+  .mt-people li:first-child { border-top: 0; }
+  .mt-danger { color: var(--destructive); }
+  .btn-danger { background: var(--destructive); border-color: var(--destructive); color: var(--primary-foreground); }
+  .mt-confirm { flex-basis: 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px; border-radius: calc(var(--radius) - 2px); background: var(--surface); box-shadow: var(--shadow-hair); }
+  .mt-foot-row { justify-content: flex-end; }
+  /* NEW: Speakers ("Who is speaking") */
+  .mt-spk-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .mt-spk { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--hairline); }
+  .mt-spk-text { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 5px; }
+  .mt-spk-label { font-weight: 600; overflow-wrap: anywhere; }
+  .mt-bar { flex: 0 0 120px; height: 6px; border-radius: 999px; background: var(--muted); overflow: hidden; }
+  .mt-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--primary); }
+  .mt-quote { margin: 0; padding-left: 10px; border-left: 2px solid var(--hairline); color: var(--muted-foreground); font-style: italic; font-size: 13px; overflow-wrap: anywhere; }
+  .mt-spk-ctrl { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+  .mt-spk-ctrl .mt-suggest { height: auto; min-height: 26px; padding: 3px 10px; }
+  .mt-warn { display: flex; align-items: flex-start; gap: 6px; padding: 8px 10px; border-radius: calc(var(--radius) - 2px); background: var(--band-cream); color: var(--band-cream-text); font-size: 12px; }
+  .mt-passages { padding: 10px 12px; border-radius: calc(var(--radius) - 2px); background: var(--surface-2); box-shadow: var(--shadow-hair); display: flex; flex-direction: column; gap: 6px; }
+  .mt-passages p { margin: 0; }
+  .mt-done-banner { display: flex; align-items: center; gap: 8px; }
+  .mt-back { display: none; }
+  .btn.new .new-tag { margin-left: 2px; }
+  /* Dark mode: base.css pairs the dark cream band with a dark warning text, which is unreadable; lift the text. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .chip-warn, :root:not([data-theme="light"]) .changed-tag, :root:not([data-theme="light"]) .mt-warn { color: var(--warning); }
+  }
+  :root[data-theme="dark"] .chip-warn, :root[data-theme="dark"] .changed-tag, :root[data-theme="dark"] .mt-warn { color: var(--warning); }
+  @media (max-width: 760px) {
+    .mt-layout { grid-template-columns: 1fr; }
+    .mt-list { position: static; }
+    .mt-back { display: inline-flex; }
+    .mt-action { flex-direction: column; align-items: stretch; }
+    .mt-action-ctrl { flex-wrap: wrap; }
+    .mt-picker { flex: 1 1 auto; }
+    .mt-owner-btn { width: 100%; }
+    .mt-owner-btn .mt-owner-name { max-width: none; }
+    .mt-pop { left: 0; right: auto; }
+    .mt-spk { flex-direction: column; align-items: stretch; }
+    .mt-spk-ctrl { align-items: stretch; }
+    .mt-bar { flex-basis: 90px; }
+    .mt-foot-row { justify-content: stretch; }
+    .mt-foot-row .btn { flex: 1 1 100%; justify-content: center; height: auto; min-height: 36px; padding-block: 6px; }
+    .mt-preview { grid-template-columns: 1fr; gap: 2px; }
+    .mt-preview .muted + .mt-code { margin-bottom: 6px; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+<nav class="rail" aria-label="Huddle">
+  <div class="rail-group">
+    <span class="rail-logo" aria-hidden="true">H</span>
+    <a class="rail-btn" href="ask.html" title="Huddles" aria-label="Huddles"><i data-lucide="message-square"></i></a>
+    <a class="rail-btn" href="#" title="Board" aria-label="Board"><i data-lucide="layout-grid"></i></a>
+    <a class="rail-btn" href="#" title="Artifacts" aria-label="Artifacts"><i data-lucide="folder-open"></i></a>
+    <a class="rail-btn" href="#" title="Memory" aria-label="Memory"><i data-lucide="compass"></i></a>
+    <span class="rail-sep" aria-hidden="true"></span>
+    <a class="rail-btn rail-labelled" href="meetings.html" title="Modules" aria-label="Modules" aria-current="page"><i data-lucide="layout-dashboard"></i><span>Modules</span></a>
+    <a class="rail-btn rail-labelled" href="library.html" title="Apps" aria-label="Apps"><i data-lucide="blocks"></i><span>Apps</span></a>
+  </div>
+  <div class="rail-group">
+    <a class="rail-btn" href="#" title="Settings" aria-label="Settings"><i data-lucide="settings"></i></a>
+    <span class="rail-you">You</span>
+  </div>
+</nav>
+<main class="main">
+  <div class="page" id="app"></div>
+</main>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="data.js"></script>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var S = window.TRINNEX_SAMPLE;
+  var OWNER = S.owner;
+  var NAME_MAX = 80; // TRIAGE_NAME_MAX in lib/proposals/meeting-triage.ts
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  // Prototype stand-in for an AI title built from the summary.
+  var AI_TITLES = {
+    "ff-01JD8Q": "Leadership weekly: vendor review and Q1 roadmap",
+    "ff-01JD3K": "Travel points policy review with Priya",
+    "ff-01JCZ1": "Engineering Leaders weekly: incident review and on-call"
+  };
+
+  // Prototype stand-in for the timestamp of each speaker's sample line (Fireflies sentences[].start_time).
+  var SAMPLE_STAMPS = { "ff-01JD8Q": { "Speaker 1": "20:12" }, "ff-01JD3K": { "Speaker 1": "06:48" } };
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function cleanName(s) { return String(s || "").replace(/\s+/g, " ").trim().slice(0, NAME_MAX); }
+
+  // ── State (memory only) ─────────────────────────────────────────────
+  var state = {
+    people: S.people.slice(),
+    filter: "all",
+    selectedId: null,
+    editingTitle: false,
+    titleDraft: "",
+    openPicker: null,
+    openSpeaker: null,
+    managing: false,
+    confirmRemove: null,
+    peopleDraft: "",
+    focus: null
+  };
+  state.meetings = S.meetings.map(function (m) {
+    var titleWithParticipants = m.triaged && m.participants.length > 0;
+    var copy = {
+      id: m.id, firefliesTitle: m.firefliesTitle, title: m.title, meetingAt: m.meetingAt, durationMin: m.durationMin,
+      onedriveFile: m.onedriveFile, originalFile: "fireflies-" + m.id.replace(/^ff-/, "") + ".md",
+      attendees: m.attendees.slice(), participants: m.participants.slice(), series: m.series, summary: m.summary,
+      actionItems: m.actionItems.map(function (a) { return { text: a.text, stamp: a.stamp, assignee: a.assignee, skipped: false }; }),
+      triaged: m.triaged, inMemory: m.triaged, titleWithParticipants: titleWithParticipants, renameFile: true,
+      speakers: (m.speakers || []).map(function (sp) {
+        return { label: sp.label, known: sp.known, lines: sp.lines, talkPct: sp.talkPct, sample: sp.sample,
+          person: sp.person || (sp.known ? knownPerson(sp.label) : null) };
+      })
+    };
+    copy.savedTitle = fullTitle(copy);
+    return copy;
+  });
+  var firstOpen = state.meetings.filter(function (m) { return !m.triaged; })[0];
+  state.selectedId = (firstOpen || state.meetings[0]).id;
+
+  // A voice Fireflies names ("Von Ellis") is matched to a person by full name or first name.
+  function knownPerson(label) {
+    var l = String(label || "").toLowerCase().trim(), first = l.split(/\s+/)[0];
+    return S.people.filter(function (p) { return p.toLowerCase() === l; })[0] ||
+      S.people.filter(function (p) { return p.toLowerCase().split(/\s+/)[0] === first; })[0] || null;
+  }
+  function voicesSet(m) { return m.speakers.filter(function (sp) { return sp.person; }).length; }
+  function voicesLine(m) { return voicesSet(m) + " of " + m.speakers.length + " voices set"; }
+  function sampleStamp(m, i) {
+    var map = SAMPLE_STAMPS[m.id] || {}, sp = m.speakers[i];
+    if (map[sp.label]) return map[sp.label];
+    var t = Math.round(m.durationMin * 60 * (i + 1) / (m.speakers.length + 1));
+    return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
+  }
+  // Mapping a voice to someone also puts them on the meeting's participants (Von is never a participant tag).
+  function setSpeaker(m, i, who) {
+    m.speakers[i].person = who;
+    if (who && who !== OWNER && m.participants.indexOf(who) < 0) m.participants.push(who);
+  }
+
+  function cur() { return state.meetings.filter(function (m) { return m.id === state.selectedId; })[0] || null; }
+  function findPerson(n) {
+    var k = cleanName(n).toLowerCase();
+    return state.people.filter(function (p) { return p.toLowerCase() === k; })[0] || null;
+  }
+  function addPerson(raw) {
+    var n = cleanName(raw);
+    if (!n) return null;
+    var ex = findPerson(n);
+    if (ex) return ex;
+    state.people.push(n);
+    toast("Added " + n + " to your people list. It will be offered from now on.");
+    return n;
+  }
+  function dateOf(m) { return m.meetingAt.slice(0, 10); }
+  function niceDate(m) { var p = dateOf(m).split("-"); return MONTHS[+p[1] - 1] + " " + (+p[2]) + ", " + p[0]; }
+  function niceTime(m) {
+    var h = +m.meetingAt.slice(11, 13), mi = m.meetingAt.slice(14, 16);
+    var ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12; return h + ":" + mi + " " + ap;
+  }
+  function fullTitle(m) {
+    return m.title + (m.titleWithParticipants && m.participants.length ? " - " + m.participants.join(", ") : "");
+  }
+  function fileName(m) {
+    if (!m.renameFile) return m.onedriveFile;
+    return (dateOf(m) + " " + fullTitle(m)).replace(/\s*:\s*/g, " - ").replace(/[\\/*?"<>|]/g, "-") + ".md";
+  }
+  function needsCount() { return state.meetings.filter(function (m) { return !m.triaged; }).length; }
+  function displayOwner(n) { return n === OWNER ? OWNER + " (me)" : n; }
+  function usedCount(name) {
+    var c = 0;
+    state.meetings.forEach(function (m) { m.actionItems.forEach(function (a) { if (a.assignee === name) c++; }); });
+    return c;
+  }
+
+  // ── Toast ───────────────────────────────────────────────────────────
+  var toastTimer = null;
+  function toast(msg) {
+    var t = document.getElementById("toast");
+    t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, 5000);
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────
+  var app = document.getElementById("app");
+  function icons() { if (window.lucide) window.lucide.createIcons(); }
+
+  function render() {
+    var m = cur();
+    app.innerHTML = headerHTML() + '<div class="mt-layout">' + listHTML() + (m ? detailHTML(m) : "") + "</div>";
+    icons();
+    if (state.focus) {
+      var el = document.getElementById(state.focus);
+      if (el) { el.focus(); if (el.tagName === "INPUT" && el.type === "text" && el.value) el.select(); }
+      state.focus = null;
+    }
+  }
+
+  function headerHTML() {
+    var n = needsCount();
+    var filters = [["all", "All", state.meetings.length], ["needs", "Needs triage", n], ["done", "Done", state.meetings.length - n]];
+    return '' +
+      '<div class="legend" aria-label="How to read this prototype">' +
+        '<span class="row"><span class="new-tag">New</span> Dashed violet outline: new in this module</span>' +
+        '<span class="row"><span class="changed-tag">Changes today\'s flow</span> Replaces something you use today</span>' +
+        '<span class="row"><i data-lucide="info" class="ic"></i> Prototype with sample data. Nothing is saved.</span>' +
+      '</div>' +
+      '<header class="card mt-head-row">' +
+        '<div class="stack" style="gap:2px">' +
+          '<div class="row"><h1 class="h-page">Meetings</h1><span class="new-tag">New</span></div>' +
+          '<p class="muted" style="margin:0" id="needs-line">Fireflies meetings waiting for you: <span class="num">' + n + '</span> to triage</p>' +
+        '</div>' +
+        '<div class="pills" role="group" aria-label="Show meetings">' +
+          filters.map(function (f) {
+            return '<button type="button" id="filter-' + f[0] + '" data-action="filter" data-f="' + f[0] + '" aria-pressed="' + (state.filter === f[0]) + '">' +
+              esc(f[1]) + ' <span class="num">' + f[2] + '</span></button>';
+          }).join("") +
+        '</div>' +
+      '</header>';
+  }
+
+  function listHTML() {
+    var items = state.meetings.filter(function (m) {
+      return state.filter === "all" || (state.filter === "needs" ? !m.triaged : m.triaged);
+    });
+    var body = items.length ? items.map(function (m) {
+      var chip = m.triaged
+        ? '<span class="chip chip-ok"><i data-lucide="check" class="ic"></i>Done</span>'
+        : '<span class="chip chip-warn">Needs triage</span>';
+      return '<button type="button" class="mt-item" id="meeting-' + m.id + '" data-action="select" data-id="' + m.id + '" aria-current="' + (m.id === state.selectedId) + '">' +
+        '<span class="row mt-item-top"><span class="small muted num">' + niceDate(m) + '</span>' + chip + '</span>' +
+        '<span class="mt-item-title">' + esc(m.savedTitle) + '</span>' +
+        '<span class="small muted row"><i data-lucide="users" class="ic"></i>' + m.attendees.length + ' attendees<span aria-hidden="true">·</span>' + m.durationMin + ' min</span>' +
+        (m.speakers.length ? '<span class="small muted row"><i data-lucide="audio-lines" class="ic"></i><span class="num" id="voices-row-' + m.id + '">' + voicesLine(m) + '</span><span class="new-tag">New</span></span>' : '') +
+      '</button>';
+    }).join("") : '<p class="muted small mt-list-empty">' + (state.filter === "needs" ? "Nothing to triage. You are all caught up." : "No meetings here yet.") + '</p>';
+    return '<section class="card mt-list" aria-label="Meetings">' + body + '</section>';
+  }
+
+  function detailHTML(m) {
+    return '<div class="mt-detail" id="detail">' +
+      overviewHTML(m) + titleHTML(m) + participantsHTML(m) + speakersHTML(m) + summaryHTML(m) + actionsHTML(m) + footerHTML(m) +
+    '</div>';
+  }
+
+  function overviewHTML(m) {
+    var status = m.triaged
+      ? '<span class="chip chip-ok"><i data-lucide="check" class="ic"></i>Done</span>' + (m.inMemory ? '<span class="chip chip-ai"><i data-lucide="brain" class="ic"></i>In Trinnex memory</span>' : '<span class="chip">Not in memory</span>')
+      : '<span class="chip chip-warn">Needs triage</span>';
+    return '<section class="card mt-section" aria-label="Meeting">' +
+      '<button type="button" class="btn btn-ghost mt-back" data-action="back" id="back-to-list"><i data-lucide="arrow-left"></i>All meetings</button>' +
+      '<div class="eyebrow">Fireflies meeting</div>' +
+      '<div class="mt-title">' + esc(m.savedTitle) + '</div>' +
+      '<div class="row small muted"><i data-lucide="calendar" class="ic"></i>' + niceDate(m) + ', ' + niceTime(m) +
+        '<span aria-hidden="true">·</span>' + m.durationMin + ' min<span aria-hidden="true">·</span>' + m.attendees.length + ' attendees</div>' +
+      '<div class="row">' + status +
+        (m.speakers.length ? '<span class="chip new" id="voices-head"><i data-lucide="audio-lines" class="ic"></i><span class="num">' + voicesLine(m) + '</span></span>' : '') +
+      '</div>' +
+    '</section>';
+  }
+
+  function titleHTML(m) {
+    var sugg = AI_TITLES[m.id];
+    var view = state.editingTitle
+      ? '<div class="row"><label class="sr-only" for="title-input">Meeting title</label>' +
+          '<input id="title-input" class="input mt-grow" type="text" maxlength="120" value="' + esc(state.titleDraft) + '">' +
+          '<button type="button" class="btn btn-primary" id="title-save" data-action="title-save">Save</button>' +
+          '<button type="button" class="btn" id="title-cancel" data-action="title-cancel">Cancel</button></div>'
+      : '<div class="row"><span class="mt-title">' + esc(m.title) + '</span>' +
+          '<button type="button" class="btn btn-ghost" id="title-edit" data-action="title-edit" aria-label="Edit title" title="Edit title"><i data-lucide="pencil"></i></button></div>';
+    var seriesNames = [];
+    state.meetings.forEach(function (x) { if (x.series && seriesNames.indexOf(x.series) < 0) seriesNames.push(x.series); });
+    return '<section class="card new mt-section" aria-labelledby="sec-title">' +
+      '<div class="mt-sec-head"><h2 class="h-section" id="sec-title">Title</h2><span class="new-tag">New</span></div>' +
+      view +
+      '<p class="small muted" style="margin:0">From Fireflies: ' + esc(m.firefliesTitle) + '</p>' +
+      (sugg && sugg !== m.title
+        ? '<div class="row"><button type="button" class="chip chip-ai mt-chip-btn" id="title-suggest" data-action="title-apply"><i data-lucide="sparkles" class="ic"></i>Use "' + esc(sugg) + '"</button>' +
+          '<span class="small muted">Suggested from the summary</span></div>'
+        : '') +
+      '<div class="stack mt-field">' +
+        '<label class="mt-label" for="series-input">Meeting series <span class="muted">(optional)</span></label>' +
+        '<input id="series-input" class="input" type="text" list="series-options" maxlength="80" placeholder="For example, Engineering Leaders" value="' + esc(m.series) + '">' +
+        '<datalist id="series-options">' + seriesNames.map(function (s) { return '<option value="' + esc(s) + '"></option>'; }).join("") + '</datalist>' +
+        '<p class="small muted" style="margin:0">Lets Iris answer "the last Engineering Leaders meeting".</p>' +
+      '</div>' +
+    '</section>';
+  }
+
+  // ── NEW: names from the Fireflies title ────────────────────────────
+  var TITLE_STOP = ["the", "team", "weekly", "sync", "meeting", "call", "review", "standup", "all", "me", "us", "everyone", "leadership"];
+  function reEsc(x) { return x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+  function hasWord(text, w) { return new RegExp("(^|[^A-Za-z])" + reEsc(w) + "(?![A-Za-z])", "i").test(text); }
+  function titleNames(m) {
+    var t = String(m.firefliesTitle || ""), out = [];
+    function push(n) { if (n && n !== OWNER && out.indexOf(n) < 0) out.push(n); }
+    // 1. Anyone already in your people, by full name or first name (case-insensitive, whole words).
+    state.people.forEach(function (p) {
+      if (p === OWNER) return;
+      var first = p.split(/\s+/)[0].replace(/\.$/, "");
+      if (hasWord(t, p) || (first.length > 1 && hasWord(t, first))) push(p);
+    });
+    // 2. A capitalised word after with / and / & / "/" / 1:1 / x / vs is offered as a name.
+    var re = /(?:(?:^|[\s(])(?:[Ww]ith|[Aa]nd|[xX]|[Vv][Ss]\.?|1:1)\s+|\s*(?:&|\/)\s*)([A-Z][A-Za-z'\-]+)/g, mt;
+    while ((mt = re.exec(t))) {
+      var w = mt[1];
+      if (w.toLowerCase() === OWNER.toLowerCase() || TITLE_STOP.indexOf(w.toLowerCase()) >= 0) continue;
+      var known = findPerson(w) || state.people.filter(function (p) { return p.split(/\s+/)[0].replace(/\.$/, "").toLowerCase() === w.toLowerCase(); })[0];
+      push(known || cleanName(w));
+    }
+    return out;
+  }
+  function titleSuggestions(m) {
+    return titleNames(m).filter(function (n) { return m.participants.indexOf(n) < 0; });
+  }
+
+  function inviteSuggestions(m) {
+    var fromTitle = titleSuggestions(m);
+    return m.attendees.filter(function (a) { return a !== OWNER && m.participants.indexOf(a) < 0 && fromTitle.indexOf(a) < 0; });
+  }
+
+  function participantsHTML(m) {
+    var sugg = inviteSuggestions(m);
+    var tsugg = titleSuggestions(m);
+    var chips = m.participants.length ? m.participants.map(function (p, i) {
+      return '<span class="chip">' + esc(p) + '<button type="button" class="mt-chip-x" id="part-remove-' + i + '" data-action="part-remove" data-name="' + esc(p) + '" aria-label="Remove ' + esc(p) + '"><i data-lucide="x" class="ic"></i></button></span>';
+    }).join("") : '<span class="small muted">No participants yet. Add them from the invite or the box below.</span>';
+    return '<section class="card new mt-section" aria-labelledby="sec-part">' +
+      '<div class="mt-sec-head"><h2 class="h-section" id="sec-part">Participants</h2><span class="new-tag">New</span></div>' +
+      '<p class="small muted" style="margin:0">Kept as tags on the meeting record, so you can find meetings by who was there.</p>' +
+      '<div class="row" aria-label="Participants on this meeting">' + chips + '</div>' +
+      (tsugg.length
+        ? '<div class="row new" id="title-names"><span class="small muted">From the title</span><span class="new-tag">New</span>' +
+            tsugg.map(function (n, i) {
+              var isNew = !findPerson(n);
+              return '<button type="button" class="chip mt-suggest" id="title-add-' + i + '" data-action="part-add" data-name="' + esc(n) + '"><i data-lucide="' + (isNew ? "user-plus" : "plus") + '" class="ic"></i>' + esc(n) +
+                (isNew ? '<span class="small muted">new name</span>' : '') + '</button>';
+            }).join("") +
+          '</div>'
+        : '') +
+      (sugg.length
+        ? '<div class="row"><span class="small muted">From the invite</span>' +
+            sugg.map(function (n, i) {
+              return '<button type="button" class="chip mt-suggest" id="invite-add-' + i + '" data-action="part-add" data-name="' + esc(n) + '"><i data-lucide="plus" class="ic"></i>' + esc(n) + '</button>';
+            }).join("") +
+            (sugg.length > 1 ? '<button type="button" class="btn btn-ghost" id="invite-add-all" data-action="part-add-all">Add all</button>' : '') +
+          '</div>'
+        : '') +
+      '<div class="stack mt-field">' +
+        '<label class="mt-label" for="person-q">Add person</label>' +
+        '<div class="mt-combo-wrap">' +
+          '<input id="person-q" class="input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="person-list" autocomplete="off" maxlength="' + NAME_MAX + '" placeholder="Type a name from your people">' +
+          '<ul id="person-list" class="mt-listbox" role="listbox" aria-label="People" hidden></ul>' +
+        '</div>' +
+      '</div>' +
+      '<label class="mt-switch" for="toggle-title-participants"><input type="checkbox" id="toggle-title-participants" data-action="toggle-title"' + (m.titleWithParticipants ? " checked" : "") + '><span>Add participants to the title</span></label>' +
+      '<label class="mt-switch" for="toggle-rename"><input type="checkbox" id="toggle-rename" data-action="toggle-rename"' + (m.renameFile ? " checked" : "") + '><span>Rename the OneDrive file to match</span></label>' +
+      '<div class="mt-preview" aria-live="polite" id="name-preview">' +
+        '<span class="small muted">Title</span><span class="mt-code">' + esc(fullTitle(m)) + '</span>' +
+        '<span class="small muted">OneDrive file</span><span class="mt-code">' + esc(fileName(m)) + '</span>' +
+        '<span class="small muted">Today</span><span class="mt-code">' + esc(m.originalFile) + '</span>' +
+      '</div>' +
+    '</section>';
+  }
+
+  // ── NEW: Who is speaking ───────────────────────────────────────────
+  function speakerName(m, i) {
+    var sp = m.speakers[i];
+    return sp.person ? sp.person : sp.label + " (unassigned)";
+  }
+  // If exactly one "Speaker N" is unmapped and exactly one title name is not yet on a voice, offer it.
+  // It is only a suggestion: the owner confirms it with one click, nothing is set automatically.
+  function speakerSuggestion(m, i) {
+    var unmapped = [];
+    m.speakers.forEach(function (sp, k) { if (!sp.person && /^speaker\s*\d+$/i.test(sp.label)) unmapped.push(k); });
+    if (unmapped.length !== 1 || unmapped[0] !== i) return null;
+    var mapped = m.speakers.map(function (sp) { return sp.person; }).filter(Boolean);
+    var free = titleNames(m).filter(function (n) { return mapped.indexOf(n) < 0; });
+    return free.length === 1 ? free[0] : null;
+  }
+
+  function speakersHTML(m) {
+    if (!m.speakers.length) return "";
+    var rows = m.speakers.map(function (sp, i) {
+      var open = state.openSpeaker === i;
+      var label = sp.person ? displayOwner(sp.person) : "Choose who";
+      var sugg = !sp.person ? speakerSuggestion(m, i) : null;
+      return '<li class="mt-spk" id="spk-row-' + i + '">' +
+        '<div class="mt-spk-text">' +
+          '<span class="row"><span class="mt-spk-label">' + esc(sp.label) + '</span>' +
+            (sp.known ? '<span class="small muted">Named by Fireflies</span>' : '') + '</span>' +
+          '<span class="row small muted"><span class="mt-bar" role="img" aria-label="' + sp.talkPct + '% of the talking"><span style="width:' + Math.max(0, Math.min(100, sp.talkPct)) + '%"></span></span>' +
+            '<span class="num">' + sp.talkPct + '% · ' + sp.lines + ' lines</span></span>' +
+          '<p class="mt-quote">"' + esc(sp.sample) + '"</p>' +
+        '</div>' +
+        '<div class="mt-spk-ctrl">' +
+          '<div class="mt-picker">' +
+            '<button type="button" class="btn mt-owner-btn' + (sp.person ? "" : " is-empty") + '" id="spk-btn-' + i + '" data-action="spk-toggle" data-i="' + i + '" aria-haspopup="listbox" aria-expanded="' + open + '" aria-label="' + esc(sp.label) + ' is: ' + esc(label) + '">' +
+              '<i data-lucide="' + (sp.person === OWNER ? "lock" : "user") + '"></i><span class="mt-owner-name">' + esc(label) + '</span><i data-lucide="chevron-down"></i>' +
+            '</button>' +
+            (open ? spkPickerHTML(i) : '') +
+          '</div>' +
+          (sugg
+            ? '<button type="button" class="chip mt-suggest" id="spk-suggest-' + i + '" data-action="spk-suggest" data-i="' + i + '" data-name="' + esc(sugg) + '"><i data-lucide="check" class="ic"></i>' + esc(sugg) + '</button>' +
+              '<span class="small muted">Suggested from the title</span>'
+            : '') +
+        '</div>' +
+      '</li>';
+    }).join("");
+    var counts = {};
+    m.speakers.forEach(function (sp) { if (sp.person) counts[sp.person] = (counts[sp.person] || 0) + 1; });
+    var warns = Object.keys(counts).filter(function (k) { return counts[k] > 1; }).map(function (k) {
+      return '<div class="mt-warn" role="status"><i data-lucide="triangle-alert" class="ic"></i><span class="spk-dup">' +
+        (counts[k] === 2 ? "Two" : counts[k]) + ' voices are set to ' + esc(k) + (/\.$/.test(k) ? '' : '.') + ' If that is right, it is fine; Fireflies sometimes splits one person.</span></div>';
+    }).join("");
+    var passages = m.speakers.slice(0, 2).map(function (sp, i) {
+      return '<p class="mt-code" id="passage-' + i + '">' + esc(speakerName(m, i)) + ' (' + sampleStamp(m, i) + '): ' + esc(sp.sample) + '</p>';
+    }).join("");
+    return '<section class="card new mt-section" aria-labelledby="sec-spk">' +
+      '<div class="mt-sec-head"><h2 class="h-section" id="sec-spk">Who is speaking</h2><span class="new-tag">New</span>' +
+        '<span class="small muted num mt-push" id="voices-sec">' + voicesLine(m) + '</span></div>' +
+      '<p class="small muted" style="margin:0">Fireflies could not name some voices. Set who each one is so every saved passage says who said it.</p>' +
+      '<ul class="mt-spk-list">' + rows + '</ul>' +
+      warns +
+      '<div class="mt-passages" aria-live="polite" id="passage-preview"><span class="small muted">Passages will be saved as:</span>' + passages + '</div>' +
+    '</section>';
+  }
+
+  function spkPickerHTML(i) {
+    return '<div class="mt-pop" data-pop="spk-' + i + '">' +
+      '<label class="sr-only" for="spk-q-' + i + '">Find or add who this voice is</label>' +
+      '<input id="spk-q-' + i + '" class="input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="spk-list-' + i + '" autocomplete="off" maxlength="' + NAME_MAX + '" placeholder="Find someone or type a new name" data-spk-q="' + i + '">' +
+      '<ul id="spk-list-' + i + '" class="mt-listbox mt-listbox-inline" role="listbox" aria-label="People"></ul>' +
+    '</div>';
+  }
+
+  function summaryHTML(m) {
+    return '<section class="card mt-section" aria-labelledby="sec-sum">' +
+      '<div class="mt-sec-head"><h2 class="h-section" id="sec-sum">Summary</h2><span class="small muted">From Fireflies, read only</span></div>' +
+      '<p style="margin:0">' + esc(m.summary) + '</p>' +
+    '</section>';
+  }
+
+  function itemStatus(a) {
+    if (a.skipped) return '<span class="mt-status"><i data-lucide="circle-slash" class="ic"></i>Skipped. Not added anywhere.</span>';
+    if (!a.assignee) return '<span class="mt-status">Not sorted yet</span>';
+    if (a.assignee === OWNER) return '<span class="mt-status"><i data-lucide="check" class="ic"></i>Mine. Goes to your Actions list.</span>';
+    return '<span class="mt-status"><i data-lucide="check" class="ic"></i>For ' + esc(a.assignee) + (/\.$/.test(a.assignee) ? '' : '.') + '</span>';
+  }
+
+  function actionsHTML(m) {
+    var sorted = m.actionItems.filter(function (a) { return a.skipped || a.assignee; }).length;
+    var rows = m.actionItems.map(function (a, i) {
+      var open = state.openPicker === i;
+      var label = a.assignee ? displayOwner(a.assignee) : "Choose owner";
+      return '<li class="mt-action' + (a.skipped ? " is-skipped" : "") + '">' +
+        '<div class="mt-action-text">' +
+          '<span><span class="mt-action-main">' + esc(a.text) + '</span> <span class="small muted num">(' + esc(a.stamp) + ')</span></span>' +
+          '<span class="small muted">' + itemStatus(a) + '</span>' +
+        '</div>' +
+        '<div class="mt-action-ctrl">' +
+          '<div class="mt-picker">' +
+            '<button type="button" class="btn mt-owner-btn' + (a.assignee ? "" : " is-empty") + '" id="owner-btn-' + i + '" data-action="picker-toggle" data-i="' + i + '" aria-haspopup="listbox" aria-expanded="' + open + '"' + (a.skipped ? " disabled" : "") + ' aria-label="Owner: ' + esc(label) + '">' +
+              '<i data-lucide="' + (a.assignee === OWNER ? "lock" : "user") + '"></i><span class="mt-owner-name">' + esc(label) + '</span><i data-lucide="chevron-down"></i>' +
+            '</button>' +
+            (open ? pickerHTML(i) : '') +
+          '</div>' +
+          '<button type="button" class="btn btn-ghost" id="skip-' + i + '" data-action="skip" data-i="' + i + '">' + (a.skipped ? "Undo skip" : "Skip") + '</button>' +
+        '</div>' +
+      '</li>';
+    }).join("");
+    return '<section class="card mt-section" aria-labelledby="sec-actions">' +
+      '<div class="mt-sec-head">' +
+        '<h2 class="h-section" id="sec-actions">Action items</h2><span class="changed-tag">Changes today\'s flow</span>' +
+        '<span class="small muted num">' + sorted + ' of ' + m.actionItems.length + ' sorted</span>' +
+        '<button type="button" class="btn new mt-push" id="people-btn" data-action="people-toggle" aria-expanded="' + state.managing + '" aria-controls="people-panel"><i data-lucide="users"></i>Manage people<span class="new-tag">New</span></button>' +
+      '</div>' +
+      '<p class="small muted" style="margin:0">Pick an owner instead of typing one. Choosing ' + esc(OWNER) + ' (me) is today\'s "Mine". Choosing anyone else is today\'s "For someone".</p>' +
+      (state.managing ? peopleHTML() : '') +
+      '<ul class="mt-actions">' + rows + '</ul>' +
+    '</section>';
+  }
+
+  function pickerHTML(i) {
+    return '<div class="mt-pop" data-pop="' + i + '">' +
+      '<label class="sr-only" for="owner-q-' + i + '">Find or add an owner</label>' +
+      '<input id="owner-q-' + i + '" class="input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="owner-list-' + i + '" autocomplete="off" maxlength="' + NAME_MAX + '" placeholder="Find someone or type a new name" data-owner-q="' + i + '">' +
+      '<ul id="owner-list-' + i + '" class="mt-listbox mt-listbox-inline" role="listbox" aria-label="Owners"></ul>' +
+    '</div>';
+  }
+
+  function peopleHTML() {
+    var rows = [OWNER].concat(state.people.filter(function (p) { return p !== OWNER; })).map(function (p, i) {
+      if (p === OWNER) {
+        return '<li><i data-lucide="lock" class="ic"></i><strong>' + esc(OWNER) + ' (me)</strong><span class="small muted">Pinned. Always first, cannot be removed.</span></li>';
+      }
+      var used = usedCount(p);
+      var confirming = state.confirmRemove === p;
+      return '<li><i data-lucide="user" class="ic"></i><span>' + esc(p) + '</span>' +
+        '<span class="small muted">' + (used ? used + " action item" + (used === 1 ? "" : "s") : "Not used yet") + '</span>' +
+        (confirming ? '' : '<button type="button" class="btn btn-ghost mt-danger mt-push" style="margin-left:auto" id="person-remove-' + i + '" data-action="person-remove" data-name="' + esc(p) + '"><i data-lucide="trash-2"></i>Remove</button>') +
+        (confirming
+          ? '<div class="mt-confirm" role="alertdialog" aria-labelledby="confirm-text-' + i + '">' +
+              '<span id="confirm-text-' + i + '" class="small">Remove ' + esc(p) + ' from your people? Meetings and action items that already name them keep the name. They will not be offered in pickers.</span>' +
+              '<button type="button" class="btn btn-danger" id="person-remove-yes" data-action="person-remove-yes" data-name="' + esc(p) + '">Remove</button>' +
+              '<button type="button" class="btn" id="person-remove-no" data-action="person-remove-no">Keep</button>' +
+            '</div>'
+          : '') +
+      '</li>';
+    }).join("");
+    return '<div class="mt-people new" id="people-panel" role="region" aria-labelledby="people-head">' +
+      '<div class="mt-sec-head"><h3 class="h-section" id="people-head">Your people</h3><span class="new-tag">New</span>' +
+        '<button type="button" class="btn btn-ghost mt-push" id="people-close" data-action="people-toggle" aria-label="Close your people"><i data-lucide="x"></i></button></div>' +
+      '<p class="small muted" style="margin:0">Everyone offered in the owner and participant pickers, on every meeting.</p>' +
+      '<ul>' + rows + '</ul>' +
+      '<div class="row"><label class="sr-only" for="people-add">New person</label>' +
+        '<input id="people-add" class="input mt-grow" type="text" maxlength="' + NAME_MAX + '" placeholder="Add a person" value="' + esc(state.peopleDraft) + '">' +
+        '<button type="button" class="btn" id="people-add-btn" data-action="people-add"><i data-lucide="user-plus"></i>Add</button></div>' +
+    '</div>';
+  }
+
+  function footerHTML(m) {
+    var open = m.actionItems.filter(function (a) { return !a.skipped && !a.assignee; }).length;
+    return '<section class="card mt-section" aria-label="Save">' +
+      (open ? '<p class="small muted" style="margin:0"><i data-lucide="info" class="ic"></i> ' + open + ' action item' + (open === 1 ? " has" : "s have") + ' no owner yet. They are saved without one.</p>' : '') +
+      '<div class="row mt-foot-row">' +
+        '<button type="button" class="btn" id="save-plain" data-action="save" data-memory="0">Save without adding to memory</button>' +
+        '<button type="button" class="btn btn-primary new" id="save-memory" data-action="save" data-memory="1"><i data-lucide="brain"></i>Save and add to Trinnex memory<span class="new-tag">New</span></button>' +
+      '</div>' +
+    '</section>';
+  }
+
+  // ── Comboboxes (participants and owner pickers share one helper) ────
+  var combo = { kind: null, i: null, opts: [], active: -1 };
+
+  function personOptions(q) {
+    var m = cur(), ql = q.toLowerCase();
+    var opts = state.people.filter(function (p) {
+      return p !== OWNER && m.participants.indexOf(p) < 0 && (!q || p.toLowerCase().indexOf(ql) >= 0);
+    }).map(function (p) { return { kind: "pick", name: p, label: p, icon: "user" }; });
+    if (q && !findPerson(q)) opts.push({ kind: "new", name: cleanName(q), label: 'Add "' + cleanName(q) + '" to your people', icon: "user-plus" });
+    return opts;
+  }
+  function ownerOptions(q) {
+    var ql = q.toLowerCase();
+    var opts = [{ kind: "pick", name: OWNER, label: OWNER + " (me)", icon: "lock", sub: "Always first" }];
+    state.people.forEach(function (p) {
+      if (p !== OWNER && (!q || p.toLowerCase().indexOf(ql) >= 0)) opts.push({ kind: "pick", name: p, label: p, icon: "user" });
+    });
+    if (q && !findPerson(q)) opts.push({ kind: "new", name: cleanName(q), label: 'Add "' + cleanName(q) + '" to your people', icon: "user-plus" });
+    else if (!q) opts.push({ kind: "focus", label: "Add new name...", icon: "user-plus" });
+    return opts;
+  }
+
+  function comboIds(kind, i) {
+    if (kind === "person") return { input: "person-q", list: "person-list", prefix: "person-opt-" };
+    if (kind === "speaker") return { input: "spk-q-" + i, list: "spk-list-" + i, prefix: "spk-opt-" + i + "-" };
+    return { input: "owner-q-" + i, list: "owner-list-" + i, prefix: "owner-opt-" + i + "-" };
+  }
+  function fillCombo(kind, i, q) {
+    var ids = comboIds(kind, i);
+    var input = document.getElementById(ids.input);
+    var list = document.getElementById(ids.list);
+    if (!input || !list) return;
+    combo.kind = kind; combo.i = i;
+    combo.opts = kind === "person" ? personOptions(q) : ownerOptions(q);
+    if (combo.active === -2) {
+      // Typing: highlight the first row matching the text ("Von (me)" stays listed first but is not auto-picked
+      // for a name that is not Von's). A new name highlights its "Add" row.
+      var ql = q.toLowerCase();
+      combo.active = 0;
+      if (q) for (var k2 = 0; k2 < combo.opts.length; k2++) {
+        var o2 = combo.opts[k2];
+        if (o2.kind === "new" || (o2.name && o2.name.toLowerCase().indexOf(ql) >= 0)) { combo.active = k2; break; }
+      }
+    }
+    if (combo.active >= combo.opts.length || combo.active < 0) combo.active = combo.opts.length ? 0 : -1;
+    var m = cur();
+    var currentOwner = !m ? null : kind === "owner" ? m.actionItems[i].assignee : kind === "speaker" ? m.speakers[i].person : null;
+    var prefix = ids.prefix;
+    list.innerHTML = combo.opts.length ? combo.opts.map(function (o, k) {
+      return '<li role="option" id="' + prefix + k + '" class="mt-opt' + (o.kind !== "pick" ? " mt-opt-add" : "") + '" data-action="combo-pick" data-idx="' + k + '" aria-selected="' + (k === combo.active) + '">' +
+        '<i data-lucide="' + o.icon + '" class="ic"></i><span>' + esc(o.label) + '</span>' +
+        (o.name && o.name === currentOwner ? '<i data-lucide="check" class="ic" style="margin-left:auto"></i>' : (o.sub ? '<span class="mt-opt-sub">' + esc(o.sub) + '</span>' : '')) +
+      '</li>';
+    }).join("") : '<li class="mt-opt-hint" role="presentation">' + (q ? "No match." : "Everyone in your people list is already added.") + '</li>';
+    input.setAttribute("aria-activedescendant", combo.active >= 0 ? prefix + combo.active : "");
+    if (kind === "person") { list.hidden = false; input.setAttribute("aria-expanded", "true"); }
+    icons();
+  }
+  function closePersonList() {
+    var list = document.getElementById("person-list"), input = document.getElementById("person-q");
+    if (list) list.hidden = true;
+    if (input) { input.setAttribute("aria-expanded", "false"); input.removeAttribute("aria-activedescendant"); }
+  }
+
+  function chooseCombo(idx) {
+    var o = combo.opts[idx], m = cur();
+    if (!o || !m) return;
+    if (combo.kind === "person") {
+      var name = o.kind === "new" ? addPerson(o.name) : o.name;
+      if (name && m.participants.indexOf(name) < 0) m.participants.push(name);
+      state.focus = "person-q";
+      render();
+      return;
+    }
+    var i = combo.i;
+    if (o.kind === "focus") {
+      var inp = document.getElementById(comboIds(combo.kind, i).input);
+      if (inp) { inp.placeholder = "Type the new name, then press Enter"; inp.focus(); }
+      return;
+    }
+    var who = o.kind === "new" ? addPerson(o.name) : o.name;
+    if (combo.kind === "speaker") {
+      if (who) setSpeaker(m, i, who);
+      state.openSpeaker = null;
+      state.focus = "spk-btn-" + i;
+      render();
+      return;
+    }
+    if (who) { m.actionItems[i].assignee = who; m.actionItems[i].skipped = false; }
+    state.openPicker = null;
+    state.focus = "owner-btn-" + i;
+    render();
+  }
+
+  // ── Events ──────────────────────────────────────────────────────────
+  document.addEventListener("mousedown", function (e) {
+    if (e.target.closest('[data-action="combo-pick"]')) e.preventDefault(); // keep focus in the input
+  });
+
+  document.addEventListener("click", function (e) {
+    var el = e.target.closest("[data-action]");
+    var m = cur();
+    if ((state.openPicker !== null || state.openSpeaker !== null) && !e.target.closest(".mt-picker")) {
+      state.openPicker = null; state.openSpeaker = null;
+      if (!el) { render(); return; }
+    }
+    if (!el) return;
+    var a = el.getAttribute("data-action");
+    switch (a) {
+      case "filter": state.filter = el.getAttribute("data-f"); state.focus = el.id; render(); break;
+      case "select":
+        state.selectedId = el.getAttribute("data-id");
+        state.editingTitle = false; state.openPicker = null; state.openSpeaker = null; state.confirmRemove = null;
+        render();
+        if (window.matchMedia("(max-width: 760px)").matches) {
+          var d = document.getElementById("detail"); if (d) d.scrollIntoView({ block: "start" });
+          var b = document.getElementById("back-to-list"); if (b) b.focus({ preventScroll: true });
+        } else { var it = document.getElementById("meeting-" + state.selectedId); if (it) it.focus(); }
+        break;
+      case "back": state.focus = "meeting-" + state.selectedId; render(); window.scrollTo(0, 0); break;
+      case "title-edit": state.editingTitle = true; state.titleDraft = m.title; state.focus = "title-input"; render(); break;
+      case "title-cancel": state.editingTitle = false; state.focus = "title-edit"; render(); break;
+      case "title-save": saveTitle(); break;
+      case "title-apply":
+        m.title = AI_TITLES[m.id]; state.editingTitle = false; state.focus = "title-edit"; render();
+        toast("Title updated from the summary. Save the meeting to keep it.");
+        break;
+      case "part-add":
+        var n = el.getAttribute("data-name");
+        if (m.participants.indexOf(n) < 0) m.participants.push(n);
+        if (!findPerson(n)) addPerson(n);
+        state.focus = "person-q"; render(); break;
+      case "part-add-all":
+        inviteSuggestions(m).forEach(function (x) { m.participants.push(x); if (!findPerson(x)) addPerson(x); });
+        state.focus = "person-q"; render(); break;
+      case "part-remove":
+        var r = el.getAttribute("data-name");
+        m.participants = m.participants.filter(function (p) { return p !== r; });
+        state.focus = "person-q"; render(); break;
+      case "picker-toggle":
+        var pi = +el.getAttribute("data-i");
+        if (state.openPicker === pi) { state.openPicker = null; state.focus = "owner-btn-" + pi; render(); break; }
+        state.openPicker = pi; state.openSpeaker = null; combo.active = 0; render();
+        fillCombo("owner", pi, "");
+        var q = document.getElementById("owner-q-" + pi); if (q) q.focus();
+        break;
+      case "spk-toggle":
+        var ki = +el.getAttribute("data-i");
+        if (state.openSpeaker === ki) { state.openSpeaker = null; state.focus = "spk-btn-" + ki; render(); break; }
+        state.openSpeaker = ki; state.openPicker = null; combo.active = 0; render();
+        fillCombo("speaker", ki, "");
+        var kq = document.getElementById("spk-q-" + ki); if (kq) kq.focus();
+        break;
+      case "spk-suggest":
+        var gi = +el.getAttribute("data-i"), gname = el.getAttribute("data-name");
+        var gwho = findPerson(gname) || addPerson(gname);
+        if (gwho) setSpeaker(m, gi, gwho);
+        state.focus = "spk-btn-" + gi; render(); break;
+      case "combo-pick": chooseCombo(+el.getAttribute("data-idx")); break;
+      case "skip":
+        var si = +el.getAttribute("data-i"), it2 = m.actionItems[si];
+        it2.skipped = !it2.skipped; if (it2.skipped) it2.assignee = null;
+        state.focus = "skip-" + si; render(); break;
+      case "people-toggle":
+        state.managing = !state.managing; state.confirmRemove = null;
+        state.focus = state.managing ? "people-add" : "people-btn"; render(); break;
+      case "people-add":
+        var added = cleanName(state.peopleDraft);
+        if (!added) { state.focus = "people-add"; render(); break; }
+        if (findPerson(added)) toast(findPerson(added) + " is already in your people list.");
+        else addPerson(added);
+        state.peopleDraft = ""; state.focus = "people-add"; render(); break;
+      case "person-remove": state.confirmRemove = el.getAttribute("data-name"); state.focus = "person-remove-no"; render(); break;
+      case "person-remove-no": state.confirmRemove = null; state.focus = "people-btn"; render(); break;
+      case "person-remove-yes":
+        var gone = el.getAttribute("data-name");
+        if (gone !== OWNER) state.people = state.people.filter(function (p) { return p !== gone; });
+        state.confirmRemove = null; state.focus = "people-add"; render();
+        toast("Removed " + gone + " from your people list.");
+        break;
+      case "save": saveMeeting(el.getAttribute("data-memory") === "1"); break;
+    }
+  });
+
+  document.addEventListener("change", function (e) {
+    var m = cur(); if (!m) return;
+    var a = e.target.getAttribute("data-action");
+    if (a === "toggle-title") { m.titleWithParticipants = e.target.checked; state.focus = e.target.id; render(); }
+    if (a === "toggle-rename") { m.renameFile = e.target.checked; state.focus = e.target.id; render(); }
+  });
+
+  document.addEventListener("input", function (e) {
+    var t = e.target, m = cur();
+    if (t.id === "title-input") state.titleDraft = t.value;
+    else if (t.id === "series-input" && m) m.series = t.value;
+    else if (t.id === "people-add") state.peopleDraft = t.value;
+    else if (t.id === "person-q") { combo.active = 0; fillCombo("person", null, cleanName(t.value)); }
+    else if (t.hasAttribute("data-owner-q")) { combo.active = -2; fillCombo("owner", +t.getAttribute("data-owner-q"), cleanName(t.value)); }
+    else if (t.hasAttribute("data-spk-q")) { combo.active = -2; fillCombo("speaker", +t.getAttribute("data-spk-q"), cleanName(t.value)); }
+  });
+
+  // The people list opens on a click, typing or an arrow key, never on focus alone (focus returns here after
+  // adding someone from the invite, and an auto-opened list would cover the toggles below).
+  document.addEventListener("pointerdown", function (e) {
+    if (e.target.id === "person-q") { combo.active = 0; fillCombo("person", null, cleanName(e.target.value)); }
+  });
+  document.addEventListener("focusout", function (e) {
+    if (e.target.id === "person-q") setTimeout(function () {
+      if (document.activeElement && document.activeElement.id === "person-q") return;
+      closePersonList();
+    }, 120);
+  });
+
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    var isCombo = t.id === "person-q" || (t.hasAttribute && (t.hasAttribute("data-owner-q") || t.hasAttribute("data-spk-q")));
+    if (isCombo) {
+      var kind = t.id === "person-q" ? "person" : t.hasAttribute("data-spk-q") ? "speaker" : "owner";
+      var i = kind === "owner" ? +t.getAttribute("data-owner-q") : kind === "speaker" ? +t.getAttribute("data-spk-q") : null;
+      var listEl = document.getElementById(comboIds(kind, i).list);
+      if (kind === "person" && listEl && listEl.hidden) {
+        if (e.key === "ArrowDown") { e.preventDefault(); combo.active = 0; fillCombo(kind, i, cleanName(t.value)); }
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (!combo.opts.length) return;
+        combo.active = (combo.active + (e.key === "ArrowDown" ? 1 : -1) + combo.opts.length) % combo.opts.length;
+        fillCombo(kind, i, cleanName(t.value));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (combo.active >= 0) chooseCombo(combo.active);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        if (kind === "owner") { state.openPicker = null; state.focus = "owner-btn-" + i; render(); }
+        else if (kind === "speaker") { state.openSpeaker = null; state.focus = "spk-btn-" + i; render(); }
+        else { t.value = ""; closePersonList(); }
+      }
+      return;
+    }
+    if (t.id === "title-input") {
+      if (e.key === "Enter") { e.preventDefault(); saveTitle(); }
+      if (e.key === "Escape") { e.preventDefault(); state.editingTitle = false; state.focus = "title-edit"; render(); }
+    }
+    if (t.id === "people-add" && e.key === "Enter") { e.preventDefault(); document.getElementById("people-add-btn").click(); }
+    if (e.key === "Escape" && state.openPicker !== null) { var p = state.openPicker; state.openPicker = null; state.focus = "owner-btn-" + p; render(); }
+    if (e.key === "Escape" && state.openSpeaker !== null) { var sk = state.openSpeaker; state.openSpeaker = null; state.focus = "spk-btn-" + sk; render(); }
+  });
+
+  function saveTitle() {
+    var m = cur(), v = String(state.titleDraft || "").replace(/\s+/g, " ").trim();
+    if (!v) { toast("A meeting needs a title."); state.focus = "title-input"; render(); return; }
+    m.title = v; state.editingTitle = false; state.focus = "title-edit"; render();
+  }
+
+  function saveMeeting(memory) {
+    var m = cur(); if (!m) return;
+    var newFile = fileName(m);
+    m.onedriveFile = newFile;
+    m.savedTitle = fullTitle(m);
+    m.triaged = true;
+    m.inMemory = memory || m.inMemory;
+    state.openPicker = null; state.openSpeaker = null; state.editingTitle = false;
+    state.focus = memory ? "save-memory" : "save-plain";
+    render();
+    var unset = m.speakers.length - voicesSet(m);
+    toast((memory
+      ? "Saved. Title, participants and owners are stored on the meeting; the transcript is queued for your Trinnex memory."
+      : "Saved. Title, participants and owners are stored on the meeting. The transcript was not added to your Trinnex memory.") +
+      (unset ? " Unset voices are saved as Speaker N and can be set later." : ""));
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>
