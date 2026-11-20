@@ -5523,3 +5523,4 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - Build log + evidence: docs/qc-evidence/BUILD-trinnex-meetings.md. Branch claude_trinnex-meetings, NOT merged, NOT live.
 - Step 3 (pure triage core + 32 tests, meeting columns + people table, writer uses the chosen file name; BUILD step 3/3b).
 - Step 4 (server store + fns: lib/trinnex/meetings.server.ts, meetings.functions.ts; owner picks via EXISTING actOnProposal triage; AC-T2 source guard).
+- Step 5 (MeetingsView + PeoplePicker + Modules entry 'Meetings'; view wired in store/HuddleApp/ViewSwitcher).

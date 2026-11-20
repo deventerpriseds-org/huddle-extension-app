@@ -8,6 +8,7 @@ import { MeetingLayer } from "./MeetingBar";
 import { Rail } from "./Rail";
 import { VIEW_TITLE, ViewSwitcher } from "./ViewSwitcher";
 import { ActionsView } from "./ActionsView";
+import { MeetingsView } from "./MeetingsView";
 import { Sidebar } from "./Sidebar";
 import { SettingsSheet } from "./SettingsSheet";
 import { AgentSettingsDrawer } from "./AgentSettingsDrawer";
@@ -49,6 +50,7 @@ const VIEWS: Record<View, React.ReactNode> = {
   priorities: <PrioritiesView />,
   schedule: <ScheduleView />,
   actions: <ActionsView />,
+  meetings: <MeetingsView />,
   polish: <PolishView />,
 };
 
