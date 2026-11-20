@@ -1,0 +1,28 @@
+<!--
+WHAT:       The Huddle chrome every Trinnex prototype page copies verbatim: the 56px teal rail from
+            Rail.tsx (Huddles, Board, Artifacts, Memory | Modules, Apps | Settings, You). Set
+            aria-current="page" on the button for the page you are drawing (Modules for Meetings,
+            Apps for Trinnex Library, Huddles for Ask).
+WHY:        One copy of the chrome so the three parallel builders cannot drift from each other.
+SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+EVIDENCE:   src/features/huddle/components/Rail.tsx; ModulesLauncher.tsx (LayoutDashboard icon,
+            label "Modules", 9.5px label); AppsLauncher.tsx (Blocks icon, label "Apps").
+Icons: lucide UMD, pinned: <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+then lucide.createIcons() at the end of the page's own script.
+-->
+<nav class="rail" aria-label="Huddle">
+  <div class="rail-group">
+    <span class="rail-logo" aria-hidden="true">H</span>
+    <a class="rail-btn" href="ask.html" title="Huddles" aria-label="Huddles"><i data-lucide="message-square"></i></a>
+    <a class="rail-btn" href="#" title="Board" aria-label="Board"><i data-lucide="layout-grid"></i></a>
+    <a class="rail-btn" href="#" title="Artifacts" aria-label="Artifacts"><i data-lucide="folder-open"></i></a>
+    <a class="rail-btn" href="#" title="Memory" aria-label="Memory"><i data-lucide="compass"></i></a>
+    <span class="rail-sep" aria-hidden="true"></span>
+    <a class="rail-btn rail-labelled" href="meetings.html" title="Modules" aria-label="Modules"><i data-lucide="layout-dashboard"></i><span>Modules</span></a>
+    <a class="rail-btn rail-labelled" href="library.html" title="Apps" aria-label="Apps"><i data-lucide="blocks"></i><span>Apps</span></a>
+  </div>
+  <div class="rail-group">
+    <a class="rail-btn" href="#" title="Settings" aria-label="Settings"><i data-lucide="settings"></i></a>
+    <span class="rail-you">You</span>
+  </div>
+</nav>
