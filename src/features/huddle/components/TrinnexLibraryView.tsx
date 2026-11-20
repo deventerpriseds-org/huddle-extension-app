@@ -121,7 +121,9 @@ export function TrinnexLibraryView() {
     () => (user ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username } : undefined),
     [user],
   );
-  const owner = ownerFirstName(user?.username);
+  const [listedOwner, setListedOwner] = useState<string | null>(null);
+  // The owner's name as the ONE people list spells it (pinned first); the sign-in name only until it loads.
+  const owner = listedOwner ?? ownerFirstName(user?.username);
   const setView = useHuddleStore((s) => s.setView);
   const [data, setData] = useState<LibraryListing>({ items: [], categories: [], people: [], firefliesWaiting: null, memoryReady: false });
   const [loading, setLoading] = useState(true);
@@ -138,7 +140,9 @@ export function TrinnexLibraryView() {
   const load = useCallback(async () => {
     if (!caller) return setLoading(false);
     try {
-      setData(await listTrinnexLibraryFn({ data: { caller } }));
+      const listing = await listTrinnexLibraryFn({ data: { caller } });
+      setData(listing);
+      if (listing.owner) setListedOwner(listing.owner);
     } finally {
       setLoading(false);
     }

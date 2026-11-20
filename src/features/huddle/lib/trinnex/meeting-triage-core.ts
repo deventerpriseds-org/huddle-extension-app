@@ -87,6 +87,22 @@ export function ownerPickToTriage(
   return { choice: "someone", name: pick.name };
 }
 
+/** Shown as the owner's row while the people list is still loading, so "Mine" stays one tap away. */
+export const OWNER_FALLBACK_LABEL = "Me";
+
+/**
+ * AC-T13: what a pick in the chat checklist / Actions > Meetings owner picker sends. EXACTLY the shape those
+ * surfaces sent from the typed box before (decision Q4): the owner -> { choice: "mine" } with no name, so the
+ * stored row is today's Mine; anyone else -> { choice: "someone", name } capped at 80 chars as before.
+ */
+export function triageForPick(name: string, owner: string | null): { choice: TriageChoice; name?: string } {
+  if (owner === null || normName(owner) === "") {
+    return name === OWNER_FALLBACK_LABEL ? { choice: "mine" } : { choice: "someone", name: name.slice(0, 80) };
+  }
+  const t = ownerPickToTriage({ kind: "person", name }, owner);
+  return t.choice === "someone" ? { choice: "someone", name: (t.name ?? name).slice(0, 80) } : { choice: t.choice };
+}
+
 // ── Speakers (AC-T10, AC-T11; S-B) ──────────────────────────────────────────────────────────────────
 
 export interface StoredSentence {

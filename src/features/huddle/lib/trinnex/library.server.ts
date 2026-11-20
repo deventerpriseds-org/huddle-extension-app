@@ -463,8 +463,6 @@ export async function firefliesWaiting(email: string): Promise<number | null> {
   return Number(r.rows[0]?.n ?? 0);
 }
 
-/** The people offered in the Library's pickers until the meetings lane's shared people list is reachable here:
- *  everyone the owner has already tagged or mapped in the Library. */
-export function peopleFrom(items: readonly LibraryItem[]): string[] {
-  return mergeCategories(items.flatMap((i) => [...i.participants, ...Object.values(i.speakerMap)]));
-}
+// SUPERSEDED (integration pass 2026-11-20): `peopleFrom(items)`, the Library's interim people list built from names
+// already tagged in the Library. The pickers now read and write the ONE owner-scoped list, chat.trinnex_people
+// (meetings.server getPeople / rememberPeople), via library.functions.ts.

@@ -86,6 +86,36 @@ export async function addPerson(caller: Caller, raw: unknown): Promise<{ ok: tru
   return { ok: true, name: people.find((p) => normName(p) === normName(name)) ?? name, people };
 }
 
+/**
+ * The Library's write path into the SAME list (one people list, AC-L5/AC-T14): every participant or speaker name
+ * the owner tags on an upload is added exactly as addPerson adds it (cleaned, case-insensitive dedup, owner never
+ * stored). Never fails the caller's save.
+ */
+export async function rememberPeople(caller: Caller, names: readonly unknown[]): Promise<void> {
+  const s = await scope(caller).catch(() => null);
+  if (!s) return;
+  const seen = new Set<string>([normName(s.ownerName)]);
+  const rows: Array<[string, string]> = [];
+  for (const raw of names) {
+    const name = cleanPersonName(raw);
+    if (!name || seen.has(normName(name))) continue;
+    seen.add(normName(name));
+    rows.push([normName(name), name]);
+  }
+  if (!rows.length) return;
+  try {
+    await ensureMinutesSchema();
+    for (const [key, name] of rows) {
+      await pool().query(
+        `INSERT INTO chat.trinnex_people (owner_email, name_key, name) VALUES ($1, $2, $3) ON CONFLICT (owner_email, name_key) DO NOTHING`,
+        [s.owners[0], key, name],
+      );
+    }
+  } catch (e) {
+    console.error("[trinnex-meetings] remember people failed", code(e, "people_write_failed"));
+  }
+}
+
 /** AC-T15: the owner is never removable; existing meetings and items keep the name (nothing else is touched). */
 export async function removePerson(caller: Caller, raw: unknown): Promise<{ ok: true; people: string[] } | { ok: false; error: string }> {
   const s = await scope(caller);

@@ -21,7 +21,10 @@ async function callerEmail(caller: { entra_object_id?: string; entra_email?: str
 export interface LibraryListing {
   items: LibraryItem[];
   categories: string[];
+  /** The ONE owner-scoped people list (chat.trinnex_people, owner first) -- the same list Meetings reads. */
   people: string[];
+  /** The owner's display name (pinned first in every picker). */
+  owner?: string | null;
   firefliesWaiting: number | null;
   memoryReady: boolean;
   error?: string;
@@ -36,11 +39,15 @@ export const listTrinnexLibraryFn = createServerFn({ method: "POST" })
     try {
       const lib = await import("./library.server");
       const { trinnexConfigured } = await import("./memory.server");
-      const [{ items, categories }, ff] = await Promise.all([
+      const { getPeople } = await import("./meetings.server");
+      const [{ items, categories }, ff, ppl] = await Promise.all([
         lib.listLibrary(email),
         lib.firefliesWaiting(email).catch(() => null),
+        getPeople(data.caller).catch(() => null),
       ]);
-      return { items, categories, people: lib.peopleFrom(items), firefliesWaiting: ff, memoryReady: trinnexConfigured() };
+      const people = ppl && ppl.ok ? ppl.people : [];
+      const owner = ppl && ppl.ok ? ppl.owner : null;
+      return { items, categories, people, owner, firefliesWaiting: ff, memoryReady: trinnexConfigured() };
     } catch {
       return { ...empty, error: "load_failed" };
     }
@@ -103,6 +110,8 @@ export const uploadTrinnexFileFn = createServerFn({ method: "POST" })
         mime: MIME[ext] ?? "application/octet-stream",
         hash,
       });
+      // One people list: names tagged here join chat.trinnex_people (what Meetings reads and writes).
+      await (await import("./meetings.server")).rememberPeople(data.caller, [...data.participants, ...Object.values(data.speakerMap)]);
       return { item };
     } catch {
       return { error: "storage_error" };
@@ -152,7 +161,9 @@ export const setTrinnexSpeakersFn = createServerFn({ method: "POST" })
     if (!email) return { ok: false };
     try {
       const { setSpeakerMap } = await import("./library.server");
-      return { ok: await setSpeakerMap(email, data.id, data.speakerMap, data.participants) };
+      const ok = await setSpeakerMap(email, data.id, data.speakerMap, data.participants);
+      if (ok) await (await import("./meetings.server")).rememberPeople(data.caller, [...data.participants, ...Object.values(data.speakerMap)]);
+      return { ok };
     } catch {
       return { ok: false };
     }

@@ -265,3 +265,13 @@ t("LOV2 huddle.functions wires search_trinnex on both paths only through the gat
   // both executors pass the resolved owner (AC-C7)
   expect(src.match(/dispatchTrinnexTool\(winner\.id, [^)]*, trinnexOwner\)/g)?.length).toBe(2);
 });
+
+// ── integration: the real lane contract is wired, no stubs ──────────────────────────────────────────
+t("INT1 Library and Meetings call the REAL ingest and delete; no stub remains", () => {
+  const { readdirSync } = require("node:fs") as typeof import("node:fs");
+  for (const f of readdirSync(`${SRC}/trinnex`)) expect(readFileSync(`${SRC}/trinnex/${f}`, "utf8")).not.toContain("STUB");
+  const libSrc = readFileSync(`${SRC}/trinnex/library.server.ts`, "utf8");
+  expect(libSrc).toContain("mem.ingestTrinnexSource(");
+  expect(libSrc).toContain("mem.deleteTrinnexSource(");
+  expect(readFileSync(`${SRC}/trinnex/meetings.server.ts`, "utf8")).toContain("mem.ingestTrinnexSource(");
+});
