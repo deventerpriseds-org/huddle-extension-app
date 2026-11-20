@@ -68,11 +68,14 @@ window.TRINNEX_SAMPLE = {
     }
   ],
   library: [
-    { id: "doc-1", name: "Travel and Expense Policy 2026.pdf", kind: "Policy", addedAt: "2026-11-15", pages: 14, chunks: 38, facts: 61, status: "Searchable", tags: ["travel", "expenses", "credit card"] },
-    { id: "doc-2", name: "Engineering Leaders weekly 2026-11-11 (Fireflies)", kind: "Transcript", addedAt: "2026-11-11", pages: null, chunks: 44, facts: 23, status: "Searchable", tags: ["Engineering Leaders"], participants: ["Michael R.", "Priya S.", "Dana K."] },
-    { id: "doc-3", name: "Weekly sync 2026-11-18 (Fireflies)", kind: "Transcript", addedAt: "2026-11-18", pages: null, chunks: 0, facts: 0, status: "Waiting for triage", tags: [], participants: [] },
-    { id: "doc-4", name: "Vendor review deck.pptx", kind: "File", addedAt: "2026-11-17", pages: 22, chunks: 31, facts: 17, status: "Searchable", tags: ["vendor"] }
+    { id: "doc-1", name: "Travel and Expense Policy 2026.pdf", kind: "Document", category: "Travel and expenses", addedAt: "2026-11-15", pages: 14, chunks: 38, facts: 61, status: "Searchable", tags: ["travel", "expenses", "credit card"] },
+    { id: "doc-2", name: "Engineering Leaders weekly 2026-11-11 (Fireflies)", kind: "Transcript", category: "Leadership meetings", addedAt: "2026-11-11", pages: null, chunks: 44, facts: 23, status: "Searchable", tags: ["Engineering Leaders"], participants: ["Michael R.", "Priya S.", "Dana K."] },
+    { id: "doc-3", name: "Weekly sync 2026-11-18 (Fireflies)", kind: "Transcript", category: "Leadership meetings", addedAt: "2026-11-18", pages: null, chunks: 0, facts: 0, status: "Waiting for triage", tags: [], participants: [] },
+    { id: "doc-4", name: "Vendor review deck.pptx", kind: "Document", category: "Vendors", addedAt: "2026-11-17", pages: 22, chunks: 31, facts: 17, status: "Searchable", tags: ["vendor"] }
   ],
+  // Categories are DYNAMIC: this list is only what the sample library already uses. A category typed
+  // (or accepted from Iris's suggestion) on upload joins it, the same way new names join `people`.
+  categories: ["Travel and expenses", "Leadership meetings", "Vendors"],
   // Answers the Ask page shows; each cites where it came from.
   qa: [
     {
@@ -80,7 +83,7 @@ window.TRINNEX_SAMPLE = {
       a: "Michael said the outcome was to keep the current vendor for one more year, with a 90-day exit clause added to the renewal.",
       sources: [
         { title: "Weekly sync", date: "2026-11-18", speaker: "Michael R.", at: "20:12", kind: "Transcript", quote: "So the outcome is we stay with them one more year, but we put a 90-day exit in the renewal." },
-        { title: "Vendor review deck.pptx", date: "2026-11-17", speaker: null, at: "slide 19", kind: "File", quote: "Recommendation: renew 12 months; add termination for convenience (90 days)." }
+        { title: "Vendor review deck.pptx", date: "2026-11-17", speaker: null, at: "slide 19", kind: "Document", quote: "Recommendation: renew 12 months; add termination for convenience (90 days)." }
       ],
       facts: [["Vendor review", "outcome", "renew 1 year with 90-day exit clause"], ["Michael R.", "stated", "vendor review outcome"]]
     },
@@ -96,7 +99,7 @@ window.TRINNEX_SAMPLE = {
       q: "What is the company policy for travel points on business credit cards?",
       a: "Points earned on the company card for business travel belong to the company and are not personal rewards. They are pooled for future business travel.",
       sources: [
-        { title: "Travel and Expense Policy 2026.pdf", date: "2026-11-15", speaker: null, at: "page 9, section 4.3", kind: "Policy", quote: "Rewards points accrued on corporate cards for business expenses are company property and may only be redeemed for business travel." },
+        { title: "Travel and Expense Policy 2026.pdf", date: "2026-11-15", speaker: null, at: "page 9, section 4.3", kind: "Document", quote: "Rewards points accrued on corporate cards for business expenses are company property and may only be redeemed for business travel." },
         { title: "Meeting with Priya", date: "2026-11-14", speaker: "Priya S.", at: "06:48", kind: "Transcript", quote: "Points on company travel stay with the company, they're not personal rewards." }
       ],
       facts: [["Corporate card points", "belong to", "company"], ["Corporate card points", "redeemable for", "business travel only"]]

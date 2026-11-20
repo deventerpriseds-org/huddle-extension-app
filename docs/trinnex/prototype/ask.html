@@ -245,7 +245,7 @@ EVIDENCE:   HuddleView.tsx (MessageRow bubbles: user = rounded-2xl rounded-br-sm
     var m = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(p[1]) - 1];
     return m ? m + " " + Number(p[2]) + ", " + p[0] : iso;
   }
-  var KIND_ICON = { Transcript: "mic", File: "file-text", Policy: "shield-check" };
+  var KIND_ICON = { Transcript: "mic", Document: "file-text" };
 
   // ── Matching: simple keyword overlap against the sample questions ──
   var STOP = "a an the and or of to in on for at by with as is are was were be been what who whom which how when where why did do does we our us you your i me my it this that there their they them about from into than then so as last say said discuss discussed".split(" ");
@@ -369,7 +369,7 @@ EVIDENCE:   HuddleView.tsx (MessageRow bubbles: user = rounded-2xl rounded-br-sm
   var STEPS = [
     { t: "Sources", d: "Fireflies meetings, after you triage them. Files you upload to Trinnex Library.", tags: ["Fireflies meetings", "Library uploads"], icon: "inbox" },
     { t: "Split into passages", d: "Each passage is tagged so it can be filtered later.", tags: ["meeting", "date", "series", "participants", "speaker"], icon: "scissors" },
-    { t: "Facts pulled out", d: "Short subject, predicate, object facts.", tags: ["who said what", "owners", "decisions", "policy rules"], icon: "git-commit-horizontal" },
+    { t: "Facts pulled out", d: "Short subject, predicate, object facts.", tags: ["who said what", "owners", "decisions", "rules in documents"], icon: "git-commit-horizontal" },
     { t: "Trinnex collection in your memory", d: "Same design as your existing memory: passages plus facts, kept as its own collection.", tags: ["passages", "facts"], icon: "database" },
     { t: "Iris searches by meaning and filters", d: "Finds passages that mean the same thing as your question, then narrows them.", tags: ["person", "meeting series", "“last” = most recent date"], icon: "search" },
     { t: "Answer with sources", d: "Every claim points back to the passage it came from. No match means Iris says so.", tags: [], icon: "message-square-quote", final: true }
@@ -382,7 +382,7 @@ EVIDENCE:   HuddleView.tsx (MessageRow bubbles: user = rounded-2xl rounded-br-sm
   var EX = [
     { q: "“Michael”", f: "speaker filter", n: 1 },
     { q: "“last Engineering Leaders meeting”", f: "series + most recent date", n: 2 },
-    { q: "“travel points policy”", f: "policy documents", n: 3 }
+    { q: "“travel points policy”", f: "search by meaning finds the policy text, no category needed", n: 3 }
   ];
   document.getElementById("examples").innerHTML = EX.map(function (x) {
     return '<a class="ex" href="#q-' + x.n + '" style="color:inherit;text-decoration:none;border-radius:6px" title="Ask sample question ' + x.n + '"><span class="q">' + esc(x.q) + '</span><i data-lucide="arrow-right" aria-hidden="true"></i><span class="f">' + esc(x.f) + '</span></a>';

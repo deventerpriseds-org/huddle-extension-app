@@ -172,6 +172,7 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     </div>
     <div class="small" id="reject-note" role="status" aria-live="polite"></div>
     <div class="stack" id="pending-list" style="gap:10px"></div>
+    <datalist id="cat-options"></datalist>
   </section>
 
   <!-- 5. Fireflies row -->
@@ -196,7 +197,7 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
         <label for="lib-search" class="sr-only">Search the library</label>
         <input id="lib-search" class="input" type="search" placeholder="Search names and tags">
       </div>
-      <div class="pills" role="group" aria-label="Filter by kind" id="kind-pills"></div>
+      <div class="pills" role="group" aria-label="Filter by category" id="kind-pills"></div>
     </div>
     <div class="list" id="lib-list"></div>
   </section>
@@ -230,9 +231,20 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
   "use strict";
   var S = window.TRINNEX_SAMPLE || { library: [], meetings: [], people: [], qa: [] };
   var REDUCED = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var KINDS = ["Policy", "Transcript", "File", "Notes"];
-  var KIND_FILTERS = [["All", "All"], ["Policy", "Policies"], ["Transcript", "Transcripts"], ["File", "Files"], ["Notes", "Notes"]];
-  var KIND_ICON = { Policy: "shield-check", Transcript: "audio-lines", File: "file-text", Notes: "notebook-pen" };
+  // TYPE is structural and automatic (it decides how a file is split: by speaker turn or by page).
+  // CATEGORY is the owner's own, open-ended, and grows as files arrive -- never a fixed list.
+  var KINDS = ["Document", "Transcript"];
+  var KIND_LABEL = { Document: "Document", Transcript: "Meeting transcript" };
+  var KIND_ICON = { Document: "file-text", Transcript: "audio-lines" };
+  var CATEGORY_HINTS = [
+    [/travel|expense|reimburs|per ?diem|mileage|card/, "Travel and expenses"],
+    [/vendor|contract|procure|supplier|renewal/, "Vendors"],
+    [/engineer|on-?call|incident|architecture|runbook/, "Engineering"],
+    [/leader|weekly|sync|staff|1-?1|one-on-one/, "Leadership meetings"],
+    [/hr|benefit|pto|leave|handbook|onboard/, "People and HR"],
+    [/budget|forecast|finance|invoice|q[1-4]/, "Finance"],
+    [/security|privacy|compliance|access/, "Security and compliance"]
+  ];
   var STEPS = ["Uploaded", "Read", "Split into passages", "Facts pulled out", "Searchable"];
   var ACCEPT = ["pdf", "docx", "pptx", "xlsx", "txt", "md", "vtt", "srt"];
   var FACT_TIP = "Short who/what/value statements, like 'Corporate card points | belong to | company', that let Iris answer exact questions";
@@ -258,16 +270,29 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
   function guessKind(name) {
     var e = ext(name), n = name.toLowerCase();
     if (e === "vtt" || e === "srt") return "Transcript";
-    if (e === "md" && n.indexOf("transcript") >= 0) return "Transcript";
-    if (/polic|handbook|guideline|standard/.test(n)) return "Policy";
-    if (e === "md" || e === "txt") return "Notes";
-    return "File";
+    if ((e === "md" || e === "txt") && n.indexOf("transcript") >= 0) return "Transcript";
+    return "Document";
   }
+  // Prototype stand-in for Iris reading the file: suggest an EXISTING category first, else a new one.
+  function guessCategory(name) {
+    var n = name.toLowerCase().replace(/[_.]+/g, " ");
+    for (var i = 0; i < CATEGORY_HINTS.length; i++) if (CATEGORY_HINTS[i][0].test(n)) return CATEGORY_HINTS[i][1];
+    return "General";
+  }
+  function categories() {
+    var seen = {}, out = [];
+    (S.categories || []).concat(state.library.map(function (d) { return d.category; })).forEach(function (c) {
+      if (c && !seen[c.toLowerCase()]) { seen[c.toLowerCase()] = 1; out.push(c); }
+    });
+    return out;
+  }
+  function isKnownCategory(c) { var l = String(c || "").trim().toLowerCase(); return categories().some(function (x) { return x.toLowerCase() === l; }); }
+  function renderCategoryList() { var dl = $("cat-options"); if (dl) dl.innerHTML = categories().map(function (c) { return '<option value="' + esc(c) + '"></option>'; }).join(""); }
   function countsFor(size, kind) {
     // Plausible: roughly one passage per ~6 KB of source, facts ~1.4x passages (fewer for transcripts).
     var kb = Math.max(1, size / 1024);
     var chunks = Math.max(3, Math.min(420, Math.round(kb / 6 + 4)));
-    var ratio = kind === "Transcript" ? 0.55 : kind === "Policy" ? 1.6 : 1.1;
+    var ratio = kind === "Transcript" ? 0.55 : 1.3;
     return { chunks: chunks, facts: Math.max(2, Math.round(chunks * ratio)) };
   }
 
@@ -298,7 +323,7 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
       if (ACCEPT.indexOf(ext(f.name)) < 0) { rejected.push(f.name); return; }
       var kind = guessKind(f.name);
       state.seq += 1;
-      state.pending.push({ pid: "p" + state.seq, name: f.name, size: f.size, kind: kind, date: today(), tags: [], participants: [], phase: "form", step: -1, counts: null });
+      state.pending.push({ pid: "p" + state.seq, name: f.name, size: f.size, kind: kind, category: guessCategory(f.name), suggested: guessCategory(f.name), date: today(), tags: [], participants: [], phase: "form", step: -1, counts: null });
     });
     $("reject-note").innerHTML = rejected.length ? '<span class="chip chip-warn"><i data-lucide="alert-triangle"></i>Not added, unsupported type: ' + esc(rejected.join(", ")) + "</span>" : "";
     renderPending(); icons();
@@ -329,7 +354,14 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
           : '<div class="small muted" aria-live="polite">' + esc(STEPS[Math.max(0, p.step)]) + "&hellip;</div>";
         return '<div class="pending">' + head + stepperHTML(p) + foot + "</div>";
       }
-      var kindOpts = KINDS.map(function (k) { return '<option value="' + k + '"' + (k === p.kind ? " selected" : "") + ">" + k + "</option>"; }).join("");
+      var kindOpts = KINDS.map(function (k) { return '<option value="' + k + '"' + (k === p.kind ? " selected" : "") + ">" + KIND_LABEL[k] + "</option>"; }).join("");
+      var catNew = p.category && !isKnownCategory(p.category);
+      var catNote = catNew
+        ? '<span class="small" style="color:var(--ai)">New category. It will be offered for future files.</span>'
+        : '<span class="small muted">Pick one you already use, accept the suggestion, or type a new one.</span>';
+      var catSuggest = p.suggested && p.suggested !== p.category
+        ? '<button type="button" class="chip chip-ai" data-act="use-suggest" data-pid="' + p.pid + '" style="border:0;cursor:pointer"><i data-lucide="sparkles"></i>Iris suggests: ' + esc(p.suggested) + "</button>"
+        : "";
       var tags = p.tags.map(function (t, i) { return chipHTML(t, 'data-act="rm-tag" data-pid="' + p.pid + '" data-i="' + i + '"', t); }).join("");
       var people = "";
       if (p.kind === "Transcript") {
@@ -339,7 +371,8 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
       }
       return '<div class="pending new">' + head +
         '<div class="form-grid">' +
-        '<div class="field"><label for="kind-' + p.pid + '">Kind</label><select class="input select" id="kind-' + p.pid + '" data-pid="' + p.pid + '" data-field="kind">' + kindOpts + "</select></div>" +
+        '<div class="field"><label for="kind-' + p.pid + '">Type <span class="muted small">(set from the file)</span></label><select class="input select" id="kind-' + p.pid + '" data-pid="' + p.pid + '" data-field="kind">' + kindOpts + "</select></div>" +
+        '<div class="field new" style="grid-column:1/-1"><label for="cat-' + p.pid + '">Category <span class="new-tag">New</span></label><div class="row"><input class="input" style="flex:1;min-width:160px" id="cat-' + p.pid + '" list="cat-options" data-pid="' + p.pid + '" data-field="category" value="' + esc(p.category) + '" autocomplete="off">' + catSuggest + "</div>" + catNote + "</div>" +
         '<div class="field"><label for="date-' + p.pid + '">Date</label><input class="input" type="date" id="date-' + p.pid + '" data-pid="' + p.pid + '" data-field="date" value="' + esc(p.date) + '"></div>' +
         '<div class="field" style="grid-column:1/-1"><label for="tag-' + p.pid + '">Tags</label><div class="tagbox">' + tags + '<input id="tag-' + p.pid + '" data-pid="' + p.pid + '" class="tag-input" placeholder="Type a tag, press Enter" autocomplete="off"></div></div>' +
         people + "</div>" +
@@ -357,6 +390,7 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     if (act === "discard" || act === "dismiss") state.pending = state.pending.filter(function (x) { return x !== p; });
     else if (act === "rm-tag") p.tags.splice(i, 1);
     else if (act === "rm-ppl") p.participants.splice(i, 1);
+    else if (act === "use-suggest") p.category = p.suggested;
     else if (act === "ingest") { ingest(p); return; }
     renderPending(); icons();
   });
@@ -364,6 +398,7 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     var el = e.target, p = findPending(el.getAttribute("data-pid")); if (!p || !el.getAttribute("data-field")) return;
     p[el.getAttribute("data-field")] = el.value;
     if (el.getAttribute("data-field") === "kind") { renderPending(); icons(); var k = $("kind-" + p.pid); if (k) k.focus(); }
+    if (el.getAttribute("data-field") === "category") { p.category = el.value.trim(); renderPending(); icons(); var c = $("cat-" + p.pid); if (c) c.focus(); }
   });
   pendingHost.addEventListener("keydown", function (e) {
     var el = e.target;
@@ -428,6 +463,8 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
 
   // ── 3. Processing stepper ──
   function ingest(p) {
+    p.category = (p.category || "").trim() || "General";
+    p.newCategory = !isKnownCategory(p.category);
     p.phase = "running"; p.step = 0; p.counts = countsFor(p.size, p.kind);
     renderPending(); icons();
     var delay = REDUCED ? 150 : 600;
@@ -437,16 +474,24 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
       if (p.step >= STEPS.length - 1) {
         clearInterval(timer); p.step = STEPS.length - 1; p.phase = "done";
         state.seq += 1;
-        state.library.unshift({ id: "doc-new-" + state.seq, name: p.name, kind: p.kind, addedAt: p.date, pages: null, chunks: p.counts.chunks, facts: p.counts.facts, status: "Searchable", tags: p.tags.slice(), participants: p.participants.slice(), fresh: true });
-        renderList();
-        toast("Added to library: " + p.counts.chunks + " passages, " + p.counts.facts + " facts");
+        if (p.newCategory) (S.categories = S.categories || []).push(p.category);
+        state.library.unshift({ id: "doc-new-" + state.seq, name: p.name, kind: p.kind, category: p.category, addedAt: p.date, pages: null, chunks: p.counts.chunks, facts: p.counts.facts, status: "Searchable", tags: p.tags.slice(), participants: p.participants.slice(), fresh: true });
+        renderPills(); renderList(); renderCategoryList();
+        toast("Added to library: " + p.counts.chunks + " passages, " + p.counts.facts + " facts" + (p.newCategory ? '. New category "' + p.category + '" added.' : ""));
       }
       renderPending(); icons();
     }, delay);
   }
 
   // ── 4. Library list ──
-  $("kind-pills").innerHTML = KIND_FILTERS.map(function (k) { return '<button type="button" id="pill-' + k[0].toLowerCase() + '" data-kind="' + k[0] + '" aria-pressed="' + (k[0] === "All") + '">' + k[1] + "</button>"; }).join("");
+  // Filter pills are built from the categories actually in the library, so they grow with it.
+  function renderPills() {
+    var used = {}; state.library.forEach(function (d) { if (d.category) used[d.category] = (used[d.category] || 0) + 1; });
+    if (state.filter !== "All" && !used[state.filter]) state.filter = "All";
+    var opts = [["All", "All"]].concat(Object.keys(used).sort().map(function (c) { return [c, c + " " + used[c]]; }));
+    $("kind-pills").innerHTML = opts.map(function (k, i) { return '<button type="button" id="pill-' + i + '" data-kind="' + esc(k[0]) + '" aria-pressed="' + (k[0] === state.filter) + '">' + esc(k[1]) + "</button>"; }).join("");
+  }
+  renderPills(); renderCategoryList();
   $("kind-pills").addEventListener("click", function (e) {
     var b = e.target.closest("button"); if (!b) return; state.filter = b.getAttribute("data-kind");
     Array.prototype.forEach.call(this.children, function (c) { c.setAttribute("aria-pressed", String(c === b)); });
@@ -456,9 +501,9 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
 
   function renderList() {
     var rows = state.library.filter(function (d) {
-      if (state.filter !== "All" && d.kind !== state.filter) return false;
+      if (state.filter !== "All" && d.category !== state.filter) return false;
       if (!state.query) return true;
-      return (d.name + " " + d.tags.join(" ") + " " + (d.participants || []).join(" ")).toLowerCase().indexOf(state.query) >= 0;
+      return (d.name + " " + (d.category || "") + " " + d.tags.join(" ") + " " + (d.participants || []).join(" ")).toLowerCase().indexOf(state.query) >= 0;
     });
     var total = state.library.length;
     $("lib-total").textContent = total + (total === 1 ? " item" : " items");
@@ -469,10 +514,10 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
       return '<button type="button" class="lrow" id="row-' + esc(d.id) + '" data-id="' + esc(d.id) + '" aria-haspopup="dialog">' +
         '<span class="kind-ico" aria-hidden="true"><i data-lucide="' + KIND_ICON[d.kind] + '"></i></span>' +
         '<span class="stack" style="gap:3px"><span class="fname">' + esc(d.name) + (d.fresh ? ' <span class="new-tag">Just added</span>' : "") + "</span>" +
-        '<span class="lmeta"><span>' + esc(d.kind) + "</span><span>" + fmtDate(d.addedAt) + "</span>" + counts + "</span>" +
+        '<span class="lmeta"><span>' + esc(KIND_LABEL[d.kind] || d.kind) + '</span><span class="chip new" style="height:20px">' + esc(d.category || "General") + "</span><span>" + fmtDate(d.addedAt) + "</span>" + counts + "</span>" +
         (tags ? '<span class="row" style="gap:4px">' + tags + "</span>" : "") + "</span>" +
         '<span class="status-cell">' + status + "</span></button>";
-    }).join("") : '<div class="empty muted">Nothing matches. Try another search or kind.</div>';
+    }).join("") : '<div class="empty muted">Nothing matches. Try another search or category.</div>';
     icons();
   }
   $("lib-list").addEventListener("click", function (e) { var r = e.target.closest(".lrow"); if (r) openDrawer(r.getAttribute("data-id")); });
@@ -538,7 +583,7 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     var d = findDoc(state.openId); if (!d) { closeDrawer(); return; }
     var det = DETAIL[d.id] || genericDetail(d);
     var waitingTriage = d.status !== "Searchable";
-    var html = '<div class="drawer-head"><span class="eyebrow">' + esc(d.kind) + " · " + fmtDate(d.addedAt) + '</span><h2 class="h-section" id="drawer-title" style="overflow-wrap:anywhere">' + esc(d.name) + "</h2>" +
+    var html = '<div class="drawer-head"><span class="eyebrow">' + esc(KIND_LABEL[d.kind] || d.kind) + " · " + esc(d.category || "General") + " · " + fmtDate(d.addedAt) + '</span><h2 class="h-section" id="drawer-title" style="overflow-wrap:anywhere">' + esc(d.name) + "</h2>" +
       '<div class="row">' + (waitingTriage ? '<span class="chip chip-warn"><i data-lucide="clock"></i>Waiting for triage</span>' : '<span class="chip chip-ok"><i data-lucide="check-circle-2"></i>Searchable</span><span class="small muted num">' + d.chunks + " passages · " + d.facts + " facts</span>") + "</div>" +
       '<button type="button" class="btn btn-ghost drawer-close" id="drawer-close" aria-label="Close"><i data-lucide="x"></i></button></div><div class="drawer-body">';
 
@@ -583,7 +628,7 @@ EVIDENCE:   base.css (Compass tokens), shell.html (rail), data.js (sample), Poli
     else if (t.id === "remove-btn") { state.confirmRemove = true; renderDrawer(); $("confirm-remove-yes").focus(); }
     else if (t.id === "confirm-remove-no") { state.confirmRemove = false; renderDrawer(); $("remove-btn").focus(); }
     else if (t.id === "confirm-remove-yes") {
-      var name = d.name; state.library = state.library.filter(function (x) { return x !== d; });
+      var name = d.name; state.library = state.library.filter(function (x) { return x !== d; }); renderPills();
       lastFocus = $("lib-search"); closeDrawer(); renderList(); toast("Removed from memory: " + name);
     }
   });

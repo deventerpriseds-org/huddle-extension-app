@@ -5522,3 +5522,6 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
       Published privately: https://claude.ai/artifact/25dG6n5GB9m1DBdynxTSyA. Branch claude_trinnex-prototype @1ccbe236. WAITING on owner review.
       Extends, does not duplicate: chat.fireflies_meetings (title/participants/series), proposals/meeting-triage.ts (owner picker replaces typed
       "For someone"), rag_chunks/rag_triples (Trinnex collection via source/metadata). Open: data-location OK for work material; which Iris.
+      2026-11-20 owner: "I don't know that policies needs its own category unless category will be dynamic". Library now has
+      TYPE (automatic: Document / Meeting transcript) + CATEGORY (dynamic: Iris suggests, owner accepts or types, new ones join
+      the list; filter pills built from categories in use). Headless check: Q1 budget file -> new "Finance" -> pill appears, 0 errors.
