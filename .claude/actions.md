@@ -5521,3 +5521,4 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 ## ACT:trinnex-meetings -- Trinnex Meetings triage module (2026-11-20) -- IN PROGRESS
 **Asked for:** owner "go on prototype" (AC-trinnex-workspace.md s1, s5 name rows, s9, s10).
 - Build log + evidence: docs/qc-evidence/BUILD-trinnex-meetings.md. Branch claude_trinnex-meetings, NOT merged, NOT live.
+- Step 3 (pure triage core + 32 tests, meeting columns + people table, writer uses the chosen file name; BUILD step 3/3b).

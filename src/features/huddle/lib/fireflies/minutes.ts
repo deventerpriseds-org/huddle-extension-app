@@ -425,3 +425,13 @@ export function safeMeetingId(id: string): string | null {
   const s = String(id ?? "").trim();
   return /^[A-Za-z0-9_-]{1,120}$/.test(s) ? s : null;
 }
+
+/** Pure (Trinnex AC-T8, 2026-11-20): the transcript's OneDrive file name. The owner's chosen name (set by "Rename the
+ *  OneDrive file" in Meetings triage, stored in chat.fireflies_meetings.onedrive_file_name) wins, so a Fireflies
+ *  resend overwrites the RENAMED file instead of recreating fireflies-<id>.md beside it. Path separators and the
+ *  other characters OneDrive refuses become "-", so a stored name can never leave the transcripts folder. */
+export function transcriptFileName(meetingId: string, chosen: string | null | undefined): string {
+  const c = typeof chosen === "string" ? chosen.replace(/[\\/*?"<>|:\u0000-\u001f]/g, "-").replace(/\s+/g, " ").trim() : "";
+  if (c && c.replace(/[.\-\s]/g, "")) return c.toLowerCase().endsWith(".md") ? c : `${c}.md`;
+  return `fireflies-${meetingId}.md`;
+}
