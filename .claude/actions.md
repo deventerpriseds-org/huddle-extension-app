@@ -5531,3 +5531,5 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - Step 7 (build exit 0).
 ## ACT:trinnex-library -- Trinnex Library app: upload, extract, ingest, remove (2026-11-20) -- BUILDING on claude_trinnex-library, NOT live
 - Lane of the Trinnex workspace build (spec docs/qc-evidence/AC-trinnex-workspace.md section 2). Step log + evidence: docs/qc-evidence/BUILD-trinnex-library.md.
+## ACT:verify-trinnex-workspace-1 -- independent verifier loop 1 of PR #289 (2026-11-20) -- OPEN, evidence branch claude_verify-trinnex-workspace-1 (not for merge)
+- Evidence: docs/qc-evidence/VERIFY-trinnex-workspace-1.md; attack tests scripts/verify-trinnex-attack.test.ts (VA9 left failing: library Remove during in-flight ingest leaves Trinnex rows behind).
