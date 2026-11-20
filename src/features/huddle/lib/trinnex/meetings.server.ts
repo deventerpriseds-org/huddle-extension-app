@@ -12,7 +12,6 @@ import type { Pool } from "pg";
 import { getSharedPool } from "../db/shared-pool.server";
 import { ensureMinutesSchema } from "../fireflies/minutes-store.server";
 import { normName, suggestNames, type NameSuggestion } from "./names";
-import { factsFailReason, factsFailureNotice } from "./library-core";
 import {
   canRemovePerson,
   cleanPersonName,
@@ -86,36 +85,6 @@ export async function addPerson(caller: Caller, raw: unknown): Promise<{ ok: tru
   return { ok: true, name: people.find((p) => normName(p) === normName(name)) ?? name, people };
 }
 
-/**
- * The Library's write path into the SAME list (one people list, AC-L5/AC-T14): every participant or speaker name
- * the owner tags on an upload is added exactly as addPerson adds it (cleaned, case-insensitive dedup, owner never
- * stored). Never fails the caller's save.
- */
-export async function rememberPeople(caller: Caller, names: readonly unknown[]): Promise<void> {
-  const s = await scope(caller).catch(() => null);
-  if (!s) return;
-  const seen = new Set<string>([normName(s.ownerName)]);
-  const rows: Array<[string, string]> = [];
-  for (const raw of names) {
-    const name = cleanPersonName(raw);
-    if (!name || seen.has(normName(name))) continue;
-    seen.add(normName(name));
-    rows.push([normName(name), name]);
-  }
-  if (!rows.length) return;
-  try {
-    await ensureMinutesSchema();
-    for (const [key, name] of rows) {
-      await pool().query(
-        `INSERT INTO chat.trinnex_people (owner_email, name_key, name) VALUES ($1, $2, $3) ON CONFLICT (owner_email, name_key) DO NOTHING`,
-        [s.owners[0], key, name],
-      );
-    }
-  } catch (e) {
-    console.error("[trinnex-meetings] remember people failed", code(e, "people_write_failed"));
-  }
-}
-
 /** AC-T15: the owner is never removable; existing meetings and items keep the name (nothing else is touched). */
 export async function removePerson(caller: Caller, raw: unknown): Promise<{ ok: true; people: string[] } | { ok: false; error: string }> {
   const s = await scope(caller);
@@ -139,8 +108,6 @@ export interface MeetingListItem {
   participants: string[];
   triaged: boolean;
   trinnexState: string | null;
-  /** AC-C5: "Facts not extracted: AI quota exhausted" (or the kind) when the passages went in without facts. */
-  factsNotice: string | null;
 }
 
 interface MeetingDbRow {
@@ -156,7 +123,6 @@ interface MeetingDbRow {
   onedrive_path: string | null;
   onedrive_file_name: string | null;
   trinnex_state: string | null;
-  trinnex_error?: string | null;
 }
 
 const iso = (v: string | Date | null) => (v == null ? null : v instanceof Date ? v.toISOString() : String(v));
@@ -171,12 +137,11 @@ const listItem = (r: MeetingDbRow): MeetingListItem => {
     participants: r.participants ?? [],
     triaged: !!r.triaged_at,
     trinnexState: r.trinnex_state,
-    factsNotice: factsFailureNotice(r.trinnex_error),
   };
 };
 
 const COLS = `meeting_id, title, display_title, series, participants, speaker_map, meeting_at, triaged_at,
-  title_with_participants, onedrive_path, onedrive_file_name, trinnex_state, trinnex_error`;
+  title_with_participants, onedrive_path, onedrive_file_name, trinnex_state`;
 
 export async function listMeetings(caller: Caller): Promise<
   { ok: true; owner: string; people: string[]; series: string[]; meetings: MeetingListItem[] } | { ok: false; error: string }
@@ -350,8 +315,6 @@ export async function saveMeeting(caller: Caller, input: SaveInput): Promise<Sav
 
   // 4. Trinnex memory (brief step 7, section 10). Never fails the save.
   let memory = "skipped";
-  let factsError: string | null = null;
-  let ingestKind: string | null = null;
   if (input.addToMemory) {
     const mem = await import("./memory.server");
     if (!mem.trinnexConfigured()) {
@@ -359,53 +322,29 @@ export async function saveMeeting(caller: Caller, input: SaveInput): Promise<Sav
       notes.push("Trinnex memory is not set up yet.");
     } else {
       try {
-        // AC-M4 / RT-I4: each passage keeps the ORIGINAL speaker label next to the mapped person.
-        const segments = segmentsFor(sentences, speakerMap).map((x) => ({
-          text: x.text,
-          speaker: x.speaker,
-          speakerLabel: x.speakerLabel,
-          at: x.at,
-        }));
+        const segments = segmentsFor(sentences, speakerMap).map((x) => ({ text: x.text, speaker: x.speaker, at: x.at }));
         const r = await mem.ingestTrinnexSource({
           sourceId: input.meetingId,
           sourceKind: "meeting",
           title: shown,
-          firefliesTitle: row.title ?? null, // AC-M4: the title as Fireflies sent it (S-C8 fallback)
           date: iso(row.meeting_at),
           series,
           participants,
           segments,
-          ownerEmail: s.owners[0], // AC-C7: the same resolved email the library rows and search_trinnex use
         });
         memory = "ingested";
-        // AC-C5: passages stored; a fact-extraction failure is recorded by KIND and shown on the meeting.
-        if (r.factsFailure) {
-          factsError = factsFailReason(r.factsFailure);
-          const n = factsFailureNotice(factsError);
-          if (n) notes.push(`${n}.`);
-        }
         console.log("[trinnex-meetings] ingested", input.meetingId, r.chunks, r.facts);
       } catch (e) {
         memory = "failed";
-        // AC-C5 (verifier loop 1): an embedding failure carries its KIND (TrinnexEmbedError.kind, already sent to
-        // the ai-quota alert by the memory lane); record it on the meeting instead of a bare "ingest_failed".
-        const k = (e as { kind?: unknown })?.kind;
-        if (typeof k === "string" && /^[a-z0-9_ ]{1,64}$/i.test(k)) ingestKind = k;
-        console.error("[trinnex-meetings] ingest failed", ingestKind ?? code(e, "ingest_failed"));
-        notes.push(
-          ingestKind === "no_api_key"
-            ? "Saved, but not added to Trinnex memory: the AI key is not set."
-            : /insufficient_quota/.test(ingestKind ?? "")
-              ? "Saved, but not added to Trinnex memory: AI quota exhausted. Try again later."
-              : "Saved, but adding it to Trinnex memory failed. Try again later.",
-        );
+        console.error("[trinnex-meetings] ingest failed", code(e, "ingest_failed"));
+        notes.push("Saved, but adding it to Trinnex memory failed. Try again later.");
       }
     }
     await pool()
       .query(`UPDATE chat.fireflies_meetings SET trinnex_state = $2, trinnex_error = $3, updated_at = now() WHERE meeting_id = $1`, [
         input.meetingId,
         memory,
-        memory === "failed" ? (ingestKind ? `ingest_failed:${ingestKind}` : "ingest_failed") : factsError,
+        memory === "failed" ? "ingest_failed" : null,
       ])
       .catch(() => {});
   }

@@ -87,22 +87,6 @@ export function ownerPickToTriage(
   return { choice: "someone", name: pick.name };
 }
 
-/** Shown as the owner's row while the people list is still loading, so "Mine" stays one tap away. */
-export const OWNER_FALLBACK_LABEL = "Me";
-
-/**
- * AC-T13: what a pick in the chat checklist / Actions > Meetings owner picker sends. EXACTLY the shape those
- * surfaces sent from the typed box before (decision Q4): the owner -> { choice: "mine" } with no name, so the
- * stored row is today's Mine; anyone else -> { choice: "someone", name } capped at 80 chars as before.
- */
-export function triageForPick(name: string, owner: string | null): { choice: TriageChoice; name?: string } {
-  if (owner === null || normName(owner) === "") {
-    return name === OWNER_FALLBACK_LABEL ? { choice: "mine" } : { choice: "someone", name: name.slice(0, 80) };
-  }
-  const t = ownerPickToTriage({ kind: "person", name }, owner);
-  return t.choice === "someone" ? { choice: "someone", name: (t.name ?? name).slice(0, 80) } : { choice: t.choice };
-}
-
 // ── Speakers (AC-T10, AC-T11; S-B) ──────────────────────────────────────────────────────────────────
 
 export interface StoredSentence {
@@ -192,9 +176,7 @@ export function segmentsFor(
     const text = typeof s.text === "string" ? collapse(s.text) : "";
     if (!text) continue;
     const label = speakerKey(s.speaker);
-    // RT-N4: OWN keys only. `map["constructor"]` on a plain object is Object.prototype.constructor, a function.
-    const mapped = Object.prototype.hasOwnProperty.call(map, label) ? map[label] : undefined;
-    const speaker = typeof mapped === "string" && mapped ? mapped : label;
+    const speaker = map[label] || label;
     const last = out[out.length - 1];
     if (last && last.speakerLabel === label && last.text.length + 1 + text.length <= SEGMENT_MAX_CHARS) {
       last.text += ` ${text}`;
@@ -210,8 +192,7 @@ export function segmentsFor(
 
 /** Pure: a client speaker map -> only known labels, values cleaned; an empty value means unmapped. */
 export function cleanSpeakerMap(raw: unknown, labels: readonly string[]): Record<string, string> {
-  // RT-N4: no prototype, so a label like "constructor" or "__proto__" is an ordinary key.
-  const out: Record<string, string> = Object.create(null);
+  const out: Record<string, string> = {};
   if (!raw || typeof raw !== "object") return out;
   const ok = new Set(labels);
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {

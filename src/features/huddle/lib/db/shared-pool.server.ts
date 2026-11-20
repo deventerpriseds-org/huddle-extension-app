@@ -42,81 +42,18 @@ export const TRINNEX_POOL_MAX = 2;
 
 let _trinnex: Pool | null = null;
 
-/** The personal memory database. Trinnex must never open a pool on it (AC-M1, AC-M6). */
-export const PERSONAL_MEMORY_DB = "RAG_AI_Agents";
-
-/** Database name the way a pg-style URL resolves it: WHATWG URL, pathname decoded with decodeURIComponent,
- *  query string and #fragment ignored (pg-connection-string sets `database` from the path even when the query
- *  has one), surrounding whitespace and slashes trimmed. Null when unparseable (incl. pg's "/socket db" form). */
-function urlParts(url: string): { host: string; port: string; db: string } | null {
-  let u: URL;
-  try {
-    u = new URL(url.trim());
-  } catch {
-    return null;
-  }
-  let path: string;
-  try {
-    // pg's socket: form carries the database in ?db= (pg-connection-string); every other form in the path.
-    path = decodeURIComponent(u.protocol === "socket:" ? (u.searchParams.get("db") ?? "") : u.pathname);
-  } catch {
-    return null; // malformed percent-escape: refuse rather than guess what pg would do
-  }
-  const db = path.trim().replace(/^[\s/]+|[\s/]+$/g, "").trim();
-  let host = u.hostname;
-  try {
-    host = decodeURIComponent(host);
-  } catch {
-    /* keep raw */
-  }
-  return { host: host.trim().toLowerCase(), port: u.port || "5432", db };
-}
-
-/**
- * Why a TRINNEX_PG_URL must not be opened, as a CODE (logged, never the URL), or null when it is safe.
- * Fail closed: an unparseable URL is refused. RT-I1/RT-I2 (percent-encoded name, #fragment) and every
- * whitespace / %2F / case spelling of the personal database are refused.
- */
-export function trinnexUrlRefusal(url: string | null | undefined, personalUrl: string | null | undefined): string | null {
-  const raw = (url ?? "").trim();
-  if (!raw) return "not_configured";
-  const t = urlParts(raw);
-  if (!t) return "unparseable_url";
-  if (!t.db) return "no_database";
-  const isPersonal = (name: string) => name.trim().toLowerCase() === PERSONAL_MEMORY_DB.toLowerCase();
-  // The whole name, and every slash-separated part of it (a decoded %2F), compared case-insensitively.
-  if (isPersonal(t.db) || t.db.split("/").some(isPersonal)) return "personal_db_name";
-  const pRaw = (personalUrl ?? "").trim();
-  if (pRaw) {
-    if (pRaw === raw) return "same_as_azure_pg_url";
-    const p = urlParts(pRaw);
-    if (p && p.host === t.host && p.port === t.port && p.db.toLowerCase() === t.db.toLowerCase()) return "same_as_azure_pg_url";
-  }
-  return null;
-}
-
-const _loggedRefusals = new Set<string>();
-function refusal(): string | null {
-  const code = trinnexUrlRefusal(process.env.TRINNEX_PG_URL, process.env.AZURE_PG_URL);
-  if (code && code !== "not_configured" && !_loggedRefusals.has(code)) {
-    _loggedRefusals.add(code);
-    console.error(`[trinnex-pool] refused code=${code}; Trinnex memory is off`);
-  }
-  return code;
-}
-
-/** True only when TRINNEX_PG_URL is set AND passes the personal-database guard. Never throws. */
 export function trinnexPgConfigured(): boolean {
-  return refusal() === null;
+  return !!process.env.TRINNEX_PG_URL?.trim();
 }
 
 export function getTrinnexPool(): Pool {
   if (_trinnex) return _trinnex;
-  const code = refusal();
-  if (code === "not_configured") throw new Error("TRINNEX_PG_URL not configured");
+  const url = process.env.TRINNEX_PG_URL?.trim();
+  if (!url) throw new Error("TRINNEX_PG_URL not configured");
   // Never the personal memory database: a mis-assembled setting must fail, not silently mix the two.
-  if (code) throw new Error(`TRINNEX_PG_URL refused (code=${code}); Trinnex memory is off`);
-  const url = process.env.TRINNEX_PG_URL!.trim();
+  if (/\/RAG_AI_Agents(\?|$)/i.test(url) || url === process.env.AZURE_PG_URL?.trim()) {
+    throw new Error("TRINNEX_PG_URL points at the personal memory database; refusing");
+  }
   _trinnex = new Pool({
     connectionString: url,
     ssl: { rejectUnauthorized: false },

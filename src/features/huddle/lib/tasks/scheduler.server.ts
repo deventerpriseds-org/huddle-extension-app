@@ -303,11 +303,6 @@ export async function runDueScheduledJobs(): Promise<number> {
   const trinnexLibrary = asJob("Trinnex Library", () => import("../trinnex/library.server")
     .then((m) => m.processDueLibraryItems(1)))
     .catch(() => 0);
-  // Trinnex orphan sweeper (loop-2 backstop, 2026-11-20): deletes Trinnex passages/facts whose source has not been
-  // live for 10+ minutes. Same shape; no AI call; throttled to once per 15 min per process; never throws.
-  const trinnexSweep = import("../trinnex/memory.server")
-    .then((m) => m.sweepTrinnexOrphansIfDue())
-    .catch(() => null);
   try {
     await ensureGroomJobs(now);
   } catch {
@@ -331,7 +326,6 @@ export async function runDueScheduledJobs(): Promise<number> {
     await correspondence;
     await proposals;
     await trinnexLibrary;
-    await trinnexSweep;
     return 0;
   }
   let fired = 0;
@@ -384,6 +378,5 @@ export async function runDueScheduledJobs(): Promise<number> {
   await correspondence; // same for the correspondence pass (never throws; bounded by PASS_BUDGET_MS)
   await proposals; // same for the proposals pass (never throws; transcripts bounded at 25s)
   await trinnexLibrary; // same for the Trinnex Library pass (never throws; one file per tick)
-  await trinnexSweep; // same for the Trinnex orphan sweep (never throws; at most once per 15 min)
   return fired;
 }

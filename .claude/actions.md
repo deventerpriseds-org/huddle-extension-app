@@ -5531,15 +5531,8 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - Step 7 (build exit 0).
 ## ACT:trinnex-library -- Trinnex Library app: upload, extract, ingest, remove (2026-11-20) -- BUILDING on claude_trinnex-library, NOT live
 - Lane of the Trinnex workspace build (spec docs/qc-evidence/AC-trinnex-workspace.md section 2). Step log + evidence: docs/qc-evidence/BUILD-trinnex-library.md.
-## ACT:verify-trinnex-workspace-1 -- independent verifier loop 1 of PR #289 (2026-11-20) -- OPEN, evidence branch claude_verify-trinnex-workspace-1 (not for merge)
-- Evidence: docs/qc-evidence/VERIFY-trinnex-workspace-1.md; attack tests scripts/verify-trinnex-attack.test.ts (VA9 left failing: library Remove during in-flight ingest leaves Trinnex rows behind).
-## ACT:trinnex-verify1-fixes -- fix round for verifier loop 1 of PR #289 (2026-11-20) -- IN PROGRESS on claude_trinnex-workspace, NOT merged, NOT live
-- Findings from docs/qc-evidence/VERIFY-trinnex-workspace-1.md; one line per fix in docs/qc-evidence/BUILD-trinnex-integration.md "Verifier loop-1 fix round (2026-11-20)".
-- VA9 Remove race (tombstone + worker-owned deletes, scripts/trinnex-removal-race.test.ts); bootstrap allow-list append-only (scripts/trinnex-bootstrap-allowlist.test.ts).
-- Quota surfacing: embed failures go through the facts alert path by kind (TrinnexEmbedError); a missing OpenAI key is kind no_api_key on the item (FailReason no_api_key / facts:no_api_key), never a silent 0 facts.
-- Scope gate (search_trinnex only in dm-iris-chase / dm-eli-vaughn), recency RT-S5 rows, RT-I5 strengthened.
-- Mutation proofs m1-m16 (15 FIRED control EQUIVALENT, m5 INERT-equivalent), regression green, build rc=0; evidence in BUILD-trinnex-integration.md.
-- [x] ACT:verify-trinnex-workspace-2 -- verifier loop 2 on PR #289 at 6c62d6e8; probes scripts/verify-trinnex-attack-2.test.ts (VB1-VB3, verifier-written, no product code). Evidence: docs/qc-evidence/VERIFY-trinnex-workspace-2.md
-- [ ] ACT:verify-trinnex-workspace-3 -- verifier loop 3 on PR #289 at 957bad98; probes scripts/verify-trinnex-attack-3.test.ts (VC1-VC3, verifier-written, no product code). Evidence: docs/qc-evidence/VERIFY-trinnex-workspace-3.md
-  - loop-3 progress: claims S, 2b, G, R recorded (G1-G12, R1-R4 added to the probe file).
-  - loop-3 complete: S, 1, 2b, G, R, V, M, 3/5/6/Q recorded; verdict MERGE-PENDING-UAT. Evidence: docs/qc-evidence/VERIFY-trinnex-workspace-3.md
+- [~] 2026-11-20 ACT:trinnex-workspace-build -- PR #289 (claude_trinnex-workspace @8755f8e3+). Lanes memory/meetings/library merged,
+      integration gaps closed, red-team 15 BROKEN -> 14 fixed (S1 kept by design), verifier loops 1-3: FIX FIRST, FIX FIRST,
+      MERGE-PENDING-UAT (docs/qc-evidence/VERIFY-trinnex-workspace-{1,2,3}.md). Voice guard REMOVED (voice cannot reach Trinnex;
+      it changed existing behaviour). Lease renewed on a timer. 727 tests pass. Next: merge -> deploy -> bootstrap-trinnex-db.yml
+      -> redeploy -> UAT via verify-uat.yml checks_file=.claude/skills/test-agent-serverfn/scripts/trinnex-checks.mjs. NOT owner-confirmed.

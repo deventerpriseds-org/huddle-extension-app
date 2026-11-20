@@ -1,9 +1,5 @@
 # Project Memory — huddle-extension-app
 
-## Trinnex verifier loop-1 fixes (2026-11-20, claude_trinnex-workspace, PR #289, NOT merged, NOT live) -- ACT:trinnex-verify1-fixes
-- Library Remove vs the worker: `runRemoval` raises a tombstone (in-process + DB `removing` via `beginRemoval`) BEFORE deleting; the pipeline and `ingestTrinnexSource({shouldStop})` check it before every write. A worker holding the lease owns the deletes (Remove returns `pending`), so the row outlives every passage. A `removing` row older than 2 min is finished by the heartbeat claim.
-- bootstrap-trinnex-db.yml never writes `azure.extensions` after a failed/empty read; it only appends VECTOR (scripts/trinnex-extensions-allowlist.sh). The allow-list is shared by every DB on eds-postgresql.
-
 ## Trinnex Meetings lane (2026-11-20, branch claude_trinnex-meetings, NOT merged, NOT live) -- ACT:trinnex-meetings
 - One shared name parser `lib/trinnex/names.ts` (titles AND file names; S-A/S-B table in AC-trinnex-workspace.md s5).
 - MEASURED (azure-pg-query run 44671380860): every stored Fireflies speaker label is `Speaker N` (18988 sentences,

@@ -114,7 +114,6 @@ export function MeetingsView() {
         {m.series ? ` · ${m.series}` : ""}
         {m.trinnexState === "ingested" ? " · In Trinnex memory" : m.trinnexState === "queued" ? " · Queued" : ""}
       </span>
-      {m.factsNotice && <span className="text-xs text-warning-foreground">{m.factsNotice}</span>}
     </button>
   );
 

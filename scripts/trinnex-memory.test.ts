@@ -78,14 +78,11 @@ beforeEach(() => {
     getPool: () => trinnexPool,
     configured: () => configured,
     embed: async () => [0.1, 0.2, 0.3],
-    extractTriples: async () => ({ triples: extracted, failureKind: null }),
-    reportFailure: async () => {},
+    extractTriples: async () => extracted,
   });
 });
 
-const OWNER = "test-owner@example.com";
 const meeting = {
-  ownerEmail: OWNER,
   sourceId: "ff-123",
   sourceKind: "meeting" as const,
   title: "Test-Leadership weekly",
@@ -147,8 +144,7 @@ t("IN2 every stored fact carries source_chunk_id; invalid model output is droppe
   expect(tri.length).toBe(3); // one valid fact per passage x 3 passages
   expect(r.facts).toBe(3);
   expect(tri.every((c) => typeof c.params![6] === "string" && (c.params![6] as string).startsWith("id-"))).toBe(true);
-  // RT-I3 contract change: a fact's agent_id is the source PLUS the owner tag, so two owners never share a fact row.
-  expect(tri.every((c) => c.params![0] === "agent" && c.params![1] === "trinnex:meeting:ff-123|trinnex-owner:test-owner@example.com")).toBe(true);
+  expect(tri.every((c) => c.params![0] === "agent" && c.params![1] === "trinnex:meeting:ff-123")).toBe(true);
   expect(trinnexCalls.some((c) => /superseded_at = now\(\)/.test(c.sql))).toBe(false);
 });
 t("IN3 not configured: trinnexConfigured() false, ingest refuses, nothing is queried", async () => {
@@ -160,7 +156,7 @@ t("IN3 not configured: trinnexConfigured() false, ingest refuses, nothing is que
 
 // ── delete (AC-L7) ──
 t("DEL1 delete removes facts explicitly (incl. superseded + orphaned) before passages", async () => {
-  await mem.deleteTrinnexSource("ff-123", OWNER);
+  await mem.deleteTrinnexSource("ff-123");
   expect(trinnexCalls.length).toBe(2);
   const [f, c] = trinnexCalls;
   expect(f.sql).toContain("DELETE FROM rag_triples");
@@ -169,10 +165,6 @@ t("DEL1 delete removes facts explicitly (incl. superseded + orphaned) before pas
   expect(f.sql).not.toContain("superseded_at IS NULL");
   expect(c.sql).toContain("DELETE FROM rag_chunks");
   expect(f.params![0]).toEqual(["trinnex:meeting:ff-123", "trinnex:upload:ff-123"]);
-  // RT-I3: both deletes are scoped to the caller-owner.
-  expect(f.params![1]).toBe(OWNER);
-  expect(c.sql).toContain("lower(metadata->>'owner_email') = $2");
-  expect(c.params![1]).toBe(OWNER);
 });
 
 // ── isolation (AC-M7) ──
@@ -183,7 +175,7 @@ t("ISO1 search_trinnex is offered only to iris-chase and eli-vaughn (every agent
 t("ISO2 every other agent's search_trinnex call is refused without touching the Trinnex pool", async () => {
   for (const a of AGENTS) {
     if (a.id === "iris-chase" || a.id === "eli-vaughn") continue;
-    const out = JSON.parse(await mem.dispatchTrinnexTool(a.id, { query: "vendor" }, OWNER));
+    const out = JSON.parse(await mem.dispatchTrinnexTool(a.id, { query: "vendor" }));
     expect(out.error).toContain("not available");
   }
   expect(trinnexCalls.length).toBe(0);
@@ -198,7 +190,7 @@ t("ISO3 personal auto-retrieval never queries the Trinnex pool", async () => {
 
 // ── honest miss, Trinnex only (AC-M14) + unavailable (AC-M16) ──
 t("MISS1 Trinnex miss is honest; personal search_memory miss stays silent", async () => {
-  const r = await mem.searchTrinnex({ query: "vendor" }, OWNER);
+  const r = await mem.searchTrinnex({ query: "vendor" });
   expect(r.status).toBe("miss");
   expect((r as any).message).toBe(search.TRINNEX_MISS_TEXT);
   const emptyStore = { ...azurePgStore, searchChunks: async () => [] };
@@ -208,12 +200,12 @@ t("MISS1 Trinnex miss is honest; personal search_memory miss stays silent", asyn
 });
 t("MISS2 a below-floor hit is a miss, not a citation", async () => {
   trinnexRows = (sql) => (sql.includes("ORDER BY embedding") ? [{ id: "c1", text: "weak", source: "trinnex:meeting:1", score: 0.1, metadata: {} }] : []);
-  const r = await mem.searchTrinnex({ query: "vendor" }, OWNER);
+  const r = await mem.searchTrinnex({ query: "vendor" });
   expect(r.status).toBe("miss");
 });
 t("UNAV1 a Trinnex DB error says unavailable and never falls back to personal memory", async () => {
   trinnexThrows = true;
-  const r = await mem.searchTrinnex({ query: "vendor", speaker: "Michael" }, OWNER);
+  const r = await mem.searchTrinnex({ query: "vendor", speaker: "Michael" });
   expect(r.status).toBe("unavailable");
   expect(sharedCalls.length).toBe(0);
 });
@@ -223,7 +215,7 @@ t("CITE1 a hit returns title, date, speaker, at and a verbatim quote", async () 
     sql.includes("ORDER BY embedding")
       ? [{ id: "c1", text, source: "trinnex:meeting:ff-123", score: 0.5, metadata: { title: "T", date: "2026-11-18", speaker: "Michael R.", at: "65.2", sourceId: "ff-123" } }]
       : [];
-  const r: any = await mem.searchTrinnex({ query: "vendor" }, OWNER);
+  const r: any = await mem.searchTrinnex({ query: "vendor" });
   expect(r.status).toBe("ok");
   expect(r.results[0]).toMatchObject({ title: "T", date: "2026-11-18", speaker: "Michael R.", at: "65.2" });
   expect(text.includes(r.results[0].quote)).toBe(true);
@@ -238,7 +230,7 @@ const catalogRows = [
 ];
 t("FIL1 'the last Engineering Leaders meeting' searches ONLY the max-date meeting of that series", async () => {
   trinnexRows = (sql) => (sql.includes("LIKE 'trinnex:%'") ? catalogRows : []);
-  await mem.searchTrinnex({ query: "to-dos", series: "Engineering Leaders", question: "to-dos from the last Engineering Leaders meeting" }, OWNER);
+  await mem.searchTrinnex({ query: "to-dos", series: "Engineering Leaders", question: "to-dos from the last Engineering Leaders meeting" });
   const s = trinnexCalls.find((c) => c.sql.includes("ORDER BY embedding"))!;
   const at = (s.params ?? []).findIndex((p) => JSON.stringify(p) === JSON.stringify(["trinnex:meeting:c"]));
   expect(at).toBeGreaterThan(-1);
@@ -247,7 +239,7 @@ t("FIL1 'the last Engineering Leaders meeting' searches ONLY the max-date meetin
 });
 t("FIL2 'what did Michael say' filters to speaker Michael R. through metadata", async () => {
   trinnexRows = (sql) => (sql.includes("LIKE 'trinnex:%'") ? catalogRows : []);
-  await mem.searchTrinnex({ query: "vendor outcome", speaker: "Michael" }, OWNER);
+  await mem.searchTrinnex({ query: "vendor outcome", speaker: "Michael" });
   const s = trinnexCalls.find((c) => c.sql.includes("ORDER BY embedding"))!;
   expect(s.sql).toContain("lower(metadata->>");
   expect(s.params).toContain("Michael R.");
@@ -256,7 +248,7 @@ t("FIL2 'what did Michael say' filters to speaker Michael R. through metadata", 
 t("FIL3 two Michaels is ambiguous, never auto-picked", async () => {
   trinnexRows = (sql) =>
     sql.includes("LIKE 'trinnex:%'") ? [...catalogRows, { source: "trinnex:meeting:e", metadata: { date: "2026-11-01", speaker: "Michael T." } }] : [];
-  const r: any = await mem.searchTrinnex({ query: "x", speaker: "Michael" }, OWNER);
+  const r: any = await mem.searchTrinnex({ query: "x", speaker: "Michael" });
   expect(r.status).toBe("ambiguous");
   expect(r.options.sort()).toEqual(["Michael R.", "Michael T."]);
 });
@@ -274,24 +266,7 @@ const SC: Array<[string, string, unknown]> = [
   ["S-C7", "the last meeting", { mostRecent: 1 }],
   ["S-C10", "what did Michael say last", { mostRecent: 1 }],
   ["S-C11", 'the "Last Mile" review', null],
-  // RT-S5 (verifier loop 1 over-matches): "at last" = finally and "last-minute" are NOT recency ...
-  ["RT-S5a", "at last we agreed on pricing", null],
-  ["RT-S5b", "at long last the vendor signed", null],
-  ["RT-S5c", "last-minute changes", null],
-  ["RT-S5d", "last minute changes to the deck", null],
-  // ... while the real recency next to them still is
-  ["RT-S5e", "what did we say at last week's sync", { dateFrom: "2026-11-09", dateTo: "2026-11-15" }],
-  ["RT-S5f", "what was decided at last meeting", { mostRecent: 1 }],
-  // spans of years / quarters are DATE RANGES ending today, never "the last N meetings"
-  ["RT-S5g", "the past two years of revenue", { dateFrom: "2024-11-20", dateTo: "2026-11-20" }],
-  ["RT-S5h", "the last 3 quarters of revenue", { dateFrom: "2026-02-20", dateTo: "2026-11-20" }],
-  ["RT-S6a", "what is our last resort if the vendor walks", null],
-  ["RT-S6b", "the last-ditch plan for the launch", null],
-  ["RT-S6c", "last but not least, what about pricing", null],
-  ["RT-S6d", "what did we say about last mile delivery", null],
-  ["RT-S6e", "over the last couple of weeks what changed", { dateFrom: "2026-11-06", dateTo: "2026-11-20" }],
-  ["RT-S6f", "in the past few months what slipped", { dateFrom: "2026-08-20", dateTo: "2026-11-20" }],
-  ["RT-S6g", "what did they decide at the last meeting", { mostRecent: 1 }],];
+];
 for (const [id, phrase, want] of SC) {
   t(`${id} recency of ${JSON.stringify(phrase)}`, () => {
     expect(search.recencyFromQuestion(phrase, NOW)).toEqual(want);

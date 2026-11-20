@@ -34,7 +34,6 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { OwnerTriageMenuItems, rememberPersonName } from "./PeoplePicker";
 import { CollapsibleSection, WidgetPage } from "./JourneyWidgets";
 import { useHuddleStore } from "../store";
 import { getActionsFn, correctActionFn, setActionsSettingsFn, actOnHeldItemFn } from "../lib/actions/actions.functions";
@@ -571,7 +570,6 @@ function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; loca
   const triaging = state === "untriaged";
   const [editing, setEditing] = useState(false);
   const [naming, setNaming] = useState(false);
-  const pickerCaller = caller;
   const [draft, setDraft] = useState(title);
   const [panel, setPanel] = useState<null | "wrong" | "reply">(null);
   // 2026-11-17 (owner: "the text areas don't expand so the text is cut off"): tap the text, or "More", to read the
@@ -632,7 +630,6 @@ function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; loca
     setNaming(false);
     if (!n) return;
     void act("triage", { choice: "someone", name: n.slice(0, 80) });
-    void rememberPersonName(pickerCaller, n); // AC-T14: a typed name joins the one people list
   }
 
   function askIris(text: string) {
@@ -705,15 +702,17 @@ function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; loca
   );
   const triageItems = (
     <>
-      {/* AC-T13 (changed flow): the ONE people picker; same stored shape as the old typed box. */}
-      <OwnerTriageMenuItems
-        testId="actions-owner-picker"
-        onTriage={(t) => void act("triage", t)}
-        onAddNew={() => {
+      <DropdownMenuItem onClick={() => void act("triage", { choice: "mine" })}>
+        <UserRound size={12} className="mr-2" /> Mine
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onClick={() => {
           setDraft("");
           setNaming(true);
         }}
-      />
+      >
+        <Users size={12} className="mr-2" /> For someone
+      </DropdownMenuItem>
       <DropdownMenuItem onClick={() => void act("triage", { choice: "skip" })}>
         <X size={12} className="mr-2" /> Skip
       </DropdownMenuItem>
@@ -793,21 +792,9 @@ function ActionRowItem({ row, local, patch, caller, tz }: { row: ActionRow; loca
                   <button type="button" className={ROW_BTN} disabled={!canAct} onClick={() => void act("triage", { choice: "mine" })}>
                     <UserRound size={11} aria-hidden /> Mine
                   </button>
-                  {/* AC-T13: "For someone" opens the ONE people picker; "Add new name" is the old typed box. */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild disabled={!canAct}>
-                      <button type="button" className={ROW_BTN} disabled={!canAct}>
-                        <Users size={11} aria-hidden /> For someone
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-52">
-                      <OwnerTriageMenuItems
-                        testId="actions-row-owner-picker"
-                        onTriage={(t) => void act("triage", t)}
-                        onAddNew={() => (setDraft(""), setNaming(true))}
-                      />
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <button type="button" className={ROW_BTN} disabled={!canAct} onClick={() => (setDraft(""), setNaming(true))}>
+                    <Users size={11} aria-hidden /> For someone
+                  </button>
                   <button type="button" className={ROW_BTN} disabled={!canAct} onClick={() => void act("triage", { choice: "skip" })}>
                     <X size={11} aria-hidden /> Skip
                   </button>

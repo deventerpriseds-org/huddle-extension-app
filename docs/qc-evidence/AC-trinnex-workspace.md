@@ -271,13 +271,8 @@ blocking, so each takes the reversible default below.
   series?: string | null; category?: string | null; participants: string[];
   segments: Array<{ text: string; speaker?: string | null; at?: string | null; page?: string | null }> }):
   Promise<{ chunks: number; facts: number }>`. It is idempotent per sourceId: re-ingest replaces that source's rows.
-- `deleteTrinnexSource(sourceId: string, ownerEmail: string): Promise<{ chunks: number; facts: number }>`. It deletes
-  passages AND facts, including superseded ones -- **only the given owner's** rows.
-  *CHANGED 2026-11-20 (red-team RT-I3):* the owner argument is REQUIRED (an empty one is refused, never an unscoped
-  delete), and the owner is part of every row's identity: passages carry `agent_id = trinnex-owner:<email>` (so the
-  rag_chunks dedup key separates owners) and facts `agent_id = <source>|trinnex-owner:<email>`. `source` keeps the
-  `trinnex:<kind>:<id>` shape. `ingestTrinnexSource` deletes only its own owner's rows before re-writing. Meeting
-  passages also carry `fireflies_title` and `speaker_label` (AC-M4; input fields `firefliesTitle`, `speakerLabel`).
+- `deleteTrinnexSource(sourceId: string): Promise<{ chunks: number; facts: number }>`. It deletes passages AND facts,
+  including superseded ones.
 - `trinnexConfigured(): boolean`. False while the Trinnex DB connection is absent; callers then skip ingestion
   and show "Trinnex memory is not set up yet". This is never an error.
 

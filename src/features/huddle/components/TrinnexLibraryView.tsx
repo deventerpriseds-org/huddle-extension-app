@@ -17,7 +17,6 @@ import {
   ACCEPTED_EXTS,
   FAIL_LABEL,
   type FailReason,
-  factsFailureNotice,
   type LibraryKind,
   MAX_UPLOAD_BYTES,
   STEPS,
@@ -80,13 +79,8 @@ interface Pending {
 }
 
 function statusChip(item: LibraryItem) {
-  if (item.status === "searchable") {
-    // AC-C5: passages are searchable, but say so when the facts could not be extracted (quota named).
-    const notice = factsFailureNotice(item.failReason);
-    return notice
-      ? { cls: "bg-band-cream text-warning-foreground", text: `Searchable · ${notice}` }
-      : { cls: "bg-ai-soft text-ai", text: "Searchable" };
-  }
+  if (item.status === "searchable")
+    return { cls: "bg-ai-soft text-ai", text: "Searchable" };
   if (item.status === "waiting_memory") return { cls: "bg-muted text-muted-foreground", text: "Waiting for Trinnex memory" };
   if (item.status === "failed")
     return { cls: "bg-destructive/10 text-destructive", text: `Failed: ${item.failedStep ?? "step"} (${FAIL_LABEL[item.failReason as FailReason] ?? item.failReason ?? "error"})` };
@@ -121,9 +115,7 @@ export function TrinnexLibraryView() {
     () => (user ? { entra_object_id: user.localAccountId ?? user.homeAccountId, entra_email: user.username } : undefined),
     [user],
   );
-  const [listedOwner, setListedOwner] = useState<string | null>(null);
-  // The owner's name as the ONE people list spells it (pinned first); the sign-in name only until it loads.
-  const owner = listedOwner ?? ownerFirstName(user?.username);
+  const owner = ownerFirstName(user?.username);
   const setView = useHuddleStore((s) => s.setView);
   const [data, setData] = useState<LibraryListing>({ items: [], categories: [], people: [], firefliesWaiting: null, memoryReady: false });
   const [loading, setLoading] = useState(true);
@@ -133,9 +125,6 @@ export function TrinnexLibraryView() {
   const [query, setQuery] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  // VA9: the id whose Remove request is in flight. Both Remove buttons are disabled and read "Removing..." until it
-  // returns, so a second click cannot start a second removal.
-  const [removingId, setRemovingId] = useState<string | null>(null);
   const [over, setOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const seq = useRef(0);
@@ -143,9 +132,7 @@ export function TrinnexLibraryView() {
   const load = useCallback(async () => {
     if (!caller) return setLoading(false);
     try {
-      const listing = await listTrinnexLibraryFn({ data: { caller } });
-      setData(listing);
-      if (listing.owner) setListedOwner(listing.owner);
+      setData(await listTrinnexLibraryFn({ data: { caller } }));
     } finally {
       setLoading(false);
     }
@@ -211,10 +198,7 @@ export function TrinnexLibraryView() {
     }
     if (!("item" in res) || !res.item) {
       patch(p.pid, { busy: false });
-      const err = (res as { error?: string }).error;
-      toast.error(err === "already_being_removed"
-        ? "Not added: the old copy is still being removed. Try again in a moment."
-        : `Not added: ${FAIL_LABEL[err as FailReason] ?? "could not save"}`);
+      toast.error(`Not added: ${FAIL_LABEL[(res as { error?: string }).error as FailReason] ?? "could not save"}`);
       return;
     }
     setPending((all) => all.filter((x) => x.pid !== p.pid));
@@ -237,22 +221,14 @@ export function TrinnexLibraryView() {
   const open = items.find((i) => i.id === openId) ?? null;
 
   async function remove(item: LibraryItem) {
-    if (!caller || removingId) return;
-    setRemovingId(item.id);
-    try {
-      const r = await removeTrinnexFileFn({ data: { caller, id: item.id } });
-      setConfirmRemove(false);
-      if (r.removed) {
-        toast.success("Removed from Trinnex memory");
-        setOpenId(null);
-      } else if ("pending" in r && r.pending) {
-        // A worker was mid-way through this file: it stops before its next write and finishes the removal.
-        toast.message("Removing: this file was still being processed, it will be gone in a moment.");
-      } else toast.error(`Removal incomplete: ${r.remaining.join(" and ") || "try again"} still there. Retry Remove.`);
-    } finally {
-      setRemovingId(null);
-      await load();
-    }
+    if (!caller) return;
+    const r = await removeTrinnexFileFn({ data: { caller, id: item.id } });
+    setConfirmRemove(false);
+    if (r.removed) {
+      toast.success("Removed from Trinnex memory");
+      setOpenId(null);
+    } else toast.error(`Removal incomplete: ${r.remaining.join(" and ") || "try again"} still there. Retry Remove.`);
+    await load();
   }
 
   return (
@@ -382,7 +358,7 @@ export function TrinnexLibraryView() {
                   <DrawerSpeakers item={open} people={data.people} onSave={async (map, participants) => {
                     if (!caller) return;
                     const r = await setTrinnexSpeakersFn({ data: { caller, id: open.id, speakerMap: map, participants } });
-                    toast[r.ok ? "success" : "error"](r.ok ? "Speakers saved. Passages will be updated." : "Speakers not saved. If the file is still processing, save again when it finishes.");
+                    toast[r.ok ? "success" : "error"](r.ok ? "Speakers saved. Passages will be updated." : "Speakers not saved");
                     await load();
                   }} />
                 )}
@@ -391,7 +367,7 @@ export function TrinnexLibraryView() {
                     <p className="text-sm font-semibold">Remove "{open.name}" from Trinnex memory?</p>
                     <p className="text-[13px] text-muted-foreground">Its passages and facts are deleted, and the stored copy of the file is deleted too. Your own original file is not touched.</p>
                     <div className="flex gap-2">
-                      <button type="button" onClick={() => void remove(open)} disabled={removingId !== null || open.status === "removing"} className="min-h-9 rounded-lg bg-destructive px-3 text-[13px] font-semibold text-primary-foreground disabled:opacity-60">{removingId === open.id ? "Removing..." : "Remove"}</button>
+                      <button type="button" onClick={() => void remove(open)} className="min-h-9 rounded-lg bg-destructive px-3 text-[13px] font-semibold text-primary-foreground">Remove</button>
                       <button type="button" onClick={() => setConfirmRemove(false)} className="min-h-9 rounded-lg border border-border px-3 text-[13px]">Keep it</button>
                     </div>
                   </div>
@@ -404,9 +380,9 @@ export function TrinnexLibraryView() {
                     <RotateCcw size={14} aria-hidden /> Retry
                   </button>
                 )}
-                <button type="button" onClick={() => setConfirmRemove(true)} disabled={open.status === "removing" || removingId !== null}
-                  className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-destructive/40 px-3 text-[13px] font-medium text-destructive hover:bg-destructive/5 disabled:opacity-60">
-                  <Trash2 size={14} aria-hidden /> {open.status === "removing" || removingId === open.id ? "Removing..." : open.status === "remove_incomplete" ? "Retry remove" : "Remove from memory"}
+                <button type="button" onClick={() => setConfirmRemove(true)} disabled={open.status === "removing"}
+                  className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-destructive/40 px-3 text-[13px] font-medium text-destructive hover:bg-destructive/5">
+                  <Trash2 size={14} aria-hidden /> {open.status === "remove_incomplete" ? "Retry remove" : "Remove from memory"}
                 </button>
               </div>
             </>
