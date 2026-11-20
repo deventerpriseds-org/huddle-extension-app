@@ -8,14 +8,34 @@
 //             TrinnexLibraryView.tsx (h1 "Trinnex Library", section aria-label "Add material" / "Your library"),
 //             ModulesLauncher.tsx (aria-label "Modules", item "Meetings"), AppsLauncher.tsx (item "Trinnex Library").
 //
+// SELECTORS 2026-11-20: visible-only clicks (see clickVisible); composer = HuddleView.tsx placeholder "Message the huddle…".
 // ORDER: no reload anywhere (the ?uat_token= bypass is single-use; see huddle-checks.mjs header).
 
+// Every click targets a VISIBLE control. UAT 2026-11-20 (run 44705328676, 390x844): on a phone the desktop rail's
+// labelled buttons are still in the DOM but hidden, and the phone bottom-bar buttons carry text, not aria-labels,
+// so `.first()` picked a hidden copy and every launcher click timed out. ViewSwitcher.tsx renders the phone bar as
+// nav[aria-label="Primary"] with "Modules" / "Apps" text; each opens a bottom sheet (ModulesSheet / AppsSheet).
+async function clickVisible(locator, what) {
+  const n = await locator.count();
+  for (let i = 0; i < n; i++) {
+    const el = locator.nth(i);
+    if (await el.isVisible()) {
+      await el.click();
+      return true;
+    }
+  }
+  throw new Error(`no visible ${what}`);
+}
+
 async function openFromLauncher(page, launcherLabel, itemLabel) {
-  const railBtn = page.locator(`nav button[aria-label="${launcherLabel}"]`).first();
-  if (await railBtn.count()) await railBtn.click();
-  else await page.getByRole("button", { name: launcherLabel }).first().click();
-  await page.waitForTimeout(500);
-  await page.getByRole("button", { name: new RegExp(`^${itemLabel}`) }).first().click();
+  const opener = page
+    .locator(`nav button[aria-label="${launcherLabel}"]`)
+    .or(page.getByRole("button", { name: launcherLabel, exact: true }));
+  await clickVisible(opener, `${launcherLabel} launcher`);
+  await page.waitForTimeout(600);
+  // The item lives in the popover (desktop) or the bottom sheet (phone); both are role=dialog.
+  const item = page.getByRole("dialog").getByRole("button", { name: new RegExp(`^${itemLabel}`) });
+  await clickVisible(item.or(page.getByRole("button", { name: new RegExp(`^${itemLabel}`) })), `${itemLabel} item`);
   await page.waitForTimeout(1500);
 }
 
@@ -30,9 +50,9 @@ export const checks = [
     check("Meetings module opens from Modules", heading > 0);
     await screenshot("trinnex-meetings-list");
     // Open the first meeting if any exist; read-only (no save button is pressed).
-    const firstRow = page.locator('[data-testid^="meeting-row"], [role="listitem"] button').first();
-    if (await firstRow.count()) {
-      await firstRow.click();
+    const rows = page.locator('[data-testid="meeting-row"]');
+    if (await rows.count()) {
+      await clickVisible(rows, "meeting row");
       await page.waitForTimeout(1200);
       check("Meeting detail renders the triage panel", (await page.locator('[data-testid="meeting-triage"]').count()) === 1);
       check("Detail shows 'Who is speaking'", (await page.getByText("Who is speaking").count()) > 0);
@@ -53,12 +73,23 @@ export const checks = [
   },
 
   async function irisOneToOneUnchanged({ page, check, screenshot }) {
-    const iris = page.getByRole("button", { name: /Iris/ }).first();
-    if (await iris.count()) {
-      await iris.click();
-      await page.waitForTimeout(1500);
+    // Back to the chat view first: after the Library the composer is not on screen at all (that, not Iris, is why
+    // this check failed on 2026-11-20). "Huddle" is the first view in ViewSwitcher ENTRIES on both layouts.
+    await clickVisible(page.getByRole("button", { name: "Huddle", exact: true }), "Huddle view button");
+    await page.waitForTimeout(1000);
+    const iris = page.getByRole("button", { name: /Iris/ });
+    let opened = false;
+    try {
+      opened = await clickVisible(iris, "Iris entry");
+    } catch {
+      opened = false;
     }
-    check("Iris 1:1 renders a composer", (await page.locator("textarea").count()) > 0);
+    await page.waitForTimeout(1500);
+    const composer = page.locator('textarea[placeholder^="Message the huddle"]');
+    let visible = false;
+    for (let i = 0; i < (await composer.count()); i++) if (await composer.nth(i).isVisible()) visible = true;
+    check("Huddle chat renders its composer", visible);
+    check("Iris 1:1 reachable from this layout", opened, opened ? "opened" : "no visible Iris entry at this width");
     await screenshot("trinnex-iris-1to1");
   },
 ];

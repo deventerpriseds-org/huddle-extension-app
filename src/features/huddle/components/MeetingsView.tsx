@@ -102,6 +102,7 @@ export function MeetingsView() {
     <button
       key={m.meetingId}
       type="button"
+      data-testid="meeting-row"
       onClick={() => setSelected(m.meetingId)}
       className={cn(
         "flex min-h-[44px] w-full flex-col items-start gap-0.5 border-b border-hairline px-3 py-2 text-left transition hover:bg-muted/50 sm:px-6",
@@ -123,8 +124,12 @@ export function MeetingsView() {
       {error && <p className="px-3 py-3 text-sm text-destructive sm:px-6">{error}</p>}
       {!list && !error && <p className="px-3 py-3 text-sm text-muted-foreground sm:px-6">Loading…</p>}
       {list && (
-        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <div className={cn("min-w-0 md:w-[320px] md:shrink-0 md:border-r md:border-hairline", selected && "app-hidden md:block")}>
+        // Two columns only when THIS page is wide enough (a container query on the page, not the screen): with the
+        // sidebar and context panel open, a 1000px screen left the detail one word wide (UAT 2026-11-20, run
+        // 44705323308). Below 42rem of page width it behaves like the phone: list, then detail with a back button.
+        <div className="@container flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col @2xl:flex-row">
+          <div className={cn("min-w-0 @2xl:w-[320px] @2xl:shrink-0 @2xl:border-r @2xl:border-hairline", selected && "app-hidden @2xl:block")}>
             <CollapsibleSection id="meetings-open" label="Needs triage" count={open.length}>
               {open.length ? open.map(row) : <p className="px-3 py-2 text-xs text-muted-foreground sm:px-6">Nothing to triage.</p>}
             </CollapsibleSection>
@@ -132,7 +137,7 @@ export function MeetingsView() {
               {done.map(row)}
             </CollapsibleSection>
           </div>
-          <div className={cn("min-w-0 flex-1", !selected && "app-hidden md:block")}>
+          <div className={cn("min-w-0 flex-1", !selected && "app-hidden @2xl:block")}>
             {selected ? (
               <MeetingTriage
                 key={selected}
@@ -148,6 +153,7 @@ export function MeetingsView() {
               <p className="px-6 py-6 text-sm text-muted-foreground">Pick a meeting to triage it.</p>
             )}
           </div>
+        </div>
         </div>
       )}
     </WidgetPage>
@@ -240,7 +246,7 @@ function MeetingTriage({
 
   return (
     <div className="flex flex-col gap-4 px-3 py-4 sm:px-6" data-testid="meeting-triage">
-      <button type="button" onClick={onBack} className="inline-flex min-h-[44px] items-center gap-1 text-sm text-muted-foreground md:app-hidden">
+      <button type="button" onClick={onBack} className="inline-flex min-h-[44px] items-center gap-1 text-sm text-muted-foreground @2xl:app-hidden">
         <ChevronLeft size={14} aria-hidden /> Meetings
       </button>
       <div className="flex flex-col gap-1.5">

@@ -42,7 +42,11 @@ export const listTrinnexLibraryFn = createServerFn({ method: "POST" })
       const { getPeople } = await import("./meetings.server");
       const [{ items, categories }, ff, ppl] = await Promise.all([
         lib.listLibrary(email),
-        lib.firefliesWaiting(email).catch(() => null),
+        // The Meetings module's owner set (every linked address), not just the signed-in one -- see firefliesWaiting.
+        import("../proposals/proposals.server")
+          .then(({ callerOwners }) => callerOwners(data.caller))
+          .then((owners) => lib.firefliesWaiting(owners?.length ? owners : [email]))
+          .catch(() => null),
         getPeople(data.caller).catch(() => null),
       ]);
       const people = ppl && ppl.ok ? ppl.people : [];
