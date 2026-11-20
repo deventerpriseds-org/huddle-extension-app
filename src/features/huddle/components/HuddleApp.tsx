@@ -21,6 +21,7 @@ import type { PrioritiesWidgetData, ScheduleWidgetData } from "../lib/tasks/widg
 import type { EmailReplyAsk } from "../lib/email/email-reply-ask";
 import { PrioritiesView, ScheduleView } from "./JourneyWidgets";
 import { PolishView } from "./PolishView";
+import { TrinnexLibraryView } from "./TrinnexLibraryView";
 import { useWorkspaceSync } from "../hooks/useWorkspaceSync";
 import { useAppViewportHeight } from "../hooks/useAppViewportHeight";
 import { useAuth } from "@/hooks/useAuth";
@@ -50,12 +51,13 @@ const VIEWS: Record<View, React.ReactNode> = {
   schedule: <ScheduleView />,
   actions: <ActionsView />,
   polish: <PolishView />,
+  "trinnex-library": <TrinnexLibraryView />,
 };
 
 /** Tool views take the whole width beside the Rail: a writing tool needs both panes more than it
  *  needs the huddle list or the activity panel. Only these views are affected; every existing view
  *  keeps the Sidebar and ContextPanel exactly as before. */
-const FULL_WIDTH_VIEWS: ReadonlySet<View> = new Set<View>(["polish"]);
+const FULL_WIDTH_VIEWS: ReadonlySet<View> = new Set<View>(["polish", "trinnex-library"]);
 
 export function HuddleApp() {
   useWorkspaceSync();

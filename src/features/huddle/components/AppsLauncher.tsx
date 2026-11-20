@@ -11,7 +11,7 @@
 // EVIDENCE:   owner message 2026-11-05; screenshots sent in session (phone + desktop "where is Polish")
 
 import { useState } from "react";
-import { Blocks, PenLine, Sparkles, Wand2, type LucideIcon } from "lucide-react";
+import { Blocks, Library, PenLine, Sparkles, Wand2, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
@@ -35,6 +35,13 @@ export const HUDDLE_APPS: HuddleApp[] = [
     blurb: "Turn rough notes into finished copy",
     icon: PenLine,
     view: "polish",
+  },
+  {
+    id: "trinnex-library",
+    label: "Trinnex Library",
+    blurb: "Work files and transcripts Iris and Eli can search",
+    icon: Library,
+    view: "trinnex-library",
   },
   { id: "sidecar", label: "Sidecar", blurb: "Coming soon", icon: Sparkles },
   { id: "prompto", label: "Prompto", blurb: "Coming soon", icon: Wand2 },

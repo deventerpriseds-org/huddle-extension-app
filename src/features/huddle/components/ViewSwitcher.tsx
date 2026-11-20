@@ -150,4 +150,5 @@ export const VIEW_TITLE: Record<View, string | null> = {
   schedule: "Schedule",
   actions: "Actions",
   polish: "Polish",
+  "trinnex-library": "Trinnex Library",
 };
