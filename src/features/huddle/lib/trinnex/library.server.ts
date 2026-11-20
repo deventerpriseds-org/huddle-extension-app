@@ -16,6 +16,7 @@ import type { Pool } from "pg";
 import { getSharedPool } from "../db/shared-pool.server";
 import {
   type FailReason,
+  factsFailReason,
   type LibraryKind,
   type LibraryStatus,
   type Segment,
@@ -142,8 +143,12 @@ export interface MemoryPort {
     category: string;
     participants: string[];
     segments: Segment[];
-  }): Promise<{ chunks: number; facts: number }>;
-  remove(sourceId: string): Promise<{ chunks: number; facts: number }>;
+    ownerEmail: string;
+    /** VA9: checked by the memory lane before every write; true = the item was Removed, stop and clean up. */
+    shouldStop?: () => boolean | Promise<boolean>;
+  }): Promise<{ chunks: number; facts: number; factsFailure?: string | null; cancelled?: boolean }>;
+  /** RT-I3: removes only THIS owner's rows for the source. */
+  remove(sourceId: string, ownerEmail: string): Promise<{ chunks: number; facts: number }>;
 }
 
 export interface PipelineDeps {
@@ -153,11 +158,34 @@ export interface PipelineDeps {
   memory: MemoryPort;
   update(id: string, patch: Partial<Pick<LibraryItem, "status" | "failedStep" | "failReason" | "chunks" | "facts">>): Promise<void>;
   deleteRow(id: string): Promise<void>;
+  /** VA9: has this item been Removed (row gone, or status removing / remove_incomplete)? Read before every pipeline
+   *  write. Live: one SELECT on the row, so a Remove in ANOTHER server process is seen too. */
+  isRemoved?(id: string): Promise<boolean>;
+  /** VA9: mark the row `removing` atomically and report whether a worker holds its processing lease right now. When
+   *  one does, that worker finishes the removal (it sees the tombstone before its next write), so the Library row
+   *  keeps pointing at every passage until the last one is deleted. Absent = no lease to consult. */
+  beginRemoval?(id: string): Promise<{ inFlight: boolean; alreadyRemoving?: boolean }>;
+  /** Loop-2 2b: extend this worker's processing lease. runPipeline calls it (throttled) from its before-every-write
+   *  check, so a run longer than the 3-minute lease never looks abandoned to beginRemoval or claim(). */
+  renewLease?(id: string): Promise<void>;
+  /** Loop-3 VC3a: run `fn` every `ms` until the returned stop function is called. Default: setInterval (unref'd).
+   *  Injected only so a test can drive renewal from a fake clock. */
+  every?(ms: number, fn: () => void): () => void;
 }
+
+/** Loop-2 2b: how often a running worker renews its 3-minute lease (well inside it). */
+export const LEASE_RENEW_MS = 60_000;
+
+/** VA9: in-process tombstones. runRemoval adds the id BEFORE deleting anything; runPipeline (and through
+ *  `shouldStop`, the memory lane) checks it before every write. ids are UUIDs and never reused. The live
+ *  `isRemoved` covers a Remove that ran in a different server process. */
+const removalTombstones = new Set<string>();
 
 /** Classify an AI/ingest failure KIND (AC-C5). Never returns or logs the message text. */
 export function ingestFailReason(e: unknown): FailReason {
-  const s = `${(e as { status?: unknown })?.status ?? ""} ${(e as { code?: unknown })?.code ?? ""} ${String((e as Error)?.message ?? "")}`;
+  const kind = (e as { kind?: unknown })?.kind; // TrinnexEmbedError (memory.server embedFailureKind)
+  const s = `${(e as { status?: unknown })?.status ?? ""} ${(e as { code?: unknown })?.code ?? ""} ${typeof kind === "string" ? kind : ""} ${String((e as Error)?.message ?? "")}`;
+  if (/\bno_api_key\b|OPENAI_API_KEY not configured/.test(s)) return "no_api_key";
   return /insufficient_quota|\b429\b|quota/i.test(s) ? "ai_quota" : "ingest_error";
 }
 
@@ -166,12 +194,53 @@ export function ingestFailReason(e: unknown): FailReason {
  * stepper follows the server (AC-L6). A failure names its step and a reason code; a failure during ingestion
  * also deletes whatever the memory lane may have written for this source, so nothing is half-searchable.
  */
+const everyMs = (ms: number, fn: () => void): (() => void) => {
+  const t = setInterval(fn, ms);
+  (t as { unref?: () => void }).unref?.();
+  return () => clearInterval(t);
+};
+
 export async function runPipeline(item: LibraryItem, deps: PipelineDeps): Promise<LibraryStatus> {
+  // Loop-3 VC3a: renew the lease on a TIMER for the whole run, independent of what the run writes. The
+  // before-every-write renewal in runPipelineSteps is not enough on its own: a facts phase that finds no facts makes
+  // no check for many minutes (measured 600 s vs the 180 s lease), so claim() could hand the item to a second worker.
+  const renew = deps.renewLease;
+  const stopRenewing = renew
+    ? (deps.every ?? everyMs)(LEASE_RENEW_MS, () => {
+        renew(item.id).catch((e: unknown) => log("lease_renew_error", { id: item.id, kind: (e as Error)?.name ?? "Error" }));
+      })
+    : () => {};
+  try {
+    return await runPipelineSteps(item, deps);
+  } finally {
+    stopRenewing();
+  }
+}
+
+async function runPipelineSteps(item: LibraryItem, deps: PipelineDeps): Promise<LibraryStatus> {
+  // VA9: Remove may run at ANY point while this runs (another request, another process). Before every write the
+  // pipeline asks whether it was removed; if so it writes nothing more and finishes the removal itself, so no
+  // passage or fact can outlive the row.
+  let renewedAt = Date.now();
+  const removed = async (): Promise<boolean> => {
+    if (deps.renewLease && Date.now() - renewedAt >= LEASE_RENEW_MS) {
+      renewedAt = Date.now();
+      await deps.renewLease(item.id);
+    }
+    return removalTombstones.has(item.id) || (deps.isRemoved ? await deps.isRemoved(item.id) : false);
+  };
+  const stopForRemoval = async (): Promise<LibraryStatus> => {
+    const r = await completeRemoval(item, deps);
+    log("pipeline_stopped_for_removal", { id: item.id, removed: r.removed ? 1 : 0 });
+    return r.removed ? "removing" : "remove_incomplete";
+  };
   const fail = async (step: string, reason: FailReason) => {
+    if (await removed()) return stopForRemoval();
     await deps.update(item.id, { status: "failed", failedStep: step, failReason: reason, chunks: 0, facts: 0 });
     log("failed", { id: item.id, step, reason });
     return "failed" as const;
   };
+  if (await removed()) return stopForRemoval();
   const bytes = await deps.getBytes(item.blobPath);
   if (!bytes) return fail(STEPS[1], "storage_error");
   let extracted;
@@ -181,19 +250,23 @@ export async function runPipeline(item: LibraryItem, deps: PipelineDeps): Promis
     const reason = ((e as { reason?: FailReason })?.reason ?? "corrupt_file") as FailReason;
     return fail(STEPS[1], reason);
   }
+  if (await removed()) return stopForRemoval();
   await deps.update(item.id, { status: "read", failedStep: null, failReason: null });
   const segments =
     extracted.cues.length > 0
       ? capSegments(turnsFromCues(extracted.cues, speakerKey, item.speakerMap))
       : capSegments(extracted.segments);
   if (!segments.length) return fail(STEPS[2], "no_readable_text");
+  if (await removed()) return stopForRemoval();
   await deps.update(item.id, { status: "split" });
   if (!deps.memory.configured()) {
+    if (await removed()) return stopForRemoval();
     await deps.update(item.id, { status: "waiting_memory", chunks: 0, facts: 0 });
     log("waiting_memory", { id: item.id, segments: segments.length });
     return "waiting_memory";
   }
-  let counts: { chunks: number; facts: number };
+  let counts: { chunks: number; facts: number; factsFailure?: string | null; cancelled?: boolean };
+  if (await removed()) return stopForRemoval();
   try {
     counts = await deps.memory.ingest({
       sourceId: item.id,
@@ -203,19 +276,27 @@ export async function runPipeline(item: LibraryItem, deps: PipelineDeps): Promis
       category: item.category,
       participants: item.participants,
       segments,
+      ownerEmail: item.ownerEmail,
+      shouldStop: removed,
     });
   } catch (e) {
     const reason = ingestFailReason(e);
     try {
-      await deps.memory.remove(item.id);
+      await deps.memory.remove(item.id, item.ownerEmail);
     } catch {
       /* the failed status below still tells the owner; Retry re-ingests, which replaces by source */
     }
     return fail(STEPS[3], reason);
   }
+  if (counts.cancelled || (await removed())) return stopForRemoval();
   if (!counts.chunks) return fail(STEPS[3], "no_readable_text");
   await deps.update(item.id, { status: "facts", chunks: counts.chunks, facts: counts.facts });
-  await deps.update(item.id, { status: "searchable" });
+  if (await removed()) return stopForRemoval();
+  // AC-C5: passages are searchable, but a fact-extraction failure is RECORDED (kind only) so the item says
+  // "Facts not extracted: AI quota exhausted" instead of silently showing 0 facts.
+  await deps.update(item.id, { status: "searchable", failReason: counts.factsFailure ? factsFailReason(counts.factsFailure) : null });
+  // VA9: a Remove deferred to this worker while the last update ran is finished here, before the lease is released.
+  if (await removed()) return stopForRemoval();
   log("searchable", { id: item.id, chunks: counts.chunks, facts: counts.facts });
   return "searchable";
 }
@@ -224,6 +305,12 @@ export interface RemovalResult {
   removed: boolean;
   /** What still exists when removal is incomplete: "memory" (passages/facts) and/or "file" (the blob). */
   remaining: Array<"memory" | "file">;
+  /** VA9: a worker was mid-run on this item. The row is `removing` (the button says "Removing..."), the worker saw
+   *  the tombstone and finishes the removal itself before writing anything more; the list refresh shows it gone. */
+  pending?: boolean;
+  /** Loop-2 2b: this item was ALREADY being removed by a worker that still holds its lease. Nothing was done; the
+   *  server refuses a second Remove (or a Replace) instead of deleting the row under a running worker. */
+  alreadyRemoving?: boolean;
 }
 
 /**
@@ -232,12 +319,33 @@ export interface RemovalResult {
  * this again retries only what is needed (every step is idempotent). Never reports removed while anything survives.
  */
 export async function runRemoval(item: LibraryItem, deps: PipelineDeps): Promise<RemovalResult> {
-  await deps.update(item.id, { status: "removing" });
+  // VA9: the tombstone goes up BEFORE anything is deleted, so a worker that is mid-run stops before its next write.
+  removalTombstones.add(item.id);
+  if (deps.beginRemoval) {
+    const { inFlight, alreadyRemoving } = await deps.beginRemoval(item.id);
+    if (inFlight) {
+      // A worker holds the lease: it owns the deletes. The row stays (status removing) until the worker has removed
+      // the last passage, so nothing is ever left with no row pointing at it. Loop-2 2b: decided from the LEASE
+      // alone, so a SECOND Remove of a row that is already `removing` is refused here too (it used to read the
+      // `removing` status as "not processing" and delete the row under the running worker).
+      log(alreadyRemoving ? "remove_refused_in_flight" : "remove_deferred_to_worker", { id: item.id });
+      return { removed: false, remaining: [], pending: true, ...(alreadyRemoving ? { alreadyRemoving: true } : {}) };
+    }
+  } else {
+    await deps.update(item.id, { status: "removing" });
+  }
+  return completeRemoval(item, deps);
+}
+
+/** The deletes themselves (memory, blob, then the row). Idempotent; shared by runRemoval and a worker that was
+ *  stopped mid-run by a Remove. */
+async function completeRemoval(item: LibraryItem, deps: PipelineDeps): Promise<RemovalResult> {
+  removalTombstones.add(item.id);
   const remaining: RemovalResult["remaining"] = [];
   const mayHaveMemory = item.chunks > 0 || item.facts > 0 || ["split", "facts", "searchable", "removing", "remove_incomplete"].includes(item.status);
   if (deps.memory.configured()) {
     try {
-      await deps.memory.remove(item.id);
+      await deps.memory.remove(item.id, item.ownerEmail);
     } catch {
       remaining.push("memory");
     }
@@ -266,7 +374,42 @@ async function update(id: string, patch: Parameters<PipelineDeps["update"]>[1]):
     cols.push(`${map[k]} = $${vals.length}`);
   }
   if (!cols.length) return;
-  await getPool().query(`UPDATE trinnex.library_items SET ${cols.join(", ")}, updated_at = now() WHERE id = $1`, vals);
+  // VA9: a pipeline write never overwrites a removal in progress. Only the removal itself moves a row out of
+  // `removing` (to `remove_incomplete`).
+  const removalWrite = patch.status === "removing" || patch.status === "remove_incomplete";
+  const guard = removalWrite ? "" : ` AND status NOT IN ('removing','remove_incomplete')`;
+  await getPool().query(`UPDATE trinnex.library_items SET ${cols.join(", ")}, updated_at = now() WHERE id = $1${guard}`, vals);
+}
+
+/** VA9: removed = the row is gone or is being removed. */
+async function isRemoved(id: string): Promise<boolean> {
+  const r = await getPool().query(`SELECT status FROM trinnex.library_items WHERE id = $1`, [id]);
+  const st = r.rows[0]?.status as string | undefined;
+  return !st || st === "removing" || st === "remove_incomplete";
+}
+
+/** VA9: one statement, so it serialises with claim() on the row lock. in_flight = a worker held an unexpired lease
+ *  at the moment the row became `removing`. Loop-2 2b: decided from the LEASE ALONE, never from a status list -- a
+ *  row that is already `removing` may still be worker-held (the first Remove deferred to that worker), and the old
+ *  status list read it as free. Every lease holder (pipeline or heartbeat removal) owns the deletes. */
+async function beginRemoval(id: string): Promise<{ inFlight: boolean; alreadyRemoving: boolean }> {
+  const r = await getPool().query(
+    `WITH old AS (SELECT id, status, lease_until FROM trinnex.library_items WHERE id = $1 FOR UPDATE)
+     UPDATE trinnex.library_items t SET status = 'removing', updated_at = now()
+       FROM old WHERE t.id = old.id
+     RETURNING (old.lease_until IS NOT NULL AND old.lease_until > now()) AS in_flight,
+               (old.status = 'removing') AS already_removing`,
+    [id],
+  );
+  return { inFlight: r.rows[0]?.in_flight === true, alreadyRemoving: r.rows[0]?.already_removing === true };
+}
+
+/** Loop-2 2b: extend the lease this worker holds (claim() took it). Only a held lease is extended. */
+async function renewLease(id: string): Promise<void> {
+  await getPool().query(
+    `UPDATE trinnex.library_items SET lease_until = now() + interval '3 minutes' WHERE id = $1 AND lease_until IS NOT NULL`,
+    [id],
+  );
 }
 
 async function liveDeps(): Promise<PipelineDeps> {
@@ -280,12 +423,15 @@ async function liveDeps(): Promise<PipelineDeps> {
     memory: {
       configured: () => mem.trinnexConfigured(),
       ingest: (input) => mem.ingestTrinnexSource({ ...input, series: null }),
-      remove: (id) => mem.deleteTrinnexSource(id),
+      remove: (id, ownerEmail) => mem.deleteTrinnexSource(id, ownerEmail),
     },
     update,
     deleteRow: async (id) => {
       await getPool().query(`DELETE FROM trinnex.library_items WHERE id = $1`, [id]);
     },
+    isRemoved,
+    beginRemoval,
+    renewLease,
   };
 }
 
@@ -352,13 +498,17 @@ export async function createUpload(email: string, u: NewUpload): Promise<Library
   return toItem(r.rows[0]);
 }
 
-/** Speakers set later from the drawer (AC-L5): store the map and re-queue; re-ingest replaces by source. */
+/** Speakers set later from the drawer (AC-L5): store the map and re-queue; re-ingest replaces by source.
+ *  Loop-2 2b: NEVER while a worker holds the lease. Clearing a held lease hid the running worker from beginRemoval
+ *  (a Remove then deleted the row under it) and let the heartbeat claim the item a second time. Refused instead
+ *  (false); the drawer says to save again once processing finishes. */
 export async function setSpeakerMap(email: string, id: string, map: Record<string, string>, participants: string[]): Promise<boolean> {
   await ensureBootstrapped();
   const r = await getPool().query(
     `UPDATE trinnex.library_items SET speaker_map = $3::jsonb, participants = $4, status = 'uploaded', attempts = 0,
        failed_step = NULL, fail_reason = NULL, lease_until = NULL, updated_at = now()
-     WHERE id = $1 AND lower(owner_email) = lower($2) AND status NOT IN ('removing','remove_incomplete')`,
+     WHERE id = $1 AND lower(owner_email) = lower($2) AND status NOT IN ('removing','remove_incomplete')
+       AND (lease_until IS NULL OR lease_until <= now())`,
     [id, email, JSON.stringify(map), participants.slice(0, 40)],
   );
   return (r.rowCount ?? 0) > 0;
@@ -383,8 +533,11 @@ async function claim(configured: boolean, only?: { id: string; email: string }):
     `UPDATE trinnex.library_items SET lease_until = now() + interval '3 minutes', attempts = attempts + 1, updated_at = now()
      WHERE id = (
        SELECT id FROM trinnex.library_items
-       WHERE (status IN ('uploaded','read','split','facts') OR (status = 'waiting_memory' AND $1::boolean))
-         AND (lease_until IS NULL OR lease_until < now()) AND attempts < 5
+       WHERE ((status IN ('uploaded','read','split','facts') OR (status = 'waiting_memory' AND $1::boolean))
+              AND attempts < 5
+           -- VA9: a removal deferred to a worker that then died is finished by the next heartbeat.
+           OR (status = 'removing' AND updated_at < now() - interval '2 minutes'))
+         AND (lease_until IS NULL OR lease_until < now())
          AND ($2::uuid IS NULL OR (id = $2::uuid AND lower(owner_email) = lower($3)))
        ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
      RETURNING *`,
@@ -404,6 +557,7 @@ export async function processLibraryItem(email: string, id: string): Promise<Lib
   const item = await claim(deps.memory.configured(), { id, email });
   if (!item) return null;
   try {
+    if (item.status === "removing") return (await completeRemoval(item, deps)).removed ? "removing" : "remove_incomplete";
     return await runPipeline(item, deps);
   } finally {
     await release(item.id);
@@ -421,7 +575,8 @@ export async function processDueLibraryItems(limit = 1): Promise<number> {
       const item = await claim(deps.memory.configured());
       if (!item) break;
       try {
-        await runPipeline(item, deps);
+        if (item.status === "removing") await completeRemoval(item, deps);
+        else await runPipeline(item, deps);
         done++;
       } catch (e) {
         log("worker_error", { id: item.id, kind: (e as Error)?.name ?? "Error" });
@@ -433,6 +588,82 @@ export async function processDueLibraryItems(limit = 1): Promise<number> {
     log("heartbeat_error", { kind: (e as Error)?.name ?? "Error" });
   }
   return done;
+}
+
+/** Loop-2 backstop: what the main DB says about a set of Trinnex sources for ONE owner. */
+export interface LiveSources {
+  /** Source keys (`trinnex:upload:<id>` / `trinnex:meeting:<id>`) that are live right now. */
+  live: Set<string>;
+  /** Upload keys whose row is in a removal state, with the row's updated_at (ms): when it stopped being live. */
+  removingSince: Map<string, number>;
+  /** False when the owner's email aliases could not be resolved, so a meeting's absence is NOT proof it is gone. */
+  meetingsChecked: boolean;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Library statuses that mean "being removed / removal left work": never live. */
+export const REMOVAL_STATUSES = ["removing", "remove_incomplete"] as const;
+
+/**
+ * Loop-2 backstop (search shows only live sources; the orphan sweeper). ONE batched query against the main DB:
+ * - a Library source is live when its trinnex.library_items row exists for this owner and is not in a removal state;
+ * - a meeting source is live when its chat.fireflies_meetings row exists for this owner (any of the owner's email
+ *   aliases, the same scope listMeetings reads).
+ * The two databases cannot share a transaction, so callers filter Trinnex rows in code by these keys.
+ */
+export async function liveTrinnexSources(ownerEmail: string, keys: string[]): Promise<LiveSources> {
+  const owner = (ownerEmail ?? "").trim().toLowerCase();
+  const uploads: string[] = [];
+  const meetings: string[] = [];
+  for (const k of new Set(keys)) {
+    const m = /^trinnex:(upload|meeting):(.+)$/.exec(k);
+    if (!m) continue;
+    if (m[1] === "upload") {
+      if (UUID_RE.test(m[2])) uploads.push(m[2].toLowerCase());
+    } else meetings.push(m[2]);
+  }
+  const out: LiveSources = { live: new Set(), removingSince: new Map(), meetingsChecked: true };
+  if (!owner || (!uploads.length && !meetings.length)) return out;
+  let owners = [owner];
+  if (meetings.length) {
+    try {
+      const { resolveScopeByEmail } = await import("../identity/identity.server");
+      const { emails } = await resolveScopeByEmail(owner);
+      owners = [...new Set([owner, ...emails.map((e) => e.trim().toLowerCase())].filter(Boolean))];
+    } catch {
+      out.meetingsChecked = false; // search still filters on the owner itself; the sweeper leaves meetings alone
+    }
+  }
+  if (uploads.length) await ensureBootstrapped();
+  // Only referenced parameters are sent (Postgres cannot type an unreferenced one).
+  const parts: string[] = [];
+  const params: unknown[] = [owner];
+  if (uploads.length) {
+    params.push(uploads);
+    parts.push(`SELECT 'trinnex:upload:' || id::text AS k, status, updated_at FROM trinnex.library_items
+                 WHERE id = ANY($${params.length}::uuid[]) AND lower(owner_email) = $1`);
+  }
+  if (meetings.length) {
+    params.push(meetings, owners);
+    parts.push(`SELECT 'trinnex:meeting:' || meeting_id AS k, 'live'::text AS status, updated_at FROM chat.fireflies_meetings
+                 WHERE meeting_id = ANY($${params.length - 1}::text[]) AND lower(owner_email) = ANY($${params.length}::text[])
+                   AND $1::text IS NOT NULL`);
+  }
+  const r = await getPool().query(parts.join(" UNION ALL "), params);
+  classifyLiveRows(r.rows as LiveRow[], out);
+  return out;
+}
+
+export type LiveRow = { k: string; status: string; updated_at: Date | string | null };
+/** Pure: a returned row is live unless its status is a removal state (then it records when it stopped being live). */
+export function classifyLiveRows(rows: LiveRow[], out: LiveSources, nowMs = Date.now()): LiveSources {
+  for (const row of rows) {
+    if ((REMOVAL_STATUSES as readonly string[]).includes(row.status)) {
+      const t = row.updated_at ? new Date(row.updated_at).getTime() : nowMs;
+      out.removingSince.set(row.k, Number.isFinite(t) ? t : nowMs);
+    } else out.live.add(row.k);
+  }
+  return out;
 }
 
 export async function removeLibraryItem(email: string, id: string): Promise<RemovalResult | null> {
@@ -458,8 +689,6 @@ export async function firefliesWaiting(email: string): Promise<number | null> {
   return Number(r.rows[0]?.n ?? 0);
 }
 
-/** The people offered in the Library's pickers until the meetings lane's shared people list is reachable here:
- *  everyone the owner has already tagged or mapped in the Library. */
-export function peopleFrom(items: readonly LibraryItem[]): string[] {
-  return mergeCategories(items.flatMap((i) => [...i.participants, ...Object.values(i.speakerMap)]));
-}
+// SUPERSEDED (integration pass 2026-11-20): `peopleFrom(items)`, the Library's interim people list built from names
+// already tagged in the Library. The pickers now read and write the ONE owner-scoped list, chat.trinnex_people
+// (meetings.server getPeople / rememberPeople), via library.functions.ts.
