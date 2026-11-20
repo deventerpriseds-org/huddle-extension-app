@@ -19,6 +19,7 @@ import {
   cleanSeries,
   cleanSpeakerMap,
   fullTitle,
+  matchNamedFiles,
   oneDriveFileName,
   ownerPickToTriage,
   participantsWithSpeakers,
@@ -134,6 +135,8 @@ export interface MeetingListItem {
   meetingId: string;
   title: string;
   firefliesTitle: string | null;
+  /** The descriptive name from the owner's named transcript file, when one matches (named-files.server). */
+  fileTitle: string | null;
   meetingAt: string | null;
   series: string | null;
   participants: string[];
@@ -160,12 +163,22 @@ interface MeetingDbRow {
 }
 
 const iso = (v: string | Date | null) => (v == null ? null : v instanceof Date ? v.toISOString() : String(v));
-const listItem = (r: MeetingDbRow): MeetingListItem => {
-  const base = r.display_title || r.title || "Untitled meeting";
+/** The descriptive name from the owner's named transcript file, by meeting id (named-files.server; fail-soft). */
+async function fileTitles(rows: readonly MeetingDbRow[]): Promise<Map<string, string>> {
+  const { listNamedTranscriptFiles } = await import("./named-files.server");
+  const files = await listNamedTranscriptFiles();
+  if (!files.length) return new Map();
+  return matchNamedFiles(rows.map((r) => ({ id: r.meeting_id, title: r.title, meetingAt: iso(r.meeting_at) })), files);
+}
+
+// The owner's own title wins; then the name from the transcript file; then Fireflies' (usually date-only) title.
+const listItem = (r: MeetingDbRow, fileTitle?: string | null): MeetingListItem => {
+  const base = r.display_title || fileTitle || r.title || "Untitled meeting";
   return {
     meetingId: r.meeting_id,
     title: fullTitle(base, r.participants ?? [], !!r.title_with_participants),
     firefliesTitle: r.title,
+    fileTitle: fileTitle ?? null,
     meetingAt: iso(r.meeting_at),
     series: r.series,
     participants: r.participants ?? [],
@@ -194,7 +207,7 @@ export async function listMeetings(caller: Caller): Promise<
     owner: s.ownerName,
     people: peopleList(s.ownerName, await storedPeople(s.owners)),
     series: seriesOptions(r.rows.map((x) => x.series)),
-    meetings: r.rows.map(listItem),
+    meetings: await fileTitles(r.rows).then((t) => r.rows.map((row) => listItem(row, t.get(row.meeting_id)))),
   };
 }
 
@@ -232,7 +245,9 @@ export async function getMeeting(caller: Caller, meetingId: string): Promise<({ 
   const ctx = { people, owner: s.ownerName };
   const { sentences, attendees } = await loadSentences(s.owners, meetingId);
   const participants = row.participants ?? [];
-  const titleSuggestions = suggestNames(row.title ?? "", ctx).filter((n) => !participants.some((p) => normName(p) === normName(n.name)));
+  const fileTitle = (await fileTitles([row])).get(row.meeting_id) ?? null;
+  // Names come from the file's descriptive name when there is one ("Alex Sync ..."); the date-only title has none.
+  const titleSuggestions = suggestNames(fileTitle ?? row.title ?? "", ctx).filter((n) => !participants.some((p) => normName(p) === normName(n.name)));
   const inviteSuggestions = attendees.filter(
     (a) => normName(a) !== normName(s.ownerName) && normName(a).split(" ")[0] !== normName(s.ownerName) &&
       !participants.some((p) => normName(p) === normName(a)) && !titleSuggestions.some((t) => normName(t.name) === normName(a)),
@@ -245,8 +260,8 @@ export async function getMeeting(caller: Caller, meetingId: string): Promise<({ 
   return {
     ok: true,
     meeting: {
-      ...listItem(row),
-      baseTitle: row.display_title || row.title || "",
+      ...listItem(row, fileTitle),
+      baseTitle: row.display_title || fileTitle || row.title || "",
       withParticipants: !!row.title_with_participants,
       speakerMap: row.speaker_map ?? {},
       onedrivePath: row.onedrive_path,

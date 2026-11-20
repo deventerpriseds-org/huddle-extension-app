@@ -5559,3 +5559,8 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
       44708491612 (1000x680) and 44708497787 (390x844): 12/12 each -- Meetings + detail, Library "29 waiting for triage",
       no h-scroll, Iris 1:1 opens with composer, 0 console errors, 0 failed requests. Mechanism verified live by UAT;
       NOT yet owner-confirmed.
+- [~] 2026-11-20 ACT:trinnex-named-titles -- owner: Meetings shows dates as titles though the OneDrive files are named, and
+      one speaker line is not enough to tell who is talking. Ground truth: Fireflies titles are date-only (29/29); folder
+      /automation/Fireflies Transcripts has 28/28 named files in the same drive (probes 44734555516, 44734811029). Built on
+      claude_trinnex-speaker-context: titles from file names (fail-soft) + up to 5 identifying lines per speaker.
+      Evidence docs/qc-evidence/BUILD-trinnex-named-titles.md. NOT owner-confirmed.
