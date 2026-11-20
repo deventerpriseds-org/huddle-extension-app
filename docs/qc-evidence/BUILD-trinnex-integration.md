@@ -107,3 +107,27 @@ Source: docs/qc-evidence/VERIFY-trinnex-workspace-2.md (FIX FIRST on claim 2b, p
 - LOW (a) 1:1 gate members | `trinnexScopeAllows` also requires `members` to be exactly `[agentId]` (the owner is the signed-in caller, implicit); `trinnexHere` passes `data.members`. Members arrive only in the client payload (`members: z.array(z.enum(AgentIds))`), so the server also requires the huddle id format `dm-<agentId>` and both must agree; a hand-built payload naming extra members is refused | trinnex-scope-gate SCOPE1-4 updated to send members, new SCOPE5 (7 refused member shapes) 5/0.
 - LOW (b) recency | new rules RT-S6 couple/few (rolling span: couple = 2, few = 3) above the "last N" rule, and RT-S6 idioms (last resort, last-ditch, last but not least, last mile -> no filter) beside RT-S5 | trinnex-memory SC table +7 rows RT-S6a..g (incl. "last couple of weeks" -> 2026-11-06..2026-11-20, "past few months" -> 2026-08-20..2026-11-20, "at the last meeting" still most recent 1) 52/0.
 - LOW (c) voice writer | `voiceReplyMayCarryTrinnex(agent, role)` (search.ts): an AGENT reply from a Trinnex agent (iris-chase, eli-vaughn) on a voice call returns before the personal `writeChunk`, fail closed if the check itself throws; it still joins that agent's own 1:1 conversation object. Behaviour change: Iris/Eli voice replies no longer reach cross-huddle personal memory (the voice path cannot tell which replies repeat Trinnex material); the owner's own spoken words are unchanged | new scripts/trinnex-voice-guard.test.ts VOICE1-2 2/0.
+
+### Mutation proofs, loop-2 round (mutate.sh, anchors/replacements in FILES at /tmp/claude-0/-home-user/5d755b8c-dcaa-530d-9f68-5c64e83e2a0f/scratchpad/mut2/m*.{a,r}, BARE test names, `(fail) ` rewritten to `FAIL `)
+
+| # | Guard | Mutation | Test | Outcome | exit |
+|---|---|---|---|---|---|
+| mA | beginRemoval lease-only (library.server) | status list put back into in_flight | LEASE1 | FIRED (control EQUIVALENT) | 0 |
+| mB | setSpeakerMap keeps a held lease | lease predicate deleted | LEASE2 | FIRED (control EQUIVALENT) | 0 |
+| mC | lease renewal | `await deps.renewLease(item.id)` -> `void 0` | LEASE3 | FIRED (control EQUIVALENT) | 0 |
+| mD | refuse Remove of a worker-held row | `if (inFlight)` -> `if (false && inFlight)` | VB1 (verifier's) | FIRED (control EQUIVALENT) | 0 |
+| mE | Replace refuses a removing duplicate (library.functions) | guard -> `void 0` | LEASE5 | FIRED (control EQUIVALENT) | 0 |
+| mF | sweeper "not live" predicate | `if (live) return false;` -> `void live;` | SWEEP4 | FIRED (control EQUIVALENT) | 0 |
+| mG | sweeper 10-minute grace | `> SWEEP_GRACE_MS` -> `> 0` | SWEEP2 | FIRED (control EQUIVALENT) | 0 |
+| mH | search hit filter | `candidates.filter(live)` -> `candidates` | LIVE1 | FIRED (control EQUIVALENT) | 0 |
+| mI | search catalog filter | filter -> `void live` | LIVE3 | first run INERT exit 1 (the fake ignored the `sources` restriction, so the hit filter alone hid the orphan); fake fixed to honour it, re-run FIRED (control EQUIVALENT) | 0 |
+| mJ | removal statuses are not live (classifyLiveRows) | `if (REMOVAL_STATUSES...)` -> `if (false)` | LIVE2 | FIRED (control EQUIVALENT) | 0 |
+| mK | 1:1 members exactly [agent] (search.ts) | `return true` | SCOPE5 | FIRED (control EQUIVALENT) | 0 |
+| mL | RT-S6 idioms rule | rule deleted | RT-S6a | FIRED (control EQUIVALENT) | 0 |
+| mM | couple/few span | out -> `{ mostRecent: 1 }` | RT-S6e | FIRED (control EQUIVALENT) | 0 |
+| mN | voice guard predicate | `return false` | VOICE1 | FIRED (control EQUIVALENT) | 0 |
+
+Every run printed "restored: ... matches HEAD". Not separately mutation-proved: the voice-memory call site (VOICE2 is a source-order check) and the scheduler wiring (SWEEP6 source check).
+
+### Regression after the loop-2 round (one file per process, all rc=0)
+trinnex-bootstrap-allowlist 4/0, trinnex-integration 13/0, trinnex-library 23/0, trinnex-live-sources 12/0 (new), trinnex-meetings 34/0, trinnex-memory 52/0, trinnex-names 43/0, trinnex-people 5/0, trinnex-quota-surfacing 5/0, trinnex-redteam-fixes 19/0, -isolation 5/0, -names 5/0, -search 5/0, trinnex-removal-lease 5/0 (new), trinnex-removal-race 11/0, trinnex-scope-gate 5/0, trinnex-voice-guard 2/0 (new), verify-trinnex-attack 9/0, verify-trinnex-attack-2 5/0 (VB1, VB1c now pass), rag-store-pool-param 3/0, memory-context 11/0, meeting-triage 69/0, -sql 34/0, -server 7/0, actions-view 264/0, -server 50/0 = 700 pass, 0 fail. No voice-memory test existed before this round (trinnex-voice-guard is the first). `nice -n 10 npm run build` rc=0. No live calls, no real data. Open: the sweeper and the live lookup are proven on fakes only; `lastTrinnexSweep` is per process (in memory) plus a log line, not a table.
