@@ -70,3 +70,29 @@ Source: docs/qc-evidence/VERIFY-trinnex-workspace-1.md. One line per finding: id
 - Claim 1 LOW (group-huddle exposure) | `trinnexScopeAllows` / `trinnexOfferedHere` (search.ts): offered only when scope is one-to-one AND huddleId === `dm-<agent>` AND not a ceremony (ceremonyBarge or ceremonyRunId); huddle.functions builds `trinnexHere(winner)` from data.huddleId/scope and gates the OpenAI tool list, the Lovable tool map and the `runTrinnexSearch` executor (refuses before dispatch). Session default, owner may overrule | scripts/trinnex-scope-gate.test.ts 4/4 (SCOPE1 1:1 yes, SCOPE2 12 refusals incl. group/ceremony/other DM/case, SCOPE3 every AGENTS id in its own DM, SCOPE4 both paths + executor); LOV2 and PERS2 source checks updated to the gated form.
 - Claim 4 LOW (recency over-match) | new RT-S5 rules: "at last"/"at long last" (not followed by a meeting word) and "last-minute"/"last minute" -> no filter; the span rule now takes quarters and years as rolling date ranges ending today | trinnex-memory SC table +8 rows (RT-S5a..h): at last -> null, at long last -> null, last-minute -> null, last minute -> null, "at last week's sync" -> last week, "at last meeting" -> most recent 1, "the past two years" -> 2024-11-20..2026-11-20, "the last 3 quarters" -> 2026-02-20..2026-11-20.
 - Claim 8 LOW (RT-I5 inert) | RT-I5 strips comments from the persistResearchedMemory block, requires the executable `if (turnUsedTrinnex(trinnexSearchedThisTurn, toolUses)) return;` before the first `writeChunk(`, and checks the predicate's behaviour | trinnex-redteam-isolation 5/5; mutation proof below.
+
+### Mutation proofs (mutate.sh, anchors/replacements in FILES at /tmp/claude-0/-home-user/5d755b8c-dcaa-530d-9f68-5c64e83e2a0f/scratchpad/mut1/m*.{a,r}, BARE test names; bun's `(fail) ` rewritten to `FAIL ` in the test command so mutate.sh can read it)
+
+| # | Guard (file) | Mutation | Test (bare name) | Outcome | exit |
+|---|---|---|---|---|---|
+| m1 | post-embed stop check (memory.server) | check deleted | RACE-embed ... | FIRED (control EQUIVALENT) | 0 |
+| m2 | pre-ingest removed() check (library.server) | check deleted | RACE-split ... | FIRED (control EQUIVALENT) | 0 |
+| m3 | cross-process isRemoved (library.server) | `\|\| deps.isRemoved` dropped | XPROC-embed ... | FIRED (control EQUIVALENT) | 0 |
+| m4 | lease-holder owns the deletes (library.server) | `if (inFlight)` -> `if (false)` | XPROC-facts ... | FIRED (control EQUIVALENT) | 0 |
+| m5 | same as m1 | same | VA9 RACE ... (verifier's test) | INERT (expected: VA9 checks only the END state, which the fact-write check + cancel cleanup still reach; the no-late-write property is proven by m1 via RACE-embed) | 1 |
+| m6 | empty list aborts (allowlist.sh) | `if [ -z ]` -> `if false` | ALLOW1 ... | FIRED (control EQUIVALENT) | 0 |
+| m7 | failed read aborts (bootstrap-trinnex-db.yml) | `2>/dev/null \|\| echo ""` put back | ALLOW4 ... | FIRED (control EQUIVALENT) | 0 |
+| m8 | embed failure reported (memory.server) | reportFailure deleted | QUOTA1 ... | FIRED (control EQUIVALENT) | 0 |
+| m9 | no key = no_api_key (triples.server) | `none("no_api_key")` -> `none()` | NOKEY2 ... | FIRED (control EQUIVALENT) | 0 |
+| m10 | 1:1 scope (search.ts) | huddle check -> `return true` | SCOPE2 ... | FIRED (control EQUIVALENT) | 0 |
+| m11 | OpenAI tool list gated (huddle.functions) | ungated spread | SCOPE4 ... | FIRED (control EQUIVALENT) | 0 |
+| m12 | executor refuses outside 1:1 (huddle.functions) | `if (!trinnexHere(winner))` -> `if (false)` | SCOPE4 ... | FIRED (control EQUIVALENT) | 0 |
+| m13 | "at last" no filter (search.ts) | rule regex never matches | RT-S5a ... | FIRED (control EQUIVALENT) | 0 |
+| m14 | quarters/years spans (search.ts) | units back to days/weeks/months | RT-S5h ... | FIRED (control EQUIVALENT) | 0 |
+| m15 | I5 no-persist (huddle.functions) | `if (turnUsedTrinnex(...)) return;` -> `if (false) return;` | RT-I5 ... (was INERT in loop 1) | FIRED (control EQUIVALENT) | 0 |
+| m16 | "last-minute" no filter (search.ts) | rule deleted | RT-S5c ... | FIRED (control EQUIVALENT) | 0 |
+
+Every run printed "restored: ... matches HEAD" and "tree clean".
+
+### Regression after the fix round (one file per process)
+trinnex-bootstrap-allowlist 4/0, trinnex-integration 13/0, trinnex-library 23/0, trinnex-meetings 34 passed 0 failed, trinnex-memory 45/0, trinnex-names 43 passed 0 failed, trinnex-people 5/0, trinnex-quota-surfacing 5/0, trinnex-redteam-fixes 19/0, trinnex-redteam-isolation 5/0, trinnex-redteam-names 5/0, trinnex-redteam-search 5/0, trinnex-removal-race 11/0, trinnex-scope-gate 4/0, verify-trinnex-attack 9/0 (VA9 now passes), rag-store-pool-param 3/0, memory-context 11/0, meeting-triage 69 passed, meeting-triage-sql 34 passed, meeting-triage-server 7 passed, actions-view 264 passed, actions-view-server 50 passed. `nice -n 10 npm run build`: rc=0 ("[nitro] You can deploy this build ..."). No live calls, no real data. UI ("Removing..." label, pending toast) not looked at in a browser.
