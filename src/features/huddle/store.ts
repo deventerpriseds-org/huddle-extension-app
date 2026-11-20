@@ -28,7 +28,8 @@ import type { PolishProfile } from "./lib/polish/polish-core";
 // "polish" = the Polish text-cleanup tool (components/PolishView.tsx), Huddle's first tool module.
 // "meetings" = the Trinnex Meetings module (components/MeetingsView.tsx), opened from Modules.
 // "actions" = the Actions page (components/ActionsView.tsx), opened from Modules with Priorities and Schedule.
-export type View = "huddle" | "board" | "artifacts" | "priorities" | "schedule" | "actions" | "meetings" | "polish";
+// "trinnex-library" = the Trinnex Library app (components/TrinnexLibraryView.tsx), 2026-11-20.
+export type View = "huddle" | "board" | "artifacts" | "priorities" | "schedule" | "actions" | "meetings" | "polish" | "trinnex-library";
 export type ContextPanelTab = "queue" | "activity" | "memory" | "artifacts";
 
 // Pure client-device UI layout prefs (panel collapse, active side-panel tab) — deliberately NOT part

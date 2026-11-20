@@ -5529,3 +5529,5 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - Step 5 (MeetingsView + PeoplePicker + Modules entry 'Meetings'; view wired in store/HuddleApp/ViewSwitcher).
 - Step 6 (4 mutation proofs FIRED; not-covered list in BUILD step 6).
 - Step 7 (build exit 0).
+## ACT:trinnex-library -- Trinnex Library app: upload, extract, ingest, remove (2026-11-20) -- BUILDING on claude_trinnex-library, NOT live
+- Lane of the Trinnex workspace build (spec docs/qc-evidence/AC-trinnex-workspace.md section 2). Step log + evidence: docs/qc-evidence/BUILD-trinnex-library.md.
