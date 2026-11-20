@@ -5537,3 +5537,4 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 - Findings from docs/qc-evidence/VERIFY-trinnex-workspace-1.md; one line per fix in docs/qc-evidence/BUILD-trinnex-integration.md "Verifier loop-1 fix round (2026-11-20)".
 - VA9 Remove race (tombstone + worker-owned deletes, scripts/trinnex-removal-race.test.ts); bootstrap allow-list append-only (scripts/trinnex-bootstrap-allowlist.test.ts).
 - Quota surfacing: embed failures go through the facts alert path by kind (TrinnexEmbedError); a missing OpenAI key is kind no_api_key on the item (FailReason no_api_key / facts:no_api_key), never a silent 0 facts.
+- Scope gate (search_trinnex only in dm-iris-chase / dm-eli-vaughn), recency RT-S5 rows, RT-I5 strengthened.

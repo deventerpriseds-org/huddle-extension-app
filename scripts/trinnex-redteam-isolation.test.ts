@@ -88,5 +88,21 @@ test("RT-I5 an agent reply built from search_trinnex results is NOT persisted in
   const end = src.indexOf("TRIPLES ARE USER-ONLY", start);
   expect(start).toBeGreaterThan(0);
   expect(end).toBeGreaterThan(start);
-  expect(src.slice(start, end)).toMatch(/search_trinnex|trinnex/i);
+  // Verifier loop 1: the old check matched the word "Trinnex" in a COMMENT, so deleting the guard left it green.
+  // Now: comments are stripped, the EXECUTABLE early return must be present, and it must come before the first
+  // personal-store write in the block.
+  const code = src
+    .slice(start, end)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "");
+  const guard = /if\s*\(\s*turnUsedTrinnex\(\s*trinnexSearchedThisTurn\s*,\s*toolUses\s*\)\s*\)\s*return\s*;/.exec(code);
+  expect(guard).not.toBeNull();
+  const firstWrite = code.indexOf("writeChunk(");
+  expect(firstWrite).toBeGreaterThan(0);
+  expect(guard!.index).toBeLessThan(firstWrite);
+  // and the guard's own predicate excludes a search_trinnex turn (flag) and a resumed one (breadcrumb)
+  const { turnUsedTrinnex } = require(`${LIB}/trinnex/search.ts`) as typeof import("../src/features/huddle/lib/trinnex/search");
+  expect(turnUsedTrinnex(true, [])).toBe(true);
+  expect(turnUsedTrinnex(false, [{ tool: "search_trinnex" }])).toBe(true);
+  expect(turnUsedTrinnex(false, [{ tool: "search_memory" }])).toBe(false);
 });

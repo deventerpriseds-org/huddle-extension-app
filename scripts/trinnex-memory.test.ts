@@ -274,7 +274,17 @@ const SC: Array<[string, string, unknown]> = [
   ["S-C7", "the last meeting", { mostRecent: 1 }],
   ["S-C10", "what did Michael say last", { mostRecent: 1 }],
   ["S-C11", 'the "Last Mile" review', null],
-];
+  // RT-S5 (verifier loop 1 over-matches): "at last" = finally and "last-minute" are NOT recency ...
+  ["RT-S5a", "at last we agreed on pricing", null],
+  ["RT-S5b", "at long last the vendor signed", null],
+  ["RT-S5c", "last-minute changes", null],
+  ["RT-S5d", "last minute changes to the deck", null],
+  // ... while the real recency next to them still is
+  ["RT-S5e", "what did we say at last week's sync", { dateFrom: "2026-11-09", dateTo: "2026-11-15" }],
+  ["RT-S5f", "what was decided at last meeting", { mostRecent: 1 }],
+  // spans of years / quarters are DATE RANGES ending today, never "the last N meetings"
+  ["RT-S5g", "the past two years of revenue", { dateFrom: "2024-11-20", dateTo: "2026-11-20" }],
+  ["RT-S5h", "the last 3 quarters of revenue", { dateFrom: "2026-02-20", dateTo: "2026-11-20" }],];
 for (const [id, phrase, want] of SC) {
   t(`${id} recency of ${JSON.stringify(phrase)}`, () => {
     expect(search.recencyFromQuestion(phrase, NOW)).toEqual(want);

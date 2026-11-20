@@ -181,7 +181,17 @@ function relativeDay(now: Date, tz: string, offset: number) {
 }
 function pastSpan(now: Date, tz: string, n: number, unit: string) {
   const c = civilToday(now, tz);
-  const back = unit.startsWith("day") ? day(c.y, c.m, c.d - n) : unit.startsWith("week") ? day(c.y, c.m, c.d - 7 * n) : day(c.y, c.m - n, c.d);
+  // Rolling spans ending today. Verifier loop 1: quarters (3 months each) and years added, so "the last 3 quarters
+  // of revenue" / "the past two years" are date ranges, never "the last N meetings".
+  const back = unit.startsWith("day")
+    ? day(c.y, c.m, c.d - n)
+    : unit.startsWith("week")
+      ? day(c.y, c.m, c.d - 7 * n)
+      : unit.startsWith("quarter")
+        ? day(c.y, c.m - 3 * n, c.d)
+        : unit.startsWith("year")
+          ? day(c.y - n, c.m, c.d)
+          : day(c.y, c.m - n, c.d);
   return { dateFrom: back, dateTo: day(c.y, c.m, c.d) };
 }
 
@@ -213,7 +223,7 @@ export const RECENCY_RULES: readonly RecencyRule[] = [
   { row: "RT-S4 yesterday", re: /\byesterday'?s?\b/, out: (_m, n, tz) => relativeDay(n, tz, -1) },
   {
     row: "RT-S4 span",
-    re: /\b(?:last|past|previous)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\s+(days?|weeks?|months?)\b/,
+    re: /\b(?:last|past|previous)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\s+(days?|weeks?|months?|quarters?|years?)\b/,
     out: (m, n, tz) => pastSpan(n, tz, numOf(m[1]) ?? 1, m[2]),
   },
   {
@@ -221,6 +231,11 @@ export const RECENCY_RULES: readonly RecencyRule[] = [
     re: /\b(?:last|latest|most\s+recent|previous|past)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\b/,
     out: (m) => ({ mostRecent: numOf(m[1]) ?? 1 }),
   },
+  // RT-S5 (verifier loop 1): "at last" (= finally) and "last-minute" / "last minute" are not recency. They sit BELOW
+  // the week/month/span/N rules, so "at last week's meeting" is still last week; "at last meeting" (a meeting word
+  // right after) still falls through to the most-recent rule.
+  { row: "RT-S5 at last", re: /\bat\s+(?:long\s+)?last\b(?!\s+(?:the\s+)?(?:meetings?|syncs?|calls?|sessions?|standups?|1on1s?|1:1s?|check-?ins?|reviews?)\b)/, out: () => null },
+  { row: "RT-S5 last-minute", re: /\blast[\s-]+minute\b/, out: () => null },
   // RT-S1: "the previous <series> meeting" applies recency. AS SHIPPED it is the most recent one (= "the last");
   // the alternative reading "the one before the latest" is ONE edit here: ({ mostRecent: 1, skip: 1 }).
   // Only when it qualifies a meeting word within a few words ("the previous Engineering Leaders meeting"), so
