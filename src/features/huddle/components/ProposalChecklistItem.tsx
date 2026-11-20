@@ -10,7 +10,8 @@
 // SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
 // EVIDENCE:   docs/qc-evidence/IMPL-task-proposals.md; docs/qc-evidence/IMPL-meeting-triage.md.
 import { useState } from "react";
-import { Check, ChevronDown, Loader2, Pencil, X, CheckCheck, UserRound, Users } from "lucide-react";
+import { Check, ChevronDown, Loader2, Pencil, X, CheckCheck } from "lucide-react";
+import { OwnerTriageMenuItems, rememberPersonName, useCaller } from "./PeoplePicker";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -59,6 +60,7 @@ export function ProposalChecklistItem({
   const assignee = live?.assignee ?? info?.assignee ?? null;
   const [editing, setEditing] = useState(false);
   const [naming, setNaming] = useState(false);
+  const pickerCaller = useCaller();
   const [draft, setDraft] = useState(title);
 
   async function act(
@@ -105,6 +107,7 @@ export function ProposalChecklistItem({
     setNaming(false);
     if (!n) return;
     void act("triage", undefined, { choice: "someone", name: n.slice(0, 80) });
+    void rememberPersonName(pickerCaller, n); // AC-T14: a typed name joins the one people list
   }
 
   function saveEdit() {
@@ -199,17 +202,16 @@ export function ProposalChecklistItem({
         </DropdownMenuTrigger>
         {triaging ? (
           <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuItem onClick={() => act("triage", undefined, { choice: "mine" })}>
-              <UserRound size={12} className="mr-2" /> Mine
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
+            {/* AC-T13 (changed flow): the ONE people picker -- owner (me) first, people, "Add new name" (the
+                typed box below). Same stored shape as before: owner -> mine, anyone else -> someone + name. */}
+            <OwnerTriageMenuItems
+              testId="checklist-owner-picker"
+              onTriage={(t) => void act("triage", undefined, t)}
+              onAddNew={() => {
                 setDraft("");
                 setNaming(true);
               }}
-            >
-              <Users size={12} className="mr-2" /> For someone
-            </DropdownMenuItem>
+            />
             <DropdownMenuItem onClick={() => act("triage", undefined, { choice: "skip" })}>
               <X size={12} className="mr-2" /> Skip
             </DropdownMenuItem>

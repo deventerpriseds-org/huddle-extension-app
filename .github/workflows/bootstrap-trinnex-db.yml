@@ -54,18 +54,29 @@ jobs:
           set -euo pipefail
           RG="$AZURE_RESOURCE_GROUP"; SRV="$TRINNEX_PG_SERVER"; DB="$TRINNEX_PG_DB"
           if [ "$DB" = "postgres" ] || [ "$DB" = "RAG_AI_Agents" ]; then echo "::error::refusing DB $DB"; exit 1; fi
-          if az postgres flexible-server db show -g "$RG" -s "$SRV" -d "$DB" -o none 2>/dev/null; then
+          # Existence via `db list` (flag-spelling-proof): run 44703349380 failed because current az wants
+          # `--name/-n` where this step passed `-d`. A failed list now fails the step instead of falling through.
+          EXISTS=$(az postgres flexible-server db list -g "$RG" -s "$SRV" --query "length([?name=='$DB'])" -o tsv)
+          if [ "$EXISTS" = "1" ]; then
             echo "Database $SRV/$DB already exists."
           else
-            az postgres flexible-server db create -g "$RG" -s "$SRV" -d "$DB" -o none
+            az postgres flexible-server db create -g "$RG" -s "$SRV" --name "$DB" -o none
             echo "Created database $SRV/$DB."
           fi
-          # vector must be allow-listed on the server (it already is for RAG_AI_Agents; append-only check).
-          CURRENT=$(az postgres flexible-server parameter show -g "$RG" -s "$SRV" --name azure.extensions --query value -o tsv 2>/dev/null || echo "")
-          if ! printf '%s' "$CURRENT" | tr ',' '\n' | grep -qix 'vector'; then
-            if [ -z "$CURRENT" ]; then NEW="VECTOR"; else NEW="${CURRENT},VECTOR"; fi
+          # vector must be allow-listed on the server (it already is for RAG_AI_Agents). The allow-list is SHARED by
+          # every database on $SRV, so this only ever ADDS: a failed or empty read ABORTS before any write
+          # (verifier loop 1; logic + tests in scripts/trinnex-extensions-allowlist.sh).
+          if ! CURRENT=$(az postgres flexible-server parameter show -g "$RG" -s "$SRV" --name azure.extensions --query value -o tsv); then
+            echo "::error::could not read azure.extensions on $SRV -- aborting, nothing written."
+            exit 1
+          fi
+          if ! NEW=$(bash scripts/trinnex-extensions-allowlist.sh "$CURRENT"); then
+            echo "::error::azure.extensions on $SRV read back empty -- aborting, nothing written."
+            exit 1
+          fi
+          if [ "$NEW" != "UNCHANGED" ]; then
             az postgres flexible-server parameter set -g "$RG" -s "$SRV" --name azure.extensions --value "$NEW" -o none
-            echo "Allow-listed VECTOR on $SRV."
+            echo "Allow-listed VECTOR on $SRV (appended to the existing list)."
           fi
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
           HOST=$(az postgres flexible-server show -g "$RG" -n "$SRV" --query fullyQualifiedDomainName -o tsv)
