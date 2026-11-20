@@ -48,15 +48,29 @@ export const checks = [
     await openFromLauncher(page, "Modules", "Meetings");
     const heading = await page.getByText("Meetings", { exact: true }).count();
     check("Meetings module opens from Modules", heading > 0);
-    await screenshot("trinnex-meetings-list");
-    // Open the first meeting if any exist; read-only (no save button is pressed).
+    // PRIVACY (2026-11-20): NO screenshot of the meetings list or a meeting. This repo is PUBLIC and verify-uat pushes
+    // shots to a public branch; the list now shows real meeting names and the detail shows transcript lines and names.
+    // Every check below reports COUNTS only (results.json is published too).
     const rows = page.locator('[data-testid="meeting-row"]');
-    if (await rows.count()) {
+    const n = await rows.count();
+    // Titles come from the named transcript files now (PR #297): count rows whose title is NOT a bare date stamp.
+    const titles = await rows.evaluateAll((els) => els.map((e) => (e.querySelector("span")?.textContent ?? "").trim()));
+    const dateOnly = titles.filter((t) => /^[A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2} [AP]M$/.test(t)).length;
+    check("Meetings list: most titles are real names, not date stamps", n > 0 && n - dateOnly >= Math.ceil(n * 0.8), `${n - dateOnly} of ${n} named`);
+    if (n) {
       await clickVisible(rows, "meeting row");
-      await page.waitForTimeout(1200);
+      await page.waitForTimeout(1500);
       check("Meeting detail renders the triage panel", (await page.locator('[data-testid="meeting-triage"]').count()) === 1);
       check("Detail shows 'Who is speaking'", (await page.getByText("Who is speaking").count()) > 0);
-      await screenshot("trinnex-meeting-detail");
+      const clueBlocks = await page.locator('[data-testid="speaker-clues"]').count();
+      check("Each speaker card shows identifying lines", clueBlocks > 0, `${clueBlocks} speaker cards with clues`);
+      const more = page.getByRole("button", { name: /^More of what they said/ });
+      if (await more.count()) {
+        await clickVisible(more, "More of what they said");
+        await page.waitForTimeout(400);
+        const items = await page.locator('[data-testid="speaker-clue-list"] li').count();
+        check("'More of what they said' opens several lines", items >= 2, `${items} lines`);
+      } else check("'More of what they said' opens several lines", false, "no button");
     } else {
       check("Meetings list rendered (no meetings to open)", true, "no rows present");
     }
@@ -95,6 +109,6 @@ export const checks = [
     for (let i = 0; i < (await composer.count()); i++) if (await composer.nth(i).isVisible()) visible = true;
     check("Huddle chat renders its composer", visible);
     check("Iris 1:1 reachable from this layout", opened, opened ? "opened" : "no visible Iris entry at this width");
-    await screenshot("trinnex-iris-1to1");
+    // PRIVACY: no screenshot of a chat (public shots branch).
   },
 ];
