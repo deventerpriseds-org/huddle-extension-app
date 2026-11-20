@@ -114,3 +114,27 @@ No output carries `SECRET`.
 
 **Suite:** `trinnex-quota-surfacing` 5/0. Its logs show `kind=429 insufficient_quota`, `kind=500`, `kind=no_api_key` for embed, and `facts failed ... kind=no_api_key`. A missing key is therefore a named reason, not a silent "0 facts".
 
+## Claim G -- search_trinnex only in dm-iris-chase / dm-eli-vaughn 1:1s: PASS for the real client. LOW: the decision trusts client-supplied huddleId/scope.
+
+**Source read:**
+- `trinnexHere` (huddle.functions.ts:2334) passes `{huddleId: data.huddleId, scope: data.scope, ceremony: data.ceremonyBarge || !!data.ceremonyRunId}` to `trinnexOfferedHere`. That check needs `trinnexAccess === true` from `agents.ts` AND scope `one-to-one` AND huddleId exactly `dm-<agent.id>`.
+- The OpenAI tool list (l.4131), the Lovable tool map (l.6929) and the executor wrapper `runTrinnexSearch` (l.2532, refusal + `not_here` breadcrumb) all read it. `trinnex-scope-gate` passes 4/0.
+
+**My spellings** (`trinnexOfferedHere(iris, ...)`):
+```
+" dm-iris-chase"            false     "dm-iris-chase\n"   false
+"dm-іris-chase" (Cyrillic і) false     scope "One-To-One"  false
+dm-iris-chase, ceremony:true false    dm-iris-chase 1:1   true
+finn-reid in dm-finn-reid    false    {id:"iris-chase"} without trinnexAccess flag false
+```
+
+**Spoofing:**
+- `huddleId` and `scope` come from the client payload. The zod schema only checks `scope ∈ {one-to-one, group}`, and `members` is an array of agent ids.
+- Nothing server-side checks that a `one-to-one`/`dm-iris-chase` payload has `members == [iris-chase]`. A hand-crafted payload `{huddleId:"dm-iris-chase", scope:"one-to-one", members:[iris, finn, ...]}` therefore passes the gate.
+- **The decision is not fully server-side.** Inference, not executed against the deployed function: whether other members would then reply in that turn depends on 1:1 routing, which I did not trace.
+
+**Impact:**
+- Only the signed-in owner can send their own payload.
+- The Trinnex owner is resolved from the caller, so a spoof can only expose the owner's own material to the owner's own agents. It is not a cross-owner leak, and the real UI always sends a 1:1 with one member.
+- LOW. Suggest: also require `data.members.length === 1 && data.members[0] === agent.id`.
+
