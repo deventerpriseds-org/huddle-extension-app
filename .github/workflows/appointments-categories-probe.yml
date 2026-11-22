@@ -1,0 +1,109 @@
+name: Probe calendar categories (read-only, counts only)
+
+# WHAT:       Answers ONE question with Huddle's existing app-only Graph token: do the owner's calendar
+#             sources carry Outlook CATEGORIES (and which colour)? Reads (1) the OneDrive work-calendar
+#             snapshot /automation/appointments/appointments.json that the owner's Power Automate flow
+#             publishes and TaskOS's feed imports, and (2) the EDS mailbox's own calendar (next 30 days).
+# WHY:        2026-11-22 the owner asked TaskOS to ignore events in the PURPLE category. Nothing in TaskOS
+#             or Huddle reads categories today (calendar-delta-sync $select has none; external_calendar_events
+#             has no column; the feed mapper reads none). Before building, prove the data exists at the source.
+# SUPERSEDES: nothing.  SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   journey-voice .claude/actions.md ACT:tentative-off-category-ignore.
+# PRIVACY:    this repo is PUBLIC, so its logs are public. NEVER print a subject, a person, an address or a
+#             custom category name. Prints: counts, record FIELD NAMES, Outlook colour presets, and a category
+#             name only when it is an Outlook default ("<Colour> category").
+
+on:
+  workflow_dispatch:
+    inputs:
+      drive_user:
+        description: "EDS user whose OneDrive and calendar to read (already public in deploy-swa.yml)."
+        required: true
+        default: "von.ellis@enterpriseds.io"
+      path:
+        description: "Snapshot path in that OneDrive."
+        required: true
+        default: "/automation/appointments/appointments.json"
+  push:
+    branches: [claude/serene-goodall-luk57e]
+    paths: [.github/workflows/appointments-categories-probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      TENANT: ${{ secrets.AZURE_TENANT_ID }}
+      CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      IN_DRIVE_USER: ${{ inputs.drive_user || 'von.ellis@enterpriseds.io' }}
+      IN_PATH: ${{ inputs.path || '/automation/appointments/appointments.json' }}
+    steps:
+      - name: Probe (counts only)
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" \
+            -d "client_id=$CLIENT_ID" --data-urlencode "client_secret=$CLIENT_SECRET" \
+            -d "scope=https://graph.microsoft.com/.default" -d "grant_type=client_credentials" \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
+          echo "::add-mask::$TOKEN"
+          [ -n "$TOKEN" ] || { echo "::error::no app-only Graph token"; exit 1; }
+          export TOKEN
+          python3 - <<'PY'
+          import json, os, re, urllib.parse, urllib.request, urllib.error, datetime
+          from collections import Counter
+          tok, user, path = os.environ["TOKEN"], os.environ["IN_DRIVE_USER"], os.environ["IN_PATH"]
+          DEFAULT = re.compile(r"^(red|orange|brown|yellow|green|teal|olive|blue|purple|cranberry|steel|dark steel|gray|dark gray|black|dark red|dark orange|dark brown|dark yellow|dark green|dark teal|dark olive|dark blue|dark purple|dark cranberry) category$", re.I)
+          def get(url, raw=False):
+              req = urllib.request.Request(url, headers={"Authorization": "Bearer " + tok, "Prefer": 'outlook.timezone="UTC"'})
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      body = r.read()
+                      return r.status, (body if raw else json.loads(body))
+              except urllib.error.HTTPError as e: return e.code, None
+          def safe(name): return name if DEFAULT.match(name or "") else "<custom name>"
+          base = "https://graph.microsoft.com/v1.0/users/" + urllib.parse.quote(user)
+
+          print("=== master category list (name -> colour) ===")
+          st, mc = get(base + "/outlook/masterCategories")
+          print("master_categories_http", st)
+          colour_of = {}
+          if mc:
+              for c in mc.get("value", []):
+                  colour_of[c.get("displayName", "")] = c.get("color", "")
+                  print("  category", safe(c.get("displayName", "")), "colour", c.get("color", ""))
+
+          def report(label, events):
+              print(f"=== {label} ===")
+              print("events", len(events))
+              keys = Counter(k for e in events for k in e.keys())
+              print("field_names", sorted(keys))
+              has_key = sum(1 for e in events if "categories" in e)
+              cats = [c for e in events for c in (e.get("categories") or []) if isinstance(c, str)]
+              print("events_with_categories_field", has_key)
+              print("events_with_nonempty_categories", sum(1 for e in events if e.get("categories")))
+              by = Counter(safe(c) for c in cats)
+              for n, k in by.most_common(): print("  name", n, "count", k)
+              col = Counter(colour_of.get(c, "unknown") for c in cats)
+              for n, k in col.most_common(): print("  colour", n, "count", k)
+
+          st, raw = get(base + "/drive/root:" + urllib.parse.quote(path) + ":/content", raw=True)
+          print("snapshot_file_http", st)
+          if raw:
+              env = json.loads(raw)
+              recs = ((env.get("snapshot") or {}).get("value")) or []
+              report("OneDrive snapshot (work calendar feed)", [r for r in recs if isinstance(r, dict)])
+
+          now = datetime.datetime.utcnow().replace(microsecond=0)
+          url = (base + "/calendarView?startDateTime=" + now.isoformat() + "Z&endDateTime=" +
+                 (now + datetime.timedelta(days=30)).isoformat() + "Z&$select=categories,showAs&$top=200")
+          events = []
+          while url:
+              st, page = get(url)
+              if st != 200: print("calendar_view_http", st); break
+              events += page.get("value", [])
+              url = page.get("@odata.nextLink")
+          report("EDS mailbox calendar, next 30 days", events)
+          PY
