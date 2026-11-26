@@ -332,6 +332,8 @@ export async function meetingsForDate(
       endISO: endIso,
       timeZone: "UTC", // response rendered in UTC so graphUtcToIso can pin it unambiguously
     };
+    // With a caller, the owner's TaskOS calendar-ignore settings apply (read from journey). With NO caller there is
+    // no owner to resolve, so getGraphCalendarEvents uses journey's DEFAULT rule and makes no journey call (AC-6).
     const r = caller ? await getOwnerCalendarEvents({ ...window, caller }) : await getGraphCalendarEvents(window);
     // EDS read failed: still brief any work meetings that loaded, and report the failure (verifier D3).
     if (!r.ok && !(r.events ?? []).length) {
