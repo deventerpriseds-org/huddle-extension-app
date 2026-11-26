@@ -593,7 +593,7 @@ export function eligibleFeedMessages(
     const m = msgs[i];
     const t = Date.parse(String(m.receivedDateTime ?? ""));
     if (Number.isNaN(t) || t < since || t < notBefore) continue;
-    if (cfg.synthetic && !String(m.subject ?? "").startsWith(cfg.subjectPrefix ?? "\\u0000")) continue;
+    if (cfg.synthetic && !String(m.subject ?? "").startsWith(cfg.subjectPrefix ?? "\u0000")) continue;
     if (seen.has(m.id)) continue;
     seen.add(m.id);
     latest.push(m);
