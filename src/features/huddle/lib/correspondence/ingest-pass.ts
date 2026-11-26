@@ -104,6 +104,20 @@ export function ledgerEmailItems(
   return { items, skipped };
 }
 
+/** One event/update path: map and compare only the changed Outlook record, then upsert that SAME email identity.
+ *  ledger.observe changes it to pending only when its content hash differs; an identical re-delivery is unchanged. */
+export async function observeEmailUpdate(
+  record: Record<string, unknown>,
+  cfg: OneDriveFeedsConfig,
+  file: { path: string; etag: string | null },
+  deps: { owner: string; ledger: Pick<LedgerStore, "observe"> },
+): Promise<{ item: SourceItem | null; skipped: boolean; inserted?: number; changed?: number; unchanged?: number }> {
+  const item = ledgerEmailItem(record, cfg, file);
+  if (!item) return { item: null, skipped: true };
+  const observed = await deps.ledger.observe(deps.owner, [item]);
+  return { item, skipped: false, inserted: observed.inserted, changed: observed.changed, unchanged: observed.unchanged };
+}
+
 /** Pure: the processors the config switches on (AC-6.3: bell and proposals independently). */
 /** Pure: is `ms` at or after the daily local time `hhmm` (America/New_York), before midnight? Owner 2026-11-15:
  *  the Teams file loads every day at 6pm. Never throws; a bad clock value reads as "in the window" (keep-loading). */
