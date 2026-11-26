@@ -20,7 +20,8 @@
 // EVIDENCE (2026-11-16): docs/qc-evidence/BUILD-correspondence-content.md.
 
 import type { InboundMessage } from "../email/inbound-email";
-import { FEED_ID_PREFIX, feedRecordBody, mapFeedMessage, mapSentRecords, normalizeCategories, type FeedInboundMessage, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
+import { FEED_ID_PREFIX, feedRecordBody, mapFeedMessage, mapSentRecords, type FeedInboundMessage, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
+import { normalizeCategories } from "../calendar/calendar-ignore";
 import { FORWARD_SUBJECT, forwardedPart, type ForwardedPart } from "./forwarded";
 import { parseRecipients } from "./needs-you";
 
