@@ -96,6 +96,30 @@ jobs:
               recs = ((env.get("snapshot") or {}).get("value")) or []
               report("OneDrive snapshot (work calendar feed)", [r for r in recs if isinstance(r, dict)])
 
+          # 2026-11-26: the owner wants emails tagged "Action needed" to become tasks. Same question for the
+          # email snapshot: does it carry categories? Counts and default-or-"Action needed" names only.
+          ACTION = re.compile(r"^action ?needed$", re.I)
+          def safe2(n): return n if (DEFAULT.match(n or "") or ACTION.match((n or "").strip())) else "<custom name>"
+          st, rawm = get(base + "/drive/root:" + urllib.parse.quote("/automation/email/emails.json") + ":/content", raw=True)
+          print("email_file_http", st)
+          if rawm:
+              envm = json.loads(rawm)
+              msgs = [r for r in (((envm.get("snapshot") or {}).get("value")) or []) if isinstance(r, dict)]
+              print("=== OneDrive email snapshot ===")
+              print("messages", len(msgs))
+              print("field_names", sorted(Counter(k for m in msgs for k in m.keys())))
+              print("messages_with_categories_field", sum(1 for m in msgs if "categories" in m))
+              cm = [c for m in msgs for c in (m.get("categories") or []) if isinstance(c, str)]
+              print("messages_with_nonempty_categories", sum(1 for m in msgs if m.get("categories")))
+              for n, k in Counter(safe2(c) for c in cm).most_common(): print("  name", n, "count", k)
+          st, inbox = get(base + "/mailFolders/inbox/messages?$select=categories&$top=200&$orderby=receivedDateTime desc")
+          print("eds_inbox_http", st)
+          if inbox:
+              v = inbox.get("value", [])
+              ci = [c for m in v for c in (m.get("categories") or [])]
+              print("eds_inbox_messages", len(v), "with_categories", sum(1 for m in v if m.get("categories")))
+              for n, k in Counter(safe2(c) for c in ci).most_common(): print("  inbox name", n, "count", k)
+
           now = datetime.datetime.utcnow().replace(microsecond=0)
           url = (base + "/calendarView?startDateTime=" + now.isoformat() + "Z&endDateTime=" +
                  (now + datetime.timedelta(days=30)).isoformat() + "Z&$select=categories,showAs&$top=200")
