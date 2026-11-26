@@ -8,6 +8,16 @@
 
 import { insertReplyIntoBody, replyTextToHtml } from "./draft-html";
 import {
+  DEFAULT_IGNORE_TITLES,
+  fallbackIgnoreRules,
+  graphAttendees,
+  isIgnoredByRules,
+  normalizeCategories,
+  withOwnerEmails,
+  type CalendarAttendee,
+  type CalendarIgnoreRules,
+} from "../calendar/calendar-ignore";
+import {
   buildInboxSearchQuery,
   cleanEmailBody,
   finishSearchHits,
@@ -525,11 +535,34 @@ export interface CalendarEvent {
   isAllDay: boolean;
   organizer: string | null;
   /** Graph's availability (busy | tentative | free | oof | workingElsewhere), lower-cased; null when unknown.
-   *  Read so tentative events can be dropped (isIgnoredCalendarEvent). Additive. */
+   *  Read for the owner's tentative-group rule (calendar/calendar-ignore.ts isIgnoredByRules). Additive. */
   showAs?: string | null;
   /** Set only on events from a second source (the work-mailbox OneDrive feed): that mailbox's address.
    *  Absent on EDS Graph events, so every existing reader sees them exactly as before. */
   source?: string;
+  /** Outlook category NAMES as sent (e.g. "Purple category"). Read ONLY by the ignore decision
+   *  (calendar/calendar-ignore.ts) and stripped before events are returned, so readers see the same fields
+   *  as before. Added 2026-11-26 (AC-13). */
+  categories?: string[];
+  /** Attendees, for the tentative-GROUP test only; stripped before events are returned (AC-13). */
+  attendees?: CalendarAttendee[];
+}
+
+/** The event as readers have always seen it: the decision-only fields (categories, attendees) removed. */
+function publicCalendarEvent<T extends { categories?: unknown; attendees?: unknown }>(e: T): Omit<T, "categories" | "attendees"> {
+  const { categories: _c, attendees: _a, ...rest } = e;
+  return rest;
+}
+
+/** Test seams for getOwnerCalendarEvents (production passes nothing). */
+export interface OwnerCalendarDeps {
+  loadRules?: (caller: { entra_object_id?: string; entra_email?: string } | undefined) => Promise<{ rules: CalendarIgnoreRules }>;
+  feed?: (
+    mailboxes: Array<string | undefined>,
+    startISO: string,
+    endISO: string,
+    timeZone: string,
+  ) => Promise<{ events: CalendarEvent[]; warnings: string[] }>;
 }
 
 export interface CalendarReadResult {
@@ -555,18 +588,34 @@ export async function getOwnerCalendarEvents(input: {
   endISO: string;
   timeZone?: string;
   top?: number;
-}): Promise<CalendarReadResult> {
-  const r = await getGraphCalendarEvents({
-    mailbox: input.mailbox,
-    startISO: input.startISO,
-    endISO: input.endISO,
-    timeZone: input.timeZone,
-    top: input.top,
-  });
+}, deps: OwnerCalendarDeps = {}): Promise<CalendarReadResult> {
+  // The owner's TaskOS ignore settings (journey get_my_config "calendar_ignore"), read ONCE per call and cached
+  // <= 60 s per owner; journey's default rule when they cannot be read (calendar-ignore-rules.server.ts). Read in
+  // parallel with the Graph call so a slow journey adds no latency beyond its 5 s bound.
+  const loadRules =
+    deps.loadRules ??
+    (async (c: Parameters<NonNullable<OwnerCalendarDeps["loadRules"]>>[0]) =>
+      (await import("../calendar/calendar-ignore-rules.server")).loadCalendarIgnoreRules(c));
+  const [raw, loaded] = await Promise.all([
+    readGraphCalendarRaw({
+      mailbox: input.mailbox,
+      startISO: input.startISO,
+      endISO: input.endISO,
+      timeZone: input.timeZone,
+      top: input.top,
+    }),
+    loadRules(input.caller).catch((err) => {
+      console.error(`[calendar-ignore] rules load threw (${err instanceof Error ? err.name : typeof err}); using the default rule`);
+      return { rules: fallbackIgnoreRules() };
+    }),
+  ]);
   let feed: { events: CalendarEvent[]; warnings: string[] } = { events: [], warnings: [] };
   try {
-    const { feedCalendarEvents } = await import("../external-feeds/onedrive-feed.server");
-    feed = await feedCalendarEvents(
+    const readFeed =
+      deps.feed ??
+      (async (m: Array<string | undefined>, s: string, e: string, tz: string) =>
+        (await import("../external-feeds/onedrive-feed.server")).feedCalendarEvents(m, s, e, tz));
+    feed = await readFeed(
       [input.caller?.entra_email, input.mailbox],
       input.startISO,
       input.endISO,
@@ -576,9 +625,20 @@ export async function getOwnerCalendarEvents(input: {
     console.error("[calendar] work-calendar feed failed", err instanceof Error ? err.message : err);
     feed = { events: [], warnings: ["Work calendar feed could not be read; work meetings are NOT included."] };
   }
-  // The work feed gets the SAME exclusion as the EDS read (work blocks, tentative). It had none: the
-  // owner's 2026-11-18 Schedule screenshot still showed "Work Block 1/2" as MEETING from this path.
-  feed = { ...feed, events: feed.events.filter((e) => !isIgnoredCalendarEvent(e)) };
+  // ONE decision, applied ONCE per event, to BOTH paths, with the owner's rules (AC-22): the EDS events are NOT
+  // pre-filtered with the fallback rule. The owner's addresses include the sign-in, the EDS mailbox and the feed
+  // mailbox, so the owner is never counted as "another person" in the tentative-group test (AC-19).
+  const rules = withOwnerEmails(loaded.rules, [
+    input.caller?.entra_email,
+    input.mailbox,
+    raw.mailbox,
+    ...feed.events.map((e) => e.source),
+  ]);
+  const keep = (e: CalendarEvent) => !isIgnoredByRules(e, rules);
+  const r: CalendarReadResult = raw.ok
+    ? { ...raw, events: (raw.events ?? []).filter(keep).map(publicCalendarEvent) }
+    : raw;
+  feed = { ...feed, events: feed.events.filter(keep).map(publicCalendarEvent) };
   if (!feed.events.length && !feed.warnings.length) return r;
   // The EDS failure is still reported (ok:false + its error), but work meetings that DID load are not
   // thrown away with it (verifier D3).
@@ -609,6 +669,24 @@ export async function getGraphCalendarEvents(input: {
   endISO: string;
   timeZone?: string;
   top?: number;
+  /** The owner's ignore rules. Absent (a read with no caller, e.g. schedule-brief.server.ts with no owner) =
+   *  journey's DEFAULT rule (work blocks, tentative GROUP invites, no categories) and NO journey call (AC-6). */
+  rules?: CalendarIgnoreRules;
+}): Promise<CalendarReadResult> {
+  const raw = await readGraphCalendarRaw(input);
+  if (!raw.ok) return raw;
+  const rules = withOwnerEmails(input.rules ?? fallbackIgnoreRules(), [raw.mailbox]);
+  return { ...raw, events: (raw.events ?? []).filter((e) => !isIgnoredByRules(e, rules)).map(publicCalendarEvent) };
+}
+
+/** The EDS Graph calendarView read, UNFILTERED, with the decision-only fields (categories, attendees) kept.
+ *  Callers apply the ignore decision exactly once (getGraphCalendarEvents / getOwnerCalendarEvents). */
+async function readGraphCalendarRaw(input: {
+  mailbox?: string;
+  startISO: string;
+  endISO: string;
+  timeZone?: string;
+  top?: number;
 }): Promise<CalendarReadResult> {
   const mailbox = (input.mailbox ?? "").trim() || defaultFrom();
   const top = Math.min(Math.max(input.top ?? 50, 1), 100);
@@ -619,7 +697,8 @@ export async function getGraphCalendarEvents(input: {
     const qs =
       `startDateTime=${encodeURIComponent(input.startISO)}` +
       `&endDateTime=${encodeURIComponent(input.endISO)}` +
-      `&$select=${encodeURIComponent("id,subject,start,end,location,isAllDay,organizer,showAs")}` +
+      // categories + attendees are read for the owner's ignore rules (Purple category; tentative GROUP invites).
+      `&$select=${encodeURIComponent("id,subject,start,end,location,isAllDay,organizer,showAs,categories,attendees")}` +
       `&$orderby=${encodeURIComponent("start/dateTime")}` +
       `&$top=${top}`;
     const res = await fetch(`${GRAPH}/users/${encodeURIComponent(mailbox)}/calendarView?${qs}`, {
@@ -649,6 +728,8 @@ export async function getGraphCalendarEvents(input: {
         isAllDay?: boolean;
         organizer?: { emailAddress?: { name?: string; address?: string } };
         showAs?: string;
+        categories?: unknown;
+        attendees?: unknown;
       }>;
     };
     const events: CalendarEvent[] = (j.value ?? []).map((e) => ({
@@ -660,31 +741,20 @@ export async function getGraphCalendarEvents(input: {
       isAllDay: !!e.isAllDay,
       organizer: e.organizer?.emailAddress?.name || e.organizer?.emailAddress?.address || null,
       showAs: e.showAs ? String(e.showAs).toLowerCase() : null,
+      categories: normalizeCategories(e.categories),
+      attendees: graphAttendees(e.attendees),
     }));
-    // Owner 2026-11-18: "work block" holds must not appear in TaskOS or Huddle. Same phrase list as journey's
-    // _shared/calendar-ignore.ts (DEFAULT_CALENDAR_IGNORE_TITLES); journey's copy is the editable one.
-    // Owner 2026-11-19: tentative events join the same exclusion (isIgnoredCalendarEvent).
-    return { ok: true, mailbox, events: events.filter((e) => !isIgnoredCalendarEvent(e)) };
+    // UNFILTERED: the owner's ignore decision (calendar/calendar-ignore.ts isIgnoredByRules) is applied once by
+    // the caller with the owner's TaskOS settings (owner 2026-11-26, option A).
+    return { ok: true, mailbox, events };
   } catch (err) {
     return { ok: false, mailbox, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-/** Calendar holds the owner never wants shown (title contains a phrase). Mirrors journey's seed list. */
-export const IGNORED_CALENDAR_TITLES = ["work block"];
-export function isIgnoredCalendarTitle(title: unknown): boolean {
-  const t = String(title ?? "").toLowerCase();
-  return IGNORED_CALENDAR_TITLES.some((p) => t.includes(p));
-}
-
-/** Owner 2026-11-19: "Items that are tentative on my schedule should be on the same exclusion list as 'work
- *  block' items." THE one drop decision for every calendar event Huddle reads (EDS Graph AND the work
- *  feed): an ignored title phrase, or availability 'tentative'. Mirrors journey's
- *  _shared/calendar-ignore.ts isIgnoredCalendarEvent (default: ignore tentative). */
-export function isIgnoredCalendarEvent(e: { subject?: unknown; showAs?: unknown }): boolean {
-  if (isIgnoredCalendarTitle(e?.subject)) return true;
-  return String(e?.showAs ?? "").toLowerCase() === "tentative";
-}
+/** The FALLBACK title seed only (journey DEFAULT_CALENDAR_IGNORE_TITLES). The live list is the owner's TaskOS
+ *  setting; the ONE decision is calendar/calendar-ignore.ts isIgnoredByRules (AC-34). */
+export const IGNORED_CALENDAR_TITLES: readonly string[] = DEFAULT_IGNORE_TITLES;
 
 /**
  * D4b: resolve, for ONE send attempt, whether every recipient clears the recipient-scoped gate.
