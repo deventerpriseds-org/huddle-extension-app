@@ -20,7 +20,7 @@
 // EVIDENCE (2026-11-16): docs/qc-evidence/BUILD-correspondence-content.md.
 
 import type { InboundMessage } from "../email/inbound-email";
-import { FEED_ID_PREFIX, feedRecordBody, mapFeedMessage, mapSentRecords, type FeedInboundMessage, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
+import { FEED_ID_PREFIX, feedRecordBody, mapFeedMessage, mapSentRecords, normalizeCategories, type FeedInboundMessage, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
 import { FORWARD_SUBJECT, forwardedPart, type ForwardedPart } from "./forwarded";
 import { parseRecipients } from "./needs-you";
 
@@ -43,6 +43,10 @@ export interface EmailContent {
   internetMessageId: string | null;
   /** The SAME visible text the app derives (mapFeedMessage -> htmlToText for an HTML body). */
   bodyText: string | null;
+  /** Outlook category names; empty when the source record has no categories. */
+  categories: string[];
+  /** True when the user's custom "Action Needed" category is applied. */
+  actionNeeded: boolean;
   isForward: boolean;
   /** 2026-11-16: the FORWARDED email of a "Fw:" message, read from the raw body (forwarded.ts forwardedPart).
    *  bodyText is cut at the forward header for Outlook-marker / blockquote forwards, so without this the stored row
@@ -232,6 +236,8 @@ export function emailContent(rec: Record<string, unknown>, mapped: InboundMessag
   // The forwarded part comes from the SAME raw body mapFeedMessage read (feedRecordBody), never from bodyText.
   const raw = isForward ? feedRecordBody(rec) : null;
   const forwarded = raw ? forwardedPart(mapped.subject, raw.raw, raw.isHtml) : null;
+  const categories = normalizeCategories(rec.categories ?? m.categories);
+  const actionNeeded = categories.some((category) => category.trim().toLowerCase() === "action needed");
   return {
     kind: "email",
     subject: mapped.subject ?? null,
@@ -242,6 +248,8 @@ export function emailContent(rec: Record<string, unknown>, mapped: InboundMessag
     conversationId: mapped.conversationId ?? null,
     internetMessageId: str(rec.internetMessageId) || null,
     bodyText: mapped.bodyText ?? mapped.bodyPreview ?? null,
+    categories,
+    actionNeeded,
     isForward,
     ...(forwarded ? { forwarded } : {}),
     ...(typeof rec.hasAttachments === "boolean" ? { hasAttachments: rec.hasAttachments } : {}),
@@ -384,6 +392,8 @@ export function emailSourceItem(
       mapped.bodyText ?? mapped.bodyPreview,
       mapped.fromAddress,
       mapped.receivedDateTime,
+      // Category order is insignificant; a category or body change requeues only this provider-id row.
+      normalizeCategories(rec.categories ?? (mapped as FeedInboundMessage).categories).map((c) => c.trim().toLowerCase()).sort().join("\u001e"),
       identityBasis === "drive_item_etag" ? file.etag : "",
     ]),
     drivePath: file.path,
