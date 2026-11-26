@@ -77,22 +77,28 @@ export const CLAIM_BATCH = 10;
 /** Pure (AC-2.4): the ledger, not the inbox watch's lookback window, decides what is new -- so the
  *  existing eligibility rule (notBefore, synthetic prefix, duplicate original id) is reused with NO
  *  lookback. A Monday-morning message after a Friday snapshot is never dropped by a 12h window. */
+export function ledgerEmailItem(
+  rec: Record<string, unknown>,
+  cfg: OneDriveFeedsConfig,
+  file: { path: string; etag: string | null },
+): SourceItem | null {
+  const mapped = mapFeedMessage(rec, cfg.mailbox);
+  const eligible = eligibleFeedMessages([mapped], cfg, new Date(0).toISOString());
+  if (!eligible.length) return null;
+  return emailSourceItem(rec, mapped, { path: file.path, etag: file.etag }, cfg.mailbox);
+}
+
+/** Pure: full snapshot adapter. Event/update callers use ledgerEmailItem so only the changed message is mapped. */
 export function ledgerEmailItems(
   records: Record<string, unknown>[],
   cfg: OneDriveFeedsConfig,
   file: { path: string; etag: string | null },
 ): { items: SourceItem[]; skipped: number } {
-  const pairs = records.map((rec) => ({ rec, mapped: mapFeedMessage(rec, cfg.mailbox) }));
-  const eligible = new Set(eligibleFeedMessages(pairs.map((p) => p.mapped), cfg, new Date(0).toISOString()));
   const items: SourceItem[] = [];
   let skipped = 0;
-  for (const p of pairs) {
-    if (!eligible.has(p.mapped)) {
-      skipped++;
-      continue;
-    }
-    const it = emailSourceItem(p.rec, p.mapped, { path: file.path, etag: file.etag }, cfg.mailbox);
-    if (it) items.push(it);
+  for (const rec of records) {
+    const item = ledgerEmailItem(rec, cfg, file);
+    if (item) items.push(item);
     else skipped++;
   }
   return { items, skipped };
