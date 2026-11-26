@@ -585,15 +585,20 @@ export function eligibleFeedMessages(
 ): InboundMessage[] {
   const since = Date.parse(sinceIso);
   const notBefore = cfg.notBeforeUtc ? Date.parse(cfg.notBeforeUtc) : -Infinity;
+  // Power Automate may append a later version of a message when its category changes. Scan from
+  // newest to oldest so the last occurrence of an Outlook id is the authoritative record.
   const seen = new Set<string>();
-  return msgs.filter((m) => {
+  const latest: InboundMessage[] = [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
     const t = Date.parse(String(m.receivedDateTime ?? ""));
-    if (Number.isNaN(t) || t < since || t < notBefore) return false;
-    if (cfg.synthetic && !String(m.subject ?? "").startsWith(cfg.subjectPrefix ?? "\u0000")) return false;
-    if (seen.has(m.id)) return false; // the flow unions the trigger message in; dedupe by original id
+    if (Number.isNaN(t) || t < since || t < notBefore) continue;
+    if (cfg.synthetic && !String(m.subject ?? "").startsWith(cfg.subjectPrefix ?? "\\u0000")) continue;
+    if (seen.has(m.id)) continue;
     seen.add(m.id);
-    return true;
-  });
+    latest.push(m);
+  }
+  return latest.reverse();
 }
 
 /** Pure: an ISO instant rendered as Graph renders a dateTime in `timeZone` ("YYYY-MM-DDTHH:mm:ss.0000000"). */
