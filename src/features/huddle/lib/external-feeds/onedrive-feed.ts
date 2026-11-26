@@ -16,6 +16,7 @@
 
 import { REPLY_PREFIX, type InboundMessage } from "../email/inbound-email";
 import { visibleHtml } from "./html-visible";
+import { feedAttendees, normalizeCategories, type CalendarAttendee } from "../calendar/calendar-ignore";
 
 /** One feed file (email or appointments) inside the owner's EDS OneDrive. */
 export interface FeedFileConfig {
@@ -632,6 +633,10 @@ export interface FeedCalendarEvent {
   /** The record's availability (Graph showAs), lower-cased; null when absent. */
   showAs: string | null;
   source: string;
+  /** Outlook category names, exactly journey feedCategories(rec) (AC-14). For the ignore decision only. */
+  categories: string[];
+  /** Attendees, exactly journey feedAttendees(rec) (AC-14). For the tentative-group test only. */
+  attendees: CalendarAttendee[];
 }
 
 const instant = (rec: Record<string, unknown>, withTz: string, plain: string): number => {
@@ -691,6 +696,8 @@ export function mapFeedAppointments(
       })(),
       showAs: str(r.showAs).toLowerCase() || null,
       source: mailbox,
+      categories: normalizeCategories(r.categories),
+      attendees: feedAttendees(r),
     });
   }
   return out;

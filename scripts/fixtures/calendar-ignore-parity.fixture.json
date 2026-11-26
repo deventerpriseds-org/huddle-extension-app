@@ -1,0 +1,1618 @@
+{
+  "_meta": {
+    "what": "Calendar-ignore parity fixture shared by journey-voice and huddle-extension-app (byte-identical copies).",
+    "generatedBy": "node --experimental-strip-types --no-warnings scripts/calendar-ignore-parity-gen.ts (journey-voice repo root)",
+    "expectedFrom": "journey supabase/functions/_shared/calendar-ignore.ts isIgnoredCalendarEvent(event, resolveIgnoreRules(config ?? {}, config ? [owner] : []))",
+    "rowShape": "event uses journey stored-row names (title, show_as, attendees, categories); Huddle maps title->subject, show_as->showAs",
+    "fallbackRows": "fallback:true rows = journey unreachable; rules = resolveIgnoreRules({}) with no owner addresses"
+  },
+  "rows": [
+    {
+      "id": "S-1",
+      "note": "exact stored category",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Purple category"
+        ]
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-2",
+      "note": "case-fold",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "purple CATEGORY"
+        ]
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-3",
+      "note": "trim",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          " Purple category "
+        ]
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-4",
+      "note": "ANY category",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Blue category",
+          "Purple category"
+        ]
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-5",
+      "note": "other category",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Blue category"
+        ]
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-6",
+      "note": "prefix only",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Purple"
+        ]
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-7",
+      "note": "list entry is a substring",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Dark Purple category"
+        ]
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-8",
+      "note": "suffix",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Purple category 2"
+        ]
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-9a",
+      "note": "blank name",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          ""
+        ]
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-9b",
+      "note": "spaces name",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "   "
+        ]
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-10a",
+      "note": "categories null",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": null
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-10b",
+      "note": "categories absent",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-10c",
+      "note": "categories []",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-11",
+      "note": "categories a string",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": "Purple category"
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-12",
+      "note": "non-string elements",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          7,
+          null,
+          {}
+        ]
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-13",
+      "note": "title must not feed the category rule",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Purple category sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-14",
+      "note": "case-fold on the list side",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Purple category"
+        ]
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-15",
+      "note": "owner unticked",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": []
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Purple category"
+        ]
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-16",
+      "note": "malformed config list",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": "Purple category"
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Purple category"
+        ]
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-17",
+      "note": "category independent of tentative switch",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": false,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": false,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          },
+          {
+            "email": "dana@example.org"
+          },
+          {
+            "email": "pat@example.org"
+          }
+        ],
+        "categories": [
+          "Purple category"
+        ]
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-18",
+      "note": "capital C",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Purple Category"
+        ]
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-19",
+      "note": "fallback: no category rule",
+      "fallback": true,
+      "config": null,
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [],
+        "ownerEmails": []
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": [
+          "Purple category"
+        ]
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-20",
+      "note": "fallback: work block seed",
+      "fallback": true,
+      "config": null,
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [],
+        "ownerEmails": []
+      },
+      "event": {
+        "title": "Work Block 2",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": []
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-21",
+      "note": "switch off: tentative group kept",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": false,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": false,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          },
+          {
+            "email": "dana@example.org"
+          },
+          {
+            "email": "pat@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-22a",
+      "note": "tentative, attendees absent",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-22b",
+      "note": "tentative, attendees null",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": null,
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-22c",
+      "note": "tentative, attendees not an array",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": "dana@example.org; pat@example.org",
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-23",
+      "note": "owner (other case) + 1 person",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": " Owner@Example.ORG "
+          },
+          {
+            "email": "dana@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "S-24",
+      "note": "2 people + 1 room",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": "dana@example.org"
+          },
+          {
+            "email": "pat@example.org"
+          },
+          {
+            "email": "room4@example.org",
+            "resource": true
+          }
+        ],
+        "categories": []
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-25a",
+      "note": "showAs Tentative (Graph casing)",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "Tentative",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          },
+          {
+            "email": "dana@example.org"
+          },
+          {
+            "email": "pat@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-25b",
+      "note": "showAs tentative",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          },
+          {
+            "email": "dana@example.org"
+          },
+          {
+            "email": "pat@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-26",
+      "note": "title upper case",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "WORK BLOCK",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": []
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "S-27",
+      "note": "title over-match negative",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Networking block party",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "AC-16a",
+      "note": "switch off: solo hold",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": false,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": false,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "AC-16b",
+      "note": "switch off: 1:1",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": false,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": false,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          },
+          {
+            "email": "dana@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "AC-17a",
+      "note": "switch on: solo hold",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "AC-17b",
+      "note": "switch on: 1:1 (+ room)",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          },
+          {
+            "email": "dana@example.org"
+          },
+          {
+            "email": "room4@example.org",
+            "resource": true
+          }
+        ],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "AC-17c",
+      "note": "switch on: group",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          },
+          {
+            "email": "dana@example.org"
+          },
+          {
+            "email": "pat@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "AC-19",
+      "note": "owner + room + self + empty + 1 person",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "tentative",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          },
+          {
+            "email": "room@example.org",
+            "resource": true
+          },
+          {
+            "email": "me@alias.example",
+            "self": true
+          },
+          {
+            "email": ""
+          },
+          {
+            "email": "dana@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "AC-20a",
+      "note": "owner list phrase focus",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block",
+          "focus"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block",
+          "focus"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Focus time",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": []
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "AC-20b",
+      "note": "owner cleared list: focus kept",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Focus time",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "AC-20c",
+      "note": "owner cleared list: work block kept",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Work Block 1",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "AC-21a",
+      "note": "title only matches",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": false,
+        "calendarIgnoreCategories": []
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": false,
+        "categories": [],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Work Block",
+        "show_as": "busy",
+        "attendees": [],
+        "categories": []
+      },
+      "expected": "IGNORE"
+    },
+    {
+      "id": "AC-21b",
+      "note": "tentative busy (not tentative) group kept",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "Team sync",
+        "show_as": "busy",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          },
+          {
+            "email": "dana@example.org"
+          },
+          {
+            "email": "pat@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "KEEP"
+    },
+    {
+      "id": "AC-30",
+      "note": "ordinary meeting",
+      "fallback": false,
+      "config": {
+        "calendarIgnoreTitles": [
+          "work block"
+        ],
+        "calendarIgnoreTentative": true,
+        "calendarIgnoreCategories": [
+          "Purple category"
+        ]
+      },
+      "rules": {
+        "phrases": [
+          "work block"
+        ],
+        "tentative": true,
+        "categories": [
+          "purple category"
+        ],
+        "ownerEmails": [
+          "owner@example.org"
+        ]
+      },
+      "event": {
+        "title": "1:1 Andrew and Von",
+        "show_as": "busy",
+        "attendees": [
+          {
+            "email": "owner@example.org"
+          },
+          {
+            "email": "andrew@example.org"
+          }
+        ],
+        "categories": []
+      },
+      "expected": "KEEP"
+    }
+  ]
+}
