@@ -48,7 +48,7 @@ import {
   type SourceItem,
   type TeamsMessage,
 } from "../src/features/huddle/lib/correspondence/source-item";
-import { contentPurgeDue, inDailyWindow, ledgerEmailItem, ledgerEmailItems, runContentPurge, runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
+import { contentPurgeDue, inDailyWindow, ledgerEmailItem, ledgerEmailItems, observeEmailUpdate, runContentPurge, runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
 
 let fail = 0;
 let pass = 0;
@@ -261,6 +261,15 @@ t("single-message update adapter maps just the supplied message", (() => {
   const item = ledgerEmailItem(categorized, cfg, file);
   return [item?.sourceItemId, (item?.content as EmailContent | undefined)?.actionNeeded];
 })(), ["owner@work.example:AAMk-sample-1", true]);
+t("update event observes only the supplied item through the existing ledger row", await (async () => {
+  let observed: SourceItem[] = [];
+  const categorized = { ...recs[0], categories: ["Action Needed"] };
+  const result = await observeEmailUpdate(categorized, cfg, file, {
+    owner: "owner@eds.example",
+    ledger: { async observe(_owner, items) { observed = items; return { inserted: 0, changed: 1, unchanged: 0 }; } },
+  });
+  return [observed.length, result.changed, result.item?.sourceItemId === e1.sourceItemId];
+})(), [1, 1, true]);
 const noId = { ...recs[0], id: "" };
 t("AC-2.2 snapshot record with no id -> no identity (never subject/time)", emailSourceItem(noId, mapFeedMessage(noId, cfg.mailbox), file, cfg.mailbox), null);
 const perFile = emailSourceItem(noId, mapFeedMessage(noId, cfg.mailbox), { ...file, perRecordFile: true }, cfg.mailbox)!;
