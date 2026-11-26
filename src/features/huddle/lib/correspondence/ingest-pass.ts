@@ -94,14 +94,17 @@ export function ledgerEmailItems(
   cfg: OneDriveFeedsConfig,
   file: { path: string; etag: string | null },
 ): { items: SourceItem[]; skipped: number } {
-  const items: SourceItem[] = [];
-  let skipped = 0;
-  for (const rec of records) {
-    const item = ledgerEmailItem(rec, cfg, file);
-    if (item) items.push(item);
-    else skipped++;
-  }
-  return { items, skipped };
+  // Resolve duplicate IDs over the whole append-only snapshot before hashing. This keeps the
+  // newest category/content version while the ledger identity stays mailbox + Outlook message ID.
+  const mapped = records.map((rec) => ({ rec, message: mapFeedMessage(rec, cfg.mailbox) }));
+  const eligible = eligibleFeedMessages(mapped.map((x) => x.message), cfg, new Date(0).toISOString());
+  const latestById = new Map(mapped.map((x) => [x.message.id, x.rec]));
+  const items = eligible.flatMap((message) => {
+    const rec = latestById.get(message.id);
+    const item = rec ? emailSourceItem(rec, message, { path: file.path, etag: file.etag }, cfg.mailbox) : null;
+    return item ? [item] : [];
+  });
+  return { items, skipped: records.length - items.length };
 }
 
 /** One event/update path: map and compare only the changed Outlook record, then upsert that SAME email identity.
