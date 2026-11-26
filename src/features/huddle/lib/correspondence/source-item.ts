@@ -49,6 +49,10 @@ export interface EmailContent {
    *  held only the cover note. Present only when isForward and a forwarded part was found; ABSENT on rows stored
    *  before this field existed (the back-fill re-writes their content). Not part of the content hash. */
   forwarded?: ForwardedPart;
+  /** Outlook category names, preserved exactly for Huddle's manual triage signal. */
+  categories?: string[];
+  /** True when Outlook carries the owner's custom `Action Needed` category. */
+  actionNeeded?: boolean;
   /** Present only when the record carries `hasAttachments`. */
   hasAttachments?: boolean;
 }
@@ -244,6 +248,8 @@ export function emailContent(rec: Record<string, unknown>, mapped: InboundMessag
     bodyText: mapped.bodyText ?? mapped.bodyPreview ?? null,
     isForward,
     ...(forwarded ? { forwarded } : {}),
+    ...(m.categories ? { categories: [...m.categories] } : {}),
+    ...(typeof m.actionNeeded === "boolean" ? { actionNeeded: m.actionNeeded } : {}),
     ...(typeof rec.hasAttachments === "boolean" ? { hasAttachments: rec.hasAttachments } : {}),
   };
 }
@@ -385,6 +391,9 @@ export function emailSourceItem(
       mapped.fromAddress,
       mapped.receivedDateTime,
       identityBasis === "drive_item_etag" ? file.etag : "",
+      // Preserve the old hash for ordinary email. A newly added/removed Action Needed label alone
+      // changes it, so that one already-processed email is requeued exactly once.
+      ...(mapped.actionNeeded === true ? ["outlook-action-needed"] : []),
     ]),
     drivePath: file.path,
     driveItemId: file.itemId ?? null,
