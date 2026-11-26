@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
   latestSentByConversation,
   mapFeedMessage,
+  eligibleFeedMessages,
   mapSentRecords,
   parseFeedsConfig,
   sentReplySettles,
@@ -250,6 +251,14 @@ t("email categories are preserved and Action Needed is explicit", (() => {
   const item = emailSourceItem(categorized, mapFeedMessage(categorized, cfg.mailbox), file, cfg.mailbox)!;
   return [(item.content as EmailContent).categories, (item.content as EmailContent).actionNeeded];
 })(), [["Action Needed"], true]);
+t("append-only snapshot dedupe keeps the newest version of a repeated Outlook message id", (() => {
+  const original = { ...recs[0], categories: [] };
+  const changed = { ...recs[0], categories: ["Action Needed"], subject: recs[0].subject };
+  const snapshot = ledgerEmailItems([original, changed], cfg, file);
+  return [snapshot.items.length, (snapshot.items[0]?.content as EmailContent | undefined)?.actionNeeded,
+    snapshot.items[0]?.sourceItemId === e1.sourceItemId,
+    eligibleFeedMessages([mapFeedMessage(original, cfg.mailbox), mapFeedMessage(changed, cfg.mailbox)], cfg, new Date(0).toISOString()).length];
+})(), [1, true, true, 1]);
 t("AC-3.4 a category-only update changes the hash on the same provider-id row", (() => {
   const categorized = { ...recs[0], categories: ["Action Needed"] };
   const mapped = mapFeedMessage(categorized, cfg.mailbox);
