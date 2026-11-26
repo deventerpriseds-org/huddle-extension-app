@@ -591,11 +591,11 @@ export function eligibleFeedMessages(
   const latest: InboundMessage[] = [];
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i];
+    if (seen.has(m.id)) continue;
+    seen.add(m.id); // latest duplicate is authoritative even if it no longer passes a filter
     const t = Date.parse(String(m.receivedDateTime ?? ""));
     if (Number.isNaN(t) || t < since || t < notBefore) continue;
     if (cfg.synthetic && !String(m.subject ?? "").startsWith(cfg.subjectPrefix ?? "\u0000")) continue;
-    if (seen.has(m.id)) continue;
-    seen.add(m.id);
     latest.push(m);
   }
   return latest.reverse();
