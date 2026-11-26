@@ -45,6 +45,10 @@ export interface InboundMessage {
   /** Lower-cased Precedence / Auto-Submitted values, when present. */
   precedence?: string | null;
   autoSubmitted?: string | null;
+  /** Outlook categories carried by the OneDrive email feed. */
+  categories?: string[];
+  /** True only when the owner assigned the custom Outlook category `Action Needed`. */
+  actionNeeded?: boolean;
 }
 
 export type ScreenVerdict =
