@@ -519,6 +519,8 @@ export interface FeedInboundMessage extends InboundMessage {
    *  shape is accepted too). Parsed by needs-you.ts parseRecipients. */
   toRecipients?: unknown;
   ccRecipients?: unknown;
+  /** Outlook category names, including user-created categories such as "Action Needed". */
+  categories?: string[];
   /** Lower-cased value of a `Content-Class` header, when present (absent on all 127 real emails, probe P-1). */
   contentClass?: string | null;
 }
@@ -566,6 +568,7 @@ export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): F
     // Needs-you redesign (2026-11-14): optional, present only when the record carries them.
     ...(rec.toRecipients !== undefined ? { toRecipients: rec.toRecipients } : {}),
     ...(rec.ccRecipients !== undefined ? { ccRecipients: rec.ccRecipients } : {}),
+    ...(rec.categories !== undefined ? { categories: normalizeCategories(rec.categories) } : {}),
     ...(header("content-class") ? { contentClass: val("content-class") } : {}),
   };
 }
