@@ -521,6 +521,10 @@ export interface FeedInboundMessage extends InboundMessage {
   ccRecipients?: unknown;
   /** Lower-cased value of a `Content-Class` header, when present (absent on all 127 real emails, probe P-1). */
   contentClass?: string | null;
+  /** Outlook category names as stored on the source message, preserving the owner's display spelling. */
+  categories?: string[];
+  /** Whether the owner manually assigned the custom `Action Needed` category. */
+  actionNeeded?: boolean;
 }
 
 /** Pure: the RAW body of one Outlook feed record and whether it is HTML -- exactly the read mapFeedMessage does
@@ -563,6 +567,15 @@ export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): F
     headerNames: headers.map((h) => str(h?.name).toLowerCase()).filter(Boolean),
     precedence: val("precedence"),
     autoSubmitted: val("auto-submitted"),
+    // Preserve Outlook categories and expose the owner's custom Action Needed label as a direct boolean signal.
+    ...(rec.categories !== undefined
+      ? {
+          categories: Array.isArray(rec.categories)
+            ? [...new Set(rec.categories.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()))]
+            : [],
+          actionNeeded: Array.isArray(rec.categories) && rec.categories.some((x) => typeof x === "string" && x.trim().toLowerCase() === "action needed"),
+        }
+      : {}),
     // Needs-you redesign (2026-11-14): optional, present only when the record carries them.
     ...(rec.toRecipients !== undefined ? { toRecipients: rec.toRecipients } : {}),
     ...(rec.ccRecipients !== undefined ? { ccRecipients: rec.ccRecipients } : {}),
