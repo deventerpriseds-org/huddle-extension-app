@@ -72,3 +72,59 @@ journey (read-only):
 | AC-11 | Given the owner changes a setting in TaskOS, when a Huddle calendar read starts more than the cache lifetime after the save, then it reflects the change. | happy-path | live: toggle once, read twice (see AC-24) |
 | AC-12 | Given journey answers slowly, when Huddle waits for settings, then the wait is bounded (≤ 5 s) and a timeout takes the AC-4 fallback; the calendar read's total time grows by at most that bound. | performance | stub delaying 10 s: read returns in < 6 s with fallback verdicts |
 
+## Section 2 — The decision on both calendar paths
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-13 | Given the EDS Graph read, when the calendarView URL is built (graph-email.server.ts:622), then `$select` includes `categories` AND `attendees` in addition to today's fields, and each mapped `CalendarEvent` carries `categories: string[]` (string names only, as journey `normalizeCategories` calendar-ignore.ts:71) and the attendee list needed for the group test. Both fields are additive and optional on the interface (519-533). | happy-path | unit test on the built query string; mapping test with a Graph-shaped fixture containing `categories:["Purple category"]` and 3 attendees |
+| AC-14 | Given the OneDrive feed path, when `mapFeedAppointments` (onedrive-feed.ts:659) maps a record with `categories:["Purple category"]` and `requiredAttendees`/`optionalAttendees`/`resourceAttendees` strings, then the `FeedCalendarEvent` carries `categories` equal to journey `feedCategories(rec)` (journey onedrive-feed.ts:187) and attendees equal to journey `feedAttendees(rec)` (148-165: split on `;`/`,`, de-duplicated, `optional`/`resource` flags). | happy-path | unit test feeding the SAME record objects journey's `onedrive-feed.test.ts:58,308-312` uses; deep-equal to journey's outputs pasted as expected values |
+| AC-15 | Given owner rules `categories:["purple category"]`, when an event (either path) has any category equal to it after trim+case-fold, then it is absent from `getOwnerCalendarEvents(...).events`; an event with only non-listed categories is present. Exact equality, never substring (spelling table S-1..S-18 below, all applied to BOTH paths). | happy-path | table-driven unit test, one row per S-n, run once per path |
+| AC-16 | Given `tentative:false` (the owner's current setting), when events with `showAs:"tentative"` are read -- solo hold, 1:1, and a 3-person group -- then ALL of them are returned (none dropped for being tentative). | happy-path | unit test; and live AC-23 |
+| AC-17 | Given `tentative:true`, when a tentative event has ≥ 2 OTHER people (journey `TENTATIVE_GROUP_MIN_OTHERS`, calendar-ignore.ts:55), then it is dropped; a tentative solo hold (0 others) and a tentative 1:1 (1 other) are kept. | happy-path | unit test with journey's own fixture shapes (`SOLO`, `ONE`, `GRP` at journey onedrive-feed.test.ts:308-312) |
+| AC-18 | Given `tentative:true`, when a tentative event has NO attendee list (field absent, `null`, or not an array) -- the case for any path that did not select/parse attendees -- then it is KEPT (journey: "no attendee list = not a group", calendar-ignore.ts:17-18, 93). | edge | unit test, 3 variants |
+| AC-19 | Given "other people" counting, when an attendee is a room (`resource:true`), flagged `self:true`, has an empty email, or is one of the owner's addresses (case-insensitive, trimmed), then it is NOT counted -- same as journey `otherPeople` (meetings.ts:141-157). Owner addresses = the `ownerEmails` returned in AC-1 UNION the caller's `entra_email`, the EDS `mailbox`, and the feed mailbox (journey adds the feed mailbox via `extraOwnerEmails`, calendar-ignore.ts:127). | edge | unit test: tentative event with owner + room + `Work@Example.org` + 1 real person = 1 other → kept |
+| AC-20 | Given `phrases` from the owner list (e.g. `["work block","focus"]`), when a title contains any phrase case-insensitively, then it is dropped; `phrases:[]` (owner cleared the list) drops nothing by title -- the built-in `"work block"` is NOT re-added when journey answered successfully with `[]`. | happy-path / edge | unit test: `"Focus time"` dropped with list, kept with `[]`; `"Work Block 1"` kept with `[]` |
+| AC-21 | Given the three rules, when they disagree, then the event is dropped if ANY rule matches (title OR category OR tentative-group), with the category rule independent of the tentative switch (S-17). | happy-path | unit test |
+| AC-22 | Given `getOwnerCalendarEvents`, when the EDS read and the feed read are merged, then the ignore decision is applied exactly ONCE per event with the owner rules -- `getGraphCalendarEvents`'s internal filter (667) must not pre-drop events with the fallback rule when the caller's rules differ (e.g. a tentative group invite dropped by the old blanket rule while the owner switch is off). | regression | unit test: owner `tentative:false`, EDS fixture has a tentative group invite → present in result |
+
+### Spelling table (Tier 1 matcher) -- category names, copied from journey `.claude/ac-calendar-ignore-categories.md:129-146`
+
+Documentation basis: journey `calendar-ignore.ts:23-28` (exact name after trim + case-fold, ANY category, malformed =
+[]); the owner's own words in that file's header. The Outlook categories API was NOT opened this session (see G-4);
+S-18 inherits its "[Graph, unread]" marking from journey. Every row runs on BOTH Huddle paths (EDS Graph, feed).
+Unless stated, owner list = `["Purple category"]`.
+
+| # | Event categories / config | Documented by | Expected verdict | Wrong answer would be |
+|---|---|---|---|---|
+| S-1 | `["Purple category"]` | probe (exact stored value) | IGNORE | FALSE PASS (event shown/busy) |
+| S-2 | `["purple CATEGORY"]` | case-fold rule, calendar-ignore.ts:26 | IGNORE | FALSE PASS |
+| S-3 | `[" Purple category "]` | trim rule, calendar-ignore.ts:26,67 | IGNORE | FALSE PASS |
+| S-4 | `["Blue category","Purple category"]` | ANY-category rule, :27 (15 live records carry both) | IGNORE | FALSE PASS |
+| S-5 | `["Blue category"]` | probe | KEEP | FALSE REFUSAL (meeting lost) |
+| S-6 | `["Purple"]` | over-match negative (prefix) | KEEP | FALSE REFUSAL |
+| S-7 | `["Dark Purple category"]` | over-match negative (list entry is a substring) | KEEP | FALSE REFUSAL |
+| S-8 | `["Purple category 2"]` | over-match negative (suffix) | KEEP | FALSE REFUSAL |
+| S-9 | `[""]` / `["   "]` | blank name | KEEP | FALSE REFUSAL |
+| S-10 | `null` / absent / `[]` | EDS events with no categories | KEEP | FALSE REFUSAL |
+| S-11 | `"Purple category"` (string, not array) | non-array input, :66 | KEEP, no throw | crash or FALSE REFUSAL |
+| S-12 | `[7, null, {}]` | non-string elements, :67 | KEEP, no throw | crash |
+| S-13 | title `"Purple category sync"`, categories `[]` | over-match negative (title must not feed category rule) | KEEP | FALSE REFUSAL |
+| S-14 | list `["purple category"]`, event `["Purple category"]` | case-fold on list side, :61 | IGNORE | FALSE PASS |
+| S-15 | list `[]`, event `["Purple category"]` | owner unticked | KEEP | FALSE REFUSAL |
+| S-16 | list `"Purple category"` (string in config) | malformed config, :60 | KEEP (category rule off) | FALSE REFUSAL |
+| S-17 | list `["Purple category"]`, `calendarIgnoreTentative:false`, event tentative group with `["Purple category"]` | tentative-switch independence, :28 | IGNORE | FALSE PASS |
+| S-18 | `["Purple Category"]` (capital C) | [Graph, unread] owner-editable display names | IGNORE | FALSE PASS |
+
+Huddle-specific additions (same axes, new transport):
+
+| # | Input | Documented by | Expected verdict | Wrong answer would be |
+|---|---|---|---|---|
+| S-19 | journey unreachable, event `["Purple category"]` | AC-4 fallback (categories:[]) | KEEP | FALSE REFUSAL if fallback invents categories |
+| S-20 | journey unreachable, event title `"Work Block 2"` | AC-4 fallback seed `["work block"]` | IGNORE | FALSE PASS |
+| S-21 | `tentative:false`, tentative 3-person group, no categories | owner switch, calendar-ignore.ts:49-51 | KEEP | FALSE REFUSAL (today's Huddle bug, graph-email.server.ts:686) |
+| S-22 | `tentative:true`, tentative event, attendees absent (EDS path if `attendees` not selected) | calendar-ignore.ts:93 | KEEP | FALSE REFUSAL |
+| S-23 | `tentative:true`, attendees = owner (different case) + 1 person | otherPeople owner exclusion, meetings.ts:155 | KEEP | FALSE REFUSAL |
+| S-24 | `tentative:true`, attendees = 2 people + 1 room (`resource:true`) | meetings.ts:153; journey feedAttendees `resourceAttendees` | IGNORE | FALSE PASS |
+| S-25 | `showAs:"Tentative"` (Graph casing) vs `"tentative"` | Huddle lower-cases at graph-email.server.ts:662, onedrive-feed.ts:693 | same verdict | either |
+| S-26 | title `"WORK BLOCK"`, owner list `["work block"]` | case-insensitive contains, calendar-ignore.ts:42-43 | IGNORE | FALSE PASS |
+| S-27 | title `"Networking block party"`, owner list `["work block"]` | over-match negative (`work block` not a substring) | KEEP | FALSE REFUSAL |
