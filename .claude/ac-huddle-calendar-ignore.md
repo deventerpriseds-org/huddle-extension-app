@@ -128,3 +128,72 @@ Huddle-specific additions (same axes, new transport):
 | S-25 | `showAs:"Tentative"` (Graph casing) vs `"tentative"` | Huddle lower-cases at graph-email.server.ts:662, onedrive-feed.ts:693 | same verdict | either |
 | S-26 | title `"WORK BLOCK"`, owner list `["work block"]` | case-insensitive contains, calendar-ignore.ts:42-43 | IGNORE | FALSE PASS |
 | S-27 | title `"Networking block party"`, owner list `["work block"]` | over-match negative (`work block` not a substring) | KEEP | FALSE REFUSAL |
+
+## Section 3 — Parity, owner-visible effect, regression guards
+
+| # | Given / When / Then | Category | Observed via |
+|---|---|---|---|
+| AC-23 | Given a shared fixture file `calendar-ignore-parity.fixture.json` (rows = {event, rules, expected}) covering S-1..S-27 plus the AC-16..AC-21 shapes, whose `expected` column was PRODUCED by running journey's `isIgnoredCalendarEvent` (calendar-ignore.ts:108) -- the generating command is recorded in the fixture header -- when Huddle's decision function runs over every row, then 100% of verdicts equal `expected`. | parity | Huddle test (node --test or bun), prints `N/N parity` |
+| AC-24 | Given the fixture is copied into both repos, when CI/test runs in journey, then journey's own test asserts its function still produces `expected` for every row; and the two copies are byte-identical (same sha256 recorded in both test files). A journey rule change that is not mirrored fails one of the two suites, never neither. | parity / regression | `sha256sum` of both copies; journey `deno test` on the fixture |
+| AC-25 | Given the parity fixture, when the fixture rows are fed through Huddle's FULL read (`getOwnerCalendarEvents` with Graph fetch and feed snapshot stubbed), not only the pure function, then the kept set equals the fixture's KEEP rows -- proving the wiring, not just the predicate. | parity (wiring) | unit test with stubbed `fetch` + `feedCalendarEvents` |
+| AC-26 | Given the live owner (settings now: `calendarIgnoreTentative:false`, `calendarIgnoreCategories:["Purple category"]`), after merge + deploy, when Huddle's calendar tool (`get_calendar_events` via the deployed server fn, or the voice tool) reads the next 7 days, then 0 returned events have a category equal to "Purple category", and the result is NOT empty. | owner-visible | live harness run, output pasted (count of events, count with Purple = 0) |
+| AC-27 | Given the same live window, when tentative events exist in the source (count from `chat.external_feed_state.last_good` records with `showAs` tentative and not Purple), then that many tentative events appear in Huddle's result (they were all hidden before by graph-email.server.ts:686). | owner-visible | `azure-pg-query.yml` count vs harness count, both pasted |
+| AC-28 | Cross-surface reconciliation: given window W and the work feed, when Huddle's feed events for W are compared by original record id with journey's stored `external_calendar_events` for the feed connection over W (journey drops ignored rows before storing, onedrive-feed-sync.ts:99-104), then the two id sets are equal, allowing only records that changed between the two snapshot reads (report any difference with both snapshot timestamps). | owner-visible / reconciliation | Supabase SQL on journey + harness output, set diff pasted |
+| AC-29 | Given the schedule brief (schedule-brief.server.ts:335), when it builds T-60 reminders for a day holding a Purple meeting and a tentative 1:1, then no reminder is scheduled for the Purple meeting and one IS scheduled for the tentative 1:1 (owner switch off). | owner-visible / downstream | `scripts/schedule-brief.test.ts`-style unit test with stubbed read |
+| AC-30 | Regression: given an event with no categories, not tentative, title not matching (the ordinary meeting), when read through either path, then it is returned with every field it had before (id, subject, start, end, location, isAllDay, organizer, showAs, source) unchanged. | regression | snapshot test: old fields deep-equal |
+| AC-31 | Regression: given the EDS Graph read fails (non-200), when `getOwnerCalendarEvents` runs, then it still returns `ok:false` + error, and feed events that loaded are still returned filtered by the owner rules (verifier D3 behaviour, graph-email.server.ts:583-591). | regression | unit test |
+| AC-32 | Regression: `scripts/calendar-ignore.test.mjs` CAL-IGN-2 and CAL-IGN-3 pin today's exact implementation text (blanket tentative regex; the old `$select` literal). They must be REWRITTEN to assert the new behaviour (owner-rules decision; `$select` containing `categories` and `attendees`), not deleted: the file ends with ≥ 4 tests, all passing, and CAL-IGN-1/4 intent (work blocks dropped on both paths) still asserted. | regression | `node --test scripts/calendar-ignore.test.mjs` → `# fail 0`, `# tests` ≥ 4 |
+| AC-33 | Regression: the measured baseline below does not get worse -- `calendar-ignore.test.mjs` 4/4 pass; `onedrive-feed.test.ts` 58 PASS lines with 0 FAIL before the environment-caused stop. | regression | same commands, counts pasted |
+| AC-34 | Regression: no other Huddle reader of calendar events changes behaviour except through the ignore decision -- `grep -n "isIgnoredCalendarEvent\|isIgnoredCalendarTitle\|IGNORED_CALENDAR_TITLES" src` after the change shows ONE decision function, used by both paths, with no second local copy. | regression / extend | grep output pasted |
+
+### Test baseline (measured in this worktree, 2026-11-26, `origin/main` at branch time)
+
+- **There is no `npm test` script.** `package.json` has no `scripts.test`; it has ~80 individual `test:*` scripts
+  and no workflow under `.github/workflows/` runs `calendar-ignore.test.mjs` or `onedrive-feed.test.ts` (grep: 0).
+  So "the npm test baseline" cannot be measured as one number; the relevant per-file baselines are:
+- `node --test scripts/calendar-ignore.test.mjs` → `# tests 4  # pass 4  # fail 0`.
+- `bun scripts/onedrive-feed.test.ts` → **58 PASS, 0 FAIL**, then exit 1: `Cannot find package 'pg'` from
+  `src/features/huddle/lib/db/shared-pool.server.ts` (no `node_modules` in this worktree; `bun install` blocked,
+  `ProxyConnectFailed (403) downloading tarball pg@8.22.0`). This stop is environmental, not a test failure.
+- `bun scripts/schedule-brief.test.ts`, `bun scripts/day-schedule.test.ts` → exit 1 (same missing-deps cause, not
+  inspected further). Implementer must re-measure these where dependencies install.
+
+### Goal → AC coverage
+
+- Goal "Huddle follows the SAME ignore settings the owner edits in TaskOS" → AC-1, AC-2, AC-11, AC-15..AC-21, AC-23..AC-25, AC-28
+- Goal "one approach, no separate copy" → AC-2, AC-3, AC-22, AC-34
+- Goal "Purple meetings gone from Huddle's calendar tools" → AC-13, AC-14, AC-15, AC-26, AC-29
+- Goal "tentatives back (owner switch off)" → AC-16, AC-22, AC-27, AC-29
+- Goal "never show nothing, never crash when journey is down" → AC-4, AC-5, AC-6, AC-10, AC-12
+- Goal "one calendar read does not call journey many times" → AC-7, AC-8, AC-9
+- Every AC traces to a goal; none is implementation-detail-only.
+
+### Gaps / open questions for the owner
+
+- **G-1 (fallback rule -- real fork, reversible).** The brief says fall back to "today's built-in rule". Today's
+  Huddle rule drops EVERY tentative (graph-email.server.ts:686), which journey itself marks as superseded
+  (calendar-ignore.ts:21) and which hides meetings the owner has said he wants back. These ACs assume the fallback
+  is journey's own default (`resolveIgnoreRules({})`: work-block titles, tentative GROUP invites only, no
+  categories). Option keep-old-rule = more meetings hidden during an outage; option journey-default = Purple
+  meetings reappear during an outage. Recommendation: journey-default (missing a meeting is the harm the owner
+  named). Either is a one-line change.
+- **G-2 (EDS attendees).** TaskOS can drop tentative group invites only because it has attendee lists. For the EDS
+  path to match, `attendees` must be added to `$select` (AC-13). If it is not, AC-18 keeps those events (safe
+  direction) but the EDS path then diverges from TaskOS whenever the owner turns the tentative switch on.
+- **G-3 (owner addresses).** Journey's owner-address set comes from `resolveOwnerEmails` (profile + connected
+  mailboxes). AC-1 has journey return it so Huddle does not guess; if the section omits it, Huddle's union in
+  AC-19 is narrower and a meeting with the owner's alias could be counted as a group.
+- **G-4 (unread documentation).** The Microsoft Graph `event` resource docs (that `categories` and `attendees` are
+  selectable on calendarView, and the attendee `type` values "required/optional/resource") were NOT opened this
+  session; S-18 and AC-13 rest on journey's prior measurement and the owner's live data (264 feed records, 135
+  Purple on 2026-11-24), not on read documentation.
+- **G-5 (no user-visible warning).** AC-4 requires a log line on fallback, not a message to the owner. If the owner
+  wants "settings could not be loaded; using defaults" surfaced in the calendar answer (like the feed's
+  `warnings`, graph-email.server.ts:576), add it to `warnings`.
+- **G-6 (cache lifetime).** AC-8 sets ≤ 60 s. The owner-visible cost is that a TaskOS setting change can take up
+  to a minute to reach Huddle. Shorter = more journey calls.
+- **G-7 (tier-1 process).** Both repos change: journey `get_my_config` (execute-tool) deploys on merge to main
+  (journey CLAUDE.md), and Huddle depends on it. Order: journey section first (additive, unused), then Huddle.
+  Until journey ships, Huddle's AC-4 fallback is what runs.
+
+AC-DONE
