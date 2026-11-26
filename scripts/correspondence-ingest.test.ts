@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
   latestSentByConversation,
   mapFeedMessage,
+  eligibleFeedMessages,
   mapSentRecords,
   parseFeedsConfig,
   sentReplySettles,
@@ -48,7 +49,7 @@ import {
   type SourceItem,
   type TeamsMessage,
 } from "../src/features/huddle/lib/correspondence/source-item";
-import { contentPurgeDue, inDailyWindow, ledgerEmailItems, runContentPurge, runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
+import { contentPurgeDue, inDailyWindow, ledgerEmailItem, ledgerEmailItems, observeEmailUpdate, runContentPurge, runIngestPass, type PassDeps } from "../src/features/huddle/lib/correspondence/ingest-pass";
 
 let fail = 0;
 let pass = 0;
@@ -245,6 +246,39 @@ const e1 = emailSourceItem(recs[0], mapFeedMessage(recs[0], cfg.mailbox), file, 
 t("AC-2.2 identity is (email, mailbox:outlook id) -- the existing feed id minus 'feed:'", [e1.source, e1.sourceItemId, e1.identityBasis], ["email", "owner@work.example:AAMk-sample-1", "provider_id"]);
 t("AC-2.2 internetMessageId stored when present", e1.internetMessageId, "<sample-1@partner.example>");
 t("AC-2.2 thread id is the conversationId", e1.threadId, "conv-sample-1");
+t("email categories are preserved and Action Needed is explicit", (() => {
+  const categorized = { ...recs[0], categories: ["Action Needed"] };
+  const item = emailSourceItem(categorized, mapFeedMessage(categorized, cfg.mailbox), file, cfg.mailbox)!;
+  return [(item.content as EmailContent).categories, (item.content as EmailContent).actionNeeded];
+})(), [["Action Needed"], true]);
+t("append-only snapshot dedupe keeps the newest version of a repeated Outlook message id", (() => {
+  const original = { ...recs[0], categories: [] };
+  const changed = { ...recs[0], categories: ["Action Needed"], subject: recs[0].subject };
+  const snapshot = ledgerEmailItems([original, changed], cfg, file);
+  return [snapshot.items.length, (snapshot.items[0]?.content as EmailContent | undefined)?.actionNeeded,
+    snapshot.items[0]?.sourceItemId === e1.sourceItemId,
+    eligibleFeedMessages([mapFeedMessage(original, cfg.mailbox), mapFeedMessage(changed, cfg.mailbox)], cfg, new Date(0).toISOString()).length];
+})(), [1, true, true, 1]);
+t("AC-3.4 a category-only update changes the hash on the same provider-id row", (() => {
+  const categorized = { ...recs[0], categories: ["Action Needed"] };
+  const mapped = mapFeedMessage(categorized, cfg.mailbox);
+  const item = emailSourceItem(categorized, mapped, file, cfg.mailbox)!;
+  return [item.sourceItemId === e1.sourceItemId, item.contentHash !== e1.contentHash];
+})(), [true, true]);
+t("single-message update adapter maps just the supplied message", (() => {
+  const categorized = { ...recs[0], categories: ["Action Needed"] };
+  const item = ledgerEmailItem(categorized, cfg, file);
+  return [item?.sourceItemId, (item?.content as EmailContent | undefined)?.actionNeeded];
+})(), ["owner@work.example:AAMk-sample-1", true]);
+t("update event observes only the supplied item through the existing ledger row", await (async () => {
+  let observed: SourceItem[] = [];
+  const categorized = { ...recs[0], categories: ["Action Needed"] };
+  const result = await observeEmailUpdate(categorized, cfg, file, {
+    owner: "owner@eds.example",
+    ledger: { async observe(_owner, items) { observed = items; return { inserted: 0, changed: 1, unchanged: 0 }; } },
+  });
+  return [observed.length, result.changed, result.item?.sourceItemId === e1.sourceItemId];
+})(), [1, 1, true]);
 const noId = { ...recs[0], id: "" };
 t("AC-2.2 snapshot record with no id -> no identity (never subject/time)", emailSourceItem(noId, mapFeedMessage(noId, cfg.mailbox), file, cfg.mailbox), null);
 const perFile = emailSourceItem(noId, mapFeedMessage(noId, cfg.mailbox), { ...file, perRecordFile: true }, cfg.mailbox)!;

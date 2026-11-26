@@ -519,6 +519,8 @@ export interface FeedInboundMessage extends InboundMessage {
    *  shape is accepted too). Parsed by needs-you.ts parseRecipients. */
   toRecipients?: unknown;
   ccRecipients?: unknown;
+  /** Outlook category names, including user-created categories such as "Action Needed". */
+  categories?: string[];
   /** Lower-cased value of a `Content-Class` header, when present (absent on all 127 real emails, probe P-1). */
   contentClass?: string | null;
 }
@@ -566,6 +568,7 @@ export function mapFeedMessage(rec: Record<string, unknown>, mailbox: string): F
     // Needs-you redesign (2026-11-14): optional, present only when the record carries them.
     ...(rec.toRecipients !== undefined ? { toRecipients: rec.toRecipients } : {}),
     ...(rec.ccRecipients !== undefined ? { ccRecipients: rec.ccRecipients } : {}),
+    ...(rec.categories !== undefined ? { categories: normalizeCategories(rec.categories) } : {}),
     ...(header("content-class") ? { contentClass: val("content-class") } : {}),
   };
 }
@@ -582,15 +585,20 @@ export function eligibleFeedMessages(
 ): InboundMessage[] {
   const since = Date.parse(sinceIso);
   const notBefore = cfg.notBeforeUtc ? Date.parse(cfg.notBeforeUtc) : -Infinity;
+  // Power Automate may append a later version of a message when its category changes. Scan from
+  // newest to oldest so the last occurrence of an Outlook id is the authoritative record.
   const seen = new Set<string>();
-  return msgs.filter((m) => {
+  const latest: InboundMessage[] = [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (seen.has(m.id)) continue;
+    seen.add(m.id); // latest duplicate is authoritative even if it no longer passes a filter
     const t = Date.parse(String(m.receivedDateTime ?? ""));
-    if (Number.isNaN(t) || t < since || t < notBefore) return false;
-    if (cfg.synthetic && !String(m.subject ?? "").startsWith(cfg.subjectPrefix ?? "\u0000")) return false;
-    if (seen.has(m.id)) return false; // the flow unions the trigger message in; dedupe by original id
-    seen.add(m.id);
-    return true;
-  });
+    if (Number.isNaN(t) || t < since || t < notBefore) continue;
+    if (cfg.synthetic && !String(m.subject ?? "").startsWith(cfg.subjectPrefix ?? "\u0000")) continue;
+    latest.push(m);
+  }
+  return latest.reverse();
 }
 
 /** Pure: an ISO instant rendered as Graph renders a dateTime in `timeZone` ("YYYY-MM-DDTHH:mm:ss.0000000"). */

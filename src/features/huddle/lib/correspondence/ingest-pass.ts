@@ -77,25 +77,48 @@ export const CLAIM_BATCH = 10;
 /** Pure (AC-2.4): the ledger, not the inbox watch's lookback window, decides what is new -- so the
  *  existing eligibility rule (notBefore, synthetic prefix, duplicate original id) is reused with NO
  *  lookback. A Monday-morning message after a Friday snapshot is never dropped by a 12h window. */
+export function ledgerEmailItem(
+  rec: Record<string, unknown>,
+  cfg: OneDriveFeedsConfig,
+  file: { path: string; etag: string | null },
+): SourceItem | null {
+  const mapped = mapFeedMessage(rec, cfg.mailbox);
+  const eligible = eligibleFeedMessages([mapped], cfg, new Date(0).toISOString());
+  if (!eligible.length) return null;
+  return emailSourceItem(rec, mapped, { path: file.path, etag: file.etag }, cfg.mailbox);
+}
+
+/** Pure: full snapshot adapter. Event/update callers use ledgerEmailItem so only the changed message is mapped. */
 export function ledgerEmailItems(
   records: Record<string, unknown>[],
   cfg: OneDriveFeedsConfig,
   file: { path: string; etag: string | null },
 ): { items: SourceItem[]; skipped: number } {
-  const pairs = records.map((rec) => ({ rec, mapped: mapFeedMessage(rec, cfg.mailbox) }));
-  const eligible = new Set(eligibleFeedMessages(pairs.map((p) => p.mapped), cfg, new Date(0).toISOString()));
-  const items: SourceItem[] = [];
-  let skipped = 0;
-  for (const p of pairs) {
-    if (!eligible.has(p.mapped)) {
-      skipped++;
-      continue;
-    }
-    const it = emailSourceItem(p.rec, p.mapped, { path: file.path, etag: file.etag }, cfg.mailbox);
-    if (it) items.push(it);
-    else skipped++;
-  }
-  return { items, skipped };
+  // Resolve duplicate IDs over the whole append-only snapshot before hashing. This keeps the
+  // newest category/content version while the ledger identity stays mailbox + Outlook message ID.
+  const mapped = records.map((rec) => ({ rec, message: mapFeedMessage(rec, cfg.mailbox) }));
+  const eligible = eligibleFeedMessages(mapped.map((x) => x.message), cfg, new Date(0).toISOString());
+  const latestById = new Map(mapped.map((x) => [x.message.id, x.rec]));
+  const items = eligible.flatMap((message) => {
+    const rec = latestById.get(message.id);
+    const item = rec ? emailSourceItem(rec, message, { path: file.path, etag: file.etag }, cfg.mailbox) : null;
+    return item ? [item] : [];
+  });
+  return { items, skipped: records.length - items.length };
+}
+
+/** One event/update path: map and compare only the changed Outlook record, then upsert that SAME email identity.
+ *  ledger.observe changes it to pending only when its content hash differs; an identical re-delivery is unchanged. */
+export async function observeEmailUpdate(
+  record: Record<string, unknown>,
+  cfg: OneDriveFeedsConfig,
+  file: { path: string; etag: string | null },
+  deps: { owner: string; ledger: Pick<LedgerStore, "observe"> },
+): Promise<{ item: SourceItem | null; skipped: boolean; inserted?: number; changed?: number; unchanged?: number }> {
+  const item = ledgerEmailItem(record, cfg, file);
+  if (!item) return { item: null, skipped: true };
+  const observed = await deps.ledger.observe(deps.owner, [item]);
+  return { item, skipped: false, inserted: observed.inserted, changed: observed.changed, unchanged: observed.unchanged };
 }
 
 /** Pure: the processors the config switches on (AC-6.3: bell and proposals independently). */
