@@ -639,6 +639,33 @@ try {
     const rec4 = (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = 'lat-e4'`)).rows[0]?.a;
     const p4 = (await pool.query(`SELECT state FROM chat.task_proposals WHERE id = $1`, [rec4?.proposalId])).rows[0];
     t("LAT-PG-6 GUARD (real SQL): the retry cap is persisted in the ledger: 5 create attempts over 7 passes, then gave up, still proposed", [creates - before, rec4?.attempts, rec4?.gaveUp, p4?.state], [5, 5, true, "proposed"]);
+    // LAT-PG-V2 (verifier V-2): A tasked; then A's label REMOVED and its content PURGED; then a labelled reply B in the
+    // SAME conversation with ANOTHER title. The conversation map is read from the real ledger by thread_id.
+    {
+      const conv = (id: string, subject: string, categories: unknown): SourceItem => {
+        const base = em(id, categories);
+        return { ...base, threadId: "lat-conv-v2", content: { ...(base.content as object), subject, conversationId: "lat-conv-v2" } as never };
+      };
+      await L.observe(O, [conv("lat-v2a", "Test-label venue booking", ["Action Needed"])]);
+      const la = (await A.loadLabelRows([O])).filter((r) => r.sourceItemId === "lat-v2a");
+      const storedCid = (await pool.query(`SELECT thread_id, content->>'conversationId' c FROM chat.correspondence_ledger WHERE source_item_id = 'lat-v2a'`)).rows[0];
+      t("LAT-PG-V2a (real SQL): the loader's thread_id = the stored content.conversationId (the plan's conversation id)", [la[0]?.threadId, storedCid?.thread_id, storedCid?.c], ["lat-conv-v2", "lat-conv-v2", "lat-conv-v2"]);
+      const before = creates;
+      await LT.runLabelAutoTask(O, [O], la, ["Action Needed"], { ...deps(), priorConversations: await A.loadAutoTaskConversations([O]) });
+      // The owner clears the label, then the content is purged (both drop A from the labelled-row loader).
+      await pool.query(`UPDATE chat.correspondence_ledger SET content = jsonb_set(content, '{categories}', '[]'::jsonb) WHERE source_item_id = 'lat-v2a'`);
+      await pool.query(`UPDATE chat.correspondence_ledger SET content = NULL, content_purged_at = now() WHERE source_item_id = 'lat-v2a'`);
+      await L.observe(O, [conv("lat-v2b", "RE: Test-label catering numbers", ["Action Needed"])]);
+      const lb = (await A.loadLabelRows([O])).filter((r) => r.sourceItemId.startsWith("lat-v2"));
+      const prior = await A.loadAutoTaskConversations([O]);
+      await LT.runLabelAutoTask(O, [O], lb, ["Action Needed"], { ...deps(), priorConversations: prior });
+      const recA = (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = 'lat-v2a'`)).rows[0]?.a;
+      const recB = (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = 'lat-v2b'`)).rows[0]?.a;
+      t("LAT-PG-V2 GUARD (real SQL): label removed + content purged, labelled reply, another title -> createTask total 1, reply decided on A's proposal", [creates - before, lb.map((r) => r.sourceItemId), prior.some((p) => p.threadId === "lat-conv-v2" && p.proposalId === recA?.proposalId), recB?.outcome, recB?.proposalId === recA?.proposalId], [1, ["lat-v2b"], true, "decided", true]);
+      const srv = (await import("node:fs")).readFileSync(join(LIB, "actions/actions.server.ts"), "utf8");
+      const passBody = srv.slice(srv.indexOf("export async function runLabelAutoTaskPass("), srv.indexOf("// ── AC8 (verifier VERIFY-report-saves-verdicts-1)"));
+      t("LAT-PG-V2 the heartbeat pass hands the ledger-wide conversation map + a deadline to the pure pass", [passBody.includes("await loadAutoTaskConversations(owners)"), passBody.includes("priorConversations,"), passBody.includes("deadlineMs: startMs + LABEL_AUTOTASK_BUDGET_MS")], [true, true, true]);
+    }
   }
 
 } catch (e) {

@@ -35,3 +35,9 @@ EVIDENCE:   this file; scripts/actions-view.test.ts LAT-V1/LAT-V2/LAT-DL; script
 AC-6.3 amended with the dated note. The old "LAT-AC-6.3 different titles -> 2 tasks" test had no conversation on its rows, so it still holds; renamed to say "NOT the same conversation".
 
 actions-view after the change: 347 passed, 0 failed (was 338).
+
+## Commit 2: real Postgres V-2
+
+LAT-PG-V2a: the loader returns thread_id, equal to the stored content.conversationId (agreement on a real ingested row).
+LAT-PG-V2: A tasked; label cleared; content purged; labelled reply B, another title -> createTask total 1, B decided on A's proposal; the purged A is absent from loadLabelRows but present in loadAutoTaskConversations.
+actions-view-server: 59 passed, 0 failed (was 56).
