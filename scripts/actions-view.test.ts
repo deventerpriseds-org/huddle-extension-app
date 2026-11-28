@@ -1759,5 +1759,29 @@ console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail
   t("LAT-AC-3.25 wouldAutoTaskCount: labelled and not done", LT.wouldAutoTaskCount([{ categories: ["Action Needed"], record: null }, { categories: ["action needed"], record: { proposalId: "p", attempts: 0, done: true, outcome: "created" } }, { categories: [], record: null }], SEED), 1);
 }
 
+// ── LAT-UI. "Outlook labels that create a task" in What shows (AC-actions-label-autotask AC-3.5) ──
+{
+  const view = (await import("node:fs")).readFileSync("src/features/huddle/components/ActionsView.tsx", "utf8");
+  const i = view.indexOf('data-testid="actions-autotask-labels-field"');
+  const field = view.slice(i, view.indexOf("</label>", i));
+  t("LAT-UI-AC-3.5 the What-shows field is labelled exactly 'Outlook labels that create a task' and edits settings.autoTaskLabels through the cleaner", [i > 0, field.includes(">Outlook labels that create a task<"), field.includes("cleanAutoTaskLabels(e.target.value.split(\"\\n\"))"), field.includes("onChange({ ...settings, autoTaskLabels: next })"), field.includes("defaultValue={settings.autoTaskLabels.join(\"\\n\")}")], [true, true, true, true, true]);
+  t("LAT-UI the field sits in the SAME What-shows settings block (saved to actions_settings, no other store)", view.indexOf('data-testid="actions-alert-skip-field"') < i && i < view.indexOf("<p className={head}>Sources</p>"), true);
+}
+
+// ── LAT-BF. back-fill categories refill plan + the pre-apply count (AC-1.8 / AC-3.25) ──
+{
+  const LB2 = await import("../src/features/huddle/lib/correspondence/email-labels");
+  const it = (id: string, categories?: unknown, source = "email") => ({ source, sourceItemId: id, content: { kind: source === "sent" ? "sent" : "email", ...(categories === undefined ? {} : { categories }) } });
+  const fl = (id: string, o: Partial<import("../src/features/huddle/lib/correspondence/email-labels").StoredLabelFlags> = {}) => ({ sourceItemId: id, hasContent: true, purged: false, categories: null, autotaskSettled: false, ...o });
+  // Oldest version first: e1's newest copy is labelled; e2 labelled; e3 []; e4 purged; e5 labelled but settled; s1 Sent.
+  const items = [it("e1", []), it("e1", ["Action Needed"]), it("e2", ["Action Needed"]), it("e3", []), it("e4", ["Action Needed"]), it("e5", ["Action Needed"]), it("s1", ["Action Needed"], "sent")];
+  const stored = [fl("e1", { categories: [] }), fl("e2"), fl("e3", { categories: [] }), fl("e4", { purged: true, hasContent: false }), fl("e5", { categories: ["Action Needed"], autotaskSettled: true })];
+  const p = LB2.planCategoriesRefill(items, stored, ["Action Needed"]);
+  t("LAT-BF-AC-1.8 GUARD: refill plan counts (newest copy wins, Sent ignored, purged not refilled)", p, { read: 5, labelled: 4, stored: 5, storedMissing: 1, wouldGain: 2, purged: 1, wouldAutoTask: 2 });
+  t("LAT-BF-AC-3.25 the pre-apply count is 0 when the setting is emptied", LB2.planCategoriesRefill(items, stored, []).wouldAutoTask, 0);
+  const src = (await import("node:fs")).readFileSync("scripts/correspondence-backfill.ts", "utf8");
+  t("LAT-BF the back-fill prints a counts-only categories line + the at-most auto-create count, and reads no status", [src.includes("`categories: read ${plan.read}"), src.includes("would auto-create at most ${plan.wouldAutoTask}"), /content->>'status'|content->'status'/.test(src)], [true, true, false]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

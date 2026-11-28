@@ -104,3 +104,69 @@ export function labelTaskTitle(subject: string | null | undefined, verdictTodo?:
   const s = stripReplyPrefixes(String(subject ?? "")).trim();
   return s || LABEL_TASK_FALLBACK_TITLE;
 }
+
+// ── Back-fill (AC-1.8 / AC-3.25): the categories refill plan, COUNTS only ───────────────────────────────────────
+
+/** What the back-fill reads per stored email row (labels are read into memory to compare; only counts print). */
+export interface StoredLabelFlags {
+  sourceItemId: string;
+  hasContent: boolean;
+  purged: boolean;
+  /** content->'categories' as stored (null = key absent). */
+  categories: unknown;
+  /** result_ids.autotask says done or gave up (the auto path never acts on it again). */
+  autotaskSettled: boolean;
+}
+
+export interface CategoriesRefillPlan {
+  /** Email items read from the file versions that carry a `categories` list (newest copy per id). */
+  read: number;
+  /** ... of which match the owner's auto-task labels. */
+  labelled: number;
+  /** Stored email rows matched to a read item. */
+  stored: number;
+  /** ... whose stored content has no `categories` key. */
+  storedMissing: number;
+  /** ... whose stored labels differ from the file's and are re-written (content only, no re-judge). */
+  wouldGain: number;
+  purged: number;
+  /** AC-3.25: stored rows that, after the refill, carry a matching label and are not settled: the MOST board tasks the
+   *  next pass can create (each is still screened: decided / already on the board create nothing). */
+  wouldAutoTask: number;
+}
+
+/** Pure: the categories refill plan. `items` oldest version first (the newest copy wins); source 'email' only. */
+export function planCategoriesRefill(items: readonly { source: string; sourceItemId: string; content?: unknown }[], stored: readonly StoredLabelFlags[], labels: readonly string[]): CategoriesRefillPlan {
+  const fileCats = new Map<string, string[]>();
+  for (const it of items) {
+    if (it.source !== "email") continue;
+    const c = it.content as { kind?: unknown; categories?: unknown } | undefined;
+    if (!c || c.kind !== "email" || !Array.isArray(c.categories)) continue;
+    fileCats.set(it.sourceItemId, c.categories as string[]);
+  }
+  const plan: CategoriesRefillPlan = { read: fileCats.size, labelled: 0, stored: 0, storedMissing: 0, wouldGain: 0, purged: 0, wouldAutoTask: 0 };
+  for (const cats of fileCats.values()) if (matchedAutoTaskLabel(cats, labels)) plan.labelled++;
+  const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  for (const s of stored) {
+    if (s.purged) {
+      if (fileCats.has(s.sourceItemId)) {
+        plan.stored++;
+        plan.purged++;
+      }
+      continue;
+    }
+    if (!s.hasContent) continue;
+    const f = fileCats.get(s.sourceItemId);
+    let effective: unknown = s.categories;
+    if (f) {
+      plan.stored++;
+      if (s.categories === null || s.categories === undefined) plan.storedMissing++;
+      if (!same(s.categories, f)) {
+        plan.wouldGain++;
+        effective = f;
+      }
+    }
+    if (!s.autotaskSettled && matchedAutoTaskLabel(effective, labels)) plan.wouldAutoTask++;
+  }
+  return plan;
+}

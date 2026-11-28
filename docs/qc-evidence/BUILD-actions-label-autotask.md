@@ -61,3 +61,23 @@ EVIDENCE:   this file; branch claude_actions-label-autotask. THIS REPO IS PUBLIC
   task-proposals 199, all 0 failed.
 - `npx tsc --noEmit`: only `trinnex/extract.server.ts` errors (module `unpdf` absent from the shared node_modules;
   pre-existing, not touched by this change).
+
+## 3. "Outlook labels that create a task" in What shows (piece 3)
+- `ActionsView.tsx` What-shows panel: a textarea labelled exactly "Outlook labels that create a task" (testid
+  `actions-autotask-labels`), one label per line, cleaned on blur with the SAME `cleanAutoTaskLabels` the server uses,
+  saved through the existing settings onChange -> `saveActionsSettings` -> `chat.attention_settings.actions_settings`
+  (no other store; the section-1 stale-client carry-over applies). Cleared = [] = off.
+- Tests: actions-view 315 -> 317 (LAT-UI: exact label text, cleaner, onChange field, placed in the What-shows block).
+- NOT DONE here: the Playwright half of AC-3.5 (save + reload on the live app) needs a `verify-uat.yml` dispatch,
+  which this build may not do.
+
+## 4. Back-fill counts (AC-1.8) and the pre-apply auto-create count (AC-3.25) (piece 4)
+- No new back-fill script: `scripts/correspondence-backfill.ts` (the existing `correspondence-backfill.yml` run) now
+  counts `labelsRefreshed` from observe's content-only refresh on apply, and prints two counts-only lines:
+  `categories: read N (matching the auto-task labels N) | stored N, stored-missing N | would-gain N | purged N | gained N`
+  and `autotask: labels configured N | the next pass would auto-create at most N board task(s)`. The DRY RUN prints the
+  same lines and writes nothing, so the owner gets the at-most count BEFORE the apply run (AC-3.25).
+- Pure plan `planCategoriesRefill` in `email-labels.ts` (newest copy per id wins; Sent ignored; purged rows never
+  refilled; settled auto-task rows not counted). Section 4 holds: neither reads `content.status`.
+- Tests: actions-view 317 -> 320 (LAT-BF).
+- NOT DONE here: running the back-fill (dry run then apply) is a workflow dispatch; not allowed in this build.
