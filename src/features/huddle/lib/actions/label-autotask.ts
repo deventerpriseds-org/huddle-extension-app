@@ -17,6 +17,9 @@
 //  - any DECIDED proposal referencing this email (or its thread's verdict proposal), any title, stops it (AC-3.21);
 //  - once per CONVERSATION: a decided/approved proposal a sibling email of the same conversation resolved to stops it
 //    too, any title (red-team RTL-6, owner default 2026-11-28);
+//    the siblings are EVERY recorded email row in scope keyed on the ledger's thread_id (verifier V-2), and the rule
+//    also holds WITHIN one pass, any title (verifier V-1, AC-6.3 note 2026-11-28);
+//  - a pass deadline: no new create starts after it; the rest are deferred, not failed (verifier F-6);
 //  - the board read happens ONCE per pass, and a FAILED board read creates nothing (fail CLOSED, AC-3.28);
 //  - at most AUTO_TASK_MAX_ATTEMPTS failed attempts, persisted, then it stops and stays listed (AC-3.27);
 //  - `status` is never read (section 4).
@@ -68,6 +71,9 @@ export interface LabelEmailRow {
   categories: unknown;
   /** result_ids.autotask as stored, or null. */
   record: AutoTaskRecord | null;
+  /** The ledger's own thread_id column (email: the Outlook conversationId). Survives a label removal and a content
+   *  purge, so it is the conversation key the once-per-conversation rule uses (verifier V-2). */
+  threadId?: string | null;
   /** The thread this email belongs to in the Actions plan, when it is in the window. */
   thread?: {
     /** The conversation key (the needs-you judge's proposal ref). */
@@ -86,6 +92,12 @@ export interface LabelAutoTaskDeps {
   metaGuard?: ApproveDeps["metaGuard"];
   /** Persist the per-email record (result_ids.autotask). Throws on failure. */
   saveRecord(sourceItemId: string, r: AutoTaskRecord): Promise<void>;
+  /** Verifier V-2: EVERY email ledger row in the owner's scope that carries an autotask record with a proposal, labelled
+   *  or not, content purged or not, keyed by the ledger's thread_id. Absent = only the rows passed in are used. */
+  priorConversations?: ReadonlyArray<{ threadId: string; proposalId: string }>;
+  /** Verifier F-6: wall clock + the pass deadline. No new create starts at or after it; the rest are DEFERRED. */
+  nowMs?(): number;
+  deadlineMs?: number;
 }
 
 export interface LabelAutoTaskResult {
@@ -108,6 +120,13 @@ const DECIDED: ReadonlySet<ProposalState | string> = new Set(["approved", "compl
  *  attempt cap (a record written without the gaveUp flag, e.g. by an older writer, still stops at the cap). */
 export function recordIsTerminal(r: AutoTaskRecord | null | undefined): boolean {
   return !!r && (r.done || r.gaveUp === true || r.attempts >= AUTO_TASK_MAX_ATTEMPTS);
+}
+
+/** Pure (verifier V-2): the conversation key the label pass uses. The ledger's thread_id first ("conv:<thread_id>",
+ *  which survives label removal and content purge); else the plan's conversation key; else none (once per email only). */
+export function rowConversationKey(r: Pick<LabelEmailRow, "threadId" | "thread">): string | null {
+  if (r.threadId) return `conv:${r.threadId}`;
+  return r.thread?.conversationKey ?? null;
 }
 
 /** Pure: the label task title for a row (AC-3.9 / 3.10): the CURRENT open verdict's to-do, else the stripped subject. */
@@ -138,17 +157,24 @@ export async function runLabelAutoTask(owner: string, owners: string[], rows: re
   if (!todo.length) return res;
 
   // RTL-6 (owner default 2026-11-28, AC-3.21 note): ONCE PER CONVERSATION. Every proposal a sibling email of the same
-  // conversation already resolved to (its persisted record, as read at pass START -- a sibling tasked earlier in THIS
-  // pass is handled by the board check, AC-6.3) is looked up; any decided/approved one stops this email, any title.
+  // conversation already resolved to is looked up; any decided/approved one stops this email, any title.
+  // Verifier V-2: the siblings come from EVERY recorded email row in scope (deps.priorConversations, keyed on the
+  // ledger's thread_id), not only the still-labelled rows passed in, so removing the label from the first email (or
+  // its content purge) does not reopen the conversation.
   const convProposals = new Map<string, Set<string>>();
-  for (const r of rows) {
-    const ck = r.thread?.conversationKey;
-    const pid = r.record?.proposalId;
-    if (!ck || !pid) continue;
+  const addConv = (ck: string | null, pid: string | null | undefined) => {
+    if (!ck || !pid) return;
     const set = convProposals.get(ck) ?? new Set<string>();
     set.add(pid);
     convProposals.set(ck, set);
-  }
+  };
+  for (const r of rows) addConv(rowConversationKey(r), r.record?.proposalId);
+  for (const c of deps.priorConversations ?? []) addConv(c.threadId ? `conv:${c.threadId}` : null, c.proposalId);
+  // Verifier V-1: IN-PASS once per conversation. A conversation that got (or already had) a task earlier in THIS pass
+  // -> its proposal id. A later email of it is skipped whatever its title, so the rule never depends on whether the
+  // reply landed before or after a heartbeat.
+  const convTasked = new Map<string, string | null>();
+  const pastDeadline = () => deps.deadlineMs !== undefined && !!deps.nowMs && deps.nowMs() >= deps.deadlineMs;
 
   // AC-3.28: ONE board read per pass; a failed read creates NOTHING this pass (fail closed: no human in the loop).
   let board: Array<{ id: string; title: string }> | null = null;
@@ -175,16 +201,27 @@ export async function runLabelAutoTask(owner: string, owners: string[], rows: re
     await save(row, { proposalId: pid ?? row.record?.proposalId ?? null, attempts, done: false, ...(gaveUp ? { gaveUp: true } : {}), outcome: gaveUp ? "gave_up" : kind });
   };
   const finish = async (row: LabelEmailRow, outcome: AutoTaskOutcome, pid: string | null) => {
+    // V-1: every terminal "it is (or was) a task" outcome closes the conversation for the rest of this pass. The meta
+    // guard does not: nothing was added to the board.
+    const ck = rowConversationKey(row);
+    if (ck && outcome !== "meta_guard" && !convTasked.has(ck)) convTasked.set(ck, pid);
     await save(row, { proposalId: pid, attempts: row.record?.attempts ?? 0, done: true, outcome });
   };
 
   let approvals = 0;
   for (const { row, label } of todo) {
-    if (approvals >= AUTO_TASK_PER_PASS) {
+    if (approvals >= AUTO_TASK_PER_PASS || pastDeadline()) {
       res.deferred++;
       continue;
     }
     try {
+      const ck = rowConversationKey(row);
+      if (ck && convTasked.has(ck)) {
+        // V-1: a sibling of this conversation got (or already had) its task earlier in this pass, any title.
+        res.decided++;
+        await finish(row, "decided", convTasked.get(ck) ?? null);
+        continue;
+      }
       const title = rowTaskTitle(row);
       const normTitle = titleKey(title);
       const ref = { source: "email" as const, sourceItemId: row.sourceItemId };
@@ -196,7 +233,7 @@ export async function runLabelAutoTask(owner: string, owners: string[], rows: re
         await finish(row, "on_board", null);
         continue;
       }
-      const convIds = row.thread?.conversationKey ? [...(convProposals.get(row.thread.conversationKey) ?? [])] : [];
+      const convIds = ck ? [...(convProposals.get(ck) ?? [])] : [];
       if (convIds.length) {
         const convDecided = (await deps.store.getMany(owners, convIds)).find((p) => DECIDED.has(p.state));
         if (convDecided) {
@@ -249,6 +286,12 @@ export async function runLabelAutoTask(owner: string, owners: string[], rows: re
       }
       if (!board) {
         await fail(row, "board_read_failed", pid);
+        continue;
+      }
+      // F-6: the deadline is checked again right before the create (the lookups above take time). Deferred, not failed:
+      // no record is written, no attempt is used, the next pass picks it up.
+      if (pastDeadline()) {
+        res.deferred++;
         continue;
       }
       // RTL-4 (record-then-act, the classify pass's recordCall pattern): persist THIS attempt BEFORE the create, so the
