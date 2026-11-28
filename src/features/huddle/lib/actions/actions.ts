@@ -14,6 +14,7 @@ import type { ActionCategory, ActionKind, ActionSection } from "../correspondenc
 import { ACTION_SECTION_ORDER } from "../correspondence/action-classify";
 import { foldPersonName } from "../correspondence/report-from-ledger";
 import { ALERT_SKIP_SUBJECTS_DEFAULT, cleanAlertSkipSubjects } from "../email/inbound-email";
+import { AUTO_TASK_LABELS_DEFAULT, cleanAutoTaskLabels } from "../correspondence/email-labels";
 
 // ── SETTINGS ("What shows") ─────────────────────────────────────────────────────────────────────────
 
@@ -66,6 +67,12 @@ export interface ActionsSettings {
    *  of these phrases gets no Iris alert, no owed row and no draft (inbound-email.ts subjectExcluded). Seeded
    *  ["meeting minutes:"] until he saves the field; a saved [] is kept. Does NOT change what the Actions page lists. */
   alertSkipSubjects: string[];
+  /** 2026-11-28 (owner: "tasks from the file that have a category of 'needs action' should automatically be
+   *  processed to tasks"; AC-actions-label-autotask 3a): "Outlook labels that create a task". An email whose Outlook
+   *  labels include one of these (whole label, case-insensitive) becomes ONE board task automatically, through the
+   *  proposal + approve path, with no AI call. Seeded ["Action Needed"] until he saves the field; a saved [] is kept
+   *  (nothing auto-creates). */
+  autoTaskLabels: string[];
 }
 
 /** F4 bounds: at most this many names, each at most OWN_NAME_CHARS characters after trim. */
@@ -127,6 +134,7 @@ export const ACTIONS_SETTINGS_DEFAULT: ActionsSettings = {
   range: "week",
   ownNames: [],
   alertSkipSubjects: [...ALERT_SKIP_SUBJECTS_DEFAULT],
+  autoTaskLabels: [...AUTO_TASK_LABELS_DEFAULT],
 };
 
 const isZone = (z: unknown): z is string => {
@@ -170,7 +178,20 @@ export function resolveActionsSettings(raw: unknown, seed: readonly string[] = [
     ownNames: cleanOwnNames(Array.isArray(o.ownNames) ? o.ownNames : seed),
     // Same rule as ownNames: a stored ARRAY (even []) is used exactly; anything else -> the seed.
     alertSkipSubjects: Array.isArray(o.alertSkipSubjects) ? cleanAlertSkipSubjects(o.alertSkipSubjects) : [...ALERT_SKIP_SUBJECTS_DEFAULT],
+    // AC-3.1/3.2: same rule -- a stored ARRAY (even []) is used exactly; anything else -> the seed.
+    autoTaskLabels: Array.isArray(o.autoTaskLabels) ? cleanAutoTaskLabels(o.autoTaskLabels) : [...AUTO_TASK_LABELS_DEFAULT],
   };
+}
+
+/** Pure (AC-3.4): the alert-skip carry-over rule, for "Outlook labels that create a task". A save payload without a
+ *  usable `autoTaskLabels` array keeps the stored list; with no stored list it is left to resolve to the seed. */
+export function payloadLacksAutoTaskLabels(raw: unknown): boolean {
+  return !!raw && typeof raw === "object" && !Array.isArray(raw) && !Array.isArray((raw as Record<string, unknown>).autoTaskLabels);
+}
+export function keepStoredAutoTaskLabels(raw: unknown, stored: unknown): unknown {
+  if (!payloadLacksAutoTaskLabels(raw)) return raw;
+  const st = stored && typeof stored === "object" && !Array.isArray(stored) ? (stored as Record<string, unknown>) : null;
+  return st && Array.isArray(st.autoTaskLabels) ? { ...(raw as Record<string, unknown>), autoTaskLabels: st.autoTaskLabels } : raw;
 }
 
 /** Pure (AC-40): a settings SAVE replaces the whole stored object, so a payload from an older client or a stale open
@@ -353,6 +374,9 @@ export function makeCorrection(
 export interface ActionCandidate {
   /** The backing chat.task_proposals id; null when none could be stored. */
   proposalId: string | null;
+  /** AC-actions-label-autotask AC-3.32: the backing proposal was AUTO-ADDED to the board from an Outlook label. Listed
+   *  as a closed "Added to board" row (never "Add as task" again), not counted as something to act on. */
+  autoAdded?: boolean;
   proposalState: string | null;
   source: ActionSource;
   /** open = admitted; none = not open; not_checked = no admitted verdict (unclassified, refused, over cap). */
@@ -592,6 +616,12 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     out.held.push({ ...toRow(c, c.section ?? "needs_reply"), heldReason: HELD_REASON_TEXT[reason], heldQuoteLabel: HELD_QUOTE_LABELS[reason] });
   };
   for (const c of cands) {
+    // AC-3.32 / AC-3.33: an auto-added (Outlook label) item is shown CLOSED with its approved state ("Added to board"),
+    // so the owner sees what happened; the What-shows switches still apply. Never counted, never offered again.
+    if (c.autoAdded && c.proposalId && c.proposalState === "approved") {
+      if (!hiddenBySettings(c)) out.rows.push(toRow(c, c.section ?? "todo"));
+      continue;
+    }
     if (isHeldCandidate(c)) {
       pushHeld(c, c.notCheckedReason as HeldReason);
       continue;
@@ -644,6 +674,7 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     out.uncheckedCounts[r.source]++;
   }
   for (const r of out.rows) {
+    if (r.state === "approved") continue; // AC-3.32: a closed auto-added row is shown, not counted as open work
     out.counts.all++;
     out.counts[r.source]++;
     out.sectionCounts[r.section]++;

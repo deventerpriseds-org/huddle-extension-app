@@ -55,6 +55,16 @@ function getPool(): Pool {
 /** How long a claimed item is held before another pass may take it (a killed pass's claim lapses). */
 export const LEDGER_LEASE_SECONDS = 300;
 
+/** 2026-11-28 (AC-1.6, AC-1.7): does an UNCHANGED-hash re-read carry email labels / status that differ from what is
+ *  stored? `o` = the stored content, `n` = the incoming content. Only an email row with stored content qualifies (a
+ *  purged row is handled before this; NULL content is filled by the COALESCE branch). A key ABSENT from the incoming
+ *  content means "unknown" and never clears a stored value. */
+const labelRefresh = (o: string, n: string) =>
+  `(${o} IS NOT NULL AND ${o}->>'kind' = 'email' AND ${n} IS NOT NULL AND (
+     (${n} ? 'categories' AND ${o}->'categories' IS DISTINCT FROM ${n}->'categories')
+     OR (${n} ? 'status' AND ${o}->'status' IS DISTINCT FROM ${n}->'status')))`;
+const LABEL_REFRESH_SQL = labelRefresh("l.content", "EXCLUDED.content");
+
 export const BOOTSTRAP_SQL = `
 CREATE SCHEMA IF NOT EXISTS chat;
 CREATE TABLE IF NOT EXISTS chat.correspondence_ledger (
@@ -202,7 +212,7 @@ export const pgLedger: LedgerStore & ContentStore = {
     // 2026-11-16: `content` is written on insert and on a hash change; an UNCHANGED row whose content is NULL
     // (stored before content existed) is filled. A purged row (content_purged_at set) is never written again.
     // A store-only row (Sent Items) is inserted `processed` and keeps its status on a hash change.
-    const r = await getPool().query<{ inserted: number; changed: number; unchanged: number; filled: number }>(
+    const r = await getPool().query<{ inserted: number; changed: number; unchanged: number; filled: number; refreshed: number }>(
       `WITH input AS (
          SELECT DISTINCT ON (source, source_item_id) * FROM jsonb_to_recordset($2::jsonb) AS x(
            source text, source_item_id text, identity_basis text, thread_id text, item_at timestamptz,
@@ -210,7 +220,8 @@ export const pgLedger: LedgerStore & ContentStore = {
            content jsonb, store_only boolean)
        ),
        prev AS (
-         SELECT l.source, l.source_item_id, l.content_hash, (l.content IS NULL AND l.content_purged_at IS NULL) AS fillable
+         SELECT l.source, l.source_item_id, l.content_hash, (l.content IS NULL AND l.content_purged_at IS NULL) AS fillable,
+                CASE WHEN l.content_purged_at IS NULL THEN l.content END AS pc
            FROM chat.correspondence_ledger l JOIN input i USING (source, source_item_id)
        ),
        up AS (
@@ -226,6 +237,10 @@ export const pgLedger: LedgerStore & ContentStore = {
            content_hash = EXCLUDED.content_hash,
            content = CASE WHEN l.content_purged_at IS NOT NULL THEN NULL
                           WHEN l.content_hash IS DISTINCT FROM EXCLUDED.content_hash THEN COALESCE(EXCLUDED.content, l.content)
+                          -- 2026-11-28 (AC-1.6): an email's labels / status are NOT in the hash, so a label the owner
+                          -- adds later is refreshed here, content-only (status, attempts, claim_version untouched).
+                          WHEN ${LABEL_REFRESH_SQL} THEN l.content || jsonb_strip_nulls(jsonb_build_object(
+                                 'categories', EXCLUDED.content->'categories', 'status', EXCLUDED.content->'status'))
                           ELSE COALESCE(l.content, EXCLUDED.content) END,
            thread_id = CASE WHEN l.content_hash IS DISTINCT FROM EXCLUDED.content_hash THEN EXCLUDED.thread_id ELSE l.thread_id END,
            item_at = CASE WHEN l.content_hash IS DISTINCT FROM EXCLUDED.content_hash THEN EXCLUDED.item_at ELSE l.item_at END,
@@ -247,13 +262,21 @@ export const pgLedger: LedgerStore & ContentStore = {
               count(*) FILTER (WHERE NOT up.inserted AND p.content_hash IS DISTINCT FROM i.content_hash)::int AS changed,
               count(*) FILTER (WHERE NOT up.inserted AND p.content_hash IS NOT DISTINCT FROM i.content_hash)::int AS unchanged,
               count(*) FILTER (WHERE NOT up.inserted AND p.content_hash IS NOT DISTINCT FROM i.content_hash
-                                 AND p.fillable AND i.content IS NOT NULL)::int AS filled
+                                 AND p.fillable AND i.content IS NOT NULL)::int AS filled,
+              count(*) FILTER (WHERE NOT up.inserted AND p.content_hash IS NOT DISTINCT FROM i.content_hash
+                                 AND ${labelRefresh("p.pc", "i.content")})::int AS refreshed
          FROM up JOIN input i USING (source, source_item_id) LEFT JOIN prev p USING (source, source_item_id)`,
       [owner, JSON.stringify(items.map(row))],
     );
     const x = r.rows[0];
     if (!x) return { inserted: 0, changed: 0, unchanged: 0 };
-    return { inserted: x.inserted, changed: x.changed, unchanged: x.unchanged, ...(x.filled ? { contentFilled: x.filled } : {}) };
+    return {
+      inserted: x.inserted,
+      changed: x.changed,
+      unchanged: x.unchanged,
+      ...(x.filled ? { contentFilled: x.filled } : {}),
+      ...(x.refreshed ? { labelsRefreshed: x.refreshed } : {}),
+    };
   },
 
   async storeContent(owner, items) {
@@ -360,7 +383,10 @@ export const pgLedger: LedgerStore & ContentStore = {
       // cap counts; dropping it here would hand the cap back calls that were already made.
       `UPDATE chat.correspondence_ledger SET status = 'processed',
               result_ids = $4::jsonb || CASE WHEN result_ids ? 'action' THEN jsonb_build_object('action', result_ids->'action') ELSE '{}'::jsonb END
-                                     || CASE WHEN result_ids ? 'action_calls' THEN jsonb_build_object('action_calls', result_ids->'action_calls') ELSE '{}'::jsonb END,
+                                     || CASE WHEN result_ids ? 'action_calls' THEN jsonb_build_object('action_calls', result_ids->'action_calls') ELSE '{}'::jsonb END
+                                     -- 2026-11-28 (AC-actions-label-autotask AC-3.18/3.27): the label auto-task record
+                                     -- (done marker + persisted attempt count) survives (re)processing too.
+                                     || CASE WHEN result_ids ? 'autotask' THEN jsonb_build_object('autotask', result_ids->'autotask') ELSE '{}'::jsonb END,
               missing_field = NULL,
               last_error_category = NULL, lease_until = NULL, processed_at = now(), updated_at = now()
         WHERE source = $1 AND source_item_id = $2 AND claim_version = $3`,

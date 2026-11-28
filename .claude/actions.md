@@ -5570,3 +5570,8 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
       PRIVACY FINDING: earlier verify-uat runs today (44705323308, 44705328676, 44707889765, 44707895133, 44708491612,
       44708497787) pushed meeting-detail / chat screenshots to PUBLIC uat-shots-run-* branches; they self-prune after 7 days.
       Owner decides: delete now or let them expire.
+
+## ACT:actions-label-autotask — emails labelled "Action Needed" become board tasks automatically (owner 2026-11-28) — OPEN
+- [x] Checked the file: categories/status present (P-8) but dropped on ingest. Lock-file fix #302 merged.
+- [x] AC (59) -> build -> red-team (3/13 broke, fixed; once per conversation) on claude_actions-label-autotask.
+- [ ] Verifier -> merge -> deploy -> back-fill dry run (count) -> apply -> UAT; owner confirms the 3 labelled emails are on his board.

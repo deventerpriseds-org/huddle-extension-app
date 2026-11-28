@@ -322,8 +322,14 @@ export async function actOnProposal(
     return r;
   }
   if (action === "edit") return editProposal(owners, id, title ?? "", store);
-  return approveProposal(owners, id, {
-    store,
+  return approveProposal(owners, id, { store, ...approveDepsFor(caller) });
+}
+
+/** The EXISTING approve I/O (board read + journey quick_create_task), factored out 2026-11-28 so the Outlook-label
+ *  auto-task (lib/actions/label-autotask.ts) creates through the SAME deps and the SAME approveProposal
+ *  (AC-actions-label-autotask AC-3.14: no second task writer). Behaviour unchanged. */
+export function approveDepsFor(caller: { entra_object_id?: string; entra_email?: string } | undefined): Pick<import("./engine").ApproveDeps, "openTasks" | "createTask"> {
+  return {
     openTasks: async () => {
       const { resolveTaskEmail } = await import("../journey/identity");
       const resolved = (await resolveTaskEmail(caller ?? {})) ?? caller?.entra_email ?? "";
@@ -350,5 +356,5 @@ export async function actOnProposal(
         return { ok: true, taskId: null };
       }
     },
-  });
+  };
 }

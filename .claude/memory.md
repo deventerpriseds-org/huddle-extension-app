@@ -1,5 +1,17 @@
 # Project Memory — huddle-extension-app
 
+## Outlook "Action Needed" label -> automatic board task (2026-11-28, branch claude_actions-label-autotask, NOT merged, NOT live) -- ACT:actions-label-autotask
+- MEASURED (probe P-8, run 46110175163): the email feed file now carries `categories` (array of strings; 3 x
+  ["Action Needed"], 2 x []) and `status` ("pending") on 5 of 98 records. Before this change mapFeedMessage DROPPED
+  both, so nothing reached chat.correspondence_ledger.content.
+- Now: both stored on EmailContent (NOT in the content hash; a label added later refreshes content only). Setting
+  `ActionsSettings.autoTaskLabels` seeded ["Action Needed"] (What shows). A labelled email gets ONE real board task via
+  the existing proposal store + approveProposal, no model call, heartbeat pass; once per CONVERSATION (a decided task
+  in the thread blocks a later labelled reply); record-then-act retry cap 5; fail closed on a board-read failure;
+  label removal never edits/deletes; shown as "Added to board". `status` stored, never interpreted, never written back.
+- Infra found on the way: #289 left package-lock without unpdf -> every `npm ci` workflow failed from Nov 20 until
+  #302 (dbf7ab05). Deploys were unaffected (bun install).
+
 ## Meetings titles come from the named transcript files (2026-11-20) -- ACT:trinnex-named-titles
 - Fireflies' own title is date-only ("Nov 10, 09:37 AM"); the owner's OneDrive folder /automation/Fireflies Transcripts
   (same drive Huddle writes /Automation/transcripts to) holds "<Mon D>- <hh-mm AM>-<name>.md". named-files.server.ts

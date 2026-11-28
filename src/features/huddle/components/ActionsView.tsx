@@ -65,6 +65,7 @@ import {
   type CorrectionReason,
 } from "../lib/actions/actions";
 import { cleanAlertSkipSubjects } from "../lib/email/inbound-email";
+import { AUTO_TASK_LABELS_MAX, cleanAutoTaskLabels } from "../lib/correspondence/email-labels";
 
 type Caller = { entra_object_id?: string; entra_email?: string } | undefined;
 type Page = Awaited<ReturnType<typeof getActionsFn>>;
@@ -1075,6 +1076,29 @@ function WhatShows({
             if (next.join("\n") !== settings.alertSkipSubjects.join("\n")) onChange({ ...settings, alertSkipSubjects: next });
           }}
           data-testid="actions-alert-skip"
+          className="mt-1 w-full max-w-sm resize-y rounded border border-hairline bg-background px-1.5 py-0.5 text-xs"
+        />
+      </label>
+      {/* Owner 2026-11-28: emails carrying one of these Outlook labels (categories) become a board task with no click and no
+          AI check. Seeded "Action Needed"; a cleared field stays empty (nothing is auto-added). Same row, same save.
+          ACs: docs/qc-evidence/AC-actions-label-autotask.md AC-3.5 */}
+      <label className="block text-xs" data-testid="actions-autotask-labels-field">
+        <span className="block">Outlook labels that create a task</span>
+        <span className="block text-[11px] text-muted-foreground">
+          One label per line. An email with one of these Outlook labels is added to your board once, automatically. The
+          whole label must match; case doesn&rsquo;t matter. Removing the label later doesn&rsquo;t remove the task. Leave
+          empty to turn this off.
+        </span>
+        <textarea
+          key={settings.autoTaskLabels.join("\n")}
+          defaultValue={settings.autoTaskLabels.join("\n")}
+          rows={Math.max(2, Math.min(AUTO_TASK_LABELS_MAX, settings.autoTaskLabels.length + 1))}
+          onBlur={(e) => {
+            const next = cleanAutoTaskLabels(e.target.value.split("\n"));
+            if (e.target.value !== next.join("\n")) e.target.value = next.join("\n");
+            if (next.join("\n") !== settings.autoTaskLabels.join("\n")) onChange({ ...settings, autoTaskLabels: next });
+          }}
+          data-testid="actions-autotask-labels"
           className="mt-1 w-full max-w-sm resize-y rounded border border-hairline bg-background px-1.5 py-0.5 text-xs"
         />
       </label>

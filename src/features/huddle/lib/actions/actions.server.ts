@@ -12,9 +12,9 @@
 
 import { getSharedPool, SHARED_POOL_MAX } from "../db/shared-pool.server";
 import { ACTION_SCHEMA, type ActionVerdict } from "../correspondence/action-classify";
-import { assembleLedgerPlan, type MeetingItems } from "../correspondence/report-from-ledger";
+import { assembleLedgerPlan, type AssembledLedgerPlan, type MeetingItems } from "../correspondence/report-from-ledger";
 import { ownerFullNames } from "../correspondence/needs-you";
-import { isFeedId, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
+import { FEED_ID_PREFIX, isFeedId, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
 import { getFeedsConfig } from "../external-feeds/onedrive-feed.server";
 import type { ProposalSourceRef } from "../proposals/proposals";
 import {
@@ -23,7 +23,9 @@ import {
   classifyEnabled,
   resolveActionsSettings,
   keepStoredAlertSkipSubjects,
+  keepStoredAutoTaskLabels,
   payloadLacksAlertSkipList,
+  payloadLacksAutoTaskLabels,
   withItemCorrection,
   withItemUndo,
   selectActionItems,
@@ -35,6 +37,8 @@ import {
 } from "./actions";
 import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, runReportClassify, inMemoryWrites, type ClassifyDeps, type ThreadTx, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
 import { actOnHeldItem, proposeOpenVerdict, threadUnits, type HeldAction, type HeldActResult, type HeldCandidate } from "./pipeline";
+import { verdictIsCurrent } from "./pipeline";
+import { readAutoTaskRecord, runLabelAutoTask, type AutoTaskRecord, type LabelAutoTaskDeps, type LabelAutoTaskResult, type LabelEmailRow } from "./label-autotask";
 
 /** The feed config when the correspondence ingest is on (the Actions view reads what the ingest stored). */
 export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | null {
@@ -178,13 +182,16 @@ export function runActionsClassify(): Promise<ClassifyResult | null> {
       const cfg = actionsConfig();
       if (!cfg) return null;
       const s = await settingsFor(cfg);
-      if (!classifyEnabled(s, true)) return null;
       const owners = lower(cfg.ownerLogins);
       const { loadLedgerReportData } = await import("../correspondence/report-from-ledger.server");
       const data = await loadLedgerReportData(cfg.ownerLogins);
       // F4 / X-6: the resolved "Names that are you" decide Teams owner identity in every pass.
       const assembled = assembleLedgerPlan(data, cfg, actionsWindowStartMs(now, s), s.ownNames);
       const verdicts = await loadVerdicts(owners);
+      // AC-actions-label-autotask: the Outlook-label auto-task runs in the SAME heartbeat pass, BEFORE the AI switch
+      // and cap (it makes no model call, AC-3.8). Isolated: a throw never stops the classify pass (AC-3.31).
+      await runLabelAutoTaskPass(cfg, s, assembled, verdicts, owners).catch((e) => console.error("[actions] autotask failed", e instanceof Error ? e.name : "error"));
+      if (!classifyEnabled(s, true)) return null;
       // Loop-2 D-1: only verdicts judged at the current classifier-input version are skipped; older ones re-judge.
       const judged = currentlyJudgedKeys(verdicts);
       const used = await usedTodayFor(cfg.ownerLogins, now, s.timeZone);
@@ -229,7 +236,166 @@ export async function classifyDepsFor(owner: string, owners: readonly string[]):
     },
     addMeetingRows: (m, items) => addMeetingRows(owner, m, items),
     lockThread: (u, fn) => withThreadLock(owners, u, fn),
+    labelProposalFor: (u) => (u.email ? labelProposalForThread(owners, u.email.messages.map((m) => stripFeedId(m.id))) : Promise.resolve(null)),
   };
+}
+
+// ── OUTLOOK-LABEL AUTO-TASK (AC-actions-label-autotask sections 3, 4, 6) ────────────────────────────────────────
+
+const stripFeedId = (id: string) => (id.startsWith(FEED_ID_PREFIX) ? id.slice(FEED_ID_PREFIX.length) : id);
+
+/** AC-3.12: the proposal a label auto-tasked for any of these email ledger ids (result_ids.autotask), or null. */
+export async function labelProposalForThread(owners: readonly string[], ledgerIds: readonly string[]): Promise<string | null> {
+  if (!ledgerIds.length) return null;
+  const r = await getSharedPool().query<{ pid: string | null }>(
+    `SELECT result_ids->'autotask'->>'proposalId' AS pid FROM chat.correspondence_ledger
+      WHERE owner_email = ANY($1::text[]) AND source = 'email' AND source_item_id = ANY($2::text[])
+        AND result_ids ? 'autotask' AND (result_ids->'autotask'->>'proposalId') IS NOT NULL
+      ORDER BY item_at NULLS LAST LIMIT 1`,
+    [owners, ledgerIds],
+  );
+  return r.rows[0]?.pid ?? null;
+}
+
+/** AC-3.32: every email ledger id -> the proposal its label auto-tasked. */
+export async function loadAutoTasked(owners: readonly string[]): Promise<Map<string, string>> {
+  const m = new Map<string, string>();
+  try {
+    const r = await getSharedPool().query<{ id: string; pid: string }>(
+      `SELECT source_item_id AS id, result_ids->'autotask'->>'proposalId' AS pid FROM chat.correspondence_ledger
+        WHERE owner_email = ANY($1::text[]) AND source = 'email' AND result_ids ? 'autotask'
+          AND (result_ids->'autotask'->>'proposalId') IS NOT NULL LIMIT 5000`,
+      [owners],
+    );
+    for (const x of r.rows) if (x.pid) m.set(x.id, x.pid);
+  } catch {
+    /* unreadable: nothing is shown as auto-added (the rows show as they do today) */
+  }
+  return m;
+}
+
+/** The stored email rows a label pass may act on: source 'email' only (Sent / Teams never, AC-1.9 / AC-6.1), content
+ *  not purged (AC-3.24), and a non-empty stored categories list. `status` is not read (AC-4.3). */
+export async function loadLabelRows(owners: readonly string[]): Promise<Array<Omit<LabelEmailRow, "thread">>> {
+  const r = await getSharedPool().query<{ id: string; item_at: Date | null; subject: string | null; categories: unknown; autotask: unknown; thread_id: string | null }>(
+    `SELECT source_item_id AS id, item_at, content->>'subject' AS subject, content->'categories' AS categories, result_ids->'autotask' AS autotask,
+            thread_id
+       FROM chat.correspondence_ledger
+      WHERE owner_email = ANY($1::text[]) AND source = 'email' AND content IS NOT NULL AND content_purged_at IS NULL
+        AND jsonb_typeof(content->'categories') = 'array' AND jsonb_array_length(content->'categories') > 0
+      LIMIT 2000`,
+    [owners],
+  );
+  return r.rows.map((x) => ({ sourceItemId: x.id, at: x.item_at ? x.item_at.toISOString() : null, subject: x.subject, categories: x.categories, record: readAutoTaskRecord(x.autotask), threadId: x.thread_id ?? null }));
+}
+
+/** Verifier V-2: EVERY email ledger row in the owner's scope that carries a result_ids.autotask record with a proposal,
+ *  whether or not it is still labelled and whether or not its content was purged, keyed on the ledger's own thread_id
+ *  (set at ingest from the Outlook conversationId; a purge never clears it). The once-per-conversation map. */
+export async function loadAutoTaskConversations(owners: readonly string[]): Promise<Array<{ threadId: string; proposalId: string }>> {
+  const r = await getSharedPool().query<{ thread_id: string; pid: string }>(
+    `SELECT thread_id, result_ids->'autotask'->>'proposalId' AS pid FROM chat.correspondence_ledger
+      WHERE owner_email = ANY($1::text[]) AND source = 'email' AND thread_id IS NOT NULL AND result_ids ? 'autotask'
+        AND (result_ids->'autotask'->>'proposalId') IS NOT NULL`,
+    [owners],
+  );
+  return r.rows.filter((x) => x.thread_id && x.pid).map((x) => ({ threadId: x.thread_id, proposalId: x.pid }));
+}
+
+/** Verifier F-6: the label pass's share of the heartbeat, counted from the label pass's own start (not the heartbeat's,
+ *  so a slow plan load can never starve it). The classify pass's absolute deadline (heartbeat start + CLASSIFY_BUDGET_MS)
+ *  is unchanged, so the label pass's time comes out of the classify share, never on top of it. */
+export const LABEL_AUTOTASK_BUDGET_MS = 8_000;
+
+/** Persist one email's auto-task record (result_ids.autotask; markProcessed keeps it). */
+export async function saveAutoTaskRecord(owners: readonly string[], sourceItemId: string, rec: AutoTaskRecord): Promise<void> {
+  await getSharedPool().query(
+    `UPDATE chat.correspondence_ledger SET result_ids = result_ids || jsonb_build_object('autotask', $3::jsonb)
+      WHERE owner_email = ANY($1::text[]) AND source = 'email' AND source_item_id = $2`,
+    [owners, sourceItemId, JSON.stringify(rec)],
+  );
+}
+
+/** Pure: attach each label row to its thread in the Actions plan (conversation key + CURRENT verdict). */
+export function attachThreads(rows: ReadonlyArray<Omit<LabelEmailRow, "thread">>, assembled: AssembledLedgerPlan, s: ActionsSettings, verdicts: ReadonlyMap<string, ActionVerdict>): LabelEmailRow[] {
+  const byId = new Map<string, NonNullable<LabelEmailRow["thread"]>>();
+  for (const u of threadUnits(assembled, { ...s, sources: { ...s.sources, email: true } }).units) {
+    if (!u.email) continue;
+    const v = verdicts.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`);
+    const cur = v && verdictIsCurrent(v, u.itemKey, u.source) ? v : null;
+    for (const m of u.email.messages) byId.set(stripFeedId(m.id), { conversationKey: u.email.key ?? null, verdict: cur });
+  }
+  return rows.map((r) => ({ ...r, ...(byId.has(r.sourceItemId) ? { thread: byId.get(r.sourceItemId)! } : {}) }));
+}
+
+/** Verifier loop-2 F-3: the advisory-lock key that makes the WHOLE label pass single-flight across server instances. */
+export const LABEL_AUTOTASK_LOCK_KEY = "actions-label-autotask";
+
+/** The minimum of a pooled connection the label-pass lock needs (the shared pool satisfies it; a test can inject). */
+export interface LabelLockPool {
+  connect(): Promise<{ query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>; release(err?: boolean | Error): void }>;
+}
+
+/**
+ * Verifier loop-2 F-3: run `fn` only while THIS process holds the cross-instance label-pass lock.
+ * `pg_try_advisory_lock` (session level, non-blocking) on ONE dedicated pooled connection, the same pool and key hash
+ * as withThreadLock. Held elsewhere -> null, nothing runs this tick (the holder is doing the work). The lock query
+ * failing -> throws before `fn` runs, so nothing is ever created without the lock. Released in `finally` on the SAME
+ * connection; if the unlock itself fails, that connection is destroyed (release(true)) so a held lock never goes back
+ * into the pool. Session level, not xact: the pass's writes run on OTHER pooled connections (store, saveRecord).
+ */
+export async function withLabelAutoTaskLock<T>(fn: () => Promise<T>, pool: LabelLockPool = getSharedPool()): Promise<T | null> {
+  const c = await pool.connect();
+  let destroy = false;
+  try {
+    const r = await c.query(`SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS got`, [LABEL_AUTOTASK_LOCK_KEY]);
+    if (r.rows[0]?.got !== true) return null;
+    try {
+      return await fn();
+    } finally {
+      await c.query(`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, [LABEL_AUTOTASK_LOCK_KEY]).catch(() => {
+        destroy = true;
+      });
+    }
+  } finally {
+    c.release(destroy);
+  }
+}
+
+/** Test seam only: replaces the journey-facing parts of the pass's deps (the real store / SQL / lock stay). */
+export interface LabelAutoTaskPassOverrides {
+  deps?: Partial<Pick<LabelAutoTaskDeps, "openTasks" | "createTask" | "metaGuard">>;
+  lockPool?: LabelLockPool;
+}
+
+/** The heartbeat's label auto-task step. Counts-only log (AC-1.10 / AC-3.30). */
+export async function runLabelAutoTaskPass(cfg: OneDriveFeedsConfig & { owner: string }, s: ActionsSettings, assembled: AssembledLedgerPlan, verdicts: ReadonlyMap<string, ActionVerdict>, owners: string[], startMs: number = Date.now(), overrides: LabelAutoTaskPassOverrides = {}): Promise<LabelAutoTaskResult | null> {
+  if (!s.autoTaskLabels.length) return null;
+  // F-3: the row load, the conversation map and every create sit INSIDE the cross-instance lock, so a second instance's
+  // next pass reads the first one's records. Lock held elsewhere -> null; lock query fails -> throws, nothing created.
+  const res = await withLabelAutoTaskLock(async () => {
+    const rows = attachThreads(await loadLabelRows(owners), assembled, s, verdicts);
+    if (!rows.length) return null;
+    // V-2: an unreadable conversation map throws here, so the pass creates nothing (fail closed, like the board read).
+    const priorConversations = await loadAutoTaskConversations(owners);
+    const { pgProposalStore } = await import("../proposals/proposals-store.server");
+    const { approveDepsFor } = await import("../proposals/proposals.server");
+    return runLabelAutoTask(cfg.owner, owners, rows, s.autoTaskLabels, {
+      store: pgProposalStore,
+      ...approveDepsFor({ entra_email: cfg.owner }),
+      ...overrides.deps,
+      saveRecord: (id, rec) => saveAutoTaskRecord(owners, id, rec),
+      priorConversations,
+      nowMs: () => Date.now(),
+      deadlineMs: startMs + LABEL_AUTOTASK_BUDGET_MS,
+    });
+  }, overrides.lockPool);
+  if (!res) return null;
+  if (res.matched)
+    console.log(
+      `[actions] autotask matched=${res.matched} created=${res.created} on_board=${res.onBoard} decided=${res.decided} meta_guard=${res.metaGuard} failed=${res.failed} gave_up=${res.gaveUp} done=${res.skippedDone} deferred=${res.deferred}${Object.keys(res.kinds).length ? ` kinds=${Object.entries(res.kinds).map(([k, n]) => `${k}=${n}`).join(",")}` : ""}`,
+    );
+  return res;
 }
 
 // ── AC8 (verifier VERIFY-report-saves-verdicts-1): one proposal per thread when two passes judge it at once ─────
@@ -421,7 +587,8 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
   const data = await loadLedgerReportData(cfg.ownerLogins);
   const assembled = assembleLedgerPlan(data, cfg, sinceMs, s.ownNames);
   const verdicts = await loadVerdicts(lower(cfg.ownerLogins));
-  const proposalIds = [...new Set([...verdicts.values()].map((v) => v.proposalId).filter((x): x is string => !!x))];
+  const autoTasked = await loadAutoTasked(lower(cfg.ownerLogins));
+  const proposalIds = [...new Set([...[...verdicts.values()].map((v) => v.proposalId), ...autoTasked.values()].filter((x): x is string => !!x))];
   const { byId: proposals, ok: proposalsRead } = await loadProposalsById(owners, proposalIds);
   const meetingProposals = s.sources.meeting ? await loadMeetingProposals(owners, assembled.plan.meetings.inWindow.map((m) => m.meetingId)) : [];
   const emailFacts = assembled.plan.email.scan;
@@ -431,7 +598,7 @@ export async function getActionsPage(caller: { entra_object_id?: string; entra_e
     emailFacts.flatMap((f) => f.messages.map((m) => m.id)),
     emailFacts.map((f) => f.conversationId).filter((x): x is string => !!x),
   ).catch(() => []);
-  const { candidates, uninvolvedHidden, meetingOthersHidden } = buildCandidates({ assembled, rows: data.rows, settings: s, verdicts, proposals, proposalsRead, meetingProposals, replies, isDraftable: (id) => !isFeedId(id) });
+  const { candidates, uninvolvedHidden, meetingOthersHidden } = buildCandidates({ assembled, rows: data.rows, settings: s, verdicts, proposals, proposalsRead, meetingProposals, autoTasked, replies, isDraftable: (id) => !isFeedId(id) });
   const sel = selectActionItems(candidates, s);
   sel.hidden.uninvolved += uninvolvedHidden;
   sel.hidden.total += uninvolvedHidden;
@@ -470,7 +637,17 @@ export async function saveActionsSettings(caller: { entra_object_id?: string; en
       return { ok: false, error: "Couldn't read your saved settings, so nothing was changed. Try again." };
     }
   }
-  const s = resolveActionsSettings(keepStoredAlertSkipSubjects(raw, stored), ownNamesSeed(cfg));
+  // 2026-11-28 (AC-3.4): the same carry-over (and the same refuse-on-read-failure) for "Outlook labels that create a
+  // task". The stored row is read once: only when the block above did not already read it.
+  if (payloadLacksAutoTaskLabels(raw) && !payloadLacksAlertSkipList(raw)) {
+    try {
+      stored = await getActionsSettingsRaw(cfg.owner);
+    } catch {
+      return { ok: false, error: "Couldn't read your saved settings, so nothing was changed. Try again." };
+    }
+  }
+  raw = keepStoredAutoTaskLabels(raw, stored);
+  const s =resolveActionsSettings(keepStoredAlertSkipSubjects(raw, stored), ownNamesSeed(cfg));
   await setActionsSettingsRaw(cfg.owner, s);
   return { ok: true, settings: s };
 }

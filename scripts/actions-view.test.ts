@@ -1384,5 +1384,595 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   t("NORT-8 held: onBoard wins over proposalMissing; a deleted rescue stays held (no_task_record); decided no-section hidden; '' id held; none answered", [rt8Groups, rt8.held.map((r) => r.heldReason)], [[[], [], ["rt8|b", "rt8|d"].sort(), [], ["rt8|e"]], [A.HELD_REASON_TEXT.no_task_record, A.HELD_REASON_TEXT.no_task_record]]);
 }
 
+console.log("LBL. OUTLOOK LABEL -> TASK: matcher spelling table S-1..S-27, the setting (AC-actions-label-autotask 3a, 5)");
+{
+  const LB = await import("../src/features/huddle/lib/correspondence/email-labels");
+  const AA = await import("../src/features/huddle/lib/actions/actions");
+  const seed = [...LB.AUTO_TASK_LABELS_DEFAULT];
+  // The stored shape as the ingest produces it (pre-step + normalizeCategories), then the matcher.
+  const verdict = (cats: unknown, labels: readonly string[] = seed, present = true) => {
+    const stored = LB.emailCategories(present ? { categories: cats } : {});
+    return LB.matchedAutoTaskLabel(stored ?? undefined, labels) !== null;
+  };
+  const S: [string, unknown, readonly string[] | null, boolean][] = [
+    ["S-1", ["Action Needed"], null, true],
+    ["S-2", ["action needed"], null, true],
+    ["S-3", [" Action Needed "], null, true],
+    ["S-4", ["ACTION NEEDED"], null, true],
+    ["S-5a", ["Action  Needed"], null, true],
+    ["S-5b", ["Action Needed"], null, true],
+    ["S-6", "Action Needed", null, true],
+    ["S-7", "Blue category; Action Needed", null, true],
+    ["S-8a", [{ displayName: "Action Needed" }], null, true],
+    ["S-8b", { displayName: "Action Needed" }, null, true],
+    ["S-9", ["Blue category", "Action Needed"], null, true],
+    ["S-10", ["Action Needed"], ["action needed "], true],
+    ["S-11", ["Needs Action"], null, false],
+    ["S-12", ["Needs Action"], ["Action Needed", "Needs Action"], true],
+    ["S-13", ["Action Needed - urgent"], null, false],
+    ["S-14a", ["No Action Needed"], null, false],
+    ["S-14b", ["Action Needed?"], null, false],
+    ["S-14c", ["ActionNeeded"], null, false],
+    ["S-15/16/17", [], null, false],
+    ["S-18a", [""], null, false],
+    ["S-18b", ["   "], null, false],
+    ["S-18c", "", null, false],
+    ["S-18d", ";;", null, false],
+    ["S-19", [""], [""], false],
+    ["S-19b", [""], ["  "], false],
+    ["S-20", ["Action Needed"], [], false],
+    ["S-21a", null, null, false],
+    ["S-21b", 42, null, false],
+    ["S-21c", true, null, false],
+    ["S-21d", {}, null, false],
+    ["S-21e", [42, null], null, false],
+    ["S-24", ["Action​Needed"], null, false],
+    ["S-26", [{ displayName: "Action Needed - urgent" }], null, false],
+    ["S-27", "Action Needed, Blue category", null, false],
+  ];
+  t("LBL-S GUARD: every spelling-table row gives its expected verdict", S.map(([id, c, l]) => [id, verdict(c, l ?? seed)]), S.map(([id, , , want]) => [id, want]));
+  t("LBL-S-22 key absent -> no match; S-23 'Categories' (capital C) is not read", [verdict(undefined, seed, false), LB.matchedAutoTaskLabel(LB.emailCategories({ Categories: ["Action Needed"] }) ?? undefined, seed)], [false, null]);
+  // S-15 / S-16 / S-17: the matcher takes ONLY categories, so a subject / body / status saying "Action Needed" is not read.
+  t("LBL-S-15..17 only categories are read: the matcher's one input is the categories value", LB.matchedAutoTaskLabel.length, 2);
+  t("LBL-S the matched label is returned trimmed, as the email spells it", LB.matchedAutoTaskLabel([" action needed "], seed), "action needed");
+  // 3a: the setting
+  t("LBL-AC-3.1 GUARD: no stored field -> the seed ['Action Needed']; default carries it", [AA.resolveActionsSettings({}).autoTaskLabels, AA.ACTIONS_SETTINGS_DEFAULT.autoTaskLabels], [["Action Needed"], ["Action Needed"]]);
+  t("LBL-AC-3.2 GUARD: a stored [] is kept (never re-seeded); a non-array -> the seed", [AA.resolveActionsSettings({ autoTaskLabels: [] }).autoTaskLabels, AA.resolveActionsSettings({ autoTaskLabels: "x" }).autoTaskLabels], [[], ["Action Needed"]]);
+  t("LBL-AC-3.3 cleaned: non-strings / blanks dropped, case+space duplicates collapsed, bounded 20 x 100", (() => {
+    const r = AA.resolveActionsSettings({ autoTaskLabels: [42, null, "", "  ", " Action Needed ", "action  needed", "Follow up", "x".repeat(150), ...Array.from({ length: 30 }, (_, i) => `L${i}`)] }).autoTaskLabels;
+    return [r.slice(0, 3), r[2].length, r.length, r.every((x) => x.length <= 100)];
+  })(), [["Action Needed", "Follow up", "x".repeat(100)], 100, 20, true]);
+  t("LBL-AC-3.4 GUARD: a save payload lacking the list keeps the stored one; a payload with a list (even []) is used", [
+    AA.resolveActionsSettings(AA.keepStoredAutoTaskLabels({ dailyCap: 9 }, { autoTaskLabels: ["Follow up"] })).autoTaskLabels,
+    AA.resolveActionsSettings(AA.keepStoredAutoTaskLabels({ autoTaskLabels: [] }, { autoTaskLabels: ["Follow up"] })).autoTaskLabels,
+    AA.resolveActionsSettings(AA.keepStoredAutoTaskLabels({ dailyCap: 9 }, null)).autoTaskLabels,
+    AA.payloadLacksAutoTaskLabels({ dailyCap: 1 }), AA.payloadLacksAutoTaskLabels({ autoTaskLabels: [] }),
+  ], [["Follow up"], [], ["Action Needed"], true, false]);
+  // 3b: the title
+  t("LBL-AC-3.9 an open verdict's non-blank to-do is the title", LB.labelTaskTitle("RE: Synthetic order", "Send the synthetic quote"), "Send the synthetic quote");
+  t("LBL-AC-3.10 no to-do -> stripped subject; empty -> the fixed safe title (never empty)", [LB.labelTaskTitle("RE: FW: Quarterly widget order", ""), LB.labelTaskTitle("FW: Synthetic invoice 42", null), LB.labelTaskTitle("RE:  ", "  "), LB.labelTaskTitle(null)], ["Quarterly widget order", "Synthetic invoice 42", LB.LABEL_TASK_FALLBACK_TITLE, LB.LABEL_TASK_FALLBACK_TITLE]);
+}
+
+// ── LAT. OUTLOOK LABEL -> AUTO TASK: the pass (AC-actions-label-autotask 3b-3e, 4, 6; outcome table O-1..O-13) ──
+console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail closed, display");
+{
+  const LT = await import("../src/features/huddle/lib/actions/label-autotask");
+  const PR = await import("../src/features/huddle/lib/proposals/proposals");
+  type LRow = import("../src/features/huddle/lib/actions/label-autotask").LabelEmailRow;
+  type Rec = import("../src/features/huddle/lib/actions/label-autotask").AutoTaskRecord;
+  type Row = import("../src/features/huddle/lib/proposals/proposals").ProposalRow & { lease: number };
+  type Store = import("../src/features/huddle/lib/proposals/proposals").ProposalStore;
+  const OWN = "owner@huddle.example";
+  const OWNS = [OWN];
+  const SEED = ["Action Needed"];
+  // In-memory ProposalStore with the SAME semantics the task-proposals suite pins for the pg store.
+  const memStore = () => {
+    const rows = new Map<string, Row>();
+    const refs = new Map<string, string>();
+    const out = (r?: Row) => (r ? (({ lease: _l, ...x }) => structuredClone(x))(r) : null);
+    const s: Store & { rows: typeof rows } = {
+      rows,
+      async upsert(p) {
+        const rk = [p.owner, p.ref.source, p.ref.sourceItemId, p.normTitle].join("|");
+        if (refs.has(rk)) return { kind: "seen", id: refs.get(rk)! };
+        const active = [...rows.values()].find((r) => r.normTitle === p.normTitle && r.state === "proposed");
+        if (active) {
+          refs.set(rk, active.id);
+          active.sources.push({ ...p.ref, context: p.ref.context ?? null });
+          return { kind: "attached", id: active.id };
+        }
+        rows.set(p.id, { id: p.id, owner: p.owner, state: "proposed", title: p.title, originalTitle: p.title, normTitle: p.normTitle, edited: false, evidence: p.evidence, assignee: null, dueText: null, dueDate: null, sources: [{ ...p.ref, context: p.ref.context ?? null }], taskId: null, createdAt: "2026-11-28T00:00:00Z", decidedAt: null, lease: 0 });
+        refs.set(rk, p.id);
+        return { kind: "created", id: p.id };
+      },
+      async priorRelated(_o, ref, norm) {
+        const same = (r: Row) => r.sources.some((x) => x.source === ref.source && x.sourceItemId === ref.sourceItemId);
+        return [...rows.values()].filter((r) => same(r) || (r.normTitle === norm && r.state === "dismissed")).map((r) => ({ id: r.id, normTitle: r.normTitle, state: r.state, sameItem: same(r) }));
+      },
+      async listActive() {
+        return [...rows.values()].filter((r) => r.state === "proposed").map((r) => out(r)!);
+      },
+      async getMany(_o, ids) {
+        return ids.map((i) => rows.get(i)).filter(Boolean).map((r) => out(r)!);
+      },
+      async claimApprove(_o, id) {
+        const r = rows.get(id);
+        if (!r) return { claimed: false, row: null };
+        if (r.state !== "proposed" || r.lease) return { claimed: false, row: out(r) };
+        r.lease = 1;
+        return { claimed: true, row: out(r) };
+      },
+      async finishApprove(id, taskId) {
+        const r = rows.get(id);
+        if (!r || r.state !== "proposed") return null;
+        Object.assign(r, { state: "approved", taskId, lease: 0 });
+        return out(r);
+      },
+      async releaseApprove(id) {
+        const r = rows.get(id);
+        if (r) r.lease = 0;
+      },
+      async decide(_o, id, state) {
+        const r = rows.get(id)!;
+        r.state = state;
+        return { applied: true, row: out(r) };
+      },
+      async edit(_o, id, title) {
+        const r = rows.get(id)!;
+        Object.assign(r, { title, edited: true });
+        return { applied: true, row: out(r) };
+      },
+    };
+    return s;
+  };
+  // The persisted record store (the ledger's result_ids.autotask): survives a "restart" (a fresh deps object).
+  const records = () => new Map<string, Rec>();
+  const world = (o: { boardFails?: boolean; createFails?: boolean; board?: { id: string; title: string }[]; recs?: Map<string, Rec>; store?: ReturnType<typeof memStore> } = {}) => {
+    const store = o.store ?? memStore();
+    const recs = o.recs ?? records();
+    const board = o.board ?? [];
+    const calls = { create: 0, board: 0 };
+    const logs: string[] = [];
+    const deps = {
+      store,
+      openTasks: async () => {
+        calls.board++;
+        if (o.boardFails) throw new Error("board");
+        return board;
+      },
+      createTask: async (title: string) => {
+        calls.create++;
+        await Promise.resolve();
+        if (o.createFails) return { ok: false as const, error: "Couldn't add that task to your board." };
+        board.push({ id: `task-${calls.create}`, title });
+        return { ok: true as const, taskId: `task-${calls.create}` };
+      },
+      saveRecord: async (id: string, r: Rec) => void recs.set(id, structuredClone(r)),
+    };
+    const pass = async (rs: readonly LRow[], labels: readonly string[] = SEED) => {
+      const r = await LT.runLabelAutoTask(OWN, OWNS, rs.map((x) => ({ ...x, record: recs.get(x.sourceItemId) ?? x.record })), labels, deps);
+      logs.push(JSON.stringify(r));
+      return r;
+    };
+    return { store, recs, board, calls, deps, pass, logs };
+  };
+  const er = (id: string, o: Partial<LRow> & { status?: unknown } = {}): LRow => ({ sourceItemId: `mb:${id}`, subject: "RE: Synthetic widget order", at: "2026-11-27T10:00:00Z", categories: ["Action Needed"], record: null, ...o });
+  const newP = (id: string, title: string, sid: string) => ({ id, owner: OWN, title, normTitle: PR.titleKey(title), evidence: "q", assignee: null, dueText: null, dueDate: null, ref: { source: "email" as const, sourceItemId: sid, at: null } });
+
+  // O-1 / AC-3.7 / AC-3.8 / AC-3.16 / AC-3.18-3.20
+  {
+    const w = world();
+    const r = await w.pass([er("a")]);
+    const rows = [...w.store.rows.values()];
+    t("LAT-AC-3.7 GUARD: one labelled email -> 1 proposal, ref (email, its id), approved, task id set, createTask x1", [rows.length, rows[0]?.sources[0]?.source, rows[0]?.sources[0]?.sourceItemId, rows[0]?.state, !!rows[0]?.taskId, w.calls.create, r.created], [1, "email", "mb:a", "approved", true, 1, 1]);
+    t("LAT-AC-3.8 no model dependency exists (no extract dep) and the board is read once", [Object.keys(w.deps).includes("extract"), w.calls.board], [false, 1]);
+    t("LAT-AC-3.16 origin marker: evidence 'Outlook label: <label>'; title the stripped subject", [rows[0]?.evidence, rows[0]?.title], ["Outlook label: Action Needed", "Synthetic widget order"]);
+    await w.pass([er("a")]);
+    await w.pass([er("a")]);
+    const w2 = world({ recs: w.recs, store: w.store, board: w.board });
+    await w2.pass([er("a")]);
+    t("LAT-AC-3.18 GUARD: 3 more passes and a restart -> 1 proposal, createTask total 1, record done", [w.store.rows.size, w.calls.create + w2.calls.create, w.recs.get("mb:a")?.done, w.recs.get("mb:a")?.outcome], [1, 1, true, "created"]);
+    const snap = JSON.stringify([...w.store.rows.values()]);
+    await w2.pass([er("a", { categories: [] })]);
+    const removedSame = JSON.stringify([...w.store.rows.values()]) === snap;
+    await w2.pass([er("a")]);
+    t("LAT-AC-3.19/3.20 label removed -> proposal/task unchanged; re-added -> still 1, no create", [removedSame, w.store.rows.size, w2.calls.create], [true, 1, 0]);
+  }
+  // AC-3.11 / AC-3.9
+  {
+    const w = world();
+    // P's own title differs from the verdict's to-do (the owner edited it / the quote was the title), so only the
+    // verdict link -- not the store's same-title attach -- can find it (mutation M06 was INERT with equal titles).
+    await w.store.upsert(newP("prop-ai1", "Send the synthetic quote by Friday", "mb:z"));
+    await w.pass([er("b", { thread: { conversationKey: "conv:b", verdict: { status: "open", todo: "Send the synthetic quote", proposalId: "prop-ai1", onBoard: false } } })]);
+    t("LAT-AC-3.11 GUARD: the verdict's proposed proposal P is approved itself -> 1 proposal, P approved", [w.store.rows.size, w.store.rows.get("prop-ai1")?.state, w.calls.create], [1, "approved", 1]);
+    const w2 = world();
+    await w2.pass([er("c", { thread: { conversationKey: "conv:c", verdict: { status: "open", todo: "Book the synthetic venue", proposalId: null, onBoard: false } } })]);
+    t("LAT-AC-3.9 an open verdict's to-do is the title", [...w2.store.rows.values()][0]?.title, "Book the synthetic venue");
+  }
+  // AC-3.13 / O-2
+  {
+    const w = world({ board: [{ id: "t-9", title: "Synthetic widget order" }] });
+    const r = await w.pass([er("d")]);
+    const p = [...w.store.rows.values()][0];
+    t("LAT-AC-3.13 same title open on the board -> approved, linked to it, createTask 0", [p?.state, p?.taskId, w.calls.create, r.onBoard], ["approved", "t-9", 0, 1]);
+  }
+  // AC-3.21 / O-4 / O-5
+  for (const state of ["dismissed", "completed", "approved", "delegated"] as const) {
+    const w = world();
+    await w.store.upsert(newP(`prop-ai-${state}`, "Some differently worded AI to-do", "mb:e"));
+    w.store.rows.get(`prop-ai-${state}`)!.state = state;
+    await w.pass([er("e")]);
+    t(`LAT-AC-3.21 GUARD: a ${state} AI-title proposal for this email -> no new proposal, createTask 0`, [w.store.rows.size, w.calls.create, w.recs.get("mb:e")?.outcome], [1, 0, "decided"]);
+  }
+  {
+    const w = world();
+    await w.store.upsert(newP("prop-conv", "Judge worded to-do", "conv:f"));
+    w.store.rows.get("prop-conv")!.state = "dismissed";
+    await w.pass([er("f", { thread: { conversationKey: "conv:f", verdict: null } })]);
+    t("LAT-AC-3.21 a dismissed needs-you proposal on the CONVERSATION ref also stops it", [w.store.rows.size, w.calls.create], [1, 0]);
+    const w3 = world();
+    await w3.store.upsert(newP("prop-v", "x y z", "mb:other"));
+    w3.store.rows.get("prop-v")!.state = "dismissed";
+    await w3.pass([er("g", { thread: { conversationKey: null, verdict: { status: "open", todo: "x y z", proposalId: "prop-v", onBoard: false } } })]);
+    t("LAT-AC-3.21 the thread verdict's own proposal dismissed -> no create", [w3.store.rows.size, w3.calls.create], [1, 0]);
+  }
+  // AC-3.26 / AC-3.27
+  {
+    const recs = records();
+    const store = memStore();
+    let creates = 0;
+    for (let i = 0; i < 7; i++) {
+      const w = world({ createFails: true, recs, store }); // a fresh deps object every pass = a restart
+      await w.pass([er("h")]);
+      creates += w.calls.create;
+    }
+    const p = [...store.rows.values()][0];
+    t("LAT-AC-3.27 GUARD: createTask always fails -> 5 attempts then stop over 7 passes with restarts; stays proposed", [creates, recs.get("mb:h")?.attempts, recs.get("mb:h")?.gaveUp, p?.state, store.rows.size], [5, 5, true, "proposed", 1]);
+  }
+  {
+    const w = world({ createFails: true });
+    await w.pass([er("i")]);
+    const p = [...w.store.rows.values()][0];
+    t("LAT-AC-3.26 a failed create -> stays proposed, lease released, attempt 1 persisted, not done", [p?.state, p?.lease, w.recs.get("mb:i")?.attempts, w.recs.get("mb:i")?.done], ["proposed", 0, 1, false]);
+  }
+  // AC-3.28 / O-9
+  {
+    const w = world({ boardFails: true });
+    const r = await w.pass([er("j")]);
+    t("LAT-AC-3.28 GUARD: board read fails -> createTask 0, proposal proposed, attempt counted, kind code only", [w.calls.create, [...w.store.rows.values()][0]?.state, w.recs.get("mb:j")?.attempts, r.kinds], [0, "proposed", 1, { "autotask:board_read_failed": 1 }]);
+  }
+  // AC-3.15 / O-10
+  {
+    const w = world();
+    const r = await LT.runLabelAutoTask(OWN, OWNS, [er("k")], SEED, { ...w.deps, metaGuard: () => ({ reason: "synthetic owner" }) as never });
+    t("LAT-AC-3.15 meta guard -> no task, proposal stays proposed (listed), terminal", [w.calls.create, [...w.store.rows.values()][0]?.state, w.recs.get("mb:k")?.done, w.recs.get("mb:k")?.outcome, r.metaGuard], [0, "proposed", true, "meta_guard", 1]);
+  }
+  // O-11
+  {
+    const w = world();
+    w.store.upsert = async () => Promise.reject(new Error("db"));
+    const r = await w.pass([er("l")]);
+    t("LAT-O-11 store write fails -> no proposal, createTask 0, attempt counted", [w.calls.create, w.recs.get("mb:l")?.attempts, r.kinds["autotask:store_failed"]], [0, 1, 1]);
+  }
+  // AC-3.2 / AC-6.5 / AC-6.6 / O-12
+  {
+    const w = world();
+    await w.pass([er("m"), er("n"), er("o")], []);
+    t("LAT-AC-3.2 GUARD: setting [] -> 0 proposals, 0 board tasks over 3 labelled emails", [w.store.rows.size, w.calls.create, w.calls.board], [0, 0, 0]);
+    await w.pass([er("m"), er("n"), er("o")], ["Follow up"]);
+    t("LAT-AC-6.6 setting changed to another label -> 'Action Needed' emails are not tasked", [w.store.rows.size, w.calls.create], [0, 0]);
+    await w.pass([er("m", { subject: "Synthetic m" }), er("n", { subject: "Synthetic n" })]);
+    await w.pass([er("m", { subject: "Synthetic m" }), er("n", { subject: "Synthetic n" }), er("o", { subject: "Synthetic o" })]);
+    t("LAT-AC-6.5 restored -> each labelled email tasked once (no duplicate for the earlier ones)", [w.store.rows.size, w.calls.create], [3, 3]);
+  }
+  // Section 4
+  {
+    const outcome = async (status: unknown) => {
+      const w = world();
+      await w.pass([er("p", status === undefined ? {} : { status })]);
+      return [w.store.rows.size, w.calls.create, [...w.store.rows.values()][0]?.title];
+    };
+    const want = [1, 1, "Synthetic widget order"];
+    t("LAT-AC-4.1 GUARD: status pending / done / 'Action Needed' / absent -> identical outcomes", [await outcome("pending"), await outcome("done"), await outcome("Action Needed"), await outcome(undefined)], [want, want, want, want]);
+    const w = world();
+    await w.pass([er("q", { categories: [], status: "Action Needed" })]);
+    t("LAT-AC-4.2 status 'Action Needed' with categories [] -> no task", [w.store.rows.size, w.calls.create], [0, 0]);
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("src/features/huddle/lib/actions/label-autotask.ts", "utf8");
+    const srv = readFileSync("src/features/huddle/lib/actions/actions.server.ts", "utf8");
+    t("LAT-AC-4.3/4.4 the auto path reads no content.status and has no Graph / drive write", [/content\.status|\.status\b(?!\s*===\s*"open")/.test(src.replace(/v\.status === "open"|v && v\.status === "open"/g, "")), /graph\.microsoft|\/messages\/|drive\/items|"PATCH"|"PUT"/.test(src), /content->>'status'/.test(srv)], [false, false, false]);
+    t("LAT-AC-3.14 one task writer: the auto path calls approveProposal, never quick_create_task / invokeJourneyTool", [src.includes("approveProposal("), /quick_create_task|invokeJourneyTool/.test(src), srv.includes("approveDepsFor({ entra_email: cfg.owner })")], [true, false, true]);
+  }
+  // Section 6
+  {
+    const w = world();
+    const th = { conversationKey: "conv:abc", verdict: null };
+    await w.pass([er("A", { thread: th }), er("B", { categories: [], thread: th }), er("C", { categories: undefined, thread: th })]);
+    const p = [...w.store.rows.values()];
+    t("LAT-AC-6.2 GUARD: one of three labelled -> exactly 1 task, ref = A, B and C none", [p.length, p[0]?.sources.map((s) => s.sourceItemId), w.calls.create], [1, ["mb:A"], 1]);
+    const w2 = world();
+    await w2.pass([er("X", { subject: "RE: Synthetic same" }), er("Y", { subject: "FW: Synthetic same" })]);
+    t("LAT-AC-6.3 two labelled emails, same stripped subject -> 1 board task (the 2nd links)", [w2.calls.create, w2.recs.get("mb:X")?.outcome, w2.recs.get("mb:Y")?.outcome], [1, "created", "on_board"]);
+    const w3 = world();
+    await w3.pass([er("X", { subject: "Synthetic one" }), er("Y", { subject: "Synthetic two" })]);
+    t("LAT-AC-6.3 different titles, NOT the same conversation -> 2 tasks (2026-11-28 V-1: one conversation -> 1, see LAT-V1)", w3.calls.create, 2);
+    const w4 = world();
+    await w4.pass([er("fw", { subject: "FW: Synthetic invoice 42" })]);
+    const f = [...w4.store.rows.values()][0];
+    t("LAT-AC-6.4 labelled forward -> title stripped, ref is the forward's own id", [f?.title, f?.sources[0]?.sourceItemId], ["Synthetic invoice 42", "mb:fw"]);
+    const { readFileSync } = await import("node:fs");
+    const srv = readFileSync("src/features/huddle/lib/actions/actions.server.ts", "utf8");
+    const body = srv.slice(srv.indexOf("export async function loadLabelRows("), srv.indexOf("/** Persist one email's auto-task record"));
+    t("LAT-AC-6.1/3.24 the loader reads source 'email' only, unpurged content only", [body.includes("source = 'email'"), body.includes("content IS NOT NULL AND content_purged_at IS NULL"), /'teams'|'sent'/.test(body)], [true, true, false]);
+  }
+  // AC-P2
+  {
+    const w = world();
+    const r = await w.pass(Array.from({ length: 25 }, (_, i) => er(`many${i}`, { subject: `Synthetic item ${i}` })));
+    t("LAT-AC-P2 at most 10 creates per pass, the rest deferred, one board read", [w.calls.create, r.deferred, w.calls.board], [10, 15, 1]);
+  }
+  // AC-3.30
+  {
+    const w = world({ createFails: true });
+    await w.pass([er("s", { subject: "Synthetic SECRET-SUBJECT" })]);
+    t("LAT-AC-3.30 the pass result carries no subject / label / id text", w.logs.some((l) => /SECRET-SUBJECT|Action Needed|mb:s/.test(l)), false);
+  }
+  // AC-3.23
+  {
+    const store = memStore();
+    const recs = records();
+    const board: { id: string; title: string }[] = [];
+    const a = world({ store, recs, board });
+    const b = world({ store, recs, board });
+    await Promise.all([a.pass([er("u")]), b.pass([er("u")])]);
+    t("LAT-AC-3.23 two concurrent passes -> 1 task, no failure recorded", [a.calls.create + b.calls.create, store.rows.size, recs.get("mb:u")?.attempts, recs.get("mb:u")?.done], [1, 1, 0, true]);
+  }
+  // AC-3.12 (classify side) + AC-3.32 (display)
+  {
+    const u0 = threadUnits(asm, S()).units.find((u) => u.email?.key.includes("conv-1"))!;
+    let proposeCalls = 0;
+    const stored = new Map<string, import("../src/features/huddle/lib/correspondence/action-classify").ActionVerdict>();
+    const deps: ClassifyDeps = {
+      recordCall: async () => {},
+      model: async (sys, inp) => answerFor(sys, inp),
+      propose: async () => (proposeCalls++, { id: "prop-judge", onBoard: false }),
+      storeVerdict: async (at, v) => void stored.set(`${at.source}\u0000${at.sourceItemId}`, v),
+      addMeetingRows: async () => 0,
+      nowIso: () => "2026-11-12T00:00:00Z",
+      labelProposalFor: async (u) => (u.itemKey === u0.itemKey ? "prop-label" : null),
+    };
+    await runClassify(asm, S(), new Set(), 10, deps);
+    const v = stored.get(`${u0.storeAt.source}\u0000${u0.storeAt.sourceItemId}`);
+    t("LAT-AC-3.12 GUARD: a judge's open verdict for a label-tasked thread links the label proposal (no 2nd proposal)", [v?.status, v?.proposalId], ["open", "prop-label"]);
+    const autoTasked = new Map([[u0.refItemId, "prop-label"]]);
+    const props = new Map([["prop-label", { id: "prop-label", state: "approved", title: "Synthetic widget order", assignee: null, correction: null }]]);
+    const sel = selectActionItems(buildCandidates({ assembled: asm, rows, settings: S(), verdicts: new Map(), proposals: props, autoTasked, meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
+    const row = sel.rows.find((r) => r.id === "prop-label");
+    t("LAT-AC-3.32 GUARD: an auto-added task (no verdict yet) is a CLOSED row (approved), not 'Not checked', not counted", [row?.state, row?.title, sel.unchecked.some((r) => r.itemKey === u0.itemKey), sel.counts.all - sel.rows.filter((r) => r.state !== "approved").length], ["approved", "Synthetic widget order", false, 0]);
+    const selJ = selectActionItems(buildCandidates({ assembled: asm, rows, settings: S(), verdicts: stored, proposals: props, autoTasked, meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
+    t("LAT-AC-3.32 with the judge's verdict linked -> still ONE closed row for the thread", selJ.rows.filter((r) => r.itemKey === u0.itemKey).map((r) => r.state), ["approved"]);
+    const view = (await import("node:fs")).readFileSync("src/features/huddle/components/ActionsView.tsx", "utf8");
+    t("LAT-AC-3.33 the card labels approved 'Added to board' and only proposed rows can act", [view.includes('approved: "Added to board"'), view.includes('const open = state === "proposed";'), view.includes("const canAct = (open || triaging)")], [true, true, true]);
+    const sel2 = selectActionItems(buildCandidates({ assembled: asm, rows, settings: S(), verdicts: new Map(), proposals: new Map([["prop-label", { ...props.get("prop-label")!, state: "proposed" }]]), autoTasked, meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
+    t("LAT-AC-3.27 a label proposal still proposed (gave up) stays LISTED for a manual Add as task", sel2.rows.some((r) => r.id === "prop-label" && r.state === "proposed"), true);
+  }
+  // ── RT. RED-TEAM PRE-PASS (docs/qc-evidence/REDTEAM-actions-label-autotask.md). A PASS = the code held; a FAIL =
+  //    the attack succeeded and the assertion states the CORRECT behaviour. Synthetic data only.
+  {
+    const LB = await import("../src/features/huddle/lib/correspondence/email-labels");
+    const AA = await import("../src/features/huddle/lib/actions/actions");
+    // RTL-1 look-alike / near-miss labels never match the seed; true whitespace variants and case do.
+    const near = ["Аction Needed", "Ａction Needed", "Action​Needed", "Action Needed!", "Needs Action", "Action Needed (old)", "Action", "Not Action Needed", "ACTİON NEEDED"];
+    t("RTL-1 look-alike / substring / reordered labels -> no match", near.map((c) => LB.matchedAutoTaskLabel([c], ["Action Needed"])), near.map(() => null));
+    t("RTL-1b whitespace/case variants of the SAME label do match", ["ACTION NEEDED", "action needed", " Action  Needed "].map((c) => !!LB.matchedAutoTaskLabel([c], ["Action Needed"])), [true, true, true]);
+    // RTL-2 an emptied / blank-only setting turns the auto path off (no label survives cleaning).
+    t("RTL-2 setting of blanks / NBSP only -> []", AA.resolveActionsSettings({ autoTaskLabels: ["", "   ", " ", "\t\n"] }).autoTaskLabels, []);
+    // RTL-3 a persisted record at the cap without the gaveUp flag (older writer / partial record) is NOT retried.
+    {
+      const w = world({ createFails: true });
+      w.recs.set("mb:cap", { proposalId: null, attempts: LT.AUTO_TASK_MAX_ATTEMPTS, done: false, outcome: "create_failed" });
+      await w.pass([er("cap")]);
+      t("RTL-3 attempts already at the cap (no gaveUp flag) -> 0 createTask calls", w.calls.create, 0);
+      t("RTL-3b wouldAutoTaskCount: a record at the cap (no gaveUp flag) is not counted", LT.wouldAutoTaskCount([{ categories: ["Action Needed"], record: { proposalId: null, attempts: LT.AUTO_TASK_MAX_ATTEMPTS, done: false, outcome: "create_failed" } }, { categories: ["Action Needed"], record: { proposalId: null, attempts: LT.AUTO_TASK_MAX_ATTEMPTS - 1, done: false, outcome: "create_failed" } }], ["Action Needed"]), 1);
+    }
+    // RTL-4 record write ALWAYS fails, create ALWAYS fails: the cap must still bound createTask calls.
+    {
+      const w = world({ createFails: true });
+      w.deps.saveRecord = async () => {
+        throw new Error("ledger down");
+      };
+      for (let i = 0; i < 8; i++) await w.pass([er("nosave")]);
+      t("RTL-4 create + record write both failing over 8 passes -> createTask at most 5", [w.calls.create <= LT.AUTO_TASK_MAX_ATTEMPTS, w.calls.create], [true, Math.min(w.calls.create, LT.AUTO_TASK_MAX_ATTEMPTS)]);
+    }
+    // RTL-4b record-then-act: only the write AFTER a failed create fails; the attempt written BEFORE it still counts.
+    {
+      const w = world({ createFails: true });
+      const ok = w.deps.saveRecord;
+      w.deps.saveRecord = async (id, r) => {
+        if (r.outcome !== "attempting") throw new Error("ledger down after create");
+        return ok(id, r);
+      };
+      for (let i = 0; i < 8; i++) await w.pass([er("half")]);
+      t("RTL-4b the post-create write fails, the pre-create attempt record holds -> exactly 5 creates", [w.calls.create, w.recs.get("mb:half")?.attempts], [LT.AUTO_TASK_MAX_ATTEMPTS, LT.AUTO_TASK_MAX_ATTEMPTS]);
+    }
+    // RTL-5 record write fails AFTER a successful create: later passes must not create a 2nd task.
+    //      (2026-11-28 FIX RTL-4: the attempt is now recorded BEFORE the create, so "the ledger is always down" creates
+    //      nothing at all -- RTL-5b. RTL-5 now fails every write made after the first create, which is the scenario its
+    //      name states; the expectation, 1 task across 3 passes, is unchanged.)
+    {
+      const w = world();
+      const ok = w.deps.saveRecord;
+      w.deps.saveRecord = async (id, r) => {
+        if (w.calls.create > 0) throw new Error("ledger down");
+        return ok(id, r);
+      };
+      for (let i = 0; i < 3; i++) await w.pass([er("lost")]);
+      t("RTL-5 created, record never persisted, 3 passes -> createTask total 1", [w.calls.create, w.store.rows.size], [1, 1]);
+    }
+    {
+      const w = world();
+      w.deps.saveRecord = async () => {
+        throw new Error("ledger down");
+      };
+      for (let i = 0; i < 3; i++) await w.pass([er("lost")]);
+      t("RTL-5b the ledger write always fails -> no create at all (record-then-act), the proposal stays proposed", [w.calls.create, w.store.rows.size, [...w.store.rows.values()][0]?.state], [0, 1, "proposed"]);
+    }
+    // RTL-6 two emails in ONE conversation, across passes: A tasked, owner completes it (gone from the open board), then
+    //      reply B arrives with the label and the same stripped subject. No verdict (AI off). Expected: no 2nd task.
+    {
+      const w = world();
+      const th = { conversationKey: "conv:rt6", verdict: null };
+      await w.pass([er("A6", { subject: "Synthetic shipment", thread: th })]);
+      w.board.length = 0; // completed on the board
+      await w.pass([er("A6", { subject: "Synthetic shipment", thread: th }), er("B6", { subject: "RE: Synthetic shipment", thread: th })]);
+      t("RTL-6 same conversation, same title, first task completed -> createTask total 1", w.calls.create, 1);
+    }
+    // RTL-6b once per conversation, ANY title, every decided state; a still-proposed sibling or another conversation does
+    //       not block (no over-match).
+    {
+      const out: Record<string, number> = {};
+      for (const st of ["approved", "completed", "dismissed", "delegated", "proposed"]) {
+        for (const ck of ["conv:rt6b", "conv:other"]) {
+          const w = world();
+          await w.store.upsert(newP("prop-sib", "Synthetic unrelated title", "mb:S6"));
+          w.store.rows.get("prop-sib")!.state = st as Row["state"];
+          w.recs.set("mb:S6", { proposalId: "prop-sib", attempts: 0, done: true, outcome: "created" });
+          await w.pass([er("S6", { subject: "Synthetic unrelated title", thread: { conversationKey: "conv:rt6b", verdict: null } }), er("B6b", { subject: "RE: Synthetic brand new ask", thread: { conversationKey: ck, verdict: null } })]);
+          out[`${st}@${ck === "conv:rt6b" ? "same" : "other"}`] = w.calls.create;
+        }
+      }
+      t("RTL-6b sibling decided under another title -> 0 creates; proposed sibling or other conversation -> 1", out, { "approved@same": 0, "approved@other": 1, "completed@same": 0, "completed@other": 1, "dismissed@same": 0, "dismissed@other": 1, "delegated@same": 0, "delegated@other": 1, "proposed@same": 1, "proposed@other": 1 });
+    }
+    // RTL-7 board read fails while the thread's verdict points at a PROPOSED proposal -> nothing created.
+    {
+      const w = world({ boardFails: true });
+      await w.store.upsert(newP("prop-rt7", "Synthetic venue", "conv:rt7"));
+      await w.pass([er("rt7", { thread: { conversationKey: "conv:rt7", verdict: { status: "open", todo: "Synthetic venue", proposalId: "prop-rt7", onBoard: false } } })]);
+      t("RTL-7 board read fails with a reusable verdict proposal -> createTask 0, still proposed", [w.calls.create, w.store.rows.get("prop-rt7")?.state], [0, "proposed"]);
+    }
+    // RTL-8 a stale (non-open) verdict to-do is never used as the title.
+    t("RTL-8 a closed verdict's to-do is not the title", LT.rowTaskTitle({ subject: "RE: Synthetic subject", thread: { conversationKey: null, verdict: { status: "none", todo: "Stale to-do", proposalId: null, onBoard: false } } }), "Synthetic subject");
+    // RTL-9 the thread verdict's proposal was dismissed under ANOTHER title, on a sibling email -> stops the auto path.
+    {
+      const w = world();
+      await w.store.upsert(newP("prop-rt9", "Some other wording", "mb:sib9"));
+      await w.store.decide(OWNS, "prop-rt9", "dismissed");
+      await w.pass([er("rt9", { subject: "Synthetic thing", thread: { conversationKey: "conv:rt9", verdict: { status: "open", todo: "", proposalId: "prop-rt9", onBoard: false } } })]);
+      t("RTL-9 thread verdict proposal dismissed under another title -> createTask 0", w.calls.create, 0);
+    }
+    // RTL-10 status is never read: categories decide alone, regardless of a status that LOOKS like an instruction.
+    {
+      const w = world();
+      await w.pass([er("st", { categories: [], status: "Action Needed" } as Partial<LRow>), er("st2", { categories: ["Done"], status: "needs action" } as Partial<LRow>)]);
+      t("RTL-10 status 'Action Needed' / 'needs action' with non-matching categories -> 0 tasks", w.calls.create, 0);
+    }
+    // RTL-11 no text is logged: no console call in the label modules; the server pass log interpolates counts only.
+    {
+      const { readFileSync } = await import("node:fs");
+      const a = readFileSync("src/features/huddle/lib/actions/label-autotask.ts", "utf8");
+      const b = readFileSync("src/features/huddle/lib/correspondence/email-labels.ts", "utf8");
+      const srv = readFileSync("src/features/huddle/lib/actions/actions.server.ts", "utf8");
+      const pass = srv.slice(srv.indexOf("export async function runLabelAutoTaskPass("), srv.indexOf("// ── AC8 (verifier"));
+      const logs = pass.match(/console\.\w+\([\s\S]*?\);/g) ?? [];
+      const interps = logs.flatMap((l) => [...l.matchAll(/\$\{([^}]*)\}/g)].map((x) => x[1]));
+      t("RTL-11 no console in label modules; the pass log interpolates only res.* counts / kinds", [/console\./.test(a), /console\./.test(b), logs.length > 0, interps.every((x) => /^(res\.|Object\.|`|k|n|\s)/.test(x.trim()) && !/subject|categories|title|sourceItemId|cfg\./.test(x))], [false, false, true, true]);
+    }
+    // RTL-12 the back-fill label block reads only (no INSERT / UPDATE / DELETE / observe / storeContent in it).
+    {
+      const { readFileSync } = await import("node:fs");
+      const bf = readFileSync("scripts/correspondence-backfill.ts", "utf8");
+      const blk = bf.slice(bf.indexOf("// Outlook labels (AC-actions-label-autotask"), bf.indexOf("// Fireflies: every meeting"));
+      t("RTL-12 the back-fill label block writes nothing", [blk.length > 100, /\b(INSERT|UPDATE|DELETE)\b|observe\(|storeContent\(|saveAutoTaskRecord|runLabelAutoTask/.test(blk)], [true, false]);
+    }
+    // RTL-13 the content-only refresh writes ONLY categories / status, and an absent incoming key never clears.
+    {
+      const { readFileSync } = await import("node:fs");
+      const led = readFileSync("src/features/huddle/lib/correspondence/ledger.server.ts", "utf8");
+      const m = led.match(/WHEN \$\{LABEL_REFRESH_SQL\} THEN l\.content \|\| jsonb_strip_nulls\(jsonb_build_object\(([\s\S]*?)\)\)/);
+      const keys = m ? [...m[1].matchAll(/'(\w+)'/g)].map((x) => x[1]).filter((k) => k !== "categories" && k !== "status") : ["NO-MATCH"];
+      t("RTL-13 refresh merges only categories/status via strip_nulls, each guarded by `? key`", [keys, led.includes("${n} ? 'categories'"), led.includes("${n} ? 'status'")], [[], true, true]);
+    }
+    // ── VERIFY-actions-label-autotask-1 fixes (docs/qc-evidence/FIX-verify1-actions-label-autotask.md) ──
+    // LAT-V1 (verifier V-1): once per conversation WITHIN one pass, any title; keyed on thread_id or the plan key.
+    {
+      const w = world();
+      const r = await w.pass([er("V1a", { subject: "Synthetic budget", threadId: "cid-v1" }), er("V1b", { subject: "RE: Synthetic budget revised figures", threadId: "cid-v1" })]);
+      const pa = w.recs.get("mb:V1a")?.proposalId;
+      t("LAT-V1 GUARD: same pass, same conversation (thread_id), different titles -> createTask 1, the 2nd decided on the 1st's proposal", [w.calls.create, w.recs.get("mb:V1a")?.outcome, w.recs.get("mb:V1b")?.outcome, w.recs.get("mb:V1b")?.proposalId === pa && !!pa, w.recs.get("mb:V1b")?.done, r.decided], [1, "created", "decided", true, true, 1]);
+      const w2 = world();
+      const th = { conversationKey: "mb:conv:plan-v1", verdict: null };
+      await w2.pass([er("V1c", { subject: "Synthetic alpha", thread: th }), er("V1d", { subject: "RE: Synthetic beta", thread: th })]);
+      const w3 = world();
+      await w3.pass([er("V1e", { subject: "Synthetic alpha", threadId: "cid-v1-x" }), er("V1f", { subject: "RE: Synthetic beta", threadId: "cid-v1-y" })]);
+      t("LAT-V1 plan-key only -> 1; two different conversations, different titles -> 2 (no over-match)", [w2.calls.create, w3.calls.create], [1, 2]);
+      const w4 = world();
+      const r4 = await LT.runLabelAutoTask(OWN, OWNS, [er("V1g", { subject: "Synthetic gamma", threadId: "cid-v1-m" }), er("V1h", { subject: "RE: Synthetic delta", threadId: "cid-v1-m" })], SEED, { ...w4.deps, metaGuard: ((title: string) => (title === "Synthetic gamma" ? { reason: "synthetic owner" } : null)) as never });
+      t("LAT-V1 a meta-guarded sibling does not close the conversation (nothing was added)", [w4.calls.create, r4.metaGuard], [1, 1]);
+      t("LAT-V1 rowConversationKey: thread_id first, else the plan key, else none", [LT.rowConversationKey({ threadId: "c1", thread: { conversationKey: "k", verdict: null } }), LT.rowConversationKey({ threadId: null, thread: { conversationKey: "k", verdict: null } }), LT.rowConversationKey({})], ["conv:c1", "k", null]);
+    }
+    // LAT-V2 (verifier V-2): A tasked, then A's label removed (A no longer a labelled row), then a labelled reply B with
+    // another title. The conversation map comes from EVERY recorded row (priorConversations, keyed on thread_id).
+    {
+      const recs = records();
+      const store = memStore();
+      const w1 = world({ recs, store });
+      await w1.pass([er("V2a", { subject: "Synthetic venue booking", threadId: "cid-v2" })]);
+      const prior = [{ threadId: "cid-v2", proposalId: recs.get("mb:V2a")!.proposalId! }];
+      const w2 = world({ recs, store });
+      const rows2 = [er("V2b", { subject: "RE: Synthetic catering numbers", threadId: "cid-v2" })];
+      await LT.runLabelAutoTask(OWN, OWNS, rows2, SEED, { ...w2.deps, priorConversations: prior });
+      t("LAT-V2 GUARD: label removed from the first email, labelled reply, another title -> createTask total 1, reply decided", [w1.calls.create + w2.calls.create, recs.get("mb:V2b")?.outcome, recs.get("mb:V2b")?.proposalId], [1, "decided", prior[0].proposalId]);
+      const w3 = world({ recs: records(), store });
+      await LT.runLabelAutoTask(OWN, OWNS, [er("V2c", { subject: "RE: Synthetic other thread ask", threadId: "cid-v2-other" })], SEED, { ...w3.deps, priorConversations: prior });
+      t("LAT-V2 another conversation is not blocked by the prior map (no over-match)", w3.calls.create, 1);
+    }
+    // LAT-DL (verifier F-6): the pass deadline. No new create starts after it; the rest are DEFERRED (no attempt used).
+    {
+      let clock = 0;
+      const w = world();
+      const create0 = w.deps.createTask;
+      const deps = { ...w.deps, createTask: async (title: string) => { const out = await create0(title); clock += 60; return out; }, nowMs: () => clock, deadlineMs: 100 };
+      const rows = Array.from({ length: 5 }, (_, i) => er(`dl${i}`, { subject: `Synthetic deadline item ${i}` }));
+      const r = await LT.runLabelAutoTask(OWN, OWNS, rows, SEED, deps);
+      t("LAT-DL GUARD: creates at t=0 and t=60, deadline 100 -> 2 created, 3 deferred, 0 failed, deferred emails have no record", [w.calls.create, r.created, r.deferred, r.failed, rows.slice(2).map((x) => w.recs.has(x.sourceItemId))], [2, 2, 3, 0, [false, false, false]]);
+      const w2 = world();
+      const r2 = await LT.runLabelAutoTask(OWN, OWNS, rows, SEED, { ...w2.deps, nowMs: () => 500, deadlineMs: 100 });
+      t("LAT-DL deadline already passed -> 0 creates, all deferred, nothing recorded", [w2.calls.create, r2.deferred, r2.failed, w2.recs.size], [0, 5, 0, 0]);
+      let c2 = 0;
+      const w3 = world();
+      const slowStore = Object.assign(Object.create(Object.getPrototypeOf(w3.store)), w3.store, { priorRelated: async (...a: Parameters<typeof w3.store.priorRelated>) => { c2 += 200; return w3.store.priorRelated(...a); } });
+      const r3 = await LT.runLabelAutoTask(OWN, OWNS, [er("dlx")], SEED, { ...w3.deps, store: slowStore as typeof w3.store, nowMs: () => c2, deadlineMs: 100 });
+      t("LAT-DL the deadline is re-checked right before the create (slow lookups) -> 0 creates, deferred, no attempt", [w3.calls.create, r3.deferred, w3.recs.get("mb:dlx")?.attempts ?? 0], [0, 1, 0]);
+    }
+  }
+  t("LAT readAutoTaskRecord malformed -> null / safe defaults", [LT.readAutoTaskRecord(null), LT.readAutoTaskRecord([1]), LT.readAutoTaskRecord({ attempts: -3, done: "yes" })], [null, null, { proposalId: null, attempts: 0, done: false, outcome: "create_failed" }]);
+  t("LAT-AC-3.25 wouldAutoTaskCount: labelled and not done", LT.wouldAutoTaskCount([{ categories: ["Action Needed"], record: null }, { categories: ["action needed"], record: { proposalId: "p", attempts: 0, done: true, outcome: "created" } }, { categories: [], record: null }], SEED), 1);
+}
+
+// ── LAT-UI. "Outlook labels that create a task" in What shows (AC-actions-label-autotask AC-3.5) ──
+{
+  const view = (await import("node:fs")).readFileSync("src/features/huddle/components/ActionsView.tsx", "utf8");
+  const i = view.indexOf('data-testid="actions-autotask-labels-field"');
+  const field = view.slice(i, view.indexOf("</label>", i));
+  t("LAT-UI-AC-3.5 the What-shows field is labelled exactly 'Outlook labels that create a task' and edits settings.autoTaskLabels through the cleaner", [i > 0, field.includes(">Outlook labels that create a task<"), field.includes("cleanAutoTaskLabels(e.target.value.split(\"\\n\"))"), field.includes("onChange({ ...settings, autoTaskLabels: next })"), field.includes("defaultValue={settings.autoTaskLabels.join(\"\\n\")}")], [true, true, true, true, true]);
+  t("LAT-UI the field sits in the SAME What-shows settings block (saved to actions_settings, no other store)", view.indexOf('data-testid="actions-alert-skip-field"') < i && i < view.indexOf("<p className={head}>Sources</p>"), true);
+}
+
+// ── LAT-BF. back-fill categories refill plan + the pre-apply count (AC-1.8 / AC-3.25) ──
+{
+  const LB2 = await import("../src/features/huddle/lib/correspondence/email-labels");
+  const it = (id: string, categories?: unknown, source = "email") => ({ source, sourceItemId: id, content: { kind: source === "sent" ? "sent" : "email", ...(categories === undefined ? {} : { categories }) } });
+  const fl = (id: string, o: Partial<import("../src/features/huddle/lib/correspondence/email-labels").StoredLabelFlags> = {}) => ({ sourceItemId: id, hasContent: true, purged: false, categories: null, autotaskSettled: false, ...o });
+  // Oldest version first: e1's newest copy is labelled; e2 labelled; e3 []; e4 purged; e5 labelled but settled; s1 Sent.
+  const items = [it("e1", []), it("e1", ["Action Needed"]), it("e2", ["Action Needed"]), it("e3", []), it("e4", ["Action Needed"]), it("e5", ["Action Needed"]), it("s1", ["Action Needed"], "sent")];
+  const stored = [fl("e1", { categories: [] }), fl("e2"), fl("e3", { categories: [] }), fl("e4", { purged: true, hasContent: false }), fl("e5", { categories: ["Action Needed"], autotaskSettled: true })];
+  const p = LB2.planCategoriesRefill(items, stored, ["Action Needed"]);
+  t("LAT-BF-AC-1.8 GUARD: refill plan counts (newest copy wins, Sent ignored, purged not refilled)", p, { read: 5, labelled: 4, stored: 5, storedMissing: 1, wouldGain: 2, purged: 1, wouldAutoTask: 2 });
+  t("LAT-BF-AC-3.25 the pre-apply count is 0 when the setting is emptied", LB2.planCategoriesRefill(items, stored, []).wouldAutoTask, 0);
+  const src = (await import("node:fs")).readFileSync("scripts/correspondence-backfill.ts", "utf8");
+  t("LAT-BF the back-fill prints a counts-only categories line + the at-most auto-create count, and reads no status", [src.includes("`categories: read ${plan.read}"), src.includes("would auto-create at most ${plan.wouldAutoTask}"), /content->>'status'|content->'status'/.test(src)], [true, true, false]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -591,6 +591,169 @@ try {
     t("NO-AC7 the held-click log line carries no to-do, quote or sender", [logs.length > 0, logs.some((l) => /synthetic|Pat|weekly|Test-/i.test(l))], [true, false]);
   }
 
+  // ── LAT-PG (AC-actions-label-autotask): the label auto-task against the REAL ledger + proposal store SQL ──────
+  {
+    const LT = await import("../src/features/huddle/lib/actions/label-autotask");
+    const em = (id: string, categories: unknown, source: SourceItem["source"] = "email"): SourceItem => ({
+      ...item(id, source),
+      threadId: `lat-conv-${id}`,
+      contentHash: `lat-${id}`,
+      content: { kind: source === "sent" ? "sent" : "email", subject: `RE: Test-label item ${id}`, from: { name: "Pat Example", address: "pat@partner.example" }, to: [O], cc: [], receivedAt: "2026-11-27T10:00:00.000Z", conversationId: `lat-conv-${id}`, internetMessageId: null, bodyText: "Synthetic body.", isForward: false, ...(categories === undefined ? {} : { categories }) } as never,
+    });
+    await L.observe(O, [em("lat-e1", ["Action Needed"]), em("lat-e2", ["Action Needed"]), em("lat-e3", []), em("lat-e4", ["action needed"]), em("lat-t1", undefined, "teams"), em("lat-s1", undefined, "sent")]);
+    await pool.query(`UPDATE chat.correspondence_ledger SET content = NULL, content_purged_at = now() WHERE source_item_id = 'lat-e2'`);
+    // A Teams / Sent row that somehow carried categories must still never be read (AC-6.1 / AC-1.9).
+    await pool.query(`UPDATE chat.correspondence_ledger SET content = content || '{"categories":["Action Needed"]}'::jsonb WHERE source_item_id IN ('lat-t1','lat-s1')`);
+    const loaded = (await A.loadLabelRows([O])).filter((r) => r.sourceItemId.startsWith("lat-"));
+    t("LAT-PG-1 GUARD (real SQL): the loader returns only unpurged EMAIL rows with a non-empty label list", loaded.map((r) => r.sourceItemId).sort(), ["lat-e1", "lat-e4"]);
+    const board: { id: string; title: string }[] = [];
+    let creates = 0;
+    const deps = (fails = false) => ({
+      store: P,
+      openTasks: async () => board,
+      createTask: async (title: string) => {
+        creates++;
+        if (fails) return { ok: false as const, error: "Couldn't add that task to your board." };
+        board.push({ id: `pg-task-${creates}`, title });
+        return { ok: true as const, taskId: `pg-task-${creates}` };
+      },
+      saveRecord: (id: string, r: import("../src/features/huddle/lib/actions/label-autotask").AutoTaskRecord) => A.saveAutoTaskRecord([O], id, r),
+    });
+    const only = (id: string) => async () => (await A.loadLabelRows([O])).filter((r) => r.sourceItemId === id);
+    const r1 = await LT.runLabelAutoTask(O, [O], await only("lat-e1")(), ["Action Needed"], deps());
+    const rec = (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = 'lat-e1'`)).rows[0]?.a;
+    const prop = (await pool.query(`SELECT state, title, evidence, task_id FROM chat.task_proposals WHERE id = $1`, [rec?.proposalId])).rows[0];
+    t("LAT-PG-2 GUARD (real SQL): label -> 1 approved proposal (stripped subject, label evidence, task id) + record done", [r1.created, creates, prop?.state, prop?.title, prop?.evidence, prop?.task_id, rec?.done], [1, 1, "approved", "Test-label item lat-e1", "Outlook label: Action Needed", "pg-task-1", true]);
+    // The ledger reprocesses the row (claim + markProcessed): the record must survive.
+    await pool.query(`UPDATE chat.correspondence_ledger SET status = 'pending', next_attempt_at = now() - interval '1 minute' WHERE source_item_id = 'lat-e1'`);
+    const claimed = (await L.claimDue(O, ["email"], 50, 5)).filter((c) => c.sourceItemId === "lat-e1");
+    for (const c of claimed) await L.markProcessed(c, { needs_you: ["x"] });
+    const kept = (await pool.query(`SELECT result_ids ? 'autotask' k FROM chat.correspondence_ledger WHERE source_item_id = 'lat-e1'`)).rows[0]?.k;
+    t("LAT-PG-3 GUARD (real SQL): markProcessed keeps result_ids.autotask (the once-per-email marker)", [claimed.length, kept], [1, true]);
+    const r2 = await LT.runLabelAutoTask(O, [O], await only("lat-e1")(), ["Action Needed"], deps());
+    t("LAT-PG-4 (real SQL): a later pass (rows re-read = a restart) creates nothing", [r2.created, r2.skippedDone, creates], [0, 1, 1]);
+    t("LAT-PG-5 (real SQL): the thread lookup and the page map find the label proposal", [await A.labelProposalForThread([O], ["lat-e1", "nope"]), (await A.loadAutoTasked([O])).get("lat-e1")], [rec?.proposalId, rec?.proposalId]);
+    // AC-3.27 persisted in the real ledger: 7 passes, each re-reading the row, createTask always failing.
+    const before = creates;
+    for (let i = 0; i < 7; i++) await LT.runLabelAutoTask(O, [O], await only("lat-e4")(), ["Action Needed"], deps(true));
+    const rec4 = (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = 'lat-e4'`)).rows[0]?.a;
+    const p4 = (await pool.query(`SELECT state FROM chat.task_proposals WHERE id = $1`, [rec4?.proposalId])).rows[0];
+    t("LAT-PG-6 GUARD (real SQL): the retry cap is persisted in the ledger: 5 create attempts over 7 passes, then gave up, still proposed", [creates - before, rec4?.attempts, rec4?.gaveUp, p4?.state], [5, 5, true, "proposed"]);
+    // LAT-PG-V2 (verifier V-2): A tasked; then A's label REMOVED and its content PURGED; then a labelled reply B in the
+    // SAME conversation with ANOTHER title. The conversation map is read from the real ledger by thread_id.
+    {
+      const conv = (id: string, subject: string, categories: unknown): SourceItem => {
+        const base = em(id, categories);
+        return { ...base, threadId: "lat-conv-v2", content: { ...(base.content as object), subject, conversationId: "lat-conv-v2" } as never };
+      };
+      await L.observe(O, [conv("lat-v2a", "Test-label venue booking", ["Action Needed"])]);
+      const la = (await A.loadLabelRows([O])).filter((r) => r.sourceItemId === "lat-v2a");
+      const storedCid = (await pool.query(`SELECT thread_id, content->>'conversationId' c FROM chat.correspondence_ledger WHERE source_item_id = 'lat-v2a'`)).rows[0];
+      t("LAT-PG-V2a (real SQL): the loader's thread_id = the stored content.conversationId (the plan's conversation id)", [la[0]?.threadId, storedCid?.thread_id, storedCid?.c], ["lat-conv-v2", "lat-conv-v2", "lat-conv-v2"]);
+      const before = creates;
+      await LT.runLabelAutoTask(O, [O], la, ["Action Needed"], { ...deps(), priorConversations: await A.loadAutoTaskConversations([O]) });
+      // The owner clears the label, then the content is purged (both drop A from the labelled-row loader).
+      await pool.query(`UPDATE chat.correspondence_ledger SET content = jsonb_set(content, '{categories}', '[]'::jsonb) WHERE source_item_id = 'lat-v2a'`);
+      await pool.query(`UPDATE chat.correspondence_ledger SET content = NULL, content_purged_at = now() WHERE source_item_id = 'lat-v2a'`);
+      await L.observe(O, [conv("lat-v2b", "RE: Test-label catering numbers", ["Action Needed"])]);
+      const lb = (await A.loadLabelRows([O])).filter((r) => r.sourceItemId.startsWith("lat-v2"));
+      const prior = await A.loadAutoTaskConversations([O]);
+      await LT.runLabelAutoTask(O, [O], lb, ["Action Needed"], { ...deps(), priorConversations: prior });
+      const recA = (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = 'lat-v2a'`)).rows[0]?.a;
+      const recB = (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = 'lat-v2b'`)).rows[0]?.a;
+      t("LAT-PG-V2 GUARD (real SQL): label removed + content purged, labelled reply, another title -> createTask total 1, reply decided on A's proposal", [creates - before, lb.map((r) => r.sourceItemId), prior.some((p) => p.threadId === "lat-conv-v2" && p.proposalId === recA?.proposalId), recB?.outcome, recB?.proposalId === recA?.proposalId], [1, ["lat-v2b"], true, "decided", true]);
+      const srv = (await import("node:fs")).readFileSync(join(LIB, "actions/actions.server.ts"), "utf8");
+      const passBody = srv.slice(srv.indexOf("export async function runLabelAutoTaskPass("), srv.indexOf("// ── AC8 (verifier VERIFY-report-saves-verdicts-1)"));
+      t("LAT-PG-V2 the heartbeat pass hands the ledger-wide conversation map + a deadline to the pure pass", [passBody.includes("await loadAutoTaskConversations(owners)"), passBody.includes("priorConversations,"), passBody.includes("deadlineMs: startMs + LABEL_AUTOTASK_BUDGET_MS")], [true, true, true]);
+    }
+    // LAT-PG-F3 (verifier loop-2 F-3): the REAL heartbeat label pass (runLabelAutoTaskPass: real loader, real
+    // conversation map, real proposal store, real pg advisory lock), two passes OVERLAPPING as on two instances. Only
+    // the journey-facing board read / create are replaced (a counter). Synthetic data only.
+    {
+      const { assembleLedgerPlan } = await import("../src/features/huddle/lib/correspondence/report-from-ledger");
+      const { loadLedgerReportData } = await import("../src/features/huddle/lib/correspondence/report-from-ledger.server");
+      const { parseFeedsConfig } = await import("../src/features/huddle/lib/external-feeds/onedrive-feed");
+      const { ACTIONS_SETTINGS_DEFAULT } = await import("../src/features/huddle/lib/actions/actions");
+      const conv = (id: string, thread: string, subject: string): SourceItem => {
+        const base = em(id, ["Action Needed"]);
+        return { ...base, threadId: thread, content: { ...(base.content as object), subject, conversationId: thread } as never };
+      };
+      await L.observe(O, [conv("lat-f3a", "lat-conv-f3", "Test-label venue walkthrough"), conv("lat-f3b", "lat-conv-f3", "RE: Test-label seating chart")]);
+      const parsed = parseFeedsConfig(process.env.HUDDLE_ONEDRIVE_FEEDS);
+      const cfgL = { ...parsed!, owner: O };
+      const sL = { ...ACTIONS_SETTINGS_DEFAULT, autoTaskLabels: ["Action Needed"] };
+      const asmL = async () => assembleLedgerPlan(await loadLedgerReportData([O]), cfgL, 0);
+      let f3Creates = 0;
+      let firstSeen!: () => void;
+      const seen = new Promise<void>((r) => (firstSeen = r));
+      let openGate!: () => void;
+      const gate = new Promise<void>((r) => (openGate = r));
+      const f3Deps = {
+        openTasks: async () => [] as { id: string; title: string }[],
+        createTask: async () => {
+          f3Creates++;
+          const n = f3Creates;
+          if (n === 1) {
+            firstSeen();
+            await gate; // pass 1 is mid-create, still holding the lock, while pass 2 starts
+          }
+          return { ok: true as const, taskId: `f3-task-${n}` };
+        },
+      };
+      const pass = async () => A.runLabelAutoTaskPass(cfgL, sL, await asmL(), new Map(), [O], Date.now(), { deps: f3Deps });
+      const p1 = pass();
+      const inCreate = await Promise.race([seen.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 10_000))]);
+      let r2: Awaited<ReturnType<typeof pass>> | "threw" = null;
+      try {
+        r2 = await pass(); // the "other instance": overlaps pass 1, whose create is still in flight
+      } catch {
+        r2 = "threw";
+      }
+      openGate();
+      const r1 = await p1;
+      const recF = async (id: string) => (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = $1`, [id])).rows[0]?.a;
+      const ra = await recF("lat-f3a");
+      const rb = await recF("lat-f3b");
+      t(
+        "LAT-PG-F3 GUARD (real SQL + real advisory lock): two OVERLAPPING heartbeat label passes, two emails of one conversation, different titles -> createTask total 1",
+        [inCreate, f3Creates, r1?.created, r2 === null, [ra?.proposalId, rb?.proposalId].filter(Boolean).length > 0, ra?.proposalId === rb?.proposalId],
+        [true, 1, 1, true, true, true],
+      );
+      const r3 = await pass();
+      t("LAT-PG-F3b (real SQL): a later pass after both creates nothing more", [f3Creates, r3?.created ?? 0], [1, 0]);
+
+      // LAT-PG-F3L: the lock query FAILS -> the pass creates nothing (never create without the lock).
+      await L.observe(O, [conv("lat-f3c", "lat-conv-f3c", "Test-label badge printing")]);
+      const before = f3Creates;
+      const brokenPool = {
+        connect: async () => ({
+          query: async () => {
+            throw new Error("synthetic lock query failure");
+          },
+          release: () => undefined,
+        }),
+      };
+      let lockThrew = false;
+      let lockRes: unknown = "unset";
+      try {
+        lockRes = await A.runLabelAutoTaskPass(cfgL, sL, await asmL(), new Map(), [O], Date.now(), { deps: f3Deps, lockPool: brokenPool });
+      } catch {
+        lockThrew = true;
+      }
+      t("LAT-PG-F3L GUARD (real SQL): the lock query fails -> the pass throws before any work and creates nothing, no record written", [lockThrew, lockRes, f3Creates - before, (await recF("lat-f3c")) ?? null], [true, "unset", 0, null]);
+      // The real lock held by ANOTHER session (another instance) -> this tick does nothing; once free, the pass runs.
+      const other = await pool.connect();
+      await other.query(`SELECT pg_advisory_lock(hashtextextended($1, 0))`, [A.LABEL_AUTOTASK_LOCK_KEY]);
+      const heldRes = await A.runLabelAutoTaskPass(cfgL, sL, await asmL(), new Map(), [O], Date.now(), { deps: f3Deps });
+      const whileHeld = f3Creates - before;
+      await other.query(`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, [A.LABEL_AUTOTASK_LOCK_KEY]);
+      other.release();
+      const freeRes = await A.runLabelAutoTaskPass(cfgL, sL, await asmL(), new Map(), [O], Date.now(), { deps: f3Deps });
+      const leaked = (await pool.query(`SELECT count(*)::int n FROM pg_locks WHERE locktype = 'advisory' AND granted`)).rows[0]?.n;
+      t("LAT-PG-F3H (real SQL): lock held by another session -> null, 0 creates; released -> the pass creates 1; no advisory lock left held", [parsed !== null, heldRes, whileHeld, freeRes?.created, f3Creates - before, leaked], [true, null, 0, 1, 1, 0]);
+    }
+  }
+
 } catch (e) {
   fail++;
   console.log(`FAIL harness: ${e instanceof Error ? `${e.name}: ${e.message}` : "error"}`);

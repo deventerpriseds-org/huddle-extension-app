@@ -84,7 +84,7 @@ function snapshotRecords(text: string): Record<string, unknown>[] {
 
 const { pgLedger } = await import("../src/features/huddle/lib/correspondence/ledger.server");
 type Src = "email" | "teams" | "sent" | "transcript";
-const zero = () => ({ versions: 0, items: 0, unique: 0, inserted: 0, contentFilled: 0, changed: 0, unchanged: 0, updated: 0, failed: 0, refreshed: 0 });
+const zero = () => ({ versions: 0, items: 0, unique: 0, inserted: 0, contentFilled: 0, changed: 0, unchanged: 0, updated: 0, failed: 0, refreshed: 0, labelsRefreshed: 0 });
 const totals: Record<Src, ReturnType<typeof zero>> = { email: zero(), teams: zero(), sent: zero(), transcript: zero() };
 const seen = new Set<string>();
 // Every email / Sent Items item read, oldest version first, for the forwarded-part refill plan below.
@@ -110,6 +110,9 @@ const store = async (source: Exclude<Src, "transcript">, items: SourceItem[]) =>
     totals[source].changed += r.changed;
     totals[source].unchanged += r.unchanged;
     totals[source].contentFilled += r.contentFilled ?? 0;
+    // 2026-11-28 (AC-actions-label-autotask AC-1.6 / AC-1.8): observe re-writes CONTENT ONLY when an unchanged email's
+    // labels / status differ from the stored ones (no re-judge). Counted, never printed per row.
+    totals[source].labelsRefreshed += r.labelsRefreshed ?? 0;
   } catch {
     totals[source].failed += items.length;
     return;
@@ -223,6 +226,37 @@ if (cfg.sent.enabled) {
       why[`${s.source}:${reason}`] = (why[`${s.source}:${reason}`] ?? 0) + 1;
     }
     console.log(`forwards still missing by shape: ${JSON.stringify(why)}`);
+  }
+}
+
+// Outlook labels (AC-actions-label-autotask AC-1.8 / AC-3.25, 2026-11-28). The live pass and the apply run above
+// re-write a stored email's categories / status through observe's content-only refresh (no re-judge). This block
+// prints COUNTS only: how many read emails carry labels, how many stored rows lack or differ, and -- in the DRY RUN,
+// before an apply run lets the heartbeat create anything -- the most board tasks the next pass can auto-create.
+{
+  try {
+    const { getSharedPool } = await import("../src/features/huddle/lib/db/shared-pool.server");
+    const { planCategoriesRefill } = await import("../src/features/huddle/lib/correspondence/email-labels");
+    const { resolveActionsSettings } = await import("../src/features/huddle/lib/actions/actions");
+    const { getActionsSettingsRaw } = await import("../src/features/huddle/lib/email/email-replies.server");
+    const labels = resolveActionsSettings(await getActionsSettingsRaw(owner).catch(() => null)).autoTaskLabels;
+    const flags = (
+      await getSharedPool().query<{ sourceItemId: string; hasContent: boolean; purged: boolean; categories: unknown; autotaskSettled: boolean }>(
+        `SELECT source_item_id AS "sourceItemId", (content IS NOT NULL) AS "hasContent", (content_purged_at IS NOT NULL) AS "purged",
+                content->'categories' AS "categories",
+                (COALESCE(result_ids->'autotask'->>'done', '') = 'true' OR COALESCE(result_ids->'autotask'->>'gaveUp', '') = 'true') AS "autotaskSettled"
+           FROM chat.correspondence_ledger WHERE source = 'email' AND lower(owner_email) = lower($1)`,
+        [owner],
+      )
+    ).rows;
+    const plan = planCategoriesRefill(mailItems, flags, labels);
+    console.log(
+      `categories: read ${plan.read} (matching the auto-task labels ${plan.labelled}) | stored ${plan.stored}, stored-missing ${plan.storedMissing} | ` +
+        `would-gain ${plan.wouldGain} | purged ${plan.purged}${apply ? ` | gained ${totals.email.labelsRefreshed}` : " | DRY RUN: nothing written"}`,
+    );
+    console.log(`autotask: labels configured ${labels.length} | the next pass would auto-create at most ${plan.wouldAutoTask} board task(s) (decided / already on the board create none)`);
+  } catch {
+    console.log("categories: could not read the ledger labels -- counts skipped");
   }
 }
 

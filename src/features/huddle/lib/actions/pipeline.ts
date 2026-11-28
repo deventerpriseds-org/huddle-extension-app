@@ -153,6 +153,10 @@ export interface ClassifyDeps {
    * `tx.store(v)` writes it there. Absent = no lock (offline tests; the report with saving off).
    */
   lockThread?<T>(u: ThreadUnit, fn: (tx: ThreadTx) => Promise<T>): Promise<T>;
+  /** AC-actions-label-autotask AC-3.12: the proposal an Outlook label already auto-tasked for ANY message of this
+   *  thread (ledger result_ids.autotask.proposalId), or null. An open verdict links to it instead of proposing a
+   *  second one. Absent = no label path (offline tests, older callers). */
+  labelProposalFor?(u: ThreadUnit): Promise<string | null>;
 }
 
 /** What the classify pass's propose step answers (AC-actions-no-orphans). Exactly one of: an id (created / attached /
@@ -296,8 +300,12 @@ export async function runClassify(
       // `not_checked` (e.g. F3 now drops a momentary line, F1/F5 hold or rescue an item): the prior proposal stays
       // attached to the item key, so the owner's decision on it is never lost and no 2nd proposal is ever made.
       const keepId = prior && prior.key === u.itemKey && typeof prior.proposalId === "string" && prior.proposalId ? prior.proposalId : null;
+      // AC-3.12: the label path got there first -> the judge's open verdict links to the label's proposal (no 2nd one).
+      const labelId = !keepId && v.status === "open" && deps.labelProposalFor ? await deps.labelProposalFor(u).catch(() => null) : null;
       if (keepId) {
         v = { ...v, proposalId: keepId };
+      } else if (labelId) {
+        v = { ...v, proposalId: labelId };
       } else if (v.status === "open") {
         const text = u.email ? u.email.messages.map((m) => m.text).filter(Boolean).join("\n\n") : u.teams!.messages.map((m) => m.text).filter(Boolean).join("\n\n");
         try {
@@ -603,6 +611,9 @@ export function buildCandidates(a: {
   /** false when the proposals read FAILED (an empty `proposals` then means "not read"). Absent = the read succeeded. */
   proposalsRead?: boolean;
   meetingProposals: readonly MeetingProposalLite[];
+  /** AC-3.32: ledger email id -> the proposal its Outlook label auto-tasked (result_ids.autotask.proposalId). Absent
+   *  = none (older callers). The proposal must be in `proposals` to be shown. */
+  autoTasked?: ReadonlyMap<string, string>;
   replies: readonly ReplyRowLite[];
   isDraftable(graphMessageId: string): boolean;
 }): { candidates: ActionCandidate[]; uninvolvedHidden: number; meetingOthersHidden: number } {
@@ -617,7 +628,11 @@ export function buildCandidates(a: {
   for (const u of units) {
     const v = a.verdicts.get(`${u.storeAt.source}\u0000${u.storeAt.sourceItemId}`);
     const current = v && verdictIsCurrent(v, u.itemKey, u.source) ? v : null;
-    const p = current?.proposalId ? a.proposals.get(current.proposalId) ?? null : null;
+    // AC-3.32: a label auto-task on ANY message of this email thread. Shown when the verdict has no proposal of its
+    // own, or points at the same one (AC-3.12 linked it). Its approved state reads "Added to board".
+    const labelId = u.email && a.autoTasked ? u.email.messages.map((m) => a.autoTasked!.get(stripFeed(m.id))).find((x): x is string => !!x) ?? null : null;
+    const labelP = labelId && (!current?.proposalId || current.proposalId === labelId) ? a.proposals.get(labelId) ?? null : null;
+    const p = labelP ?? (current?.proposalId ? a.proposals.get(current.proposalId) ?? null : null);
     const base = {
       proposalId: p?.id ?? null,
       proposalState: p?.state ?? null,
@@ -636,6 +651,7 @@ export function buildCandidates(a: {
       correction: p ? correctionFor(p.correction, u.itemKey) : null,
       uninvolved: u.uninvolved,
       at: u.at,
+      ...(labelP ? { autoAdded: labelP.state === "approved", status: "open" as const, onBoard: false, notCheckedReason: null } : {}),
     };
     // 2026-11-17: an item with no current verdict is listed under "Not checked yet" with a plain preview of the
     // latest message from the other person (display only).
@@ -650,7 +666,7 @@ export function buildCandidates(a: {
       out.push({
         ...base,
         source: "email",
-        section: actionSectionFor("email", current?.kind ?? null, f.ownerPosition),
+        section: actionSectionFor("email", current?.kind ?? null, f.ownerPosition) ?? (labelP ? "todo" : null),
         listSender: list ? String(c?.from?.address ?? "").trim().toLowerCase() || null : null,
         display: {
           title: p?.title ?? plainRoles(current?.todo) ?? lo.subject ?? "",
