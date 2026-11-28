@@ -1,6 +1,6 @@
 # Project Memory — huddle-extension-app
 
-## Outlook "Action Needed" label -> automatic board task (2026-11-28, branch claude_actions-label-autotask, NOT merged, NOT live) -- ACT:actions-label-autotask
+## Outlook "Action Needed" label -> automatic board task (2026-11-28, #303 MERGED 0db41631, deploy-swa 46117556048 SUCCESS, back-fill applied 46118406561, 3/3 auto-tasks done per azure-pg-query 46119414397, UAT 46119899445 60/60; NOT owner-confirmed live) -- ACT:actions-label-autotask
 - MEASURED (probe P-8, run 46110175163): the email feed file now carries `categories` (array of strings; 3 x
   ["Action Needed"], 2 x []) and `status` ("pending") on 5 of 98 records. Before this change mapFeedMessage DROPPED
   both, so nothing reached chat.correspondence_ledger.content.

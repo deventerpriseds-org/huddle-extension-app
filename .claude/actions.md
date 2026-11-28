@@ -5574,4 +5574,8 @@ Owner: *"Items that are tentative on my schedule should be on the same exclusion
 ## ACT:actions-label-autotask — emails labelled "Action Needed" become board tasks automatically (owner 2026-11-28) — OPEN
 - [x] Checked the file: categories/status present (P-8) but dropped on ingest. Lock-file fix #302 merged.
 - [x] AC (59) -> build -> red-team (3/13 broke, fixed; once per conversation) on claude_actions-label-autotask.
-- [ ] Verifier -> merge -> deploy -> back-fill dry run (count) -> apply -> UAT; owner confirms the 3 labelled emails are on his board.
+- [x] 3 verifier loops (final SHIP; fixed V-1 in-pass, V-2 label-removed, F-3 cross-instance lock). Merged #303 (0db41631),
+      deploy 46117556048 SUCCESS; back-fill dry run 46117702428 ("at most 3"), apply 46118406561 (gained 5);
+      counts query 46119414397: with_categories 5, action_needed 3, with_status 5, autotask_done 3. UAT 46119899445 60/60
+      (after #304 updated the Modules expectation for Meetings).
+- [ ] Owner confirms the 3 "Action Needed" emails are on his board.
