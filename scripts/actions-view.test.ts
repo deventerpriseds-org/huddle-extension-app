@@ -1828,6 +1828,22 @@ console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail
       await w.pass([er("A6", { subject: "Synthetic shipment", thread: th }), er("B6", { subject: "RE: Synthetic shipment", thread: th })]);
       t("RTL-6 same conversation, same title, first task completed -> createTask total 1", w.calls.create, 1);
     }
+    // RTL-6b once per conversation, ANY title, every decided state; a still-proposed sibling or another conversation does
+    //       not block (no over-match).
+    {
+      const out: Record<string, number> = {};
+      for (const st of ["approved", "completed", "dismissed", "delegated", "proposed"]) {
+        for (const ck of ["conv:rt6b", "conv:other"]) {
+          const w = world();
+          await w.store.upsert(newP("prop-sib", "Synthetic unrelated title", "mb:S6"));
+          w.store.rows.get("prop-sib")!.state = st as Row["state"];
+          w.recs.set("mb:S6", { proposalId: "prop-sib", attempts: 0, done: true, outcome: "created" });
+          await w.pass([er("S6", { subject: "Synthetic unrelated title", thread: { conversationKey: "conv:rt6b", verdict: null } }), er("B6b", { subject: "RE: Synthetic brand new ask", thread: { conversationKey: ck, verdict: null } })]);
+          out[`${st}@${ck === "conv:rt6b" ? "same" : "other"}`] = w.calls.create;
+        }
+      }
+      t("RTL-6b sibling decided under another title -> 0 creates; proposed sibling or other conversation -> 1", out, { "approved@same": 0, "approved@other": 1, "completed@same": 0, "completed@other": 1, "dismissed@same": 0, "dismissed@other": 1, "delegated@same": 0, "delegated@other": 1, "proposed@same": 1, "proposed@other": 1 });
+    }
     // RTL-7 board read fails while the thread's verdict points at a PROPOSED proposal -> nothing created.
     {
       const w = world({ boardFails: true });

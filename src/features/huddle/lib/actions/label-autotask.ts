@@ -15,6 +15,8 @@
 //  - once per email: a persisted record (ledger result_ids.autotask) marks it done; a later label removal or re-add
 //    never re-creates, edits or deletes anything (AC-3.18..3.20);
 //  - any DECIDED proposal referencing this email (or its thread's verdict proposal), any title, stops it (AC-3.21);
+//  - once per CONVERSATION: a decided/approved proposal a sibling email of the same conversation resolved to stops it
+//    too, any title (red-team RTL-6, owner default 2026-11-28);
 //  - the board read happens ONCE per pass, and a FAILED board read creates nothing (fail CLOSED, AC-3.28);
 //  - at most AUTO_TASK_MAX_ATTEMPTS failed attempts, persisted, then it stops and stays listed (AC-3.27);
 //  - `status` is never read (section 4).
@@ -135,6 +137,19 @@ export async function runLabelAutoTask(owner: string, owners: string[], rows: re
   }
   if (!todo.length) return res;
 
+  // RTL-6 (owner default 2026-11-28, AC-3.21 note): ONCE PER CONVERSATION. Every proposal a sibling email of the same
+  // conversation already resolved to (its persisted record, as read at pass START -- a sibling tasked earlier in THIS
+  // pass is handled by the board check, AC-6.3) is looked up; any decided/approved one stops this email, any title.
+  const convProposals = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const ck = r.thread?.conversationKey;
+    const pid = r.record?.proposalId;
+    if (!ck || !pid) continue;
+    const set = convProposals.get(ck) ?? new Set<string>();
+    set.add(pid);
+    convProposals.set(ck, set);
+  }
+
   // AC-3.28: ONE board read per pass; a failed read creates NOTHING this pass (fail closed: no human in the loop).
   let board: Array<{ id: string; title: string }> | null = null;
   try {
@@ -180,6 +195,15 @@ export async function runLabelAutoTask(owner: string, owners: string[], rows: re
         res.onBoard++;
         await finish(row, "on_board", null);
         continue;
+      }
+      const convIds = row.thread?.conversationKey ? [...(convProposals.get(row.thread.conversationKey) ?? [])] : [];
+      if (convIds.length) {
+        const convDecided = (await deps.store.getMany(owners, convIds)).find((p) => DECIDED.has(p.state));
+        if (convDecided) {
+          res.decided++;
+          await finish(row, "decided", convDecided.id);
+          continue;
+        }
       }
       if (v?.proposalId) {
         const [p] = await deps.store.getMany(owners, [v.proposalId]);
