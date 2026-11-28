@@ -81,3 +81,59 @@ EVIDENCE:   this file; branch claude_actions-label-autotask. THIS REPO IS PUBLIC
   refilled; settled auto-task rows not counted). Section 4 holds: neither reads `content.status`.
 - Tests: actions-view 317 -> 320 (LAT-BF).
 - NOT DONE here: running the back-fill (dry run then apply) is a workflow dispatch; not allowed in this build.
+
+## 5. Verification, mutation table, NOT DONE (builder C, 2026-11-28)
+### Suites (all 165 `scripts/*.test.*` files, run at the head of this branch)
+- 119 green under `bun <file>`; 32 more green under `bun test` (they use describe/test).
+- 14 non-zero, and EVERY one fails identically on the section-1 head aa1ebeb2 (extracted with `git archive` and run
+  side by side): confirm-reask-db, confirm-reask-rotation, fireflies-minutes, focus, handoff-lane-b-db, memory-mode,
+  model-policy, nexus-write-fix, nexus-write-loop2, nexus-write-tool, schedule-today-band, start-on-approval,
+  trinnex-library, queue-decision. Pre-existing; not touched by this change.
+- This change's suites: actions-view 320/0 (was 274), actions-view-server real PG 56/0 (was 50), correspondence-ingest
+  196/0, correspondence-ledger-sql real PG 85/0, actions-accuracy 103/0, report-saves-verdicts 39/0, task-proposals
+  199/0, task-proposals-sql 45/0, needs-you 77/0, forwarded-store 83/0, meeting-triage-server 7/0, onedrive-feed rc 0,
+  inbound-alert-exclusions (bun test) 73/0.
+- `npx tsc --noEmit`: 0 errors and `npm run build`: rc 0 (client + server bundles built). Both need `unpdf@1.4.0`,
+  which is in package.json but ABSENT from the shared node_modules (without it: the same 4 tsc errors in
+  `trinnex/extract.server.ts` on the base too, and the build cannot resolve it). It was installed into the scratchpad
+  and overlaid for the run only; nothing in the repo or the shared node_modules changed.
+
+### Mutation table (`mutate.sh`, anchors/replacements under the scratchpad `label-C/`; every FIRED is control EQUIVALENT, exit 0)
+| # | Guard (test id) | Mutation | Result |
+|---|---|---|---|
+| M01 | LAT-AC-3.7 | skip approveProposal | FIRED |
+| M02 | LAT-AC-3.18 | ignore the persisted done record | FIRED |
+| M03 | LAT-AC-3.21 | decided check by same title only | FIRED |
+| M04 | LAT-AC-3.27 | no retry bound | FIRED |
+| M05 | LAT-AC-3.28 | failed board read -> empty board (fail open) | FIRED |
+| M06 | LAT-AC-3.11 | drop reuse of the verdict's proposal | INERT first (equal titles: the store's same-title attach hid it) -> fixture fixed (P has its own title) -> FIRED |
+| M07 | LAT-AC-4.1 | branch on `status` | FIRED |
+| M08 | LAT-AC-6.2 | proposal ref = the thread, not the email | FIRED |
+| M09 | LAT-AC-3.12 | judge does not link the label proposal | FIRED |
+| M10 | LAT-AC-3.32 | no closed "Added to board" row | FIRED |
+| M11 | LAT-AC-3.2 | pass drops its `labels.length` early return | INERT: behaviourally EQUIVALENT (the matcher returns null for [] and the board is read only when something matched). Not proven by this test; AC-3.2's real guard is M19 |
+| M12 | LAT-PG-3 (real PG) | markProcessed drops result_ids.autotask | FIRED |
+| M13 | LAT-PG-1 (real PG) | loader drops `content_purged_at IS NULL` | INERT: EQUIVALENT (a purged row's content is NULL, so `content IS NOT NULL` already excludes it). Not proven |
+| M23 | LAT-PG-1 (real PG) | loader reads teams + sent too | FIRED |
+| M14 | LAT-BF-AC-1.8 | refill plan counts purged rows as refillable | FIRED |
+| M15 | LBL-AC-1.1 (section 1) | drop categories from emailContent | FIRED |
+| M16 | LBL-AC-1.4 (section 1) | categories in the content hash | FIRED |
+| M17 | LBL-AC-1.6 (section 1, real PG) | no content-only label refresh in observe | FIRED |
+| M18 | LBL-AC-3.1 (section 1) | no seed | FIRED |
+| M19 | LBL-AC-3.2 (section 1) | re-seed a stored [] | FIRED |
+| M20 | LBL-AC-3.4 (section 1) | no stale-client carry-over | FIRED |
+| M21 | LBL-S (section 1) | substring match | FIRED |
+| M22 | LBL-S (section 1) | no case-fold | FIRED |
+
+### NOT DONE (each needs something this build was not allowed to do)
+- AC-1.8 / AC-3.25 RUN: the back-fill dry run (prints the at-most auto-create count for the owner) and then the apply run
+  are `correspondence-backfill.yml` dispatches. Order: dry run -> report the `autotask: ... at most N` line to the
+  owner -> apply. Code + counts lines are done and tested.
+- AC-3.5 / AC-3.32 / AC-3.33 live Playwright (save + reload the field; "Added to board" on a synthetic `Test-` row) and
+  AC-3.7 live (one synthetic labelled email -> a journey task, then cleanup): `verify-uat.yml` / live data.
+- AC-3.35 reconciliation counts and AC-1.6's PG run on the live DB: `azure-pg-query.yml` dispatches.
+- AC-3.22 (owner edited the label proposal's title / the board task): holds by construction (the pass never calls
+  edit, and a done email is never touched again) but has no dedicated test.
+- AC-P1 (100 labelled emails inside the heartbeat wall-clock) has no timed test; AC-P2 (<= 10 creates per pass, one
+  board read) is tested.
+- Merge to main: not part of this brief (Tier 1: an independent verifier runs before the PR merges).
