@@ -41,3 +41,38 @@ actions-view after the change: 347 passed, 0 failed (was 338).
 LAT-PG-V2a: the loader returns thread_id, equal to the stored content.conversationId (agreement on a real ingested row).
 LAT-PG-V2: A tasked; label cleared; content purged; labelled reply B, another title -> createTask total 1, B decided on A's proposal; the purged A is absent from loadLabelRows but present in loadAutoTaskConversations.
 actions-view-server: 59 passed, 0 failed (was 56).
+
+## Mutation proofs (mutate.sh, anchors in the session scratchpad label-V1/)
+
+| # | Defect reinstated | Test that must fail | Result |
+|---|---|---|---|
+| M-V1 | in-pass conversation skip disabled (`if (false && ck && convTasked.has(ck))`) | LAT-V1 GUARD | FIRED (control EQUIVALENT), exit 0 |
+| M-V2 | ledger-wide conversation map ignored (`for (const c of [] ...)`) | LAT-V2 GUARD | FIRED (control EQUIVALENT), exit 0 |
+| M-V2-PG | conversation SQL filtered to unpurged rows (`AND content_purged_at IS NULL`) | LAT-PG-V2 GUARD | FIRED (control EQUIVALENT), exit 0 |
+| M-DL | deadline never reached (`pastDeadline = () => false`) | LAT-DL GUARD | FIRED (control EQUIVALENT), exit 0 |
+| M-DL2 | pre-create deadline re-check removed (`if (false)`) | LAT-DL the deadline is re-checked | FIRED (control EQUIVALENT), exit 0 |
+
+## Final suite counts (head after commit 2, 8a0ba699 + this notes commit)
+
+| Suite | Result |
+|---|---|
+| actions-view | 347 passed, 0 failed |
+| actions-view-server (real Postgres) | 59 passed, 0 failed |
+| correspondence-ingest | 196 passed, 0 failed |
+| correspondence-ledger-sql | 87 passed, 0 failed |
+| task-proposals | 199 passed, 0 failed |
+| actions-accuracy | 103 passed, 0 failed |
+| report-saves-verdicts | 39 passed, 0 failed |
+| `npx tsc --noEmit` | rc 0 |
+| `npm run build` | rc 0 |
+
+## Not done / still open
+
+- F-3 (two server instances on two emails of one conversation at once -> 2 tasks): not fixed. No thread/conversation lock
+  in the label pass; the heartbeat is single-flight per process.
+- F-4 (AI judge proposal beside the label proposal on one thread): not changed.
+- F-5 (`loadLabelRows` no time window): not changed. `loadAutoTaskConversations` has no LIMIT on purpose (a LIMIT would
+  silently reopen conversations); it is one indexed-by-owner read of recorded email rows per heartbeat.
+- The conversation key is the raw Outlook conversationId (`conv:<thread_id>`), not mailbox-prefixed. Two of the owner's
+  mailboxes holding the same conversation are treated as ONE conversation (the safer direction: fewer tasks).
+- The label pass budget (8 s) is a safe default, not measured against the live heartbeat.
