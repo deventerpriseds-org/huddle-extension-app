@@ -58,6 +58,18 @@ console.log(`email records: ${records.length}`);
   }
   console.log(`P-8 email record field names: ${JSON.stringify(sorted(keys))}`);
   console.log(`P-8 records with a category: ${withCats} of ${records.length}; labels: ${JSON.stringify(sorted(cats))}`);
+  // `status` appeared on the same handful of records: print its value VOCABULARY (short strings / types only).
+  const st: Record<string, number> = {};
+  const pair: Record<string, number> = {};
+  for (const r of records) {
+    const v = (r as Record<string, unknown>).status;
+    if (v === undefined) continue;
+    const label = typeof v === "string" ? v.trim().slice(0, 30) : `(${Array.isArray(v) ? "array" : typeof v})`;
+    bump(st, label);
+    const c = (r as Record<string, unknown>).categories;
+    bump(pair, `${label} | ${Array.isArray(c) ? c.map((x) => String(x).slice(0, 30)).join("+") : "(no categories)"}`);
+  }
+  console.log(`P-8 status values: ${JSON.stringify(sorted(st))}; status | categories pairs: ${JSON.stringify(sorted(pair))}`);
 }
 
 // P-7 (2026-11-15): OneDrive version history of each feed file -- can the ledger be back-filled since Monday? Prints
