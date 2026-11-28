@@ -41,6 +41,25 @@ try {
 }
 console.log(`email records: ${records.length}`);
 
+// P-8 (2026-11-28): does the email file carry an Outlook category (owner: "tasks from the file that have a category of
+// 'needs action' should automatically be processed")? Prints record FIELD NAMES (schema, not content) and, per
+// category label, how many records carry it. Labels are the owner's own Outlook tags, never message text.
+{
+  const keys: Record<string, number> = {};
+  const cats: Record<string, number> = {};
+  let withCats = 0;
+  for (const r of records) {
+    for (const k of Object.keys(r ?? {})) bump(keys, k);
+    const c = (r as Record<string, unknown>).categories ?? (r as Record<string, unknown>).Categories ?? (r as Record<string, unknown>).category;
+    const list = Array.isArray(c) ? c : typeof c === "string" && c ? c.split(/[;,]/) : [];
+    const labels = list.map((x) => String(typeof x === "object" && x ? (x as Record<string, unknown>).displayName ?? (x as Record<string, unknown>).name ?? "" : x).trim().slice(0, 40)).filter(Boolean);
+    if (labels.length) withCats++;
+    for (const l of new Set(labels)) bump(cats, l);
+  }
+  console.log(`P-8 email record field names: ${JSON.stringify(sorted(keys))}`);
+  console.log(`P-8 records with a category: ${withCats} of ${records.length}; labels: ${JSON.stringify(sorted(cats))}`);
+}
+
 // P-7 (2026-11-15): OneDrive version history of each feed file -- can the ledger be back-filled since Monday? Prints
 // ONLY each version's timestamp and record/line count (no content). The owner: the report must cover everything
 // since Monday that he has not resolved, but the live email file shrank 127 -> 17 overnight.
