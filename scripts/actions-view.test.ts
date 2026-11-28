@@ -1786,13 +1786,26 @@ console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail
       t("RTL-4 create + record write both failing over 8 passes -> createTask at most 5", [w.calls.create <= LT.AUTO_TASK_MAX_ATTEMPTS, w.calls.create], [true, Math.min(w.calls.create, LT.AUTO_TASK_MAX_ATTEMPTS)]);
     }
     // RTL-5 record write fails AFTER a successful create: later passes must not create a 2nd task.
+    //      (2026-11-28 FIX RTL-4: the attempt is now recorded BEFORE the create, so "the ledger is always down" creates
+    //      nothing at all -- RTL-5b. RTL-5 now fails every write made after the first create, which is the scenario its
+    //      name states; the expectation, 1 task across 3 passes, is unchanged.)
+    {
+      const w = world();
+      const ok = w.deps.saveRecord;
+      w.deps.saveRecord = async (id, r) => {
+        if (w.calls.create > 0) throw new Error("ledger down");
+        return ok(id, r);
+      };
+      for (let i = 0; i < 3; i++) await w.pass([er("lost")]);
+      t("RTL-5 created, record never persisted, 3 passes -> createTask total 1", [w.calls.create, w.store.rows.size], [1, 1]);
+    }
     {
       const w = world();
       w.deps.saveRecord = async () => {
         throw new Error("ledger down");
       };
       for (let i = 0; i < 3; i++) await w.pass([er("lost")]);
-      t("RTL-5 created, record never persisted, 3 passes -> createTask total 1", [w.calls.create, w.store.rows.size], [1, 1]);
+      t("RTL-5b the ledger write always fails -> no create at all (record-then-act), the proposal stays proposed", [w.calls.create, w.store.rows.size, [...w.store.rows.values()][0]?.state], [0, 1, "proposed"]);
     }
     // RTL-6 two emails in ONE conversation, across passes: A tasked, owner completes it (gone from the open board), then
     //      reply B arrives with the label and the same stripped subject. No verdict (AI off). Expected: no 2nd task.

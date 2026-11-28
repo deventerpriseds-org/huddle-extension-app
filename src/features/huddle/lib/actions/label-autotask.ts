@@ -53,7 +53,9 @@ export type AutoTaskOutcome =
   | "create_failed"
   | "board_read_failed"
   | "store_failed"
-  | "gave_up";
+  | "gave_up"
+  /** Written BEFORE the create (record-then-act, RTL-4); a crash mid-create reads as one used attempt. */
+  | "attempting";
 
 /** One stored email row the pass may act on (source 'email', content not purged). */
 export interface LabelEmailRow {
@@ -223,6 +225,17 @@ export async function runLabelAutoTask(owner: string, owners: string[], rows: re
       }
       if (!board) {
         await fail(row, "board_read_failed", pid);
+        continue;
+      }
+      // RTL-4 (record-then-act, the classify pass's recordCall pattern): persist THIS attempt BEFORE the create, so the
+      // AUTO_TASK_MAX_ATTEMPTS cap holds even when the create then fails. If the record cannot be written, NO create
+      // this pass (never swallow the write error into a create); the email stays retryable and nothing is lost.
+      const nextAttempts = (row.record?.attempts ?? 0) + 1;
+      try {
+        await deps.saveRecord(row.sourceItemId, { proposalId: pid, attempts: nextAttempts, done: false, outcome: "attempting" });
+      } catch {
+        res.failed++;
+        res.kinds["autotask:record_failed"] = (res.kinds["autotask:record_failed"] ?? 0) + 1;
         continue;
       }
       approvals++;
