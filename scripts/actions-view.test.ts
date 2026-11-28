@@ -1453,5 +1453,311 @@ console.log("LBL. OUTLOOK LABEL -> TASK: matcher spelling table S-1..S-27, the s
   t("LBL-AC-3.10 no to-do -> stripped subject; empty -> the fixed safe title (never empty)", [LB.labelTaskTitle("RE: FW: Quarterly widget order", ""), LB.labelTaskTitle("FW: Synthetic invoice 42", null), LB.labelTaskTitle("RE:  ", "  "), LB.labelTaskTitle(null)], ["Quarterly widget order", "Synthetic invoice 42", LB.LABEL_TASK_FALLBACK_TITLE, LB.LABEL_TASK_FALLBACK_TITLE]);
 }
 
+// ── LAT. OUTLOOK LABEL -> AUTO TASK: the pass (AC-actions-label-autotask 3b-3e, 4, 6; outcome table O-1..O-13) ──
+console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail closed, display");
+{
+  const LT = await import("../src/features/huddle/lib/actions/label-autotask");
+  const PR = await import("../src/features/huddle/lib/proposals/proposals");
+  type LRow = import("../src/features/huddle/lib/actions/label-autotask").LabelEmailRow;
+  type Rec = import("../src/features/huddle/lib/actions/label-autotask").AutoTaskRecord;
+  type Row = import("../src/features/huddle/lib/proposals/proposals").ProposalRow & { lease: number };
+  type Store = import("../src/features/huddle/lib/proposals/proposals").ProposalStore;
+  const OWN = "owner@huddle.example";
+  const OWNS = [OWN];
+  const SEED = ["Action Needed"];
+  // In-memory ProposalStore with the SAME semantics the task-proposals suite pins for the pg store.
+  const memStore = () => {
+    const rows = new Map<string, Row>();
+    const refs = new Map<string, string>();
+    const out = (r?: Row) => (r ? (({ lease: _l, ...x }) => structuredClone(x))(r) : null);
+    const s: Store & { rows: typeof rows } = {
+      rows,
+      async upsert(p) {
+        const rk = [p.owner, p.ref.source, p.ref.sourceItemId, p.normTitle].join("|");
+        if (refs.has(rk)) return { kind: "seen", id: refs.get(rk)! };
+        const active = [...rows.values()].find((r) => r.normTitle === p.normTitle && r.state === "proposed");
+        if (active) {
+          refs.set(rk, active.id);
+          active.sources.push({ ...p.ref, context: p.ref.context ?? null });
+          return { kind: "attached", id: active.id };
+        }
+        rows.set(p.id, { id: p.id, owner: p.owner, state: "proposed", title: p.title, originalTitle: p.title, normTitle: p.normTitle, edited: false, evidence: p.evidence, assignee: null, dueText: null, dueDate: null, sources: [{ ...p.ref, context: p.ref.context ?? null }], taskId: null, createdAt: "2026-11-28T00:00:00Z", decidedAt: null, lease: 0 });
+        refs.set(rk, p.id);
+        return { kind: "created", id: p.id };
+      },
+      async priorRelated(_o, ref, norm) {
+        const same = (r: Row) => r.sources.some((x) => x.source === ref.source && x.sourceItemId === ref.sourceItemId);
+        return [...rows.values()].filter((r) => same(r) || (r.normTitle === norm && r.state === "dismissed")).map((r) => ({ id: r.id, normTitle: r.normTitle, state: r.state, sameItem: same(r) }));
+      },
+      async listActive() {
+        return [...rows.values()].filter((r) => r.state === "proposed").map((r) => out(r)!);
+      },
+      async getMany(_o, ids) {
+        return ids.map((i) => rows.get(i)).filter(Boolean).map((r) => out(r)!);
+      },
+      async claimApprove(_o, id) {
+        const r = rows.get(id);
+        if (!r) return { claimed: false, row: null };
+        if (r.state !== "proposed" || r.lease) return { claimed: false, row: out(r) };
+        r.lease = 1;
+        return { claimed: true, row: out(r) };
+      },
+      async finishApprove(id, taskId) {
+        const r = rows.get(id);
+        if (!r || r.state !== "proposed") return null;
+        Object.assign(r, { state: "approved", taskId, lease: 0 });
+        return out(r);
+      },
+      async releaseApprove(id) {
+        const r = rows.get(id);
+        if (r) r.lease = 0;
+      },
+      async decide(_o, id, state) {
+        const r = rows.get(id)!;
+        r.state = state;
+        return { applied: true, row: out(r) };
+      },
+      async edit(_o, id, title) {
+        const r = rows.get(id)!;
+        Object.assign(r, { title, edited: true });
+        return { applied: true, row: out(r) };
+      },
+    };
+    return s;
+  };
+  // The persisted record store (the ledger's result_ids.autotask): survives a "restart" (a fresh deps object).
+  const records = () => new Map<string, Rec>();
+  const world = (o: { boardFails?: boolean; createFails?: boolean; board?: { id: string; title: string }[]; recs?: Map<string, Rec>; store?: ReturnType<typeof memStore> } = {}) => {
+    const store = o.store ?? memStore();
+    const recs = o.recs ?? records();
+    const board = o.board ?? [];
+    const calls = { create: 0, board: 0 };
+    const logs: string[] = [];
+    const deps = {
+      store,
+      openTasks: async () => {
+        calls.board++;
+        if (o.boardFails) throw new Error("board");
+        return board;
+      },
+      createTask: async (title: string) => {
+        calls.create++;
+        await Promise.resolve();
+        if (o.createFails) return { ok: false as const, error: "Couldn't add that task to your board." };
+        board.push({ id: `task-${calls.create}`, title });
+        return { ok: true as const, taskId: `task-${calls.create}` };
+      },
+      saveRecord: async (id: string, r: Rec) => void recs.set(id, structuredClone(r)),
+    };
+    const pass = async (rs: readonly LRow[], labels: readonly string[] = SEED) => {
+      const r = await LT.runLabelAutoTask(OWN, OWNS, rs.map((x) => ({ ...x, record: recs.get(x.sourceItemId) ?? x.record })), labels, deps);
+      logs.push(JSON.stringify(r));
+      return r;
+    };
+    return { store, recs, board, calls, deps, pass, logs };
+  };
+  const er = (id: string, o: Partial<LRow> & { status?: unknown } = {}): LRow => ({ sourceItemId: `mb:${id}`, subject: "RE: Synthetic widget order", at: "2026-11-27T10:00:00Z", categories: ["Action Needed"], record: null, ...o });
+  const newP = (id: string, title: string, sid: string) => ({ id, owner: OWN, title, normTitle: PR.titleKey(title), evidence: "q", assignee: null, dueText: null, dueDate: null, ref: { source: "email" as const, sourceItemId: sid, at: null } });
+
+  // O-1 / AC-3.7 / AC-3.8 / AC-3.16 / AC-3.18-3.20
+  {
+    const w = world();
+    const r = await w.pass([er("a")]);
+    const rows = [...w.store.rows.values()];
+    t("LAT-AC-3.7 GUARD: one labelled email -> 1 proposal, ref (email, its id), approved, task id set, createTask x1", [rows.length, rows[0]?.sources[0]?.source, rows[0]?.sources[0]?.sourceItemId, rows[0]?.state, !!rows[0]?.taskId, w.calls.create, r.created], [1, "email", "mb:a", "approved", true, 1, 1]);
+    t("LAT-AC-3.8 no model dependency exists (no extract dep) and the board is read once", [Object.keys(w.deps).includes("extract"), w.calls.board], [false, 1]);
+    t("LAT-AC-3.16 origin marker: evidence 'Outlook label: <label>'; title the stripped subject", [rows[0]?.evidence, rows[0]?.title], ["Outlook label: Action Needed", "Synthetic widget order"]);
+    await w.pass([er("a")]);
+    await w.pass([er("a")]);
+    const w2 = world({ recs: w.recs, store: w.store, board: w.board });
+    await w2.pass([er("a")]);
+    t("LAT-AC-3.18 GUARD: 3 more passes and a restart -> 1 proposal, createTask total 1, record done", [w.store.rows.size, w.calls.create + w2.calls.create, w.recs.get("mb:a")?.done, w.recs.get("mb:a")?.outcome], [1, 1, true, "created"]);
+    const snap = JSON.stringify([...w.store.rows.values()]);
+    await w2.pass([er("a", { categories: [] })]);
+    const removedSame = JSON.stringify([...w.store.rows.values()]) === snap;
+    await w2.pass([er("a")]);
+    t("LAT-AC-3.19/3.20 label removed -> proposal/task unchanged; re-added -> still 1, no create", [removedSame, w.store.rows.size, w2.calls.create], [true, 1, 0]);
+  }
+  // AC-3.11 / AC-3.9
+  {
+    const w = world();
+    await w.store.upsert(newP("prop-ai1", "Send the synthetic quote", "mb:z"));
+    await w.pass([er("b", { thread: { conversationKey: "conv:b", verdict: { status: "open", todo: "Send the synthetic quote", proposalId: "prop-ai1", onBoard: false } } })]);
+    t("LAT-AC-3.11 GUARD: the verdict's proposed proposal P is approved itself -> 1 proposal, P approved", [w.store.rows.size, w.store.rows.get("prop-ai1")?.state, w.calls.create], [1, "approved", 1]);
+    const w2 = world();
+    await w2.pass([er("c", { thread: { conversationKey: "conv:c", verdict: { status: "open", todo: "Book the synthetic venue", proposalId: null, onBoard: false } } })]);
+    t("LAT-AC-3.9 an open verdict's to-do is the title", [...w2.store.rows.values()][0]?.title, "Book the synthetic venue");
+  }
+  // AC-3.13 / O-2
+  {
+    const w = world({ board: [{ id: "t-9", title: "Synthetic widget order" }] });
+    const r = await w.pass([er("d")]);
+    const p = [...w.store.rows.values()][0];
+    t("LAT-AC-3.13 same title open on the board -> approved, linked to it, createTask 0", [p?.state, p?.taskId, w.calls.create, r.onBoard], ["approved", "t-9", 0, 1]);
+  }
+  // AC-3.21 / O-4 / O-5
+  for (const state of ["dismissed", "completed", "approved", "delegated"] as const) {
+    const w = world();
+    await w.store.upsert(newP(`prop-ai-${state}`, "Some differently worded AI to-do", "mb:e"));
+    w.store.rows.get(`prop-ai-${state}`)!.state = state;
+    await w.pass([er("e")]);
+    t(`LAT-AC-3.21 GUARD: a ${state} AI-title proposal for this email -> no new proposal, createTask 0`, [w.store.rows.size, w.calls.create, w.recs.get("mb:e")?.outcome], [1, 0, "decided"]);
+  }
+  {
+    const w = world();
+    await w.store.upsert(newP("prop-conv", "Judge worded to-do", "conv:f"));
+    w.store.rows.get("prop-conv")!.state = "dismissed";
+    await w.pass([er("f", { thread: { conversationKey: "conv:f", verdict: null } })]);
+    t("LAT-AC-3.21 a dismissed needs-you proposal on the CONVERSATION ref also stops it", [w.store.rows.size, w.calls.create], [1, 0]);
+    const w3 = world();
+    await w3.store.upsert(newP("prop-v", "x y z", "mb:other"));
+    w3.store.rows.get("prop-v")!.state = "dismissed";
+    await w3.pass([er("g", { thread: { conversationKey: null, verdict: { status: "open", todo: "x y z", proposalId: "prop-v", onBoard: false } } })]);
+    t("LAT-AC-3.21 the thread verdict's own proposal dismissed -> no create", [w3.store.rows.size, w3.calls.create], [1, 0]);
+  }
+  // AC-3.26 / AC-3.27
+  {
+    const recs = records();
+    const store = memStore();
+    let creates = 0;
+    for (let i = 0; i < 7; i++) {
+      const w = world({ createFails: true, recs, store }); // a fresh deps object every pass = a restart
+      await w.pass([er("h")]);
+      creates += w.calls.create;
+    }
+    const p = [...store.rows.values()][0];
+    t("LAT-AC-3.27 GUARD: createTask always fails -> 5 attempts then stop over 7 passes with restarts; stays proposed", [creates, recs.get("mb:h")?.attempts, recs.get("mb:h")?.gaveUp, p?.state, store.rows.size], [5, 5, true, "proposed", 1]);
+  }
+  {
+    const w = world({ createFails: true });
+    await w.pass([er("i")]);
+    const p = [...w.store.rows.values()][0];
+    t("LAT-AC-3.26 a failed create -> stays proposed, lease released, attempt 1 persisted, not done", [p?.state, p?.lease, w.recs.get("mb:i")?.attempts, w.recs.get("mb:i")?.done], ["proposed", 0, 1, false]);
+  }
+  // AC-3.28 / O-9
+  {
+    const w = world({ boardFails: true });
+    const r = await w.pass([er("j")]);
+    t("LAT-AC-3.28 GUARD: board read fails -> createTask 0, proposal proposed, attempt counted, kind code only", [w.calls.create, [...w.store.rows.values()][0]?.state, w.recs.get("mb:j")?.attempts, r.kinds], [0, "proposed", 1, { "autotask:board_read_failed": 1 }]);
+  }
+  // AC-3.15 / O-10
+  {
+    const w = world();
+    const r = await LT.runLabelAutoTask(OWN, OWNS, [er("k")], SEED, { ...w.deps, metaGuard: () => ({ reason: "synthetic owner" }) as never });
+    t("LAT-AC-3.15 meta guard -> no task, proposal stays proposed (listed), terminal", [w.calls.create, [...w.store.rows.values()][0]?.state, w.recs.get("mb:k")?.done, w.recs.get("mb:k")?.outcome, r.metaGuard], [0, "proposed", true, "meta_guard", 1]);
+  }
+  // O-11
+  {
+    const w = world();
+    w.store.upsert = async () => Promise.reject(new Error("db"));
+    const r = await w.pass([er("l")]);
+    t("LAT-O-11 store write fails -> no proposal, createTask 0, attempt counted", [w.calls.create, w.recs.get("mb:l")?.attempts, r.kinds["autotask:store_failed"]], [0, 1, 1]);
+  }
+  // AC-3.2 / AC-6.5 / AC-6.6 / O-12
+  {
+    const w = world();
+    await w.pass([er("m"), er("n"), er("o")], []);
+    t("LAT-AC-3.2 GUARD: setting [] -> 0 proposals, 0 board tasks over 3 labelled emails", [w.store.rows.size, w.calls.create, w.calls.board], [0, 0, 0]);
+    await w.pass([er("m"), er("n"), er("o")], ["Follow up"]);
+    t("LAT-AC-6.6 setting changed to another label -> 'Action Needed' emails are not tasked", [w.store.rows.size, w.calls.create], [0, 0]);
+    await w.pass([er("m", { subject: "Synthetic m" }), er("n", { subject: "Synthetic n" })]);
+    await w.pass([er("m", { subject: "Synthetic m" }), er("n", { subject: "Synthetic n" }), er("o", { subject: "Synthetic o" })]);
+    t("LAT-AC-6.5 restored -> each labelled email tasked once (no duplicate for the earlier ones)", [w.store.rows.size, w.calls.create], [3, 3]);
+  }
+  // Section 4
+  {
+    const outcome = async (status: unknown) => {
+      const w = world();
+      await w.pass([er("p", status === undefined ? {} : { status })]);
+      return [w.store.rows.size, w.calls.create, [...w.store.rows.values()][0]?.title];
+    };
+    const want = [1, 1, "Synthetic widget order"];
+    t("LAT-AC-4.1 GUARD: status pending / done / 'Action Needed' / absent -> identical outcomes", [await outcome("pending"), await outcome("done"), await outcome("Action Needed"), await outcome(undefined)], [want, want, want, want]);
+    const w = world();
+    await w.pass([er("q", { categories: [], status: "Action Needed" })]);
+    t("LAT-AC-4.2 status 'Action Needed' with categories [] -> no task", [w.store.rows.size, w.calls.create], [0, 0]);
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("src/features/huddle/lib/actions/label-autotask.ts", "utf8");
+    const srv = readFileSync("src/features/huddle/lib/actions/actions.server.ts", "utf8");
+    t("LAT-AC-4.3/4.4 the auto path reads no content.status and has no Graph / drive write", [/content\.status|\.status\b(?!\s*===\s*"open")/.test(src.replace(/v\.status === "open"|v && v\.status === "open"/g, "")), /graph\.microsoft|\/messages\/|drive\/items|"PATCH"|"PUT"/.test(src), /content->>'status'/.test(srv)], [false, false, false]);
+    t("LAT-AC-3.14 one task writer: the auto path calls approveProposal, never quick_create_task / invokeJourneyTool", [src.includes("approveProposal("), /quick_create_task|invokeJourneyTool/.test(src), srv.includes("approveDepsFor({ entra_email: cfg.owner })")], [true, false, true]);
+  }
+  // Section 6
+  {
+    const w = world();
+    const th = { conversationKey: "conv:abc", verdict: null };
+    await w.pass([er("A", { thread: th }), er("B", { categories: [], thread: th }), er("C", { categories: undefined, thread: th })]);
+    const p = [...w.store.rows.values()];
+    t("LAT-AC-6.2 GUARD: one of three labelled -> exactly 1 task, ref = A, B and C none", [p.length, p[0]?.sources.map((s) => s.sourceItemId), w.calls.create], [1, ["mb:A"], 1]);
+    const w2 = world();
+    await w2.pass([er("X", { subject: "RE: Synthetic same" }), er("Y", { subject: "FW: Synthetic same" })]);
+    t("LAT-AC-6.3 two labelled emails, same stripped subject -> 1 board task (the 2nd links)", [w2.calls.create, w2.recs.get("mb:X")?.outcome, w2.recs.get("mb:Y")?.outcome], [1, "created", "on_board"]);
+    const w3 = world();
+    await w3.pass([er("X", { subject: "Synthetic one" }), er("Y", { subject: "Synthetic two" })]);
+    t("LAT-AC-6.3 different titles -> 2 tasks", w3.calls.create, 2);
+    const w4 = world();
+    await w4.pass([er("fw", { subject: "FW: Synthetic invoice 42" })]);
+    const f = [...w4.store.rows.values()][0];
+    t("LAT-AC-6.4 labelled forward -> title stripped, ref is the forward's own id", [f?.title, f?.sources[0]?.sourceItemId], ["Synthetic invoice 42", "mb:fw"]);
+    const { readFileSync } = await import("node:fs");
+    const srv = readFileSync("src/features/huddle/lib/actions/actions.server.ts", "utf8");
+    const body = srv.slice(srv.indexOf("export async function loadLabelRows("), srv.indexOf("/** Persist one email's auto-task record"));
+    t("LAT-AC-6.1/3.24 the loader reads source 'email' only, unpurged content only", [body.includes("source = 'email'"), body.includes("content IS NOT NULL AND content_purged_at IS NULL"), /'teams'|'sent'/.test(body)], [true, true, false]);
+  }
+  // AC-P2
+  {
+    const w = world();
+    const r = await w.pass(Array.from({ length: 25 }, (_, i) => er(`many${i}`, { subject: `Synthetic item ${i}` })));
+    t("LAT-AC-P2 at most 10 creates per pass, the rest deferred, one board read", [w.calls.create, r.deferred, w.calls.board], [10, 15, 1]);
+  }
+  // AC-3.30
+  {
+    const w = world({ createFails: true });
+    await w.pass([er("s", { subject: "Synthetic SECRET-SUBJECT" })]);
+    t("LAT-AC-3.30 the pass result carries no subject / label / id text", w.logs.some((l) => /SECRET-SUBJECT|Action Needed|mb:s/.test(l)), false);
+  }
+  // AC-3.23
+  {
+    const store = memStore();
+    const recs = records();
+    const board: { id: string; title: string }[] = [];
+    const a = world({ store, recs, board });
+    const b = world({ store, recs, board });
+    await Promise.all([a.pass([er("u")]), b.pass([er("u")])]);
+    t("LAT-AC-3.23 two concurrent passes -> 1 task, no failure recorded", [a.calls.create + b.calls.create, store.rows.size, recs.get("mb:u")?.attempts, recs.get("mb:u")?.done], [1, 1, 0, true]);
+  }
+  // AC-3.12 (classify side) + AC-3.32 (display)
+  {
+    const u0 = threadUnits(asm, S()).units.find((u) => u.email?.key.includes("conv-1"))!;
+    let proposeCalls = 0;
+    const stored = new Map<string, import("../src/features/huddle/lib/correspondence/action-classify").ActionVerdict>();
+    const deps: ClassifyDeps = {
+      recordCall: async () => {},
+      model: async (sys, inp) => answerFor(sys, inp),
+      propose: async () => (proposeCalls++, { id: "prop-judge", onBoard: false }),
+      storeVerdict: async (at, v) => void stored.set(`${at.source}\u0000${at.sourceItemId}`, v),
+      addMeetingRows: async () => 0,
+      nowIso: () => "2026-11-12T00:00:00Z",
+      labelProposalFor: async (u) => (u.itemKey === u0.itemKey ? "prop-label" : null),
+    };
+    await runClassify(asm, S(), new Set(), 10, deps);
+    const v = stored.get(`${u0.storeAt.source}\u0000${u0.storeAt.sourceItemId}`);
+    t("LAT-AC-3.12 GUARD: a judge's open verdict for a label-tasked thread links the label proposal (no 2nd proposal)", [v?.status, v?.proposalId], ["open", "prop-label"]);
+    const autoTasked = new Map([[u0.refItemId, "prop-label"]]);
+    const props = new Map([["prop-label", { id: "prop-label", state: "approved", title: "Synthetic widget order", assignee: null, correction: null }]]);
+    const sel = selectActionItems(buildCandidates({ assembled: asm, rows, settings: S(), verdicts: new Map(), proposals: props, autoTasked, meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
+    const row = sel.rows.find((r) => r.id === "prop-label");
+    t("LAT-AC-3.32 GUARD: an auto-added task (no verdict yet) is a CLOSED row (approved), not 'Not checked', not counted", [row?.state, row?.title, sel.unchecked.some((r) => r.itemKey === u0.itemKey), sel.counts.all - sel.rows.filter((r) => r.state !== "approved").length], ["approved", "Synthetic widget order", false, 0]);
+    const selJ = selectActionItems(buildCandidates({ assembled: asm, rows, settings: S(), verdicts: stored, proposals: props, autoTasked, meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
+    t("LAT-AC-3.32 with the judge's verdict linked -> still ONE closed row for the thread", selJ.rows.filter((r) => r.itemKey === u0.itemKey).map((r) => r.state), ["approved"]);
+    const view = (await import("node:fs")).readFileSync("src/features/huddle/components/ActionsView.tsx", "utf8");
+    t("LAT-AC-3.33 the card labels approved 'Added to board' and only proposed rows can act", [view.includes('approved: "Added to board"'), view.includes('const open = state === "proposed";'), view.includes("const canAct = (open || triaging)")], [true, true, true]);
+    const sel2 = selectActionItems(buildCandidates({ assembled: asm, rows, settings: S(), verdicts: new Map(), proposals: new Map([["prop-label", { ...props.get("prop-label")!, state: "proposed" }]]), autoTasked, meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
+    t("LAT-AC-3.27 a label proposal still proposed (gave up) stays LISTED for a manual Add as task", sel2.rows.some((r) => r.id === "prop-label" && r.state === "proposed"), true);
+  }
+  t("LAT readAutoTaskRecord malformed -> null / safe defaults", [LT.readAutoTaskRecord(null), LT.readAutoTaskRecord([1]), LT.readAutoTaskRecord({ attempts: -3, done: "yes" })], [null, null, { proposalId: null, attempts: 0, done: false, outcome: "create_failed" }]);
+  t("LAT-AC-3.25 wouldAutoTaskCount: labelled and not done", LT.wouldAutoTaskCount([{ categories: ["Action Needed"], record: null }, { categories: ["action needed"], record: { proposalId: "p", attempts: 0, done: true, outcome: "created" } }, { categories: [], record: null }], SEED), 1);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -591,6 +591,56 @@ try {
     t("NO-AC7 the held-click log line carries no to-do, quote or sender", [logs.length > 0, logs.some((l) => /synthetic|Pat|weekly|Test-/i.test(l))], [true, false]);
   }
 
+  // ── LAT-PG (AC-actions-label-autotask): the label auto-task against the REAL ledger + proposal store SQL ──────
+  {
+    const LT = await import("../src/features/huddle/lib/actions/label-autotask");
+    const em = (id: string, categories: unknown, source: SourceItem["source"] = "email"): SourceItem => ({
+      ...item(id, source),
+      threadId: `lat-conv-${id}`,
+      contentHash: `lat-${id}`,
+      content: { kind: source === "sent" ? "sent" : "email", subject: `RE: Test-label item ${id}`, from: { name: "Pat Example", address: "pat@partner.example" }, to: [O], cc: [], receivedAt: "2026-11-27T10:00:00.000Z", conversationId: `lat-conv-${id}`, internetMessageId: null, bodyText: "Synthetic body.", isForward: false, ...(categories === undefined ? {} : { categories }) } as never,
+    });
+    await L.observe(O, [em("lat-e1", ["Action Needed"]), em("lat-e2", ["Action Needed"]), em("lat-e3", []), em("lat-e4", ["action needed"]), em("lat-t1", undefined, "teams"), em("lat-s1", undefined, "sent")]);
+    await pool.query(`UPDATE chat.correspondence_ledger SET content = NULL, content_purged_at = now() WHERE source_item_id = 'lat-e2'`);
+    // A Teams / Sent row that somehow carried categories must still never be read (AC-6.1 / AC-1.9).
+    await pool.query(`UPDATE chat.correspondence_ledger SET content = content || '{"categories":["Action Needed"]}'::jsonb WHERE source_item_id IN ('lat-t1','lat-s1')`);
+    const loaded = (await A.loadLabelRows([O])).filter((r) => r.sourceItemId.startsWith("lat-"));
+    t("LAT-PG-1 GUARD (real SQL): the loader returns only unpurged EMAIL rows with a non-empty label list", loaded.map((r) => r.sourceItemId).sort(), ["lat-e1", "lat-e4"]);
+    const board: { id: string; title: string }[] = [];
+    let creates = 0;
+    const deps = (fails = false) => ({
+      store: P,
+      openTasks: async () => board,
+      createTask: async (title: string) => {
+        creates++;
+        if (fails) return { ok: false as const, error: "Couldn't add that task to your board." };
+        board.push({ id: `pg-task-${creates}`, title });
+        return { ok: true as const, taskId: `pg-task-${creates}` };
+      },
+      saveRecord: (id: string, r: import("../src/features/huddle/lib/actions/label-autotask").AutoTaskRecord) => A.saveAutoTaskRecord([O], id, r),
+    });
+    const only = (id: string) => async () => (await A.loadLabelRows([O])).filter((r) => r.sourceItemId === id);
+    const r1 = await LT.runLabelAutoTask(O, [O], await only("lat-e1")(), ["Action Needed"], deps());
+    const rec = (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = 'lat-e1'`)).rows[0]?.a;
+    const prop = (await pool.query(`SELECT state, title, evidence, task_id FROM chat.task_proposals WHERE id = $1`, [rec?.proposalId])).rows[0];
+    t("LAT-PG-2 GUARD (real SQL): label -> 1 approved proposal (stripped subject, label evidence, task id) + record done", [r1.created, creates, prop?.state, prop?.title, prop?.evidence, prop?.task_id, rec?.done], [1, 1, "approved", "Test-label item lat-e1", "Outlook label: Action Needed", "pg-task-1", true]);
+    // The ledger reprocesses the row (claim + markProcessed): the record must survive.
+    await pool.query(`UPDATE chat.correspondence_ledger SET status = 'pending', next_attempt_at = now() - interval '1 minute' WHERE source_item_id = 'lat-e1'`);
+    const claimed = (await L.claimDue(O, ["email"], 50, 5)).filter((c) => c.sourceItemId === "lat-e1");
+    for (const c of claimed) await L.markProcessed(c, { needs_you: ["x"] });
+    const kept = (await pool.query(`SELECT result_ids ? 'autotask' k FROM chat.correspondence_ledger WHERE source_item_id = 'lat-e1'`)).rows[0]?.k;
+    t("LAT-PG-3 GUARD (real SQL): markProcessed keeps result_ids.autotask (the once-per-email marker)", [claimed.length, kept], [1, true]);
+    const r2 = await LT.runLabelAutoTask(O, [O], await only("lat-e1")(), ["Action Needed"], deps());
+    t("LAT-PG-4 (real SQL): a later pass (rows re-read = a restart) creates nothing", [r2.created, r2.skippedDone, creates], [0, 1, 1]);
+    t("LAT-PG-5 (real SQL): the thread lookup and the page map find the label proposal", [await A.labelProposalForThread([O], ["lat-e1", "nope"]), (await A.loadAutoTasked([O])).get("lat-e1")], [rec?.proposalId, rec?.proposalId]);
+    // AC-3.27 persisted in the real ledger: 7 passes, each re-reading the row, createTask always failing.
+    const before = creates;
+    for (let i = 0; i < 7; i++) await LT.runLabelAutoTask(O, [O], await only("lat-e4")(), ["Action Needed"], deps(true));
+    const rec4 = (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = 'lat-e4'`)).rows[0]?.a;
+    const p4 = (await pool.query(`SELECT state FROM chat.task_proposals WHERE id = $1`, [rec4?.proposalId])).rows[0];
+    t("LAT-PG-6 GUARD (real SQL): the retry cap is persisted in the ledger: 5 create attempts over 7 passes, then gave up, still proposed", [creates - before, rec4?.attempts, rec4?.gaveUp, p4?.state], [5, 5, true, "proposed"]);
+  }
+
 } catch (e) {
   fail++;
   console.log(`FAIL harness: ${e instanceof Error ? `${e.name}: ${e.message}` : "error"}`);

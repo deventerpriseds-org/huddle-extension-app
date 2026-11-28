@@ -374,6 +374,9 @@ export function makeCorrection(
 export interface ActionCandidate {
   /** The backing chat.task_proposals id; null when none could be stored. */
   proposalId: string | null;
+  /** AC-actions-label-autotask AC-3.32: the backing proposal was AUTO-ADDED to the board from an Outlook label. Listed
+   *  as a closed "Added to board" row (never "Add as task" again), not counted as something to act on. */
+  autoAdded?: boolean;
   proposalState: string | null;
   source: ActionSource;
   /** open = admitted; none = not open; not_checked = no admitted verdict (unclassified, refused, over cap). */
@@ -613,6 +616,12 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     out.held.push({ ...toRow(c, c.section ?? "needs_reply"), heldReason: HELD_REASON_TEXT[reason], heldQuoteLabel: HELD_QUOTE_LABELS[reason] });
   };
   for (const c of cands) {
+    // AC-3.32 / AC-3.33: an auto-added (Outlook label) item is shown CLOSED with its approved state ("Added to board"),
+    // so the owner sees what happened; the What-shows switches still apply. Never counted, never offered again.
+    if (c.autoAdded && c.proposalId && c.proposalState === "approved") {
+      if (!hiddenBySettings(c)) out.rows.push(toRow(c, c.section ?? "todo"));
+      continue;
+    }
     if (isHeldCandidate(c)) {
       pushHeld(c, c.notCheckedReason as HeldReason);
       continue;
@@ -665,6 +674,7 @@ export function selectActionItems(cands: readonly ActionCandidate[], s: ActionsS
     out.uncheckedCounts[r.source]++;
   }
   for (const r of out.rows) {
+    if (r.state === "approved") continue; // AC-3.32: a closed auto-added row is shown, not counted as open work
     out.counts.all++;
     out.counts[r.source]++;
     out.sectionCounts[r.section]++;

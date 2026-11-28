@@ -29,3 +29,35 @@ EVIDENCE:   this file; branch claude_actions-label-autotask. THIS REPO IS PUBLIC
 - Tests: correspondence-ingest 186 -> 196 (LBL-AC-1.1..1.4, 1.9, 1.12, S-21); correspondence-ledger-sql 79 -> 85
   (real PG: LBL-AC-1.6 x4, 1.7, 1.9); actions-view 264 -> 274 (spelling table S-1..S-27 in one guard, 3.1-3.4, 3.9, 3.10).
   AC-1.5: every pre-existing hash expectation unchanged (the 186 old checks all pass).
+
+## 2. Label auto-task pass + display + classify link (piece 2, builder C, 2026-11-28)
+- Restarted after the previous builder was killed; branch at aa1ebeb2 (section 1 commit), worked on a local branch tracking it.
+- NEW `lib/actions/label-autotask.ts` (pure, all I/O injected): `runLabelAutoTask(owner, owners, rows, labels, deps)`.
+  No extract/model dependency exists (AC-3.8). Proposals ONLY through `ProposalStore.upsert` / `priorRelated` /
+  `getMany`; tasks ONLY through the EXISTING `approveProposal` (AC-3.14). Per email: thread verdict `onBoard` -> done;
+  verdict proposal decided -> done (AC-3.21); verdict proposal `proposed` -> approve it (AC-3.11); else every proposal
+  on the email's own ref AND the needs-you conversation ref, any title -> decided stops it, a `proposed` one is reused;
+  else upsert a label proposal (evidence `Outlook label: <label>` = origin marker, AC-3.16; title per AC-3.9/3.10).
+  ONE board read per pass; a failed read creates nothing (fail CLOSED, AC-3.28) and counts an attempt. The board list
+  is extended after each create so a 2nd labelled email of the same title links (AC-6.3). Meta guard = terminal
+  (AC-3.15). Concurrent lease loser = no failure (AC-3.23). <= 10 approves per pass (AC-P2). Kind codes only.
+- Persisted record `chat.correspondence_ledger.result_ids.autotask` = {proposalId, attempts, done, gaveUp?, outcome}
+  on the labelled email's own row (no new table/column). `markProcessed` now keeps `autotask` like `action` /
+  `action_calls` (ledger.server.ts), so a re-judge never wipes the once-per-email marker or the retry count.
+  Done/gave-up rows are never touched again: label removed / re-added changes nothing (AC-3.19/3.20).
+- `proposals.server.ts`: the approve I/O (board read + journey quick_create_task) factored into `approveDepsFor(caller)`,
+  behaviour unchanged; `actOnProposal` and the label pass both use it.
+- `actions.server.ts`: `runLabelAutoTaskPass` runs inside `runActionsClassify` BEFORE the AI switch / cap (no model
+  call), isolated by `.catch` (AC-3.31). `loadLabelRows` reads source 'email' only, unpurged content, non-empty
+  categories (AC-1.9, 3.24, 6.1); never reads `content.status` (AC-4.3). `labelProposalFor` on the classify deps.
+- `pipeline.ts runClassify`: an open verdict with no kept id links to the label proposal of any message of the thread
+  instead of proposing (AC-3.12). `buildCandidates` takes `autoTasked` (ledger id -> proposal id) and shows that
+  proposal for the thread; `actions.ts selectActionItems` lists an `autoAdded` approved proposal as a CLOSED row (state
+  `approved` -> the card's existing `STATE_LABEL.approved` "Added to board", `canAct` false), not counted (AC-3.32/3.33).
+  A label proposal still `proposed` (gave up) is a normal listed row for a manual "Add as task" (AC-3.27).
+- Tests: actions-view 274 -> 315 (section LAT, in-memory store with the pg store's semantics); actions-view-server
+  (real PG) 50 -> 56 (LAT-PG-1..6: loader filter, approve end to end, markProcessed keeps the record, restart, thread
+  lookup, persisted retry cap). correspondence-ingest 196, actions-accuracy 103, report-saves-verdicts 39,
+  task-proposals 199, all 0 failed.
+- `npx tsc --noEmit`: only `trinnex/extract.server.ts` errors (module `unpdf` absent from the shared node_modules;
+  pre-existing, not touched by this change).
