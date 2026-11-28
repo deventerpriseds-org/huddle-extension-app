@@ -1785,6 +1785,17 @@ console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail
       for (let i = 0; i < 8; i++) await w.pass([er("nosave")]);
       t("RTL-4 create + record write both failing over 8 passes -> createTask at most 5", [w.calls.create <= LT.AUTO_TASK_MAX_ATTEMPTS, w.calls.create], [true, Math.min(w.calls.create, LT.AUTO_TASK_MAX_ATTEMPTS)]);
     }
+    // RTL-4b record-then-act: only the write AFTER a failed create fails; the attempt written BEFORE it still counts.
+    {
+      const w = world({ createFails: true });
+      const ok = w.deps.saveRecord;
+      w.deps.saveRecord = async (id, r) => {
+        if (r.outcome !== "attempting") throw new Error("ledger down after create");
+        return ok(id, r);
+      };
+      for (let i = 0; i < 8; i++) await w.pass([er("half")]);
+      t("RTL-4b the post-create write fails, the pre-create attempt record holds -> exactly 5 creates", [w.calls.create, w.recs.get("mb:half")?.attempts], [LT.AUTO_TASK_MAX_ATTEMPTS, LT.AUTO_TASK_MAX_ATTEMPTS]);
+    }
     // RTL-5 record write fails AFTER a successful create: later passes must not create a 2nd task.
     //      (2026-11-28 FIX RTL-4: the attempt is now recorded BEFORE the create, so "the ledger is always down" creates
     //      nothing at all -- RTL-5b. RTL-5 now fails every write made after the first create, which is the scenario its
