@@ -38,7 +38,7 @@ import {
 import { buildCandidates, classifyCallsLeft, currentlyJudgedKeys, runClassify, runReportClassify, inMemoryWrites, type ClassifyDeps, type ThreadTx, type ClassifyResult, type MeetingProposalLite, type ProposalLite, type ThreadUnit } from "./pipeline";
 import { actOnHeldItem, proposeOpenVerdict, threadUnits, type HeldAction, type HeldActResult, type HeldCandidate } from "./pipeline";
 import { verdictIsCurrent } from "./pipeline";
-import { readAutoTaskRecord, runLabelAutoTask, type AutoTaskRecord, type LabelAutoTaskResult, type LabelEmailRow } from "./label-autotask";
+import { readAutoTaskRecord, runLabelAutoTask, type AutoTaskRecord, type LabelAutoTaskDeps, type LabelAutoTaskResult, type LabelEmailRow } from "./label-autotask";
 
 /** The feed config when the correspondence ingest is on (the Actions view reads what the ingest stored). */
 export function actionsConfig(): (OneDriveFeedsConfig & { owner: string }) | null {
@@ -328,23 +328,69 @@ export function attachThreads(rows: ReadonlyArray<Omit<LabelEmailRow, "thread">>
   return rows.map((r) => ({ ...r, ...(byId.has(r.sourceItemId) ? { thread: byId.get(r.sourceItemId)! } : {}) }));
 }
 
+/** Verifier loop-2 F-3: the advisory-lock key that makes the WHOLE label pass single-flight across server instances. */
+export const LABEL_AUTOTASK_LOCK_KEY = "actions-label-autotask";
+
+/** The minimum of a pooled connection the label-pass lock needs (the shared pool satisfies it; a test can inject). */
+export interface LabelLockPool {
+  connect(): Promise<{ query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>; release(err?: boolean | Error): void }>;
+}
+
+/**
+ * Verifier loop-2 F-3: run `fn` only while THIS process holds the cross-instance label-pass lock.
+ * `pg_try_advisory_lock` (session level, non-blocking) on ONE dedicated pooled connection, the same pool and key hash
+ * as withThreadLock. Held elsewhere -> null, nothing runs this tick (the holder is doing the work). The lock query
+ * failing -> throws before `fn` runs, so nothing is ever created without the lock. Released in `finally` on the SAME
+ * connection; if the unlock itself fails, that connection is destroyed (release(true)) so a held lock never goes back
+ * into the pool. Session level, not xact: the pass's writes run on OTHER pooled connections (store, saveRecord).
+ */
+export async function withLabelAutoTaskLock<T>(fn: () => Promise<T>, pool: LabelLockPool = getSharedPool()): Promise<T | null> {
+  const c = await pool.connect();
+  let destroy = false;
+  try {
+    const r = await c.query(`SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS got`, [LABEL_AUTOTASK_LOCK_KEY]);
+    if (r.rows[0]?.got !== true) return null;
+    try {
+      return await fn();
+    } finally {
+      await c.query(`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, [LABEL_AUTOTASK_LOCK_KEY]).catch(() => {
+        destroy = true;
+      });
+    }
+  } finally {
+    c.release(destroy);
+  }
+}
+
+/** Test seam only: replaces the journey-facing parts of the pass's deps (the real store / SQL / lock stay). */
+export interface LabelAutoTaskPassOverrides {
+  deps?: Partial<Pick<LabelAutoTaskDeps, "openTasks" | "createTask" | "metaGuard">>;
+  lockPool?: LabelLockPool;
+}
+
 /** The heartbeat's label auto-task step. Counts-only log (AC-1.10 / AC-3.30). */
-export async function runLabelAutoTaskPass(cfg: OneDriveFeedsConfig & { owner: string }, s: ActionsSettings, assembled: AssembledLedgerPlan, verdicts: ReadonlyMap<string, ActionVerdict>, owners: string[], startMs: number = Date.now()): Promise<LabelAutoTaskResult | null> {
+export async function runLabelAutoTaskPass(cfg: OneDriveFeedsConfig & { owner: string }, s: ActionsSettings, assembled: AssembledLedgerPlan, verdicts: ReadonlyMap<string, ActionVerdict>, owners: string[], startMs: number = Date.now(), overrides: LabelAutoTaskPassOverrides = {}): Promise<LabelAutoTaskResult | null> {
   if (!s.autoTaskLabels.length) return null;
-  const rows = attachThreads(await loadLabelRows(owners), assembled, s, verdicts);
-  if (!rows.length) return null;
-  // V-2: an unreadable conversation map throws here, so the pass creates nothing (fail closed, like the board read).
-  const priorConversations = await loadAutoTaskConversations(owners);
-  const { pgProposalStore } = await import("../proposals/proposals-store.server");
-  const { approveDepsFor } = await import("../proposals/proposals.server");
-  const res = await runLabelAutoTask(cfg.owner, owners, rows, s.autoTaskLabels, {
-    store: pgProposalStore,
-    ...approveDepsFor({ entra_email: cfg.owner }),
-    saveRecord: (id, rec) => saveAutoTaskRecord(owners, id, rec),
-    priorConversations,
-    nowMs: () => Date.now(),
-    deadlineMs: startMs + LABEL_AUTOTASK_BUDGET_MS,
-  });
+  // F-3: the row load, the conversation map and every create sit INSIDE the cross-instance lock, so a second instance's
+  // next pass reads the first one's records. Lock held elsewhere -> null; lock query fails -> throws, nothing created.
+  const res = await withLabelAutoTaskLock(async () => {
+    const rows = attachThreads(await loadLabelRows(owners), assembled, s, verdicts);
+    if (!rows.length) return null;
+    // V-2: an unreadable conversation map throws here, so the pass creates nothing (fail closed, like the board read).
+    const priorConversations = await loadAutoTaskConversations(owners);
+    const { pgProposalStore } = await import("../proposals/proposals-store.server");
+    const { approveDepsFor } = await import("../proposals/proposals.server");
+    return runLabelAutoTask(cfg.owner, owners, rows, s.autoTaskLabels, {
+      store: pgProposalStore,
+      ...approveDepsFor({ entra_email: cfg.owner }),
+      ...overrides.deps,
+      saveRecord: (id, rec) => saveAutoTaskRecord(owners, id, rec),
+      priorConversations,
+      nowMs: () => Date.now(),
+      deadlineMs: startMs + LABEL_AUTOTASK_BUDGET_MS,
+    });
+  }, overrides.lockPool);
+  if (!res) return null;
   if (res.matched)
     console.log(
       `[actions] autotask matched=${res.matched} created=${res.created} on_board=${res.onBoard} decided=${res.decided} meta_guard=${res.metaGuard} failed=${res.failed} gave_up=${res.gaveUp} done=${res.skippedDone} deferred=${res.deferred}${Object.keys(res.kinds).length ? ` kinds=${Object.entries(res.kinds).map(([k, n]) => `${k}=${n}`).join(",")}` : ""}`,

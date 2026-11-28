@@ -666,6 +666,92 @@ try {
       const passBody = srv.slice(srv.indexOf("export async function runLabelAutoTaskPass("), srv.indexOf("// ── AC8 (verifier VERIFY-report-saves-verdicts-1)"));
       t("LAT-PG-V2 the heartbeat pass hands the ledger-wide conversation map + a deadline to the pure pass", [passBody.includes("await loadAutoTaskConversations(owners)"), passBody.includes("priorConversations,"), passBody.includes("deadlineMs: startMs + LABEL_AUTOTASK_BUDGET_MS")], [true, true, true]);
     }
+    // LAT-PG-F3 (verifier loop-2 F-3): the REAL heartbeat label pass (runLabelAutoTaskPass: real loader, real
+    // conversation map, real proposal store, real pg advisory lock), two passes OVERLAPPING as on two instances. Only
+    // the journey-facing board read / create are replaced (a counter). Synthetic data only.
+    {
+      const { assembleLedgerPlan } = await import("../src/features/huddle/lib/correspondence/report-from-ledger");
+      const { loadLedgerReportData } = await import("../src/features/huddle/lib/correspondence/report-from-ledger.server");
+      const { parseFeedsConfig } = await import("../src/features/huddle/lib/external-feeds/onedrive-feed");
+      const { ACTIONS_SETTINGS_DEFAULT } = await import("../src/features/huddle/lib/actions/actions");
+      const conv = (id: string, thread: string, subject: string): SourceItem => {
+        const base = em(id, ["Action Needed"]);
+        return { ...base, threadId: thread, content: { ...(base.content as object), subject, conversationId: thread } as never };
+      };
+      await L.observe(O, [conv("lat-f3a", "lat-conv-f3", "Test-label venue walkthrough"), conv("lat-f3b", "lat-conv-f3", "RE: Test-label seating chart")]);
+      const parsed = parseFeedsConfig(process.env.HUDDLE_ONEDRIVE_FEEDS);
+      const cfgL = { ...parsed!, owner: O };
+      const sL = { ...ACTIONS_SETTINGS_DEFAULT, autoTaskLabels: ["Action Needed"] };
+      const asmL = async () => assembleLedgerPlan(await loadLedgerReportData([O]), cfgL, 0);
+      let f3Creates = 0;
+      let firstSeen!: () => void;
+      const seen = new Promise<void>((r) => (firstSeen = r));
+      let openGate!: () => void;
+      const gate = new Promise<void>((r) => (openGate = r));
+      const f3Deps = {
+        openTasks: async () => [] as { id: string; title: string }[],
+        createTask: async () => {
+          f3Creates++;
+          const n = f3Creates;
+          if (n === 1) {
+            firstSeen();
+            await gate; // pass 1 is mid-create, still holding the lock, while pass 2 starts
+          }
+          return { ok: true as const, taskId: `f3-task-${n}` };
+        },
+      };
+      const pass = async () => A.runLabelAutoTaskPass(cfgL, sL, await asmL(), new Map(), [O], Date.now(), { deps: f3Deps });
+      const p1 = pass();
+      const inCreate = await Promise.race([seen.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 10_000))]);
+      let r2: Awaited<ReturnType<typeof pass>> | "threw" = null;
+      try {
+        r2 = await pass(); // the "other instance": overlaps pass 1, whose create is still in flight
+      } catch {
+        r2 = "threw";
+      }
+      openGate();
+      const r1 = await p1;
+      const recF = async (id: string) => (await pool.query(`SELECT result_ids->'autotask' a FROM chat.correspondence_ledger WHERE source_item_id = $1`, [id])).rows[0]?.a;
+      const ra = await recF("lat-f3a");
+      const rb = await recF("lat-f3b");
+      t(
+        "LAT-PG-F3 GUARD (real SQL + real advisory lock): two OVERLAPPING heartbeat label passes, two emails of one conversation, different titles -> createTask total 1",
+        [inCreate, f3Creates, r1?.created, r2 === null, [ra?.proposalId, rb?.proposalId].filter(Boolean).length > 0, ra?.proposalId === rb?.proposalId],
+        [true, 1, 1, true, true, true],
+      );
+      const r3 = await pass();
+      t("LAT-PG-F3b (real SQL): a later pass after both creates nothing more", [f3Creates, r3?.created ?? 0], [1, 0]);
+
+      // LAT-PG-F3L: the lock query FAILS -> the pass creates nothing (never create without the lock).
+      await L.observe(O, [conv("lat-f3c", "lat-conv-f3c", "Test-label badge printing")]);
+      const before = f3Creates;
+      const brokenPool = {
+        connect: async () => ({
+          query: async () => {
+            throw new Error("synthetic lock query failure");
+          },
+          release: () => undefined,
+        }),
+      };
+      let lockThrew = false;
+      let lockRes: unknown = "unset";
+      try {
+        lockRes = await A.runLabelAutoTaskPass(cfgL, sL, await asmL(), new Map(), [O], Date.now(), { deps: f3Deps, lockPool: brokenPool });
+      } catch {
+        lockThrew = true;
+      }
+      t("LAT-PG-F3L GUARD (real SQL): the lock query fails -> the pass throws before any work and creates nothing, no record written", [lockThrew, lockRes, f3Creates - before, (await recF("lat-f3c")) ?? null], [true, "unset", 0, null]);
+      // The real lock held by ANOTHER session (another instance) -> this tick does nothing; once free, the pass runs.
+      const other = await pool.connect();
+      await other.query(`SELECT pg_advisory_lock(hashtextextended($1, 0))`, [A.LABEL_AUTOTASK_LOCK_KEY]);
+      const heldRes = await A.runLabelAutoTaskPass(cfgL, sL, await asmL(), new Map(), [O], Date.now(), { deps: f3Deps });
+      const whileHeld = f3Creates - before;
+      await other.query(`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, [A.LABEL_AUTOTASK_LOCK_KEY]);
+      other.release();
+      const freeRes = await A.runLabelAutoTaskPass(cfgL, sL, await asmL(), new Map(), [O], Date.now(), { deps: f3Deps });
+      const leaked = (await pool.query(`SELECT count(*)::int n FROM pg_locks WHERE locktype = 'advisory' AND granted`)).rows[0]?.n;
+      t("LAT-PG-F3H (real SQL): lock held by another session -> null, 0 creates; released -> the pass creates 1; no advisory lock left held", [parsed !== null, heldRes, whileHeld, freeRes?.created, f3Creates - before, leaked], [true, null, 0, 1, 1, 0]);
+    }
   }
 
 } catch (e) {
