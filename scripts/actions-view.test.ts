@@ -1696,7 +1696,7 @@ console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail
     t("LAT-AC-6.3 two labelled emails, same stripped subject -> 1 board task (the 2nd links)", [w2.calls.create, w2.recs.get("mb:X")?.outcome, w2.recs.get("mb:Y")?.outcome], [1, "created", "on_board"]);
     const w3 = world();
     await w3.pass([er("X", { subject: "Synthetic one" }), er("Y", { subject: "Synthetic two" })]);
-    t("LAT-AC-6.3 different titles -> 2 tasks", w3.calls.create, 2);
+    t("LAT-AC-6.3 different titles, NOT the same conversation -> 2 tasks (2026-11-28 V-1: one conversation -> 1, see LAT-V1)", w3.calls.create, 2);
     const w4 = world();
     await w4.pass([er("fw", { subject: "FW: Synthetic invoice 42" })]);
     const f = [...w4.store.rows.values()][0];
@@ -1892,6 +1892,58 @@ console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail
       const m = led.match(/WHEN \$\{LABEL_REFRESH_SQL\} THEN l\.content \|\| jsonb_strip_nulls\(jsonb_build_object\(([\s\S]*?)\)\)/);
       const keys = m ? [...m[1].matchAll(/'(\w+)'/g)].map((x) => x[1]).filter((k) => k !== "categories" && k !== "status") : ["NO-MATCH"];
       t("RTL-13 refresh merges only categories/status via strip_nulls, each guarded by `? key`", [keys, led.includes("${n} ? 'categories'"), led.includes("${n} ? 'status'")], [[], true, true]);
+    }
+    // ── VERIFY-actions-label-autotask-1 fixes (docs/qc-evidence/FIX-verify1-actions-label-autotask.md) ──
+    // LAT-V1 (verifier V-1): once per conversation WITHIN one pass, any title; keyed on thread_id or the plan key.
+    {
+      const w = world();
+      const r = await w.pass([er("V1a", { subject: "Synthetic budget", threadId: "cid-v1" }), er("V1b", { subject: "RE: Synthetic budget revised figures", threadId: "cid-v1" })]);
+      const pa = w.recs.get("mb:V1a")?.proposalId;
+      t("LAT-V1 GUARD: same pass, same conversation (thread_id), different titles -> createTask 1, the 2nd decided on the 1st's proposal", [w.calls.create, w.recs.get("mb:V1a")?.outcome, w.recs.get("mb:V1b")?.outcome, w.recs.get("mb:V1b")?.proposalId === pa && !!pa, w.recs.get("mb:V1b")?.done, r.decided], [1, "created", "decided", true, true, 1]);
+      const w2 = world();
+      const th = { conversationKey: "mb:conv:plan-v1", verdict: null };
+      await w2.pass([er("V1c", { subject: "Synthetic alpha", thread: th }), er("V1d", { subject: "RE: Synthetic beta", thread: th })]);
+      const w3 = world();
+      await w3.pass([er("V1e", { subject: "Synthetic alpha", threadId: "cid-v1-x" }), er("V1f", { subject: "RE: Synthetic beta", threadId: "cid-v1-y" })]);
+      t("LAT-V1 plan-key only -> 1; two different conversations, different titles -> 2 (no over-match)", [w2.calls.create, w3.calls.create], [1, 2]);
+      const w4 = world();
+      const r4 = await LT.runLabelAutoTask(OWN, OWNS, [er("V1g", { subject: "Synthetic gamma", threadId: "cid-v1-m" }), er("V1h", { subject: "RE: Synthetic delta", threadId: "cid-v1-m" })], SEED, { ...w4.deps, metaGuard: ((title: string) => (title === "Synthetic gamma" ? { reason: "synthetic owner" } : null)) as never });
+      t("LAT-V1 a meta-guarded sibling does not close the conversation (nothing was added)", [w4.calls.create, r4.metaGuard], [1, 1]);
+      t("LAT-V1 rowConversationKey: thread_id first, else the plan key, else none", [LT.rowConversationKey({ threadId: "c1", thread: { conversationKey: "k", verdict: null } }), LT.rowConversationKey({ threadId: null, thread: { conversationKey: "k", verdict: null } }), LT.rowConversationKey({})], ["conv:c1", "k", null]);
+    }
+    // LAT-V2 (verifier V-2): A tasked, then A's label removed (A no longer a labelled row), then a labelled reply B with
+    // another title. The conversation map comes from EVERY recorded row (priorConversations, keyed on thread_id).
+    {
+      const recs = records();
+      const store = memStore();
+      const w1 = world({ recs, store });
+      await w1.pass([er("V2a", { subject: "Synthetic venue booking", threadId: "cid-v2" })]);
+      const prior = [{ threadId: "cid-v2", proposalId: recs.get("mb:V2a")!.proposalId! }];
+      const w2 = world({ recs, store });
+      const rows2 = [er("V2b", { subject: "RE: Synthetic catering numbers", threadId: "cid-v2" })];
+      await LT.runLabelAutoTask(OWN, OWNS, rows2, SEED, { ...w2.deps, priorConversations: prior });
+      t("LAT-V2 GUARD: label removed from the first email, labelled reply, another title -> createTask total 1, reply decided", [w1.calls.create + w2.calls.create, recs.get("mb:V2b")?.outcome, recs.get("mb:V2b")?.proposalId], [1, "decided", prior[0].proposalId]);
+      const w3 = world({ recs: records(), store });
+      await LT.runLabelAutoTask(OWN, OWNS, [er("V2c", { subject: "RE: Synthetic other thread ask", threadId: "cid-v2-other" })], SEED, { ...w3.deps, priorConversations: prior });
+      t("LAT-V2 another conversation is not blocked by the prior map (no over-match)", w3.calls.create, 1);
+    }
+    // LAT-DL (verifier F-6): the pass deadline. No new create starts after it; the rest are DEFERRED (no attempt used).
+    {
+      let clock = 0;
+      const w = world();
+      const create0 = w.deps.createTask;
+      const deps = { ...w.deps, createTask: async (title: string) => { const out = await create0(title); clock += 60; return out; }, nowMs: () => clock, deadlineMs: 100 };
+      const rows = Array.from({ length: 5 }, (_, i) => er(`dl${i}`, { subject: `Synthetic deadline item ${i}` }));
+      const r = await LT.runLabelAutoTask(OWN, OWNS, rows, SEED, deps);
+      t("LAT-DL GUARD: creates at t=0 and t=60, deadline 100 -> 2 created, 3 deferred, 0 failed, deferred emails have no record", [w.calls.create, r.created, r.deferred, r.failed, rows.slice(2).map((x) => w.recs.has(x.sourceItemId))], [2, 2, 3, 0, [false, false, false]]);
+      const w2 = world();
+      const r2 = await LT.runLabelAutoTask(OWN, OWNS, rows, SEED, { ...w2.deps, nowMs: () => 500, deadlineMs: 100 });
+      t("LAT-DL deadline already passed -> 0 creates, all deferred, nothing recorded", [w2.calls.create, r2.deferred, r2.failed, w2.recs.size], [0, 5, 0, 0]);
+      let c2 = 0;
+      const w3 = world();
+      const slowStore = Object.assign(Object.create(Object.getPrototypeOf(w3.store)), w3.store, { priorRelated: async (...a: Parameters<typeof w3.store.priorRelated>) => { c2 += 200; return w3.store.priorRelated(...a); } });
+      const r3 = await LT.runLabelAutoTask(OWN, OWNS, [er("dlx")], SEED, { ...w3.deps, store: slowStore as typeof w3.store, nowMs: () => c2, deadlineMs: 100 });
+      t("LAT-DL the deadline is re-checked right before the create (slow lookups) -> 0 creates, deferred, no attempt", [w3.calls.create, r3.deferred, w3.recs.get("mb:dlx")?.attempts ?? 0], [0, 1, 0]);
     }
   }
   t("LAT readAutoTaskRecord malformed -> null / safe defaults", [LT.readAutoTaskRecord(null), LT.readAutoTaskRecord([1]), LT.readAutoTaskRecord({ attempts: -3, done: "yes" })], [null, null, { proposalId: null, attempts: 0, done: false, outcome: "create_failed" }]);

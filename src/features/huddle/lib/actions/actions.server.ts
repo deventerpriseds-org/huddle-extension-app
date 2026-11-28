@@ -277,16 +277,35 @@ export async function loadAutoTasked(owners: readonly string[]): Promise<Map<str
 /** The stored email rows a label pass may act on: source 'email' only (Sent / Teams never, AC-1.9 / AC-6.1), content
  *  not purged (AC-3.24), and a non-empty stored categories list. `status` is not read (AC-4.3). */
 export async function loadLabelRows(owners: readonly string[]): Promise<Array<Omit<LabelEmailRow, "thread">>> {
-  const r = await getSharedPool().query<{ id: string; item_at: Date | null; subject: string | null; categories: unknown; autotask: unknown }>(
-    `SELECT source_item_id AS id, item_at, content->>'subject' AS subject, content->'categories' AS categories, result_ids->'autotask' AS autotask
+  const r = await getSharedPool().query<{ id: string; item_at: Date | null; subject: string | null; categories: unknown; autotask: unknown; thread_id: string | null }>(
+    `SELECT source_item_id AS id, item_at, content->>'subject' AS subject, content->'categories' AS categories, result_ids->'autotask' AS autotask,
+            thread_id
        FROM chat.correspondence_ledger
       WHERE owner_email = ANY($1::text[]) AND source = 'email' AND content IS NOT NULL AND content_purged_at IS NULL
         AND jsonb_typeof(content->'categories') = 'array' AND jsonb_array_length(content->'categories') > 0
       LIMIT 2000`,
     [owners],
   );
-  return r.rows.map((x) => ({ sourceItemId: x.id, at: x.item_at ? x.item_at.toISOString() : null, subject: x.subject, categories: x.categories, record: readAutoTaskRecord(x.autotask) }));
+  return r.rows.map((x) => ({ sourceItemId: x.id, at: x.item_at ? x.item_at.toISOString() : null, subject: x.subject, categories: x.categories, record: readAutoTaskRecord(x.autotask), threadId: x.thread_id ?? null }));
 }
+
+/** Verifier V-2: EVERY email ledger row in the owner's scope that carries a result_ids.autotask record with a proposal,
+ *  whether or not it is still labelled and whether or not its content was purged, keyed on the ledger's own thread_id
+ *  (set at ingest from the Outlook conversationId; a purge never clears it). The once-per-conversation map. */
+export async function loadAutoTaskConversations(owners: readonly string[]): Promise<Array<{ threadId: string; proposalId: string }>> {
+  const r = await getSharedPool().query<{ thread_id: string; pid: string }>(
+    `SELECT thread_id, result_ids->'autotask'->>'proposalId' AS pid FROM chat.correspondence_ledger
+      WHERE owner_email = ANY($1::text[]) AND source = 'email' AND thread_id IS NOT NULL AND result_ids ? 'autotask'
+        AND (result_ids->'autotask'->>'proposalId') IS NOT NULL`,
+    [owners],
+  );
+  return r.rows.filter((x) => x.thread_id && x.pid).map((x) => ({ threadId: x.thread_id, proposalId: x.pid }));
+}
+
+/** Verifier F-6: the label pass's share of the heartbeat, counted from the label pass's own start (not the heartbeat's,
+ *  so a slow plan load can never starve it). The classify pass's absolute deadline (heartbeat start + CLASSIFY_BUDGET_MS)
+ *  is unchanged, so the label pass's time comes out of the classify share, never on top of it. */
+export const LABEL_AUTOTASK_BUDGET_MS = 8_000;
 
 /** Persist one email's auto-task record (result_ids.autotask; markProcessed keeps it). */
 export async function saveAutoTaskRecord(owners: readonly string[], sourceItemId: string, rec: AutoTaskRecord): Promise<void> {
@@ -310,16 +329,21 @@ export function attachThreads(rows: ReadonlyArray<Omit<LabelEmailRow, "thread">>
 }
 
 /** The heartbeat's label auto-task step. Counts-only log (AC-1.10 / AC-3.30). */
-export async function runLabelAutoTaskPass(cfg: OneDriveFeedsConfig & { owner: string }, s: ActionsSettings, assembled: AssembledLedgerPlan, verdicts: ReadonlyMap<string, ActionVerdict>, owners: string[]): Promise<LabelAutoTaskResult | null> {
+export async function runLabelAutoTaskPass(cfg: OneDriveFeedsConfig & { owner: string }, s: ActionsSettings, assembled: AssembledLedgerPlan, verdicts: ReadonlyMap<string, ActionVerdict>, owners: string[], startMs: number = Date.now()): Promise<LabelAutoTaskResult | null> {
   if (!s.autoTaskLabels.length) return null;
   const rows = attachThreads(await loadLabelRows(owners), assembled, s, verdicts);
   if (!rows.length) return null;
+  // V-2: an unreadable conversation map throws here, so the pass creates nothing (fail closed, like the board read).
+  const priorConversations = await loadAutoTaskConversations(owners);
   const { pgProposalStore } = await import("../proposals/proposals-store.server");
   const { approveDepsFor } = await import("../proposals/proposals.server");
   const res = await runLabelAutoTask(cfg.owner, owners, rows, s.autoTaskLabels, {
     store: pgProposalStore,
     ...approveDepsFor({ entra_email: cfg.owner }),
     saveRecord: (id, rec) => saveAutoTaskRecord(owners, id, rec),
+    priorConversations,
+    nowMs: () => Date.now(),
+    deadlineMs: startMs + LABEL_AUTOTASK_BUDGET_MS,
   });
   if (res.matched)
     console.log(
