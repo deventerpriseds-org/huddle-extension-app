@@ -1774,6 +1774,7 @@ console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail
       w.recs.set("mb:cap", { proposalId: null, attempts: LT.AUTO_TASK_MAX_ATTEMPTS, done: false, outcome: "create_failed" });
       await w.pass([er("cap")]);
       t("RTL-3 attempts already at the cap (no gaveUp flag) -> 0 createTask calls", w.calls.create, 0);
+      t("RTL-3b wouldAutoTaskCount: a record at the cap (no gaveUp flag) is not counted", LT.wouldAutoTaskCount([{ categories: ["Action Needed"], record: { proposalId: null, attempts: LT.AUTO_TASK_MAX_ATTEMPTS, done: false, outcome: "create_failed" } }, { categories: ["Action Needed"], record: { proposalId: null, attempts: LT.AUTO_TASK_MAX_ATTEMPTS - 1, done: false, outcome: "create_failed" } }], ["Action Needed"]), 1);
     }
     // RTL-4 record write ALWAYS fails, create ALWAYS fails: the cap must still bound createTask calls.
     {

@@ -100,6 +100,12 @@ export interface LabelAutoTaskResult {
 
 const DECIDED: ReadonlySet<ProposalState | string> = new Set(["approved", "completed", "dismissed", "delegated"]);
 
+/** Pure (AC-3.27 + red-team RTL-3): a record the auto path never touches again -- done, gave up, OR already at the
+ *  attempt cap (a record written without the gaveUp flag, e.g. by an older writer, still stops at the cap). */
+export function recordIsTerminal(r: AutoTaskRecord | null | undefined): boolean {
+  return !!r && (r.done || r.gaveUp === true || r.attempts >= AUTO_TASK_MAX_ATTEMPTS);
+}
+
 /** Pure: the label task title for a row (AC-3.9 / 3.10): the CURRENT open verdict's to-do, else the stripped subject. */
 export function rowTaskTitle(r: Pick<LabelEmailRow, "subject" | "thread">): string {
   const v = r.thread?.verdict;
@@ -119,7 +125,7 @@ export async function runLabelAutoTask(owner: string, owners: string[], rows: re
     const label = matchedAutoTaskLabel(row.categories, labels);
     if (!label) continue;
     res.matched++;
-    if (row.record && (row.record.done || row.record.gaveUp)) {
+    if (recordIsTerminal(row.record)) {
       res.skippedDone++;
       continue;
     }
@@ -273,5 +279,5 @@ export function readAutoTaskRecord(raw: unknown): AutoTaskRecord | null {
 /** Pure (AC-3.25): how many stored labelled emails a pass would try to task (no done / gave-up record). */
 export function wouldAutoTaskCount(rows: readonly Pick<LabelEmailRow, "categories" | "record">[], labels: readonly string[]): number {
   if (!labels.length) return 0;
-  return rows.filter((r) => matchedAutoTaskLabel(r.categories, labels) && !(r.record?.done || r.record?.gaveUp)).length;
+  return rows.filter((r) => matchedAutoTaskLabel(r.categories, labels) && !recordIsTerminal(r.record)).length;
 }
