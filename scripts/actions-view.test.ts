@@ -1581,7 +1581,9 @@ console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail
   // AC-3.11 / AC-3.9
   {
     const w = world();
-    await w.store.upsert(newP("prop-ai1", "Send the synthetic quote", "mb:z"));
+    // P's own title differs from the verdict's to-do (the owner edited it / the quote was the title), so only the
+    // verdict link -- not the store's same-title attach -- can find it (mutation M06 was INERT with equal titles).
+    await w.store.upsert(newP("prop-ai1", "Send the synthetic quote by Friday", "mb:z"));
     await w.pass([er("b", { thread: { conversationKey: "conv:b", verdict: { status: "open", todo: "Send the synthetic quote", proposalId: "prop-ai1", onBoard: false } } })]);
     t("LAT-AC-3.11 GUARD: the verdict's proposed proposal P is approved itself -> 1 proposal, P approved", [w.store.rows.size, w.store.rows.get("prop-ai1")?.state, w.calls.create], [1, "approved", 1]);
     const w2 = world();
