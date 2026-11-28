@@ -1757,6 +1757,102 @@ console.log("LAT. OUTLOOK LABEL AUTO-TASK: create once, decided, retry cap, fail
     const sel2 = selectActionItems(buildCandidates({ assembled: asm, rows, settings: S(), verdicts: new Map(), proposals: new Map([["prop-label", { ...props.get("prop-label")!, state: "proposed" }]]), autoTasked, meetingProposals: [], replies: [], isDraftable: () => false }).candidates, S());
     t("LAT-AC-3.27 a label proposal still proposed (gave up) stays LISTED for a manual Add as task", sel2.rows.some((r) => r.id === "prop-label" && r.state === "proposed"), true);
   }
+  // ── RT. RED-TEAM PRE-PASS (docs/qc-evidence/REDTEAM-actions-label-autotask.md). A PASS = the code held; a FAIL =
+  //    the attack succeeded and the assertion states the CORRECT behaviour. Synthetic data only.
+  {
+    const LB = await import("../src/features/huddle/lib/correspondence/email-labels");
+    const AA = await import("../src/features/huddle/lib/actions/actions");
+    // RTL-1 look-alike / near-miss labels never match the seed; true whitespace variants and case do.
+    const near = ["Аction Needed", "Ａction Needed", "Action​Needed", "Action Needed!", "Needs Action", "Action Needed (old)", "Action", "Not Action Needed", "ACTİON NEEDED"];
+    t("RTL-1 look-alike / substring / reordered labels -> no match", near.map((c) => LB.matchedAutoTaskLabel([c], ["Action Needed"])), near.map(() => null));
+    t("RTL-1b whitespace/case variants of the SAME label do match", ["ACTION NEEDED", "action needed", " Action  Needed "].map((c) => !!LB.matchedAutoTaskLabel([c], ["Action Needed"])), [true, true, true]);
+    // RTL-2 an emptied / blank-only setting turns the auto path off (no label survives cleaning).
+    t("RTL-2 setting of blanks / NBSP only -> []", AA.resolveActionsSettings({ autoTaskLabels: ["", "   ", " ", "\t\n"] }).autoTaskLabels, []);
+    // RTL-3 a persisted record at the cap without the gaveUp flag (older writer / partial record) is NOT retried.
+    {
+      const w = world({ createFails: true });
+      w.recs.set("mb:cap", { proposalId: null, attempts: LT.AUTO_TASK_MAX_ATTEMPTS, done: false, outcome: "create_failed" });
+      await w.pass([er("cap")]);
+      t("RTL-3 attempts already at the cap (no gaveUp flag) -> 0 createTask calls", w.calls.create, 0);
+    }
+    // RTL-4 record write ALWAYS fails, create ALWAYS fails: the cap must still bound createTask calls.
+    {
+      const w = world({ createFails: true });
+      w.deps.saveRecord = async () => {
+        throw new Error("ledger down");
+      };
+      for (let i = 0; i < 8; i++) await w.pass([er("nosave")]);
+      t("RTL-4 create + record write both failing over 8 passes -> createTask at most 5", [w.calls.create <= LT.AUTO_TASK_MAX_ATTEMPTS, w.calls.create], [true, Math.min(w.calls.create, LT.AUTO_TASK_MAX_ATTEMPTS)]);
+    }
+    // RTL-5 record write fails AFTER a successful create: later passes must not create a 2nd task.
+    {
+      const w = world();
+      w.deps.saveRecord = async () => {
+        throw new Error("ledger down");
+      };
+      for (let i = 0; i < 3; i++) await w.pass([er("lost")]);
+      t("RTL-5 created, record never persisted, 3 passes -> createTask total 1", [w.calls.create, w.store.rows.size], [1, 1]);
+    }
+    // RTL-6 two emails in ONE conversation, across passes: A tasked, owner completes it (gone from the open board), then
+    //      reply B arrives with the label and the same stripped subject. No verdict (AI off). Expected: no 2nd task.
+    {
+      const w = world();
+      const th = { conversationKey: "conv:rt6", verdict: null };
+      await w.pass([er("A6", { subject: "Synthetic shipment", thread: th })]);
+      w.board.length = 0; // completed on the board
+      await w.pass([er("A6", { subject: "Synthetic shipment", thread: th }), er("B6", { subject: "RE: Synthetic shipment", thread: th })]);
+      t("RTL-6 same conversation, same title, first task completed -> createTask total 1", w.calls.create, 1);
+    }
+    // RTL-7 board read fails while the thread's verdict points at a PROPOSED proposal -> nothing created.
+    {
+      const w = world({ boardFails: true });
+      await w.store.upsert(newP("prop-rt7", "Synthetic venue", "conv:rt7"));
+      await w.pass([er("rt7", { thread: { conversationKey: "conv:rt7", verdict: { status: "open", todo: "Synthetic venue", proposalId: "prop-rt7", onBoard: false } } })]);
+      t("RTL-7 board read fails with a reusable verdict proposal -> createTask 0, still proposed", [w.calls.create, w.store.rows.get("prop-rt7")?.state], [0, "proposed"]);
+    }
+    // RTL-8 a stale (non-open) verdict to-do is never used as the title.
+    t("RTL-8 a closed verdict's to-do is not the title", LT.rowTaskTitle({ subject: "RE: Synthetic subject", thread: { conversationKey: null, verdict: { status: "none", todo: "Stale to-do", proposalId: null, onBoard: false } } }), "Synthetic subject");
+    // RTL-9 the thread verdict's proposal was dismissed under ANOTHER title, on a sibling email -> stops the auto path.
+    {
+      const w = world();
+      await w.store.upsert(newP("prop-rt9", "Some other wording", "mb:sib9"));
+      await w.store.decide(OWNS, "prop-rt9", "dismissed");
+      await w.pass([er("rt9", { subject: "Synthetic thing", thread: { conversationKey: "conv:rt9", verdict: { status: "open", todo: "", proposalId: "prop-rt9", onBoard: false } } })]);
+      t("RTL-9 thread verdict proposal dismissed under another title -> createTask 0", w.calls.create, 0);
+    }
+    // RTL-10 status is never read: categories decide alone, regardless of a status that LOOKS like an instruction.
+    {
+      const w = world();
+      await w.pass([er("st", { categories: [], status: "Action Needed" } as Partial<LRow>), er("st2", { categories: ["Done"], status: "needs action" } as Partial<LRow>)]);
+      t("RTL-10 status 'Action Needed' / 'needs action' with non-matching categories -> 0 tasks", w.calls.create, 0);
+    }
+    // RTL-11 no text is logged: no console call in the label modules; the server pass log interpolates counts only.
+    {
+      const { readFileSync } = await import("node:fs");
+      const a = readFileSync("src/features/huddle/lib/actions/label-autotask.ts", "utf8");
+      const b = readFileSync("src/features/huddle/lib/correspondence/email-labels.ts", "utf8");
+      const srv = readFileSync("src/features/huddle/lib/actions/actions.server.ts", "utf8");
+      const pass = srv.slice(srv.indexOf("export async function runLabelAutoTaskPass("), srv.indexOf("// ── AC8 (verifier"));
+      const logs = pass.match(/console\.\w+\([\s\S]*?\);/g) ?? [];
+      const interps = logs.flatMap((l) => [...l.matchAll(/\$\{([^}]*)\}/g)].map((x) => x[1]));
+      t("RTL-11 no console in label modules; the pass log interpolates only res.* counts / kinds", [/console\./.test(a), /console\./.test(b), logs.length > 0, interps.every((x) => /^(res\.|Object\.|`|k|n|\s)/.test(x.trim()) && !/subject|categories|title|sourceItemId|cfg\./.test(x))], [false, false, true, true]);
+    }
+    // RTL-12 the back-fill label block reads only (no INSERT / UPDATE / DELETE / observe / storeContent in it).
+    {
+      const { readFileSync } = await import("node:fs");
+      const bf = readFileSync("scripts/correspondence-backfill.ts", "utf8");
+      const blk = bf.slice(bf.indexOf("// Outlook labels (AC-actions-label-autotask"), bf.indexOf("// Fireflies: every meeting"));
+      t("RTL-12 the back-fill label block writes nothing", [blk.length > 100, /\b(INSERT|UPDATE|DELETE)\b|observe\(|storeContent\(|saveAutoTaskRecord|runLabelAutoTask/.test(blk)], [true, false]);
+    }
+    // RTL-13 the content-only refresh writes ONLY categories / status, and an absent incoming key never clears.
+    {
+      const { readFileSync } = await import("node:fs");
+      const led = readFileSync("src/features/huddle/lib/correspondence/ledger.server.ts", "utf8");
+      const m = led.match(/WHEN \$\{LABEL_REFRESH_SQL\} THEN l\.content \|\| jsonb_strip_nulls\(jsonb_build_object\(([\s\S]*?)\)\)/);
+      const keys = m ? [...m[1].matchAll(/'(\w+)'/g)].map((x) => x[1]).filter((k) => k !== "categories" && k !== "status") : ["NO-MATCH"];
+      t("RTL-13 refresh merges only categories/status via strip_nulls, each guarded by `? key`", [keys, led.includes("${n} ? 'categories'"), led.includes("${n} ? 'status'")], [[], true, true]);
+    }
+  }
   t("LAT readAutoTaskRecord malformed -> null / safe defaults", [LT.readAutoTaskRecord(null), LT.readAutoTaskRecord([1]), LT.readAutoTaskRecord({ attempts: -3, done: "yes" })], [null, null, { proposalId: null, attempts: 0, done: false, outcome: "create_failed" }]);
   t("LAT-AC-3.25 wouldAutoTaskCount: labelled and not done", LT.wouldAutoTaskCount([{ categories: ["Action Needed"], record: null }, { categories: ["action needed"], record: { proposalId: "p", attempts: 0, done: true, outcome: "created" } }, { categories: [], record: null }], SEED), 1);
 }
