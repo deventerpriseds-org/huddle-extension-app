@@ -348,6 +348,26 @@ CREATE TABLE IF NOT EXISTS chat.correspondence_cursor (owner_email TEXT NOT NULL
   t("CC-4 a hash change writes the new content", [await L.observe(O, [{ ...item("k1:m2", "h2"), content: content("2b") }]), (await crow("k1:m2")).content], [{ inserted: 0, changed: 1, unchanged: 0 }, content("2b")]);
   t("CC-5 a hash change with NO content keeps the stored content", [await L.observe(O, [item("k1:m2", "h3")]), (await crow("k1:m2")).content], [{ inserted: 0, changed: 1, unchanged: 0 }, content("2b")]);
 
+  // LBL (2026-11-28, AC-actions-label-autotask AC-1.6 / AC-1.7): a label added LATER reaches the stored content with
+  // no re-judge -- content-only refresh on an unchanged hash. Synthetic content only.
+  {
+    const emailC = (cats?: string[], status?: string) => ({ kind: "email" as const, subject: "SYNTH subject", from: { name: null, address: "pat@partner.example" }, to: [], cc: [], receivedAt: "2026-11-11T10:00:00.000Z", conversationId: "conv-L", internetMessageId: null, bodyText: "SYNTH body", isForward: false, ...(cats ? { categories: cats } : {}), ...(status ? { status } : {}) });
+    const ei = (id: string, c: unknown): SourceItem => ({ ...item(id, "he1", "email"), content: c as never });
+    const lrow = async (id: string) => (await pool.query(`SELECT content->'categories' cats, content->'status' st, content ? 'categories' has, content->>'subject' subj, status, attempts, claim_version::int v, content_purged_at IS NOT NULL purged, content IS NULL nul FROM chat.correspondence_ledger WHERE source='email' AND source_item_id=$1`, [id])).rows[0];
+    await L.observe(O, [ei("mb:L1", emailC([]))]);
+    await pool.query(`UPDATE chat.correspondence_ledger SET status='processed', attempts=1, claim_version=4 WHERE source='email' AND source_item_id='mb:L1'`);
+    t("LBL-AC-1.6 GUARD: same hash + a newly added label -> stored categories refreshed; status / attempts / claim_version untouched; counted", [await L.observe(O, [ei("mb:L1", emailC(["Action Needed"], "pending"))]), await lrow("mb:L1")], [{ inserted: 0, changed: 0, unchanged: 1, labelsRefreshed: 1 }, { cats: ["Action Needed"], st: "pending", has: true, subj: "SYNTH subject", status: "processed", attempts: 1, v: 4, purged: false, nul: false }]);
+    t("LBL-AC-1.6 a second identical read refreshes nothing (no labelsRefreshed key)", await L.observe(O, [ei("mb:L1", emailC(["Action Needed"], "pending"))]), { inserted: 0, changed: 0, unchanged: 1 });
+    t("LBL-AC-1.6 incoming content WITHOUT the keys (unknown) never clears the stored labels", [await L.observe(O, [ei("mb:L1", emailC())]), (await lrow("mb:L1")).cats], [{ inserted: 0, changed: 0, unchanged: 1 }, ["Action Needed"]]);
+    t("LBL-AC-1.6 a label removed in the file is refreshed to [] (stored, task logic decides)", [await L.observe(O, [ei("mb:L1", emailC([]))]), (await lrow("mb:L1")).cats, (await lrow("mb:L1")).status], [{ inserted: 0, changed: 0, unchanged: 1, labelsRefreshed: 1 }, [], "processed"]);
+    await L.observe(O, [ei("mb:L2", emailC([]))]);
+    await pool.query(`UPDATE chat.correspondence_ledger SET content=NULL, content_purged_at=now() WHERE source='email' AND source_item_id='mb:L2'`);
+    t("LBL-AC-1.7 GUARD: a purged row stays NULL when a label arrives (retention not undone)", [await L.observe(O, [ei("mb:L2", emailC(["Action Needed"]))]), (await lrow("mb:L2")).nul], [{ inserted: 0, changed: 0, unchanged: 1 }, true]);
+    await L.observe(O, [{ ...item("k9:t1", "ht"), content: content("9") }]);
+    t("LBL-AC-1.9 a Teams row is never label-refreshed", [await L.observe(O, [{ ...item("k9:t1", "ht"), content: { ...(content("9") as object), categories: ["Action Needed"] } as never }]), (await crow("k9:t1")).content], [{ inserted: 0, changed: 0, unchanged: 1 }, content("9")]);
+    await pool.query(`DELETE FROM chat.correspondence_ledger WHERE source_item_id IN ('mb:L1','mb:L2','k9:t1')`);
+  }
+
   // CS: Sent Items are store-only -- inserted processed, never pending again, never claimed even if forced pending.
   const sentItem = (id: string, hash = "s1"): SourceItem => ({ ...item(id, hash, "sent"), storeOnly: true, content: { kind: "sent", subject: "SYNTH", from: { name: null, address: "owner@work.example" }, to: ["pat@partner.example"], cc: [], receivedAt: null, conversationId: "conv-1", internetMessageId: null, bodyText: "SYNTH sent body", isForward: false, sentAt: "2026-11-11T10:00:00.000Z" } });
   t("CS-1 a sent item is inserted 'processed' with its content", [await L.observe(O, [sentItem("mb:S1")]), (await crow("mb:S1", "sent")).status, (await crow("mb:S1", "sent")).content?.kind], [{ inserted: 1, changed: 0, unchanged: 0 }, "processed", "sent"]);

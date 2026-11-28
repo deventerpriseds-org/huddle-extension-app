@@ -23,7 +23,9 @@ import {
   classifyEnabled,
   resolveActionsSettings,
   keepStoredAlertSkipSubjects,
+  keepStoredAutoTaskLabels,
   payloadLacksAlertSkipList,
+  payloadLacksAutoTaskLabels,
   withItemCorrection,
   withItemUndo,
   selectActionItems,
@@ -470,7 +472,17 @@ export async function saveActionsSettings(caller: { entra_object_id?: string; en
       return { ok: false, error: "Couldn't read your saved settings, so nothing was changed. Try again." };
     }
   }
-  const s = resolveActionsSettings(keepStoredAlertSkipSubjects(raw, stored), ownNamesSeed(cfg));
+  // 2026-11-28 (AC-3.4): the same carry-over (and the same refuse-on-read-failure) for "Outlook labels that create a
+  // task". The stored row is read once: only when the block above did not already read it.
+  if (payloadLacksAutoTaskLabels(raw) && !payloadLacksAlertSkipList(raw)) {
+    try {
+      stored = await getActionsSettingsRaw(cfg.owner);
+    } catch {
+      return { ok: false, error: "Couldn't read your saved settings, so nothing was changed. Try again." };
+    }
+  }
+  raw = keepStoredAutoTaskLabels(raw, stored);
+  const s =resolveActionsSettings(keepStoredAlertSkipSubjects(raw, stored), ownNamesSeed(cfg));
   await setActionsSettingsRaw(cfg.owner, s);
   return { ok: true, settings: s };
 }

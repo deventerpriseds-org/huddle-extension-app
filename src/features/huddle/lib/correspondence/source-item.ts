@@ -23,6 +23,7 @@ import type { InboundMessage } from "../email/inbound-email";
 import { FEED_ID_PREFIX, feedRecordBody, mapFeedMessage, mapSentRecords, type FeedInboundMessage, type OneDriveFeedsConfig } from "../external-feeds/onedrive-feed";
 import { FORWARD_SUBJECT, forwardedPart, type ForwardedPart } from "./forwarded";
 import { parseRecipients } from "./needs-you";
+import { emailCategories, emailStatus } from "./email-labels";
 
 export type CorrespondenceSource = "email" | "teams" | "transcript" | "sent";
 export const CORRESPONDENCE_SOURCES: readonly CorrespondenceSource[] = ["email", "teams", "transcript", "sent"];
@@ -51,6 +52,14 @@ export interface EmailContent {
   forwarded?: ForwardedPart;
   /** Present only when the record carries `hasAttachments`. */
   hasAttachments?: boolean;
+  /** 2026-11-28 (AC-1.1/1.3): the Outlook labels, as sent, after the email-only pre-step + normalizeCategories
+   *  (email-labels.ts emailCategories). ABSENT = the record had no `categories` key (unknown); [] = known empty.
+   *  Not part of the content hash (AC-1.4); a later label change reaches a stored row through the content-only
+   *  refresh in observe (AC-1.6). Never on Sent Items or Teams (AC-1.9). */
+  categories?: string[];
+  /** 2026-11-28 (AC-1.2, section 4): the feed's `status` string, stored as sent (<= 64 chars) and NEVER interpreted.
+   *  Absent when the record had none or a non-string. Not part of the content hash. */
+  status?: string;
 }
 
 export interface SentContent extends Omit<EmailContent, "kind"> {
@@ -232,6 +241,8 @@ export function emailContent(rec: Record<string, unknown>, mapped: InboundMessag
   // The forwarded part comes from the SAME raw body mapFeedMessage read (feedRecordBody), never from bodyText.
   const raw = isForward ? feedRecordBody(rec) : null;
   const forwarded = raw ? forwardedPart(mapped.subject, raw.raw, raw.isHtml) : null;
+  const categories = emailCategories(rec);
+  const status = emailStatus(rec);
   return {
     kind: "email",
     subject: mapped.subject ?? null,
@@ -245,6 +256,8 @@ export function emailContent(rec: Record<string, unknown>, mapped: InboundMessag
     isForward,
     ...(forwarded ? { forwarded } : {}),
     ...(typeof rec.hasAttachments === "boolean" ? { hasAttachments: rec.hasAttachments } : {}),
+    ...(categories ? { categories } : {}),
+    ...(status !== null ? { status } : {}),
   };
 }
 
@@ -277,7 +290,9 @@ export function sentSourceItems(
     }
     seen.add(sourceItemId);
     const mapped = mapFeedMessage(rec, cfg.mailbox);
-    const content: SentContent = { ...emailContent(rec, mapped), kind: "sent", sentAt: ok.sentAt };
+    // AC-1.9: labels + status are an inbox-only change; Sent Items stays exactly as it was.
+    const { categories: _labels, status: _status, ...base } = emailContent(rec, mapped);
+    const content: SentContent = { ...base, kind: "sent", sentAt: ok.sentAt };
     items.push({
       source: "sent",
       sourceItemId,
@@ -484,6 +499,9 @@ export interface ObserveResult {
   /** Unchanged rows whose stored content was NULL and is now filled (2026-11-16). Present only when > 0, so the
    *  result of an observe that fills nothing is exactly the earlier three-field shape. */
   contentFilled?: number;
+  /** 2026-11-28 (AC-1.6): unchanged-hash email rows whose stored labels / status were refreshed (content only).
+   *  Present only when > 0. */
+  labelsRefreshed?: number;
 }
 
 /** Content-only storage (2026-11-16), separate from LedgerStore so the processing contract is unchanged. */

@@ -1384,5 +1384,74 @@ t("H-5 classify ON by default for the configured owner only; explicit wins", [cl
   t("NORT-8 held: onBoard wins over proposalMissing; a deleted rescue stays held (no_task_record); decided no-section hidden; '' id held; none answered", [rt8Groups, rt8.held.map((r) => r.heldReason)], [[[], [], ["rt8|b", "rt8|d"].sort(), [], ["rt8|e"]], [A.HELD_REASON_TEXT.no_task_record, A.HELD_REASON_TEXT.no_task_record]]);
 }
 
+console.log("LBL. OUTLOOK LABEL -> TASK: matcher spelling table S-1..S-27, the setting (AC-actions-label-autotask 3a, 5)");
+{
+  const LB = await import("../src/features/huddle/lib/correspondence/email-labels");
+  const AA = await import("../src/features/huddle/lib/actions/actions");
+  const seed = [...LB.AUTO_TASK_LABELS_DEFAULT];
+  // The stored shape as the ingest produces it (pre-step + normalizeCategories), then the matcher.
+  const verdict = (cats: unknown, labels: readonly string[] = seed, present = true) => {
+    const stored = LB.emailCategories(present ? { categories: cats } : {});
+    return LB.matchedAutoTaskLabel(stored ?? undefined, labels) !== null;
+  };
+  const S: [string, unknown, readonly string[] | null, boolean][] = [
+    ["S-1", ["Action Needed"], null, true],
+    ["S-2", ["action needed"], null, true],
+    ["S-3", [" Action Needed "], null, true],
+    ["S-4", ["ACTION NEEDED"], null, true],
+    ["S-5a", ["Action  Needed"], null, true],
+    ["S-5b", ["Action Needed"], null, true],
+    ["S-6", "Action Needed", null, true],
+    ["S-7", "Blue category; Action Needed", null, true],
+    ["S-8a", [{ displayName: "Action Needed" }], null, true],
+    ["S-8b", { displayName: "Action Needed" }, null, true],
+    ["S-9", ["Blue category", "Action Needed"], null, true],
+    ["S-10", ["Action Needed"], ["action needed "], true],
+    ["S-11", ["Needs Action"], null, false],
+    ["S-12", ["Needs Action"], ["Action Needed", "Needs Action"], true],
+    ["S-13", ["Action Needed - urgent"], null, false],
+    ["S-14a", ["No Action Needed"], null, false],
+    ["S-14b", ["Action Needed?"], null, false],
+    ["S-14c", ["ActionNeeded"], null, false],
+    ["S-15/16/17", [], null, false],
+    ["S-18a", [""], null, false],
+    ["S-18b", ["   "], null, false],
+    ["S-18c", "", null, false],
+    ["S-18d", ";;", null, false],
+    ["S-19", [""], [""], false],
+    ["S-19b", [""], ["  "], false],
+    ["S-20", ["Action Needed"], [], false],
+    ["S-21a", null, null, false],
+    ["S-21b", 42, null, false],
+    ["S-21c", true, null, false],
+    ["S-21d", {}, null, false],
+    ["S-21e", [42, null], null, false],
+    ["S-24", ["Action​Needed"], null, false],
+    ["S-26", [{ displayName: "Action Needed - urgent" }], null, false],
+    ["S-27", "Action Needed, Blue category", null, false],
+  ];
+  t("LBL-S GUARD: every spelling-table row gives its expected verdict", S.map(([id, c, l]) => [id, verdict(c, l ?? seed)]), S.map(([id, , , want]) => [id, want]));
+  t("LBL-S-22 key absent -> no match; S-23 'Categories' (capital C) is not read", [verdict(undefined, seed, false), LB.matchedAutoTaskLabel(LB.emailCategories({ Categories: ["Action Needed"] }) ?? undefined, seed)], [false, null]);
+  // S-15 / S-16 / S-17: the matcher takes ONLY categories, so a subject / body / status saying "Action Needed" is not read.
+  t("LBL-S-15..17 only categories are read: the matcher's one input is the categories value", LB.matchedAutoTaskLabel.length, 2);
+  t("LBL-S the matched label is returned trimmed, as the email spells it", LB.matchedAutoTaskLabel([" action needed "], seed), "action needed");
+  // 3a: the setting
+  t("LBL-AC-3.1 GUARD: no stored field -> the seed ['Action Needed']; default carries it", [AA.resolveActionsSettings({}).autoTaskLabels, AA.ACTIONS_SETTINGS_DEFAULT.autoTaskLabels], [["Action Needed"], ["Action Needed"]]);
+  t("LBL-AC-3.2 GUARD: a stored [] is kept (never re-seeded); a non-array -> the seed", [AA.resolveActionsSettings({ autoTaskLabels: [] }).autoTaskLabels, AA.resolveActionsSettings({ autoTaskLabels: "x" }).autoTaskLabels], [[], ["Action Needed"]]);
+  t("LBL-AC-3.3 cleaned: non-strings / blanks dropped, case+space duplicates collapsed, bounded 20 x 100", (() => {
+    const r = AA.resolveActionsSettings({ autoTaskLabels: [42, null, "", "  ", " Action Needed ", "action  needed", "Follow up", "x".repeat(150), ...Array.from({ length: 30 }, (_, i) => `L${i}`)] }).autoTaskLabels;
+    return [r.slice(0, 3), r[2].length, r.length, r.every((x) => x.length <= 100)];
+  })(), [["Action Needed", "Follow up", "x".repeat(100)], 100, 20, true]);
+  t("LBL-AC-3.4 GUARD: a save payload lacking the list keeps the stored one; a payload with a list (even []) is used", [
+    AA.resolveActionsSettings(AA.keepStoredAutoTaskLabels({ dailyCap: 9 }, { autoTaskLabels: ["Follow up"] })).autoTaskLabels,
+    AA.resolveActionsSettings(AA.keepStoredAutoTaskLabels({ autoTaskLabels: [] }, { autoTaskLabels: ["Follow up"] })).autoTaskLabels,
+    AA.resolveActionsSettings(AA.keepStoredAutoTaskLabels({ dailyCap: 9 }, null)).autoTaskLabels,
+    AA.payloadLacksAutoTaskLabels({ dailyCap: 1 }), AA.payloadLacksAutoTaskLabels({ autoTaskLabels: [] }),
+  ], [["Follow up"], [], ["Action Needed"], true, false]);
+  // 3b: the title
+  t("LBL-AC-3.9 an open verdict's non-blank to-do is the title", LB.labelTaskTitle("RE: Synthetic order", "Send the synthetic quote"), "Send the synthetic quote");
+  t("LBL-AC-3.10 no to-do -> stripped subject; empty -> the fixed safe title (never empty)", [LB.labelTaskTitle("RE: FW: Quarterly widget order", ""), LB.labelTaskTitle("FW: Synthetic invoice 42", null), LB.labelTaskTitle("RE:  ", "  "), LB.labelTaskTitle(null)], ["Quarterly widget order", "Synthetic invoice 42", LB.LABEL_TASK_FALLBACK_TITLE, LB.LABEL_TASK_FALLBACK_TITLE]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

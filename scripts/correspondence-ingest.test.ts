@@ -255,6 +255,28 @@ t("AC-2.3 drive-item identity: a new eTag is a CHANGE of the same item", (() => 
 })(), [true, false]);
 t("AC-2.2 snapshot eTag does not affect a provider-id item's hash", emailSourceItem(recs[0], mapFeedMessage(recs[0], cfg.mailbox), { ...file, etag: "other" }, cfg.mailbox)!.contentHash, e1.contentHash);
 
+console.log("D1b. OUTLOOK LABELS + STATUS reach the stored content (AC-actions-label-autotask section 1)");
+{
+  const adapt = (extra: Record<string, unknown>, base: Record<string, unknown> = recs[0]) => {
+    const r = { ...base, ...extra };
+    return emailSourceItem(r, mapFeedMessage(r, cfg.mailbox), file, cfg.mailbox)!;
+  };
+  const ec = (x: Record<string, unknown>) => adapt(x).content as EmailContent;
+  const { categories: _c0, status: _s0, ...noKeys } = recs[0] as Record<string, unknown>;
+  t("LBL-AC-1.1 categories kept as sent (not lower-cased)", ec({ categories: ["Action Needed"] }).categories, ["Action Needed"]);
+  t("LBL-AC-1.2 status kept as sent", ec({ status: "pending" }).status, "pending");
+  t("LBL-AC-1.2 a non-string / blank status is ABSENT (never 'null' / '[object Object]')", [42, { a: 1 }, null, true, "   "].map((s) => "status" in ec({ status: s })), [false, false, false, false, false]);
+  t("LBL-AC-1.2 status absent -> key absent; a long status is cut to 64", ["status" in (adapt({}, noKeys).content as object), ec({ status: "x".repeat(100) }).status?.length], [false, 64]);
+  t("LBL-AC-1.3 no categories key -> no key (unknown); [] / [''] / ['  '] -> [] (known empty)", ["categories" in (adapt({}, noKeys).content as object), ec({ categories: [] }).categories, ec({ categories: [""] }).categories, ec({ categories: ["  "] }).categories], [false, [], [], []]);
+  t("LBL-AC-1.3 shape pre-step: bare string, ';' string, {displayName} objects", [ec({ categories: "Action Needed" }).categories, ec({ categories: "Blue category; Action Needed" }).categories, ec({ categories: [{ displayName: "Action Needed" }] }).categories, ec({ categories: { displayName: "Action Needed" } }).categories], [["Action Needed"], ["Blue category", " Action Needed"], ["Action Needed"], ["Action Needed"]]);
+  t("LBL-S-21 non-string shapes drop without a throw", [null, 42, true, {}, [42, null]].map((c) => ec({ categories: c }).categories), [[], [], [], [], []]);
+  t("LBL-AC-1.4 GUARD: categories and status are NOT in the content hash", [adapt({ categories: [] }).contentHash === adapt({ categories: ["Action Needed"] }).contentHash, adapt({ status: "pending" }).contentHash === adapt({ status: "done" }).contentHash, adapt({}, noKeys).contentHash === e1.contentHash], [true, true, true]);
+  t("LBL-AC-1.12 the mapped InboundMessage (judge input) is identical labelled vs unlabelled", (() => {
+    const a = { ...recs[0], categories: ["Action Needed"], status: "pending" };
+    return JSON.stringify(mapFeedMessage(a, cfg.mailbox)) === JSON.stringify(mapFeedMessage(noKeys, cfg.mailbox));
+  })(), true);
+}
+
 console.log("D2. SENT ITEMS SNAPSHOT (owner decision 2, option A)");
 const sentFixture = JSON.parse(readFileSync(join(FIX, "sent.sample.json"), "utf8"));
 const sv = validateSentSnapshot(sentFixture, cfg, NOW);
@@ -300,6 +322,12 @@ const makeTwin = () => {
           out.changed++;
         } else {
           if (r.content == null && i.content) (r.content = i.content), filled++;
+          else if (r.content && (r.content as { kind?: string }).kind === "email" && i.content) {
+            // 2026-11-28 (AC-1.6): mirrors ledger.server.ts labelRefresh -- labels / status refreshed, content only.
+            const o = r.content as Record<string, unknown>, n = i.content as unknown as Record<string, unknown>;
+            const diff = (k: string) => k in n && JSON.stringify(o[k]) !== JSON.stringify(n[k]);
+            if (diff("categories") || diff("status")) r.content = { ...o, ...("categories" in n ? { categories: n.categories } : {}), ...("status" in n ? { status: n.status } : {}) };
+          }
           out.unchanged++;
         }
       }
@@ -837,7 +865,12 @@ console.log("H. STORED CONTENT (owner decision 2026-11-16): email / teams / sent
   t("HS-2 sent items are source 'sent', store-only, keyed (sent, mailbox:outlook id)", si.items.map((i) => [i.source, i.storeOnly, i.sourceItemId]), [["sent", true, "owner@work.example:AAMk-sent-1"], ["sent", true, "owner@work.example:AAMk-sent-2"]]);
   const sc = si.items[0].content as SentContent;
   t("HS-3 sent content = email shape + sentAt; recipients parsed", [sc.kind, sc.sentAt, sc.to, sc.conversationId, si.items[0].at], ["sent", "2026-11-10T15:00:00.000Z", ["colleague@partner.example"], "conv-sample-1", "2026-11-10T15:00:00.000Z"]);
-  t("HS-4 'sent' is a source and the ONLY store-only source", [CORRESPONDENCE_SOURCES.includes("sent"), STORE_ONLY_SOURCES], [true, ["sent"]]);
+  {
+    const lab = svH.snapshot.records.map((r) => ({ ...r, categories: ["Action Needed"], status: "pending" }));
+    const sl = sentSourceItems(lab, cfg, { path: "/automation/email/sent.json", etag: "s" });
+    t("LBL-AC-1.9 Sent Items and Teams content carry NO categories / status key", [sl.items.map((i) => ["categories" in (i.content as object), "status" in (i.content as object)]), "categories" in tc, "status" in tc], [sl.items.map(() => [false, false]), false, false]);
+  }
+  t("HS-4 'sent' is a source and the ONLY store-only source",[CORRESPONDENCE_SOURCES.includes("sent"), STORE_ONLY_SOURCES], [true, ["sent"]]);
 
   // The pass with Sent Items on, bell switched on: sent rows stored processed, never handed to a processor, and the
   // email/teams processing is exactly what it was without Sent Items (7 items processed, AC-6.3 test above).
