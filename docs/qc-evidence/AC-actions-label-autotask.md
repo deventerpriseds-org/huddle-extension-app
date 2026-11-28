@@ -156,3 +156,127 @@ evidence).
 | AC-3.34 | Given the board, then the task links back to the email the same way a manual "Add as task" does (same ref/link fields) | cross-surface | board read vs a manual-approve fixture: same link shape | test |
 | AC-3.35 | Reconciliation: given N labelled emails processed, then three counts agree in one counts-only check: label-origin board tasks, Actions rows "Added to board" with the label origin, and label-origin proposals in `approved` | reconciliation | `azure-pg-query.yml` counts + Actions read | test |
 
+---
+
+## 4. `status`: stored, never interpreted, nothing written back
+
+| # | Given / When / Then | Category | Observed via | Guard |
+|---|---|---|---|---|
+| AC-4.1 | Given records with `status` `"pending"`, `"done"`, `"Action Needed"` and absent, all with the same categories, when passes run, then the auto-task, bell, judge and Actions outcomes are identical across all four (status changes nothing) | regression | pass test, 4 fixtures, outcome snapshots equal | **MUTATION** (branch on status -> one snapshot differs -> fails) |
+| AC-4.2 | Given `status: "Action Needed"` with `categories: []`, then NO task (status is never read as a label) | over-match negative | pass test | test (same as S-15) |
+| AC-4.3 | Given the diff, then no code outside the adapter and its tests reads `content.status` (grep) | regression | diff grep | n/a |
+| AC-4.4 | Given a full pass that auto-creates a task, then 0 Graph/OneDrive write calls target the feed file or the message: no PUT/PATCH/POST to a drive item and no `/messages/{id}` PATCH (categories are not removed, status is not changed). The fake Graph client records 0 writes; diff grep finds no new drive/message write call | regression | fake Graph call log | **MUTATION** |
+
+---
+
+## 5. Spelling table: label matching (Tier 1 matcher)
+
+**The rule under test (from the owner brief):** a label matches a setting entry when they are equal after trim and
+case-insensitive comparison. **Whole-label equality, never a substring.** Internal whitespace runs collapse to one
+space (safe default). Only `content.categories` is read. Subject, body, `status` and headers are never read.
+
+**Shape caveat, measured in code.** `normalizeCategories` (calendar-ignore.ts ~139) keeps only an array of
+non-blank strings, and keeps them UNTRIMMED (it filters on `trim()` but returns the raw string). A `;` string or a
+`{displayName}` object returns `[]`. Safe default: the email side keeps calendar's function exactly as it is
+(calendar behaviour unchanged; changing it would change existing calendar ignore behaviour, which needs the
+owner's thumbs-up) and wraps it with an email-only pre-step that turns a `;` string and `{displayName}` objects
+into string arrays before calling `normalizeCategories`. The stored value is what `normalizeCategories` returns
+after that pre-step. Matching trims.
+
+Documentation: the Microsoft Graph `message` resource (`categories`: string collection) and `outlookCategory`
+(`displayName`) were NOT opened in this pass. See Gaps. Rows below cite the brief's rule, the repo code that fixes
+the shape, or the probe.
+
+| # | `categories` value in the record (synthetic) | Setting | Documented by | Expected verdict | Wrong answer would be |
+|---|---|---|---|---|---|
+| S-1 | `["Action Needed"]` | seed | brief seed + probe (3 records) | MATCH -> task | FALSE REFUSAL |
+| S-2 | `["action needed"]` | seed | brief: case-insensitive | MATCH | FALSE REFUSAL |
+| S-3 | `[" Action Needed "]` | seed | brief: trims; `normalizeCategories` keeps it untrimmed | MATCH | FALSE REFUSAL |
+| S-4 | `["ACTION NEEDED"]` | seed | brief: case-insensitive | MATCH | FALSE REFUSAL |
+| S-5 | `["Action  Needed"]` (two spaces) / `["Action Needed"]` (no-break space) | seed | safe default: collapse whitespace | MATCH | FALSE REFUSAL |
+| S-6 | `"Action Needed"` (bare string) | seed | pre-step (shape caveat); calendar fn alone gives `[]` | MATCH | FALSE REFUSAL (silent inert) |
+| S-7 | `"Blue category; Action Needed"` (`;`-joined) | seed | pre-step splits on `;` | MATCH | FALSE REFUSAL |
+| S-8 | `[{"displayName":"Action Needed"}]` / `{"displayName":"Action Needed"}` | seed | pre-step; Graph `outlookCategory.displayName` (not opened) | MATCH | FALSE REFUSAL |
+| S-9 | `["Blue category","Action Needed"]` | seed | array of names (probe field list) | MATCH | FALSE REFUSAL |
+| S-10 | `["Action Needed"]` | `["action needed "]` (owner typed it lower case with a space) | brief: both sides trimmed + case-folded | MATCH | FALSE REFUSAL |
+| S-11 | `["Needs Action"]` | seed | not in the list; owner adds it if wanted | NO MATCH | FALSE PASS |
+| S-12 | `["Needs Action"]` | `["Action Needed","Needs Action"]` | brief: user-changeable list | MATCH | FALSE REFUSAL |
+| S-13 | `["Action Needed - urgent"]` | seed | whole-label equality | NO MATCH | FALSE PASS (substring) |
+| S-14 | `["No Action Needed"]` / `["Action Needed?"]` / `["ActionNeeded"]` | seed | whole-label equality | NO MATCH | FALSE PASS |
+| S-15 | `[]` and subject `"Action Needed: sign the form"` | seed | only categories read | NO MATCH | FALSE PASS (subject over-match) |
+| S-16 | `[]` and body contains "Action Needed" | seed | only categories read | NO MATCH | FALSE PASS |
+| S-17 | `[]`, `status: "Action Needed"` | seed | AC-4.2 | NO MATCH | FALSE PASS |
+| S-18 | `[""]` / `["   "]` / `""` / `";;"` | seed | `normalizeCategories` drops blanks | NO MATCH, stored `[]` | FALSE PASS |
+| S-19 | `[""]` | `[""]` or `["  "]` (blank entry somehow saved) | AC-3.3 drops blank entries | NO MATCH | FALSE PASS (empty == empty) |
+| S-20 | `["Action Needed"]` | `[]` (owner emptied it) | AC-3.2 | NO MATCH | FALSE PASS |
+| S-21 | `null` / `42` / `true` / `{}` / `[42, null]` | seed | `normalizeCategories` non-string drop | NO MATCH, no throw | FALSE PASS or a crash |
+| S-22 | key absent (two of the 5 real records have the field present but empty; most have no key) | seed | probe | NO MATCH, `categories` absent in content | FALSE PASS |
+| S-23 | key spelled `Categories` (capital C) | seed | probe field list is lower case only | NO MATCH (not read) | FALSE PASS |
+| S-24 | `["Action​Needed"]` (zero-width inside) | seed | safe default: not folded (Outlook does not produce it) | NO MATCH | FALSE PASS |
+| S-25 | Teams record (no categories in TeamsContent) | seed | AC-1.9 | NO MATCH | FALSE PASS |
+| S-26 | `[{"displayName":"Action Needed - urgent"}]` | seed | whole-label equality after the pre-step | NO MATCH | FALSE PASS |
+| S-27 | `"Action Needed, Blue category"` (comma-joined string) | seed | safe default: split on `;` only (a comma may be inside a name) | NO MATCH | FALSE PASS if split on comma. A FALSE REFUSAL is possible if the real feed uses commas; AC-1.11 measures it |
+
+Each S-row is one test case in the matcher's unit test, plus S-1, S-6, S-13, S-15, S-20 through the full pass.
+**The matcher test is mutation-proved twice:** substring match (S-13/S-14 must fail) and no case-fold (S-2 must fail).
+
+---
+
+## 6. Propose / approve outcome table, and the named scenarios
+
+| # | Starting state for the labelled email | Pass does | End state | createTask calls | Actions shows | Retry? |
+|---|---|---|---|---|---|---|
+| O-1 | no proposal, nothing on board | upsert label proposal -> `approveProposal` | proposal `approved`, taskId set | 1 | "Added to board" | no |
+| O-2 | no proposal, same-title task already on board | upsert -> approve -> dedup skip | proposal `approved`, linked to the existing task | 0 | "Added to board" | no |
+| O-3 | open verdict with `proposalId` P (`proposed`) | approve P | P `approved` | 1 | "Added to board" | no |
+| O-4 | any proposal for this email `dismissed` | nothing | unchanged | 0 | as today (not listed) | no |
+| O-5 | any proposal for this email `completed` / `delegated` | nothing | unchanged | 0 | as today | no |
+| O-6 | label proposal already `approved` (an earlier pass) | nothing (`alreadyDone`) | unchanged | 0 | "Added to board" | no |
+| O-7 | createTask fails (attempt k of N) | approve -> release | `proposed`, attempts=k | 1 | listed, normal row | yes, next pass |
+| O-8 | createTask failed N times | nothing | `proposed`, gave-up marker | 0 | listed for a manual "Add as task" | no (`autotask:gave_up` logged once) |
+| O-9 | board read fails | approve refused before create (fail closed) | `proposed`, attempts+1 | 0 | listed | yes |
+| O-10 | meta-task guard rejects | stop | `proposed` | 0 | listed for the owner | no |
+| O-11 | store write fails | no proposal row | ledger/auto step retries | 0 | nothing new | yes (bounded by the same N) |
+| O-12 | setting is `[]` | nothing | unchanged | 0 | as today | no |
+| O-13 | label removed after O-1 | nothing | unchanged | 0 | "Added to board" | no |
+
+| # | Scenario | Given / When / Then | Guard |
+|---|---|---|---|
+| AC-6.1 | Teams record | Given a Teams message whose text is "Action Needed", when passes run, then 0 auto-tasks and no `categories` in its content | test |
+| AC-6.2 | Conversation, one of three labelled | Given emails A (labelled, oldest), B and C (unlabelled, C latest) in one conversation, when the pass runs, then exactly 1 task exists, its proposal `ref` is A, B and C create none, and the title follows AC-3.9 / AC-3.10 (the thread verdict's to-do when open, else A's stripped subject) | **MUTATION** (match on the thread instead of the email -> refs wrong or tasks for B/C -> fails) |
+| AC-6.3 | Conversation, two labelled | Given A and C both labelled in one conversation, then each email is evaluated once. When both resolve to the same title (same verdict to-do, or subjects equal after `stripReplyPrefixes`), the board holds 1 task (the second links via `alreadyOnBoard`). When they resolve to different titles, 2 tasks exist. No email is tasked twice | test |
+| AC-6.4 | Labelled forward | Given a labelled email with subject `"FW: Synthetic invoice 42"` and a forwarded part, then the title is `"Synthetic invoice 42"` (stripped, never the forwarded part's own subject unless they are equal), the ref is the forward's own sourceItemId, and the task is created even when needs-you would not flag a forward | test |
+| AC-6.5 | Owner empties the setting | Given 3 labelled emails and the setting saved as `[]`, then 0 tasks are created. Tasks created before he emptied it are unchanged. Restoring `["Action Needed"]` lets later passes create tasks for labelled emails not yet decided or tasked (no duplicate for earlier ones) | **MUTATION** (same as AC-3.2) |
+| AC-6.6 | Setting changed to a different label | Given the setting `["Follow up"]`, then emails labelled only "Action Needed" are not tasked from then on, and existing tasks are untouched | test |
+
+---
+
+## 7. Goal -> AC coverage
+
+- Goal "columns reach the database from the file" -> AC-1.1 to AC-1.12, AC-4.1 to AC-4.4, S-1 to S-27
+- Goal "labelled emails become tasks automatically, no waiting on me" -> AC-3.7, AC-3.8, AC-3.17, AC-3.25, O-1 to O-3
+- Goal "the label list is mine to change" -> AC-3.1 to AC-3.6, AC-6.5, AC-6.6, S-10 to S-12, S-20
+- Goal "never duplicates, never re-does what I decided" -> AC-3.11 to AC-3.13, AC-3.18 to AC-3.23, AC-6.2 to AC-6.3, O-2, O-4 to O-6
+- Goal "I can see what happened" -> AC-3.32 to AC-3.35
+- Safety (implied; no goal names it): AC-3.26 to AC-3.31 (bounded retries, kind-only logs, isolation)
+- Every AC traces to a goal. No goal is left without an AC.
+
+Performance: the owner named none. Safe defaults: the auto-task step adds at most one board read per pass (not one
+per email), and at most 10 createTask calls per pass (the rest wait for the next pass). With 100 synthetic
+labelled emails the pass still finishes inside the existing heartbeat wall-clock guard. Observed via a timed
+pass test with fakes (AC-P1), and the per-pass create count is at most 10 (AC-P2).
+
+## Gaps / open questions
+
+1. **The real shape of `categories` is unmeasured (AC-1.11).** This is a measurement, not an owner question. If
+   the feed sends a string or objects and only `normalizeCategories` is used, the feature is silently inert.
+   Re-run the counts-only probe for `typeof` per record before merge.
+2. **Documentation not opened:** the Microsoft Graph `message.categories` and `outlookCategory.displayName`
+   reference pages, and the Power Automate Outlook connector's output schema. S-6, S-7, S-8 and S-27 rest on
+   repo code and the probe, not on that documentation. The red-team pre-pass should open them.
+3. **Rollout creates real tasks.** AC-3.25: the back-fill plus the first pass will put at most 3 real tasks on the
+   board. Safe default: that is what the owner asked for, so do it, and report the count before the apply run.
+4. **How long "Added to board" rows stay listed** (AC-3.32): safe default, for the current Actions range ("This
+   week" / "All time"), the same rule other rows follow.
+5. No genuinely undecidable owner question remains. Every fork above has a reversible safe default stated in place.
+
