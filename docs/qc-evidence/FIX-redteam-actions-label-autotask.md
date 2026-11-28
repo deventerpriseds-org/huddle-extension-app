@@ -72,3 +72,34 @@ After: `actions-view` 336 passed, 1 failed (RTL-6).
 
 After: `actions-view` 338 passed, 0 failed.
 
+## RTL-13 — labels-only content refresh, run against REAL Postgres (HELD, test added in a45517e6)
+
+The red-team checked this by reading the source only. Two assertions were added to `scripts/correspondence-ledger-sql.test.ts`
+(the suite's throwaway local Postgres 16, synthetic rows):
+- same hash, incoming categories + a different subject/body, no status -> categories refreshed, the stored subject
+  and body unchanged, the absent status kept, ledger status/attempts/claim_version unchanged;
+- same hash, status only -> status refreshed, the absent categories kept.
+Both PASS on the unmodified source. No source fix was needed. (A first run failed on MY test literal: I expected a
+fresh row's ledger status to be `new`; it is `pending`. I corrected the expectation, which is a test-authoring error, not a code defect.)
+
+| mutation (ledger.server.ts) | test | exit | verdict |
+|---|---|---|---|
+| merge onto `EXCLUDED.content` instead of `l.content` | RTL-13 SQL categories-only | 0 | FIRED (control EQUIVALENT) |
+| drop `jsonb_strip_nulls` (an absent key would write null) | RTL-13 SQL status-only | 0 | FIRED (control EQUIVALENT) |
+
+## Final run (after the last fix)
+
+| check | result |
+|---|---|
+| `bun scripts/actions-view.test.ts` | 338 passed, 0 failed (3 runs; LAT-AC-3.23 concurrency stable) |
+| `bun scripts/actions-view-server.test.ts` | 56 passed, 0 failed |
+| `bun scripts/correspondence-ingest.test.ts` | 196 passed, 0 failed |
+| `bun scripts/correspondence-ledger-sql.test.ts` | 87 passed, 0 failed |
+| `bun scripts/task-proposals.test.ts` | 199 passed, 0 failed |
+| `bun scripts/actions-accuracy.test.ts` | 103 passed, 0 failed |
+| `bun scripts/report-saves-verdicts.test.ts` | 39 passed, 0 failed |
+| `npx tsc --noEmit` | rc 0, no output |
+| `npm run build` | rc 0 |
+
+Test-file edits, all additive except one: RTL-3b, RTL-4b, RTL-5b, RTL-6b, and two RTL-13 SQL assertions were added.
+RTL-5 was re-scoped to the scenario its own name states, with the same expectation (see the RTL-4 section).
