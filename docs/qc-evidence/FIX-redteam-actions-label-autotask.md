@@ -47,3 +47,28 @@ assertion was loosened; RTL-5b is stricter than the old RTL-5 for the always-dow
 
 After: `actions-view` 336 passed, 1 failed (RTL-6).
 
+## RTL-6 — once per conversation (FIXED, commit 36543582)
+
+- Owner-facing default (orchestrator-chosen, safe, reversible): **once per conversation**. Recorded as the dated
+  "AC-3.21 note" row in AC-actions-label-autotask.md.
+- At pass start, the pass maps each conversation key to the proposal ids its sibling emails' persisted records point
+  at. Per email (after the on-board check, before the verdict-proposal check), `store.getMany` on those ids; ANY in
+  `approved | completed | dismissed | delegated` -> outcome `decided`, no proposal, no create, any title. The judge's
+  conversation-key proposals were already covered by the existing `priorRelated(conversationKey)` + `sameItem`.
+- Only records as read at pass START feed the map, so AC-6.3 (a sibling tasked earlier in the SAME pass links as
+  `on_board`) is unchanged.
+- Added `RTL-6b` (additive): a sibling decided under ANOTHER title, one case per decided state -> 0 creates; a still
+  `proposed` sibling, or another conversation -> 1 create (no over-match).
+- Limit (by design, not a defect of this fix): the sibling must still be a loaded row (labelled, content not purged,
+  in the plan window so it has a conversation key). A sibling whose content was purged no longer contributes.
+
+| mutation | test | exit | verdict |
+|---|---|---|---|
+| `if (false && convDecided)` (check disabled) | RTL-6 | 0 | FIRED (control EQUIVALENT) |
+| same | RTL-6b | 0 | FIRED (control EQUIVALENT) |
+| sibling check also requires the same title | RTL-6b | 0 | FIRED (control EQUIVALENT) |
+| sibling check accepts only `approved` | RTL-6b | 0 | FIRED (control EQUIVALENT) |
+| conversation map never filled | RTL-6 | 0 | FIRED (control EQUIVALENT) |
+
+After: `actions-view` 338 passed, 0 failed.
+
