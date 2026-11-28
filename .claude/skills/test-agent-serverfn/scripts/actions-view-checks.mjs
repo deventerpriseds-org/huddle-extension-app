@@ -176,7 +176,8 @@ export const checks = [
       if (i === 0) {
         const labels = [];
         for (let k = 0; k < (await items.count()); k++) labels.push(((await items.nth(k).locator("span.font-semibold").textContent()) ?? "").trim());
-        check("A-2 Modules lists exactly Priorities, Schedule, Actions in order", labels.join(",") === "Priorities,Schedule,Actions", labels.join(","));
+        // 2026-11-28: #289 (Trinnex workspace) added the Meetings module after Actions.
+        check("A-2 Modules lists exactly Priorities, Schedule, Actions, Meetings in order", labels.join(",") === "Priorities,Schedule,Actions,Meetings", labels.join(","));
         await screenshot("modules-popover-desktop-light");
       }
       await items.nth(i).locator("button").click();
@@ -295,7 +296,7 @@ export const checks = [
     const rows = sheet.locator("li button");
     const rh = [];
     for (let k = 0; k < (await rows.count()); k++) rh.push((await rows.nth(k).boundingBox())?.height ?? 0);
-    check("A-11 sheet rows are >= 44px tall", rh.length === 3 && rh.every((h) => h >= 44), rh.map(Math.round).join(","));
+    check("A-11 sheet rows are >= 44px tall (4 modules since #289)", rh.length === 4 && rh.every((h) => h >= 44), rh.map(Math.round).join(","));
     await screenshot("modules-sheet-phone-light");
     await rows.nth(2).click();
     await page.waitForTimeout(2500);
