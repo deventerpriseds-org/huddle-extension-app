@@ -365,7 +365,12 @@ CREATE TABLE IF NOT EXISTS chat.correspondence_cursor (owner_email TEXT NOT NULL
     t("LBL-AC-1.7 GUARD: a purged row stays NULL when a label arrives (retention not undone)", [await L.observe(O, [ei("mb:L2", emailC(["Action Needed"]))]), (await lrow("mb:L2")).nul], [{ inserted: 0, changed: 0, unchanged: 1 }, true]);
     await L.observe(O, [{ ...item("k9:t1", "ht"), content: content("9") }]);
     t("LBL-AC-1.9 a Teams row is never label-refreshed", [await L.observe(O, [{ ...item("k9:t1", "ht"), content: { ...(content("9") as object), categories: ["Action Needed"] } as never }]), (await crow("k9:t1")).content], [{ inserted: 0, changed: 0, unchanged: 1 }, content("9")]);
-    await pool.query(`DELETE FROM chat.correspondence_ledger WHERE source_item_id IN ('mb:L1','mb:L2','k9:t1')`);
+    // RTL-13 (red-team, run against real Postgres 2026-11-28): the refresh merges ONLY categories / status. Other
+    // incoming content (a different subject on the same hash) is never written, and an absent key keeps its value.
+    await L.observe(O, [ei("mb:L3", emailC(["Synthetic Old"], "pending"))]);
+    t("RTL-13 SQL categories-only refresh: subject NOT overwritten, absent status kept", [await L.observe(O, [ei("mb:L3", { ...emailC(["Action Needed"]), subject: "SYNTH rewritten subject", bodyText: "SYNTH other body" })]), await lrow("mb:L3"), (await pool.query(`SELECT content->>'bodyText' b FROM chat.correspondence_ledger WHERE source='email' AND source_item_id='mb:L3'`)).rows[0].b], [{ inserted: 0, changed: 0, unchanged: 1, labelsRefreshed: 1 }, { cats: ["Action Needed"], st: "pending", has: true, subj: "SYNTH subject", status: "pending", attempts: 0, v: 0, purged: false, nul: false }, "SYNTH body"]);
+    t("RTL-13 SQL status-only refresh: absent categories kept", [await L.observe(O, [ei("mb:L3", { ...emailC(undefined, "completed"), subject: "SYNTH rewritten subject" })]), (await lrow("mb:L3")).cats, (await lrow("mb:L3")).st, (await lrow("mb:L3")).subj], [{ inserted: 0, changed: 0, unchanged: 1, labelsRefreshed: 1 }, ["Action Needed"], "completed", "SYNTH subject"]);
+    await pool.query(`DELETE FROM chat.correspondence_ledger WHERE source_item_id IN ('mb:L1','mb:L2','mb:L3','k9:t1')`);
   }
 
   // CS: Sent Items are store-only -- inserted processed, never pending again, never claimed even if forced pending.
